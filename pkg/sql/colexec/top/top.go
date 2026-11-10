@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,61 @@ import (
 )
 
 const opName = "top"
+
+const (
+	topResidentRecoveryTarget = uint64(evalSpillChunkBytes / 2)
+	topRecoveryMinimum        = uint64(topSpillWriteBufferSize * 2)
+	topSpillRowReferenceSize  = uint64(32)
+)
+
+func topRecoveryAdd(left, right uint64) uint64 {
+	if right > math.MaxUint64-left {
+		return math.MaxUint64
+	}
+	return left + right
+}
+
+func topRecoveryMul(left, right uint64) uint64 {
+	if left != 0 && right > math.MaxUint64/left {
+		return math.MaxUint64
+	}
+	return left * right
+}
+
+// topSpillRecoveryTarget is the bounded resident state needed to choose and
+// later reload winners: order keys, one int64 selector, and one row reference
+// per winner, including replacement overlap. Large limits may exceed the
+// ordinary in-memory window, so cap the up-front floor and let spill keep the
+// remaining payload on disk.
+func topSpillRecoveryTarget(limit uint64, fs []*plan.OrderBySpec) uint64 {
+	width := uint64(8) + topSpillRowReferenceSize
+	for _, spec := range fs {
+		if spec == nil || spec.Expr == nil {
+			continue
+		}
+		size := spec.Expr.Typ.Id
+		typeSize := types.T(size).TypeLen()
+		if typeSize <= 0 {
+			typeSize = types.VarlenaSize
+		}
+		width = topRecoveryAdd(width, uint64(typeSize)+1)
+	}
+	target := topRecoveryMul(topRecoveryMul(limit, width), 2)
+	target = max(target, topRecoveryMinimum)
+	return min(target, topResidentRecoveryTarget)
+}
+
+func (ctr *container) recoveryTargetShare(target uint64) uint64 {
+	if ctr == nil || ctr.budget == nil {
+		return target
+	}
+	workers := max(1, system.GoMaxProcs())
+	share := ctr.budget.Snapshot().Cap / uint64(workers)
+	if share == 0 {
+		share = ctr.budget.Snapshot().Cap
+	}
+	return min(target, share)
+}
 
 func (top *Top) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -103,6 +159,9 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
+		if err = top.ctr.installRecoveryCapacity(); err != nil {
+			return err
+		}
 	}
 
 	// limit executor
@@ -121,6 +180,29 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+	top.ctr.spilling = top.ctr.limit > topSpillThreshold
+	if top.ctr.limit > 0 && top.ctr.recoveryCapacity != nil {
+		target := min(topResidentRecoveryTarget,
+			topRecoveryMul(top.ctr.residentWindow(), 2))
+		if top.ctr.spilling {
+			target = topSpillRecoveryTarget(top.ctr.limit, top.Fs)
+		}
+		target = top.ctr.recoveryTargetShare(target)
+		if err = top.ctr.ensureRecoveryCapacity(target); err != nil {
+			// A small resident Top is an optimization. If its complete overlap
+			// window cannot be admitted, switch to the bounded key+row-reference
+			// spill path and reserve only the progress state that path needs.
+			if top.ctr.spilling {
+				return err
+			}
+			top.ctr.spilling = true
+			if err = top.ctr.ensureRecoveryCapacity(
+				top.ctr.recoveryTargetShare(
+					topSpillRecoveryTarget(top.ctr.limit, top.Fs))); err != nil {
+				return err
+			}
+		}
+	}
 
 	initialSelections := int(min(top.ctr.limit, uint64(1024)))
 	if initialSelections > 0 {
@@ -161,19 +243,12 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	// OrderedOutput is a topology contract, not a storage policy. Both eval
 	// paths produce sorted rows. Small results use type/actual-byte admission
 	// in build and migrate only under payload pressure; large K still spills.
-	if top.ctr.limit > topSpillThreshold {
-		top.ctr.spilling = true
-	}
-
 	return nil
 }
 
 func (top *Top) Call(
 	proc *process.Process,
-) (callResult vm.CallResult, callErr error) {
-	defer func() {
-		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "top", callErr)
-	}()
+) (vm.CallResult, error) {
 	analyzer := top.OpAnalyzer
 
 	if top.ctr.limit == 0 {
@@ -224,7 +299,8 @@ func (top *Top) Call(
 				if _, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err
 				}
-				return result, err
+				return result, hashbuild.TerminalBudgetErrorForOperator(
+					proc.Ctx, "top", err)
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
 				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.GetMessageBoard())
@@ -240,7 +316,12 @@ func (top *Top) Call(
 		}
 		done, err := top.ctr.eval(top.ctr.limit, top.ctr.n, proc, &result)
 		if err != nil {
-			return result, err
+			return result, hashbuild.TerminalBudgetErrorForOperator(
+				proc.Ctx, "top", err)
+		}
+		if err = top.ctr.trimRecoveryCapacity(); err != nil {
+			return result, hashbuild.TerminalBudgetErrorForOperator(
+				proc.Ctx, "top", err)
 		}
 		if done {
 			top.ctr.state = vm.End
@@ -262,15 +343,13 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		if err != nil {
 			return err
 		}
-		aNewOrderColumn := true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				aNewOrderColumn = false
-				ctr.poses = append(ctr.poses, int32(j))
-				break
-			}
-		}
-		if aNewOrderColumn {
+		// A column expression may return a cached typed-NULL vector, so its
+		// logical slot must come from the plan rather than pointer identity.
+		if col := ap.Fs[i].Expr.GetCol(); col != nil {
+			pos := int(col.ColPos)
+			ctr.poses = append(ctr.poses, col.ColPos)
+			bat.Vecs[pos] = vec
+		} else {
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 			bat.Vecs = append(bat.Vecs, vec)
 		}
@@ -370,13 +449,68 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		}
 	}
 
+	start, err := ctr.verifiedBatchSuffix(bat, proc)
+	if err != nil {
+		return err
+	}
 	if ctr.spilling {
-		return ctr.processBatchSpill(ap.ctr.limit, bat, proc, analyzer)
+		return ctr.processBatchSpillFrom(ap.ctr.limit, bat, start, proc, analyzer)
 	}
 	if ctr.boundedResident {
-		return ctr.processBatchResident(bat, proc, analyzer)
+		return ctr.processBatchResident(bat, start, proc, analyzer)
 	}
-	return ctr.processBatch(ap.ctr.limit, bat, proc)
+	return ctr.processBatch(ap.ctr.limit, bat, start, proc)
+}
+
+// verifiedBatchSuffix discards a prefix only after proving the whole batch is
+// ordered opposite to the query. Every discarded row then has at least limit
+// rows in the suffix that compare no worse. The input remains in its original
+// order, including when the resident path later migrates to spill.
+func (ctr *container) verifiedBatchSuffix(bat *batch.Batch, proc *process.Process) (int, error) {
+	rows := bat.RowCount()
+	if ctr.limit == 0 || ctr.limit >= uint64(rows) {
+		return 0, nil
+	}
+	for _, pos := range ctr.poses {
+		vec := bat.Vecs[pos]
+		// Float-array and JSON numeric comparisons are not transitive for all
+		// values. Binding a constant fixed vector also expands it to batch size.
+		// Keep these keys on the ordinary path without speculative bindings.
+		if vec.IsConst() || vec.GetType().Oid.IsArray() || vec.GetType().Oid == types.T_json {
+			return 0, nil
+		}
+	}
+	for i, pos := range ctr.poses {
+		vec := bat.Vecs[pos]
+		if ctr.spilling {
+			ctr.cmps[i].Set(1, vec)
+		} else {
+			ctr.cmps[pos].Set(1, vec)
+		}
+	}
+	// Avoid a verification pass when the sample shows no progress beyond the
+	// first limit rows. This only selects the ordinary path; later rows may
+	// still improve the heap and must be processed there.
+	middle := rows / 2
+	if uint64(middle) < ctr.limit ||
+		ctr.compare(1, 1, int64(middle), int64(ctr.limit-1)) >= 0 ||
+		ctr.compare(1, 1, int64(rows-1), int64(middle)) > 0 {
+		return 0, nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, err
+	}
+	for row := 1; row < rows; row++ {
+		if row%evalSpillChunkSize == 0 {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return 0, err
+			}
+		}
+		if ctr.compare(1, 1, int64(row-1), int64(row)) < 0 {
+			return 0, nil
+		}
+	}
+	return rows - int(ctr.limit), nil
 }
 
 func (ctr *container) residentWindow() uint64 {
@@ -474,13 +608,13 @@ func (ctr *container) startResidentSpill(proc *process.Process, analyzer process
 	return nil
 }
 
-func (ctr *container) processBatchResident(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) processBatchResident(bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
 	window := ctr.residentWindow()
 	full := uint64(len(ctr.sels)) == ctr.limit
-	for row := 0; row < bat.RowCount(); row++ {
+	for row := start; row < bat.RowCount(); row++ {
 		if full {
 			// Reject contiguous losers with only the comparison hot path. Keep
 			// cancellation outside that loop but bound each scan segment.
@@ -554,9 +688,9 @@ func (ctr *container) processBatchResident(bat *batch.Batch, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit uint64, bat *batch.Batch, start int, proc *process.Process) error {
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
+	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
 		if processCount > math.MaxInt-len(ctr.sels) {
@@ -577,7 +711,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(
 				bat.Vecs[j],
-				0,
+				int64(start),
 				processCount,
 				nil,
 				proc.Mp(),
@@ -595,7 +729,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		}
 	}
 
-	if processCount == rowCount {
+	if start+processCount == rowCount {
 		return nil
 	}
 
@@ -603,7 +737,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
-	for i, j := processCount, rowCount; i < j; i++ {
+	for i, j := start+processCount, rowCount; i < j; i++ {
 		rowIdx := int64(i)
 		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
@@ -752,17 +886,13 @@ func (ctr *container) spillBatch(
 	return spillRecordRef{offset: offset, size: int64(payloadSize)}, nil
 }
 
-func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
-	return ctr.processBatchSpillFrom(limit, bat, 0, proc, analyzer)
-}
-
 func (ctr *container) processBatchSpillFrom(limit uint64, bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {
 	// A complete loser batch must not create a spill file or consume disk.
 	var record spillRecordRef
 	var err error
 
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount-start)
+	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
 		record, err = ctr.spillBatch(bat, proc, analyzer)
@@ -885,17 +1015,6 @@ func spillOutputRowBytes(bat *batch.Batch, columnCount, row int) (uint64, error)
 		total += rowBytes
 	}
 	return total, nil
-}
-
-func rowsToFill(limit uint64, currentRows int, batchRows int) int {
-	if uint64(currentRows) >= limit {
-		return 0
-	}
-	remaining := limit - uint64(currentRows)
-	if remaining >= uint64(batchRows) {
-		return batchRows
-	}
-	return int(remaining)
 }
 
 func (ctr *container) eval(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
@@ -1235,6 +1354,14 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	case types.T_float64:
 		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
 		return types.EncodeFloat64(&v), true
+	case types.T_bf16:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.BF16](vec, x)), true
+	case types.T_float16:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float16](vec, x)), true
+	case types.T_float8:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float8](vec, x)), true
+	case types.T_float4:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float4](vec, x)), true
 	case types.T_date:
 		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
 		return types.EncodeDate(&v), true

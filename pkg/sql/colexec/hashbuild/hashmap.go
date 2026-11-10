@@ -35,14 +35,8 @@ import (
 
 type HashmapBuilder struct {
 	needDupVec bool
-	// InputBatchRowCount is the physical retained row count published with the
-	// JoinMap. hashMapRowCount is the number of those rows that participate in
-	// the current hashmap and its auxiliary-memory projection. REPLACE may
-	// append delete-only rows which belong to the first count but not the
-	// second.
+	// InputBatchRowCount is the physical retained row count published with the JoinMap.
 	InputBatchRowCount int
-	hashMapRowCount    int
-	hashMapRowCountSet bool
 	TrackNullKeys      bool
 	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
@@ -52,7 +46,7 @@ type HashmapBuilder struct {
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
-	UniqueJoinKeys     []*vector.Vector
+	uniqueKeys         uniqueKeyBatches
 	uniqueKeySlots     []bool
 	uniqueSels         []int64
 	cachedIntIterator  hashmap.Iterator
@@ -63,6 +57,7 @@ type HashmapBuilder struct {
 	OnDuplicateAction  plan.Node_OnDuplicateAction
 	DedupColName       string
 	DedupColTypes      []plan.Type
+	DedupKeyExprs      []*plan.Expr
 
 	IgnoreRows *bitmap.Bitmap
 
@@ -85,6 +80,8 @@ type HashmapBuilder struct {
 	// that point, Batches are no longer equivalent to the original ingress and
 	// must not be retried or re-spilled.
 	runtimeFilterCollectionFallback bool
+	runtimeFilterKeysRequired       bool
+	uniqueKeyRowsHint               int
 	retainedBatchRecoverySafe       bool
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
@@ -102,11 +99,21 @@ func (hb *HashmapBuilder) GetSize() int64 {
 		sz += hb.StrHashMap.Size()
 	}
 	sz += hb.Sels.Size()
-	for _, v := range hb.UniqueJoinKeys {
-		if v != nil {
-			sz += int64(v.Allocated())
+	if len(hb.uniqueKeys.first.vecs) != 0 {
+		_ = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
+			for _, v := range vecs {
+				if v != nil {
+					sz += int64(v.Allocated())
+				}
+			}
+			return nil
+		})
+		sz += int64(hb.uniqueKeys.first.metadata.Capacity())
+		for i := range hb.uniqueKeys.rest {
+			sz += int64(hb.uniqueKeys.rest[i].metadata.Capacity())
 		}
 	}
+	sz += int64(hb.uniqueKeys.directory.Capacity())
 	if hb.IgnoreRows != nil {
 		sz += int64(hb.IgnoreRows.Size())
 	}
@@ -214,8 +221,6 @@ func (hb *HashmapBuilder) Prepare(
 		hb.keyExprs = keyCols
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
-		hb.hashMapRowCount = 0
-		hb.hashMapRowCountSet = false
 	}
 
 	if hb.IsDedup {
@@ -248,8 +253,6 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
-	hb.hashMapRowCount = 0
-	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.retainedSpillTailSelected = 0
@@ -257,13 +260,10 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.StrHashMap = nil
 	hb.freeIgnoreRows(proc.Mp())
 	hb.freeDelRows(proc.Mp())
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
+	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Destroy them here; immutable allocation selections remain installed until
 	// the statement lifecycle calls ClearAllocationAccount.
@@ -285,14 +285,11 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterCollectionFallback = false
+	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	hb.retainedBatchRecoverySafe = false
 }
 
@@ -387,6 +384,10 @@ func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 // explicit key domains; an IntHashMap cannot represent a sentinel outside the
 // complete uint64 raw-value domain without collisions.
 func (hb *HashmapBuilder) hasGroupingKey() bool {
+	return hb.hasGroupingKeyInBatches(hb.Batches.Buf)
+}
+
+func (hb *HashmapBuilder) hasGroupingKeyInBatches(batches []*batch.Batch) bool {
 	for _, executor := range hb.executors {
 		if !executor.IsColumnExpr() {
 			continue
@@ -402,10 +403,10 @@ func (hb *HashmapBuilder) hasGroupingKey() bool {
 		// same physical column here; filtering on RelPos would miss GROUPING
 		// sentinels for DedupJoin and RightDedupJoin.
 		position := column.GetColIndex()
-		for _, bat := range hb.Batches.Buf {
+		for _, bat := range batches {
 			if bat != nil && position >= 0 && position < len(bat.Vecs) &&
 				bat.Vecs[position] != nil &&
-				bat.Vecs[position].GetGrouping().GetBitmap().CountRange(
+				bat.Vecs[position].GetGrouping().CountRange(
 					0, uint64(bat.Vecs[position].Length()),
 				) > 0 {
 				return true
@@ -436,10 +437,9 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 }
 
 // buildHashmapWithRuntimeFilterLimit bounds optional exact-runtime-filter key
-// retention independently of the mandatory JoinMap. A negative limit keeps
-// the legacy unbounded collection contract for callers that do not have a
-// RuntimeFilterSpec (including membership-filter consumers, which apply their
-// own policy). Exceeding the bound fails only the optional filter open; the
+// retention independently of the mandatory JoinMap. A negative limit disables
+// the planner cardinality cutoff; chunk and wire-format limits still apply.
+// Exceeding the bound fails only the optional filter open; the
 // complete JoinMap continues to build.
 func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
 	hashOnPK bool,
@@ -450,6 +450,10 @@ func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
 ) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
+	hb.uniqueKeyRowsHint = 0
+	if hashOnPK && needUniqueVec && (runtimeFilterLimit < 0 || hb.InputBatchRowCount <= int(runtimeFilterLimit)) {
+		hb.uniqueKeyRowsHint = min(8192, hb.InputBatchRowCount)
+	}
 	return hb.buildHashmap(
 		hashOnPK,
 		needAllocateSels,
@@ -478,12 +482,7 @@ func (hb *HashmapBuilder) optionalRuntimeFilterKeysExceedLimit(limit int32) bool
 	if hb.GetGroupCount() > uint64(limit) {
 		return true
 	}
-	for i, keys := range hb.UniqueJoinKeys {
-		if hb.collectUniqueKeySlot(i) && keys != nil && keys.Length() > int(limit) {
-			return true
-		}
-	}
-	return false
+	return hb.uniqueKeys.count() > int(limit)
 }
 
 // RetainedBatchRecoverySafe reports whether the batches retained by this
@@ -520,7 +519,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			duplicateWarnings.Reset()
 		}
 	}()
-	recordDuplicateWarning := func(vec *vector.Vector, row int) {
+	recordDuplicateWarning := func(vec *vector.Vector, row int, inputRow int) {
 		if !warningsEnabled {
 			return
 		}
@@ -532,7 +531,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			duplicateWarnings.AddCount()
 			return
 		}
-		rowStr, err := colexec.FormatDedupEntry(vec, row, hb.DedupColName, hb.DedupColTypes)
+		rowStr, err := hb.formatDuplicateEntry(proc, vec, row, inputRow)
 		if err != nil {
 			// IGNORE must preserve its historical data-path semantics even if a
 			// user-facing rendering of a corrupt internal key is unavailable.
@@ -547,11 +546,6 @@ func (hb *HashmapBuilder) buildHashmap(
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	// Every ordinary build starts with all retained rows participating in the
-	// map. Canonical Dedup rewrites below update this count before resizing the
-	// auxiliary owner and rebuilding.
-	hb.hashMapRowCount = hb.InputBatchRowCount
-	hb.hashMapRowCountSet = true
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -848,8 +842,7 @@ buildUnits:
 							continue
 						}
 
-						rowStr, err := colexec.FormatDedupEntry(
-							hb.curVecs[0], vecIdx2+k, hb.DedupColName, hb.DedupColTypes)
+						rowStr, err := hb.formatDuplicateEntry(proc, hb.curVecs[0], vecIdx2+k, i+k)
 						if err != nil {
 							return err
 						}
@@ -859,13 +852,13 @@ buildUnits:
 							previousRow := ignoreSurvivorRows[v]
 							if previousRow > 0 {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
-								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
+								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, int(previousRow-1))
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
 							ignoreSurvivorOwnsKey[v] = true
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
-							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
+							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, i+k)
 						}
 					}
 				} else {
@@ -896,56 +889,8 @@ buildUnits:
 		}
 
 		if needUniqueVec {
-			if len(hb.UniqueJoinKeys) == 0 {
-				if hb.uniqueKeyAllocation == nil {
-					return mpool.ErrAllocationAccountInvalid
-				}
-				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					hb.UniqueJoinKeys[j], err = vector.NewOffHeapVecWithTypeAndAllocation(
-						*vec.GetType(),
-						hb.uniqueKeyAllocation,
-					)
-					if err != nil {
-						cause := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							cause = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr := hb.fallbackOptionalRuntimeFilterCollection(
-							proc,
-							cause,
-						); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						continue buildUnits
-					}
-				}
-			}
-
 			if hashOnPK {
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
-					if err != nil {
-						allocationErr := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							allocationErr = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr :=
-							hb.fallbackOptionalRuntimeFilterCollection(
-								proc, allocationErr); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						break
-					}
-				}
+				err = hb.appendUniqueKeys(proc, vecIdx2, n, nil)
 			} else {
 				if hb.uniqueSels == nil {
 					hb.uniqueSels = make([]int64, 0, hashmap.UnitLimit)
@@ -958,26 +903,17 @@ buildUnits:
 					}
 				}
 				hb.uniqueSels = newSels
-
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
-					if err != nil {
-						allocationErr := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							allocationErr = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr :=
-							hb.fallbackOptionalRuntimeFilterCollection(
-								proc, allocationErr); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						break
-					}
+				err = hb.appendUniqueKeys(proc, 0, len(newSels), newSels)
+			}
+			if err != nil {
+				cause := err
+				if mpool.IsRetryableAllocationCapacity(err) {
+					cause = runtimefilter.MarkOptionalAllocationError(err)
 				}
+				if fatalErr := hb.fallbackOptionalRuntimeFilterCollection(proc, cause); fatalErr != nil {
+					return fatalErr
+				}
+				needUniqueVec = false
 			}
 			if needUniqueVec &&
 				hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit) {
@@ -1008,7 +944,6 @@ buildUnits:
 		} else {
 			hb.InputBatchRowCount = totalRowCount
 		}
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.resetHashStateForRebuild(proc)
 		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
@@ -1044,7 +979,6 @@ buildUnits:
 			return err
 		}
 		hb.InputBatchRowCount = hb.Batches.RowCount()
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.freeDelRows(proc.Mp())
 		hb.resetHashStateForRebuild(proc)
@@ -1182,12 +1116,7 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Sels.Free(proc.Mp())
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.FreeTemporaryVectors(proc)
 	for i := range hb.executors {
 		if hb.executors[i] != nil {
@@ -1377,4 +1306,12 @@ func (hb *HashmapBuilder) detachAndPruneCachedIterators() {
 		}
 		hashmap.IteratorClearOwner(hb.cachedStrIterator)
 	}
+}
+
+func (hb *HashmapBuilder) formatDuplicateEntry(proc *process.Process, key *vector.Vector, keyRow, inputRow int) (string, error) {
+	if len(hb.DedupKeyExprs) > 0 {
+		return colexec.FormatDedupKeyFromRow(proc, hb.DedupKeyExprs,
+			hb.Batches.Buf[inputRow/colexec.DefaultBatchSize], inputRow%colexec.DefaultBatchSize)
+	}
+	return colexec.FormatDedupEntry(key, keyRow, hb.DedupColName, hb.DedupColTypes)
 }

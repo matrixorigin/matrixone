@@ -38,7 +38,6 @@ type container struct {
 	blockStep     int
 	block         bool
 	cachedBatches []*batch.Batch
-	rowCount      int64
 }
 
 type Output struct {
@@ -46,20 +45,6 @@ type Output struct {
 
 	Data interface{}
 	Func func(*batch.Batch, *perfcounter.CounterSet) error
-
-	// IsAdaptive enables the adaptive vector search fallback mechanism.
-	// When set to true and the query completes with zero results (rowCount == 0),
-	// the Output operator will return ErrVectorNeedRetryWithPreMode error,
-	// signaling that the query should be retried with 'pre' (pre-filter) mode.
-	//
-	// This is part of the vector search adaptive mode optimization (Phase 5),
-	// which automatically falls back from 'post' mode to 'pre' mode when
-	// post-filtering returns empty results due to high filter selectivity.
-	//
-	// IMPORTANT: We only trigger retry when rowCount == 0 (not when rowCount < limit)
-	// to avoid merging partial results from the original query with retry results,
-	// which would cause duplicate rows in the final output.
-	IsAdaptive bool
 
 	vm.OperatorBase
 }
@@ -109,19 +94,6 @@ func (output *Output) WithBlock(block bool) *Output {
 	return output
 }
 
-// WithAdaptive sets the adaptive vector search fallback mode.
-// When enabled, the Output operator will trigger a retry with pre-filter mode
-// if the query completes with zero results.
-// See IsAdaptive field documentation for details.
-func (output *Output) WithAdaptive(isAdaptive bool) *Output {
-	output.IsAdaptive = isAdaptive
-	return output
-}
-
-func (output *Output) shouldRetryWithPreMode() bool {
-	return output.IsAdaptive && output.ctr.rowCount == 0
-}
-
 func (output *Output) Release() {
 	if output != nil {
 		reuse.Free[Output](output, nil)
@@ -147,10 +119,6 @@ func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error
 		output.cleanCachedBatch(proc)
 		output.ctr.cachedBatches = nil
 	}
-}
-
-func (output *Output) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (output *Output) cleanCachedBatch(proc *process.Process) {

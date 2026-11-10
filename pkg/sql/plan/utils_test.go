@@ -28,19 +28,23 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReadDirHiddenPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	root := t.TempDir()
 	contents := map[string]string{
 		".data/part-1.csv":     "1\n",
@@ -195,6 +199,7 @@ func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
 		{"json_insert", []int32{2, 4}},
 		{"json_replace", []int32{2, 4}},
 		{"json_array_append", []int32{2, 4}},
+		{"json_array_insert", []int32{2, 4}},
 		{"concat", []int32{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -811,7 +816,7 @@ func TestPreparedCharSourceTypeFromString(t *testing.T) {
 	}{
 		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
 		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
-		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "fractional text retains truncation", value: "65.5e0", want: types.T_varchar},
 		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
 		{name: "non-numeric", value: "abc", want: types.T_varchar},
 		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
@@ -1067,7 +1072,7 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 		{name: "predicate control", sql: "prepare predicate_only from 'select 1 where ? = 1'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			got := PreparedPlanDirectResultParamPositions(planUnderTest)
@@ -1093,7 +1098,7 @@ func TestPreparedPlanConversionParamPositions(t *testing.T) {
 		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
@@ -1118,7 +1123,7 @@ func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
 		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
@@ -1139,7 +1144,7 @@ func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
 		{name: "distinct row source", sql: "prepare runtime_distinct_rows from 'select distinct ? as result from nation'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
@@ -1195,7 +1200,7 @@ func TestPreparedDirectDecimal256RestoresRuntimeParamRef(t *testing.T) {
 	require.Equal(t, int32(0), restoredParam.Pos)
 
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false), t,
+		NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare decimal256_order from 'select ? as result order by result'")
 	require.NoError(t, err)
 	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
@@ -1218,14 +1223,14 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 	target := types.T_int64.ToType()
 	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(target, target, literalCast))
+	require.True(t, checkNoNeedCast(context.Background(), target, target, literalCast))
 
 	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
 	}, makePlan2Type(&target))
 	require.NoError(t, err)
-	require.False(t, checkNoNeedCast(target, target, columnCast))
+	require.False(t, checkNoNeedCast(context.Background(), target, target, columnCast))
 
 	uuidType := types.T_uuid.ToType()
 	uuidCast, err := appendExplicitCastBeforeExpr(
@@ -1234,7 +1239,7 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 		makePlan2Type(&uuidType),
 	)
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	require.True(t, checkNoNeedCast(context.Background(), uuidType, uuidType, uuidCast), uuidCast.String())
 	secondUUIDCast, err := appendExplicitCastBeforeExpr(
 		ctx,
 		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
@@ -1388,7 +1393,7 @@ func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 func TestValidatePreparedPaginationParams(t *testing.T) {
 	buildPreparedPlan := func(t *testing.T, sql string) *plan.Plan {
 		t.Helper()
-		prepared, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 		require.NoError(t, err)
 		queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
 		require.NotNil(t, queryPlan)
@@ -1504,13 +1509,13 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 }
 
 func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt1 from 'select ? as result'")
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt1 from 'select ? as result'")
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
 	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
 	require.Equal(t, []int32{0}, PreparedPlanDirectResultParamPositions(queryPlan))
 
-	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
+	functionPrepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt2 from 'select abs(?)'")
 	require.NoError(t, err)
 	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
 	require.Empty(t, PreparedPlanDirectResultParamPositions(functionPrepared.GetDcl().GetPrepare().GetPlan()))
@@ -1530,7 +1535,7 @@ func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
 }
 
 func TestPreparedDirectResultSpecializationIsPositionScoped(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_direct_scope from 'select ? as direct_text, ? as direct_number, abs(?) as nested_number'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().GetPlan()
@@ -1701,10 +1706,47 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			got := PreparedPlanDirectResultParamPositions(prepared.GetDcl().GetPrepare().GetPlan())
 			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestCheckNoNeedCastIntegerLiteralEncodings(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expr   *plan.Expr
+		target types.T
+		fits   bool
+	}{
+		{"I8 minimum widens", makePlan2Int8ConstExprWithType(math.MinInt8), types.T_int16, true},
+		{"I8 negative to unsigned", makePlan2Int8ConstExprWithType(-1), types.T_uint8, false},
+		{"I16 at I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8), types.T_int8, true},
+		{"I16 below I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8 - 1), types.T_int8, false},
+		{"I16 at I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8), types.T_int8, true},
+		{"I16 above I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8 + 1), types.T_int8, false},
+		{"I16 positive to unsigned", makePlan2Int16ConstExprWithType(math.MaxUint8), types.T_uint8, true},
+		{"I32 at I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"I32 above I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"I32 at I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16), types.T_int16, true},
+		{"I32 below I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16 - 1), types.T_int16, false},
+		{"I64 minimum to unsigned", makePlan2Int64ConstExprWithType(math.MinInt64), types.T_uint64, false},
+		{"I64 maximum narrows", makePlan2Int64ConstExprWithType(math.MaxInt64), types.T_int32, false},
+		{"U8 widens to signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int16, true},
+		{"U8 exceeds signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int8, false},
+		{"U16 at I16 maximum", makePlan2Uint16ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"U16 exceeds signed", makePlan2Uint16ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"U32 at U16 maximum", makePlan2Uint32ConstExprWithType(math.MaxUint16), types.T_uint16, true},
+		{"U32 exceeds unsigned", makePlan2Uint32ConstExprWithType(math.MaxUint16 + 1), types.T_uint16, false},
+		{"U64 at I64 maximum", makePlan2Uint64ConstExprWithType(math.MaxInt64), types.T_int64, true},
+		{"U64 exceeds signed", makePlan2Uint64ConstExprWithType(math.MaxInt64 + 1), types.T_int64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := DeepCopyExpr(tc.expr)
+			require.Equal(t, tc.fits, checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(tc.expr), tc.target.ToType(), tc.expr))
+			require.Equal(t, before, tc.expr, "range proof must not mutate the literal")
 		})
 	}
 }
@@ -1786,12 +1828,71 @@ func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 			}
 
 			// Test checkNoNeedCast
-			result := checkNoNeedCast(constType, columnType, constExpr)
+			result := checkNoNeedCast(context.Background(), constType, columnType, constExpr)
 
 			t.Logf("ConstValue: %s, ConstScale: %d, ColumnScale: %d", tt.constValue, tt.constScale, tt.columnScale)
 			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
 
 			require.Equal(t, tt.expectResult, result, "checkNoNeedCast result mismatch")
+		})
+	}
+}
+
+// TestCheckNoNeedCastIntIntoDecimalDomain pins the contract behind the
+// integer->DECIMAL precision fix (#30367): a constant comparison rewrite may
+// only replace `n < 1000` with `n < cast(1000 AS DECIMAL(5,2))` while that
+// cast cannot raise the declared-range error enforced by the strict
+// integer->decimal conversion. Out-of-domain constants must keep a widened
+// plan instead of erroring at execution time.
+func TestCheckNoNeedCastIntIntoDecimalDomain(t *testing.T) {
+	intLiteral := func(v int64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}},
+			},
+		}
+	}
+	uintLiteral := func(v uint64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: v}},
+			},
+		}
+	}
+	column := func(width, scale int32) types.Type {
+		return types.Type{Oid: types.T_decimal64, Width: width, Scale: scale}
+	}
+
+	cases := []struct {
+		name   string
+		expr   *plan.Expr
+		column types.Type
+		want   bool
+	}{
+		{"in range below integer capacity", intLiteral(999), column(5, 2), true},
+		{"negative in range", intLiteral(-999), column(5, 2), true},
+		{"boundary value cannot cram", intLiteral(1000), column(5, 2), false},
+		{"negative boundary cannot cram", intLiteral(-1000), column(5, 2), false},
+		{"beyond declared integer digits", intLiteral(2000), column(5, 2), false},
+		{"only zero fits decimal(2,2)", intLiteral(0), column(2, 2), true},
+		{"one exceeds decimal(2,2)", intLiteral(1), column(2, 2), false},
+		{"negative one exceeds decimal(2,2)", intLiteral(-1), column(2, 2), false},
+		{"scale-free width uses int32 bound", intLiteral(math.MaxInt32), column(18, 0), true},
+		{"scale-free width keeps int32 bound", intLiteral(math.MaxInt32 + 1), column(18, 0), false},
+		{"synthesized zero width keeps legacy bound", intLiteral(math.MaxInt32), column(0, 0), true},
+		{"synthesized zero width rejects beyond legacy bound", intLiteral(math.MaxInt32 + 1), column(0, 0), false},
+		{"unsigned in range", uintLiteral(999), column(5, 2), true},
+		{"unsigned boundary cannot cram", uintLiteral(1000), column(5, 2), false},
+		{"unsigned zero fits decimal(2,2)", uintLiteral(0), column(2, 2), true},
+		{"unsigned one exceeds decimal(2,2)", uintLiteral(1), column(2, 2), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			constT := makeTypeByPlan2Expr(tc.expr)
+			require.Equal(t, tc.want, checkNoNeedCast(context.Background(), constT, tc.column, tc.expr))
 		})
 	}
 }
@@ -2614,7 +2715,7 @@ func TestValidateAndSetHivePartitionOptions_Disabled(t *testing.T) {
 	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
 	stmt.Param.Option = []string{"filepath", "/x", "format", "parquet"}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	assert.False(t, stmt.Param.HivePartitioning)
 }
 
@@ -2642,7 +2743,7 @@ func TestValidateAndSetHivePartitionOptions_DisabledWithColumnsRejected(t *testi
 			stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
 			stmt.Param.Option = tc.opts
 			ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-			err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+			err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 		})
@@ -2665,7 +2766,7 @@ func TestValidateAndSetHivePartitionOptions_HappyPath(t *testing.T) {
 			Default: &plan.Default{NullAbility: true},
 		},
 	)
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	assert.True(t, stmt.Param.HivePartitioning)
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 	require.Equal(t, 1, len(stmt.Param.HivePartitionColTypes))
@@ -2684,7 +2785,7 @@ func TestValidateAndSetHivePartitionOptions_MissingColsAutoInferenceNoHiveDirs(t
 	stmt.Param.FileService = makeHiveMemoryFS(t, "data/plain/file.parquet")
 	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan()
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto inference found no hive-style partition directories")
 }
@@ -2703,7 +2804,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInference(t *testing.T) {
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.True(t, stmt.Param.HivePartitioning)
 	assert.Equal(t, []string{"year", "month"}, stmt.Param.HivePartitionCols)
 	require.Equal(t, 2, len(stmt.Param.HivePartitionColTypes))
@@ -2723,7 +2824,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceFromRawFilepath(t *test
 	stmt.Param.Option = []string{"filepath", dir, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.Equal(t, dir, stmt.Param.Filepath)
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 }
@@ -2740,7 +2841,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceExplicitAuto(t *testing
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct))
 	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
 }
 
@@ -2757,7 +2858,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceMixedKeys(t *testing.T)
 		&plan.ColDef{Name: "dt", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mixed keys")
 }
@@ -2769,7 +2870,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceUndeclaredColumn(t *tes
 	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "partition column 'year' not found")
 }
@@ -2788,7 +2889,7 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceMaxListCalls(t *testing
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
 	)
 
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto inference exceeded")
 	assert.Contains(t, err.Error(), "specify hive_partition_columns explicitly")
@@ -2915,7 +3016,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicateHiveKey(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan()
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate option key")
 }
@@ -2929,7 +3030,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicateFormat(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate option key 'format'")
 }
@@ -2942,7 +3043,7 @@ func TestValidateAndSetHivePartitionOptions_NonParquetFormat(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only supports format='parquet'")
 }
@@ -2956,7 +3057,7 @@ func TestValidateAndSetHivePartitionOptions_StageFilepath(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support stage external tables")
 }
@@ -2970,7 +3071,7 @@ func TestValidateAndSetHivePartitionOptions_StageNameSet(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support stage external tables")
 }
@@ -2983,7 +3084,7 @@ func TestValidateAndSetHivePartitionOptions_ColumnNotFound(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found in table columns")
 }
@@ -2996,7 +3097,7 @@ func TestValidateAndSetHivePartitionOptions_HiddenColumn(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}, Hidden: true})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a hidden column")
 }
@@ -3013,7 +3114,7 @@ func TestValidateAndSetHivePartitionOptions_GeneratedColumn(t *testing.T) {
 		Typ:          plan.Type{Id: int32(types.T_int32)},
 		GeneratedCol: &plan.GeneratedCol{},
 	})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a generated column")
 }
@@ -3026,12 +3127,12 @@ func TestValidateAndSetHivePartitionOptions_VectorType(t *testing.T) {
 		"hive_partition_columns", "emb",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
 
 	ct = makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float64)}})
-	err = validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err = validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
 }
@@ -3044,7 +3145,7 @@ func TestValidateAndSetHivePartitionOptions_DuplicatePartitionColumn(t *testing.
 		"hive_partition_columns", "year,year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate partition column")
 }
@@ -3069,7 +3170,7 @@ func TestValidateAndSetHivePartitionOptions_MultiLevelAndNullability(t *testing.
 		// month: no Default → treated as nullable (default true)
 		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}},
 	)
-	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct))
 	require.Len(t, stmt.Param.HivePartitionColTypes, 2)
 	assert.False(t, stmt.Param.HivePartitionColTypes[0].NullAbility, "year declared NOT NULL")
 	assert.True(t, stmt.Param.HivePartitionColTypes[1].NullAbility, "month default nullable when Default is nil")
@@ -3085,7 +3186,7 @@ func TestValidateAndSetHivePartitionOptions_InvalidHiveValue(t *testing.T) {
 		"hive_partition_columns", "year",
 	}
 	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
-	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	err := validateAndSetHivePartitionOptions(context.Background(), nil, stmt, ct)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be 'true' or 'false'")
 }
@@ -3250,6 +3351,50 @@ func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
 	assert.Equal(t, "parquet", param.Format)
 }
 
+func TestInitInfileOrStageParamRetainsStageDependency(t *testing.T) {
+	for _, backingURL := range []string{"file:///bound/", "s3://bucket/bound/"} {
+		t.Run(backingURL, func(t *testing.T) {
+			ctx := context.Background()
+			proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			backing, err := url.Parse(backingURL)
+			require.NoError(t, err)
+			definition := stage.StageDef{Name: "binding_stage", Url: backing, Credentials: map[string]string{
+				stage.PARAMKEY_AWS_KEY_ID: "key", stage.PARAMKEY_AWS_SECRET_KEY: "secret",
+				stage.PARAMKEY_AWS_REGION: "region", stage.PARAMKEY_ENDPOINT: "endpoint",
+			}}
+			proc.GetStageCache().Set(definition.Name, definition)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: "stage://binding_stage/input.csv", Format: tree.CSV,
+			}, ExParam: tree.ExParam{Ctx: ctx}}
+			require.NoError(t, InitInfileOrStageParam(param, proc))
+			require.Equal(t, "stage://binding_stage/input.csv", param.StageFilepath)
+			require.NotEqual(t, param.StageFilepath, param.Filepath)
+
+			param.Ctx = nil // Binding drops the execution context before serialization.
+			payload, err := json.Marshal(param)
+			require.NoError(t, err)
+			var retained tree.ExternParam
+			require.NoError(t, json.Unmarshal(payload, &retained))
+			require.Equal(t, param.StageFilepath, retained.StageFilepath)
+			retained.Ctx = ctx
+			definition.Status = "disabled"
+			proc.GetStageCache().Set(definition.Name, definition)
+			require.ErrorContains(t, InitInfileOrStageParam(&retained, proc), "stage binding_stage is disabled")
+
+			// A later bind can resolve the retained identity back to a local
+			// source, even when the previous bind changed ScanType to S3.
+			definition.Status = "in_use"
+			definition.Url, err = url.Parse("file:///rebound/")
+			require.NoError(t, err)
+			proc.GetStageCache().Set(definition.Name, definition)
+			require.NoError(t, InitInfileOrStageParam(&retained, proc))
+			require.Equal(t, "/rebound/input.csv", retained.Filepath)
+			require.Equal(t, tree.INFILE, retained.ScanType)
+			require.Nil(t, retained.S3Param)
+		})
+	}
+}
+
 // Avoid unused import warning when some branches of types are not directly referenced.
 var _ = types.T_int32
 
@@ -3262,4 +3407,190 @@ func TestGetRowSizeFromTableDefLongTextDoesNotOverflow(t *testing.T) {
 	got := GetRowSizeFromTableDef(tableDef, true)
 	require.Equal(t, float64(math.MaxInt32), got)
 	require.GreaterOrEqual(t, got, float64(0))
+}
+
+func TestNodeHasMoCtrl(t *testing.T) {
+	moCtl := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "mo_ctl"}}}}
+	other := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "="}}}}
+
+	require.False(t, NodeHasMoCtrl(nil))
+	require.False(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{other}}))
+
+	// mo_ctl in every executable position must be detected, not just ProjectList.
+	require.True(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OnList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{GroupBy: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{AggList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{TblFuncExprList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{Limit: moCtl}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{RowsetData: &plan.RowsetData{
+		Cols: []*plan.ColData{{Data: []*plan.RowsetExpr{{Expr: moCtl}}}},
+	}}))
+	// nested inside a function argument (e.g. mo_ctl(...) IS NOT NULL)
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{
+		{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "is_not_null"}, Args: []*plan.Expr{moCtl}}}},
+	}}))
+
+	// A window entry hides the call inside an Expr_W (WinSpecList), where the pre-Expr_W traversal
+	// never looked: MAX(mo_ctl(...)) OVER () or mo_ctl(...) OVER (...) must still be detected.
+	winWith := func(spec *plan.WindowSpec) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_W{W: spec}}
+	}
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "max"}, Args: []*plan.Expr{moCtl}}}}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{PartitionBy: []*plan.Expr{moCtl}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}),
+	}}))
+	// a window with no mo_ctl, and a nil spec, must be safe and false.
+	require.False(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "row_number"}}}}}),
+	}}))
+	require.False(t, HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: nil}}))
+}
+
+func TestExprIsZonemappableComparisonDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		left := &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		right := &plan.Expr{Typ: left.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{left, right})
+		require.NoError(t, err)
+		require.Equal(t, oid != types.T_char, ExprIsZonemappable(context.Background(), expr))
+	}
+}
+
+func TestConstantTransposeArithmeticSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name, op                                 string
+		constantLeft, equalityReversed, overflow bool
+	}{
+		{name: "absorbed addition", op: "+"},
+		{name: "absorbed subtraction", op: "-"},
+		{name: "constant minus column", op: "-", constantLeft: true},
+		{name: "reversed equality", op: "+", equalityReversed: true},
+		{name: "integer overflow", op: "+", overflow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := NewMockCompilerContext(false, newPlanTestProcess(t))
+			proc := cc.GetProcess()
+			typ := types.T_float64.ToType()
+			literal := MakePlan2Float64ConstExprWithType(1)
+			target := MakePlan2Float64ConstExprWithType(1)
+			if tc.op == "-" && !tc.constantLeft {
+				target = MakePlan2Float64ConstExprWithType(-1)
+			}
+			if tc.overflow {
+				typ = types.T_int64.ToType()
+				literal = MakePlan2Int64ConstExprWithType(1)
+				target = MakePlan2Int64ConstExprWithType(math.MaxInt64)
+			}
+			col := &plan.Expr{Typ: makePlan2Type(&typ), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			operands := []*plan.Expr{col, literal}
+			if tc.constantLeft {
+				operands[0], operands[1] = operands[1], operands[0]
+			}
+			arithmetic, err := BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, operands)
+			require.NoError(t, err)
+			operands = []*plan.Expr{arithmetic, target}
+			if tc.equalityReversed {
+				operands[0], operands[1] = operands[1], operands[0]
+			}
+			source, err := BindFuncExprImplByPlanExpr(proc.Ctx, "=", operands)
+			require.NoError(t, err)
+			normalized, err := ConstantTranspose(DeepCopyExpr(source), proc)
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(typ)
+			defer input.Clean(proc.Mp())
+			if tc.overflow {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(math.MaxInt64), false, proc.Mp()))
+				input.SetRowCount(1)
+			} else {
+				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []float64{-1e-17, 0, 1e-17, 0}, []bool{false, false, false, true}, proc.Mp()))
+				input.SetRowCount(4)
+			}
+			for _, expr := range []*plan.Expr{source, normalized} {
+				executor, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				if tc.overflow {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+					continue
+				}
+				require.NoError(t, err)
+				for i := 0; i < 3; i++ {
+					require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, i), "row %d", i)
+				}
+				require.True(t, result.IsNull(3))
+			}
+		})
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_LowPrecisionFloat(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "p",
+	}
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		ct := makeHivePlan(&plan.ColDef{Name: "p", Typ: plan.Type{Id: int32(id)}})
+		err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
+		require.ErrorContains(t, err, "partition column 'p' cannot be a "+id.String()+" type")
+	}
+}
+
+func TestAuthorizeExternalFileAccess(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{SessionInfo: process.SessionInfo{Account: "tenant", Role: "accountadmin"}}}
+	for _, tc := range []struct {
+		name   string
+		param  tree.ExternParam
+		denied bool
+	}{
+		{name: "server infile", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "/owned/input.csv"}}, denied: true},
+		{name: "client local", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "client.csv"}, ExParam: tree.ExParam{Local: true}}},
+		{name: "inline", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}}},
+		{name: "owned result scan", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:/query_result/owned"}, ExParam: tree.ExParam{ExternType: int32(plan.ExternType_RESULT_SCAN)}}},
+		{name: "named service", param: tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "SHARED:owned.csv"}}, denied: true},
+		{name: "remote s3", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "https://owned.example", Bucket: "owned", APIKey: "owned-key", APISecret: "owned-secret"}}}},
+		{name: "s3 disk", param: tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "owned.csv"}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Endpoint: "disk", Bucket: "/owned"}}}, denied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AuthorizeExternalFileAccess(&tc.param, proc)
+			if tc.denied {
+				require.ErrorContains(t, err, "only the sys account moadmin role")
+			} else {
+				require.NoError(t, err)
+			}
+			proc.Base.SessionInfo = process.SessionInfo{Account: "sys", Role: "moadmin"}
+			require.NoError(t, AuthorizeExternalFileAccess(&tc.param, proc))
+			proc.Base.SessionInfo = process.SessionInfo{Account: "tenant", Role: "accountadmin"}
+		})
+	}
+}
+
+func hiveInferenceProcess(t *testing.T) *process.Process {
+	p := testutil.NewProcess(t)
+	p.Base.SessionInfo.Account = "sys"
+	p.Base.SessionInfo.Role = "moadmin"
+	return p
+}
+
+func TestHiveInferenceAuthorizationPrecedesListing(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "tenant"
+	proc.Base.SessionInfo.Role = "accountadmin"
+	parent := filepath.Join(t.TempDir(), "uncreated-parent")
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{Option: []string{"filepath", filepath.Join(parent, "part"), "format", "parquet", "hive_partitioning", "true"}}}
+	err := validateAndSetHivePartitionOptions(t.Context(), proc, stmt, makeHivePlan())
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = os.Stat(parent)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

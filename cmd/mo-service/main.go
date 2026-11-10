@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	goruntime "runtime"
 	"sync"
 	"syscall"
@@ -32,9 +31,11 @@ import (
 	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -62,16 +63,17 @@ import (
 )
 
 var (
-	configFile        = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile        = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag       = flag.Bool("version", false, "print version information")
-	daemon            = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy         = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
-	maxProcessor      = flag.Int("max-processor", 0, "set max processor for go runtime")
-	globalEtlFS       fileservice.FileService
-	globalServiceType string
-	globalNodeId      string
-	serviceLifecycle  *serviceSupervisor
+	configFile           = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile           = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	catalogDecisionsFile = flag.String("catalog-upgrade-decisions", "", "publish a catalog snapshot decision file using the CN -cfg; stop all CNs first")
+	versionFlag          = flag.Bool("version", false, "print version information")
+	daemon               = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy            = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor         = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS          fileservice.FileService
+	globalServiceType    string
+	globalNodeId         string
+	serviceLifecycle     *serviceSupervisor
 )
 
 func init() {
@@ -79,12 +81,21 @@ func init() {
 }
 
 func main() {
-	if *maxProcessor > 0 {
-		system.SetGoMaxProcs(*maxProcessor)
-	}
-
 	flag.Parse()
+	applyMaxProcessor()
 	maybePrintVersion()
+	if *catalogDecisionsFile != "" {
+		if *configFile == "" || *launchFile != "" {
+			fmt.Fprintln(os.Stderr, "catalog-upgrade-decisions requires a CN -cfg and cannot be combined with -launch")
+			os.Exit(1)
+		}
+		if err := publishCatalogUpgradeDecisions(context.Background(), *configFile, *catalogDecisionsFile); err != nil {
+			fmt.Fprintln(os.Stderr, "publish catalog upgrade decisions:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, "published catalog upgrade decisions to", bootstrap.SnapshotUpgradeDecisionPath)
+		return
+	}
 	maybeRunInDaemonMode()
 	// Connection tracking is optional debug instrumentation. Start it only
 	// after command-line handling so image validation with -h does not require
@@ -122,7 +133,6 @@ func main() {
 		logutil.Infof("Mutex profiling enabled with fraction: %d", *mutexProfileFraction)
 	}
 	if *httpListenAddr != "" {
-		frontend.SetDebugHTTPAddr(*httpListenAddr)
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
 		}()
@@ -165,6 +175,16 @@ func main() {
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
+// applyMaxProcessor applies -max-processor to the Go runtime and to the
+// worker budget reported by system.GoMaxProcs. It must run after
+// flag.Parse: before parsing, the flag still holds its registered
+// default 0 and an explicit command-line value would be silently ignored.
+func applyMaxProcessor() {
+	if *maxProcessor > 0 {
+		system.SetGoMaxProcs(*maxProcessor)
+	}
+}
+
 func serviceFailureC() <-chan error {
 	if serviceLifecycle == nil {
 		return nil
@@ -183,6 +203,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 
 	detail := "Starting shutdown..."
 	fatal := false
+	var fatalCause error
 	select {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
@@ -207,7 +228,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 		// shutdown cmd from ha keeper
 		launchSleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
-	case <-serviceFailureC():
+	case fatalCause = <-serviceFailureC():
 		detail += "service task failed"
 		fatal = true
 	}
@@ -224,7 +245,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 		// stopper now only releases observability and other process-level tasks.
 		stopper.Stop()
 	}
-	return err
+	return errors.Join(fatalCause, err)
 }
 
 func startService(
@@ -236,17 +257,12 @@ func startService(
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	if err := cfg.resolveGossipSeedAddresses(); err != nil {
+	if err := cfg.LogService.ResolveGossipSeedAddresses(); err != nil {
 		return err
 	}
 	st, err := cfg.getServiceType()
 	if err != nil {
 		return err
-	}
-	if st == metadata.ServiceType_CN {
-		if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
-			return err
-		}
 	}
 
 	setupServiceRuntime(cfg, stopper)
@@ -365,9 +381,6 @@ func startCNService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 ) error {
-	if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
-		return err
-	}
 	c := cfg.getCNServiceConfig()
 	// start up system module to do some calculation.
 	system.Run(stopper)
@@ -386,26 +399,40 @@ func startCNService(
 	}
 	err := stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		var closeErr error
-		defer func() { finishTask(closeErr) }()
+		var startupErr error
+		defer func() {
+			finishTask(closeErr)
+			serviceLifecycle.notifyFatal(startupErr)
+		}()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleCN)
 		defer cancelRole()
 		cfg.initMetaCache()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
+		var published cnservice.Service
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
 			gossipNode,
+			func(owner cnservice.Service) { published = owner },
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
-			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, c.Txn.Trace.Dir)),
 		)
 		if err != nil {
-			panic(err)
+			startupErr = err
+			if published != nil {
+				closeErr = published.Close()
+			}
+			return
 		}
-		if err := s.Start(); err != nil {
-			panic(err)
+		if err := s.StartContext(roleCtx); err != nil {
+			closeErr = published.Close()
+			if roleCtx.Err() != nil && errors.Is(err, context.Canceled) {
+				return
+			}
+			startupErr = err
+			return
 		}
 
 		<-roleCtx.Done()
@@ -424,10 +451,6 @@ func startCNService(
 		finishTask(err)
 	}
 	return err
-}
-
-func (c *Config) verifySiriusBenchmarkNoGC() error {
-	return cnservice.VerifySiriusBenchmarkNoGC(&c.CN, c.benchmarkTNNoGC)
 }
 
 func startTNService(
@@ -450,7 +473,19 @@ func startTNService(
 	}
 	err := stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		var closeErr error
-		defer func() { finishTask(closeErr) }()
+		var owner tnservice.Service
+		completed := false
+		defer func() {
+			if !completed && closeErr == nil {
+				closeErr = moerr.NewInvalidStateNoCtx("TN startup task interrupted")
+			}
+			if owner != nil {
+				err := owner.Close()
+				closeErr = errors.Join(closeErr, err)
+			}
+			finishTask(closeErr)
+			serviceLifecycle.notifyFatal(closeErr)
+		}()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleTN)
 		defer cancelRole()
 		cfg.initMetaCache()
@@ -463,19 +498,21 @@ func startTNService(
 			mustGetRuntime(cfg),
 			fileService,
 			shutdownC,
+			func(value tnservice.Service) {
+				owner = value
+			},
 			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
-			panic(err)
+			closeErr = err
+			return
 		}
 		if err := s.Start(); err != nil {
-			panic(err)
+			closeErr = err
+			return
 		}
 
 		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close tn service", zap.Error(err))
-		}
+		completed = true
 	})
 	if err != nil {
 		finishTask(err)

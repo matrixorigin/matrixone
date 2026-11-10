@@ -219,3 +219,44 @@ select * from result_scan(last_query_id()) as u;
 drop table time_window01;
 -- @session
 drop account abc;
+
+-- issue #30553: empty select saved by save_result must stay scannable (multi-type empty result readback)
+set save_query_result = on;
+drop table if exists t_30553;
+create table t_30553 (a int, b varchar(20), c double, d date, e timestamp(3), f decimal(10,2), g bool);
+/* save_result */select * from t_30553;
+select * from result_scan(last_query_id()) as u;
+/* save_result */select * from t_30553 where a > 100;
+select count(*) from result_scan(last_query_id()) as u;
+/* save_result */select a, b from t_30553;
+select * from result_scan(last_query_id()) as u;
+/* save_result */select 1 as x, 's' as y where 1 > 2;
+select * from result_scan(last_query_id()) as u;
+drop table t_30553;
+set save_query_result = off;
+
+-- issue #30571: non-leading column projection/aggregation and NULL filtering over result_scan
+set save_query_result = on;
+drop table if exists t_30571;
+create table t_30571 (id int primary key, name varchar(20), price decimal(10,2), qty int, tag varchar(10));
+insert into t_30571 values (1,'apple',1.50,10,'a'),(2,'banana',2.25,20,null),(3,'cherry',3.00,null,'c'),(4,null,null,40,null);
+/* save_result */select * from t_30571 order by id;
+select name from result_scan(last_query_id()) as u order by id;
+/* save_result */select * from t_30571 order by id;
+select id, price from result_scan(last_query_id()) as u order by id;
+/* save_result */select * from t_30571 order by id;
+select sum(price) from result_scan(last_query_id()) as u;
+/* save_result */select * from t_30571 order by id;
+select avg(price), min(price), max(price), count(price) from result_scan(last_query_id()) as u;
+/* save_result */select * from t_30571 order by id;
+select sum(qty), max(qty) from result_scan(last_query_id()) as u;
+/* save_result */select * from t_30571 order by id;
+select name from result_scan(last_query_id()) as u where price > 2.00 order by id;
+/* save_result */select * from t_30571 order by id;
+select id from result_scan(last_query_id()) as u where name is null;
+/* save_result */select * from t_30571 order by id;
+select id, name, tag from result_scan(last_query_id()) as u where tag is null order by id;
+/* save_result */select * from t_30571 order by id;
+select id, qty from result_scan(last_query_id()) as u where qty is null;
+drop table t_30571;
+set save_query_result = off;

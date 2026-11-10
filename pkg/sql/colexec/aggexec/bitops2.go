@@ -42,7 +42,7 @@ const MaxBitwiseAggregateOperandBytes int32 = 511
 // The caller must provide a type whose Width is a proven maximum result size;
 // generic VARBINARY capacity is not such a proof.
 func IsBitwiseAggregateOperandTooWide(param types.Type) bool {
-	return (param.Oid == types.T_binary || param.Oid == types.T_varbinary) &&
+	return (param.Oid == types.T_binary || param.Oid == types.T_varbinary || param.Oid == types.T_blob) &&
 		param.Width > MaxBitwiseAggregateOperandBytes
 }
 
@@ -54,7 +54,8 @@ type bitOpExecFixed[T types.Ints | types.UInts] struct {
 type bitOpExecBytes struct {
 	aggExec
 	op bitOp
-	// width is the byte length of the argument type (BINARY(N)/VARBINARY(N)).
+	// width is the declared binary-string width. BLOB expressions with an
+	// unknown width use zero and validate operand lengths at runtime.
 	// It drives the length of the neutral value produced for empty or
 	// all-NULL groups so the result preserves the argument's byte length,
 	// matching MySQL binary-string aggregate semantics.
@@ -208,6 +209,15 @@ func (exec *bitOpExecBytes) BulkFill(groupIndex int, vectors []*vector.Vector) e
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
+// BLOB expressions can have unknown width; validate values before copying or
+// combining them, including partial states restored from serialization.
+func (exec *bitOpExecBytes) validateOperand(value []byte) error {
+	if exec.argTypes[0].Oid == types.T_blob && len(value) > int(MaxBitwiseAggregateOperandBytes) {
+		return moerr.NewInvalidBitwiseAggregateOperandsSizeNoCtx()
+	}
+	return nil
+}
+
 func (exec *bitOpExecBytes) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -220,6 +230,9 @@ func (exec *bitOpExecBytes) BatchFill(offset int, groups []uint64, vectors []*ve
 		} else {
 			x, y := exec.getXY(grp - 1)
 			value := vectors[0].GetBytesAt(int(idx))
+			if err := exec.validateOperand(value); err != nil {
+				return err
+			}
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
 				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
 					return err
@@ -255,15 +268,17 @@ func (exec *bitOpExecBytes) BatchMerge(next AggFuncExec, offset int, groups []ui
 		if other.state[x2].vecs[0].IsNull(uint64(y2)) {
 			continue
 		}
+		otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
+		if err := exec.validateOperand(otherValue); err != nil {
+			return err
+		}
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
 			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), otherValue, exec.mp); err != nil {
 				return err
 			}
 			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 		} else {
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
-			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
 			// computeBytes will update oldValue in place
 			_, err := exec.op.computeBytes(oldValue, otherValue)
 			if err != nil {
@@ -405,7 +420,7 @@ func makeBitOpExec(mp *mpool.MPool, id int64, isDistinct bool, param types.Type,
 		return makeBitOpExecFixed[uint64](mp, id, param, op)
 	case types.T_binary:
 		return makeBitOpExecBytes(mp, id, param, op)
-	case types.T_varbinary:
+	case types.T_varbinary, types.T_blob:
 		return makeBitOpExecBytes(mp, id, param, op)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("unsupported parameter type %s for bit operations", param.String()))

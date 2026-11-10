@@ -270,8 +270,14 @@ func (s *morpcStream) write(
 		seg.MessageSize = int32(size)
 		seg.Sequence = int32(index + 1)
 		seg.MaxSequence = int32(len(chunks))
-		n := copy(seg.Payload, chunk)
-		seg.Payload = seg.Payload[:n]
+		if cap(seg.Payload) < len(chunk) {
+			// Grow only for actual payloads, without copying overwritten bytes.
+			// Retained capacity stays within the existing segment limit.
+			capacity := min(s.limit, max(len(chunk), 2*cap(seg.Payload)))
+			seg.Payload = make([]byte, capacity)
+		}
+		seg.Payload = seg.Payload[:len(chunk)]
+		copy(seg.Payload, chunk)
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
@@ -778,12 +784,21 @@ func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail, closeCB func(),
 ) error {
 	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	// Snapshot progress shares the incremental admission frontier: a delayed
+	// read barrier must not enqueue an older update after this subscription.
+	to := *tail.Ts
+	ss.publishMu.Lock()
+	defer ss.publishMu.Unlock()
 
 	resp := ss.responses.Acquire()
 	resp.closeCB = closeCB
 	resp.Response = newSubscritpionResponse(tail)
 	err := ss.sendResponse(sendCtx, resp, false)
 	if err == nil {
+		ss.publishInit.Do(func() { ss.exactFrom = to })
+		if ss.exactFrom.Less(to) {
+			ss.exactFrom = to
+		}
 		atomic.AddInt32(&ss.active, 1)
 	}
 	return err
@@ -847,9 +862,8 @@ func (ss *Session) TrySendProgressResponse(
 	ss.publishMu.Lock()
 	defer ss.publishMu.Unlock()
 
-	// A ready subscriber has already applied its subscription snapshots. If no
-	// incremental response initialized exactFrom yet, that snapshot is at least
-	// as new as the barrier frontier and no extra progress response is needed.
+	// Subscription snapshots and incremental updates both initialize this
+	// frontier. A barrier can also be the session's first progress admission.
 	ss.publishInit.Do(func() {
 		ss.exactFrom = to
 	})

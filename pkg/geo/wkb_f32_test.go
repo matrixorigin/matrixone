@@ -173,3 +173,18 @@ func TestWKBFloat32ToStandard(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rounded, back)
 }
+
+func TestWKBFloat32Golden(t *testing.T) {
+	// Literal variant bytes: ordinary WKB headers/counts and little-endian
+	// IEEE754 float32 ordinates. These do not depend on either geometry reader.
+	for _, tc := range []struct{ wkt, hex string }{
+		{"POINT(1 2)", "01010000000000803f00000040"},
+		{"POINT EMPTY", "01010000000000c07f0000c07f"},
+		{"LINESTRING(0 0,1 2)", "01020000000200000000000000000000000000803f00000040"},
+		{"GEOMETRYCOLLECTION(POINT(1 2),MULTILINESTRING EMPTY)", "01070000000200000001010000000000803f00000040010500000000000000"},
+	} {
+		t.Run(tc.wkt, func(t *testing.T) {
+			require.Equal(t, mustHex(t, tc.hex), mustWriteWKBFloat32(t, mustParse(t, tc.wkt)))
+		})
+	}
+}

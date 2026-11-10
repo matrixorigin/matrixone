@@ -35,7 +35,7 @@ where match(a.body) against('hello') and match(b.body) against('hello') order by
 explain select a.id, match(a.body) against('hello') as sa, match(b.body) against('hello') as sb
 from a join b on a.id=b.id
 where match(a.body) against('hello') and match(b.body) against('hello');
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -47,14 +47,16 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_join.b  𝄀
                     Runtime Filter Probe: b.id  𝄀
-              ->  Table Function on fulltext_index_scan  𝄀
+              ->  Fulltext Index Scan on fb  𝄀
+                    Fulltext Index: fb  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (a.id = mo_fulltext_alias_0.doc_id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_join.a  𝄀
                     Runtime Filter Probe: a.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on fa  𝄀
+                    Fulltext Index: fa
 select a.id from a join b on a.id=b.id
 where match(a.body) against('hello') order by match(a.body) against('hello') desc;
 ➤ id[4,32,0]  𝄀

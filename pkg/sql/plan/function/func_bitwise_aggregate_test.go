@@ -31,7 +31,7 @@ import (
 func TestBitwiseAggregateBinaryOperandWidth(t *testing.T) {
 	ctx := context.Background()
 	for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
-		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 			for _, width := range []int32{510, 511} {
 				resolved, err := GetFunctionByName(ctx, functionName,
 					[]types.Type{types.New(oid, width, 0)})
@@ -40,7 +40,7 @@ func TestBitwiseAggregateBinaryOperandWidth(t *testing.T) {
 				require.Equal(t, width, resolved.GetReturnType().Width)
 			}
 
-			for _, width := range []int32{512, 600} {
+			for _, width := range []int32{512, 600, 65535} {
 				_, err := GetFunctionByName(ctx, functionName,
 					[]types.Type{types.New(oid, width, 0)})
 				require.Error(t, err, "%s(%s(%d)) must be rejected", functionName, oid, width)
@@ -332,8 +332,8 @@ func TestBitwiseAggregateCastRegistration(t *testing.T) {
 	testCase := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestInput(decimalType, []types.Decimal128{value}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
-	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64}, nil), fEvalFn(eval))
-	success, info := testCase.Run()
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64}, nil), executeLogicOfOverload(eval))
+	success, info := testCase.RunAndFree()
 	require.True(t, success, info)
 }
 
@@ -350,6 +350,7 @@ func TestBitwiseAggregateCastDispatchAndErrors(t *testing.T) {
 		NewFunctionTestInput(types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), []string{"1"}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	defer binaryTextCase.Free()
 	binaryTextCase.parameters[0].SetIsBin(true)
 	success, info := binaryTextCase.Run()
 	require.True(t, success, info)
@@ -564,6 +565,7 @@ func assertBitwiseAggregateCastFails(
 	t.Helper()
 	testCase := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	defer testCase.Free()
 	if selectList != nil {
 		testCase = testCase.WithSelectList(selectList)
 	}
@@ -625,9 +627,31 @@ func assertBitwiseAggregateCast(
 	}
 	expected := NewFunctionTestResult(resultType, false, want, wantNulls)
 	testCase := NewFunctionTestCase(proc, inputs, expected, NewBitwiseAggregateCast)
+	defer testCase.Free()
 	if selectList != nil {
 		testCase = testCase.WithSelectList(selectList)
 	}
 	success, info := testCase.Run()
 	require.True(t, success, info)
+}
+
+func TestBitwiseAggregateCastLowPrecisionFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	assertBitwiseAggregateCast(t, proc, types.T_bf16.ToType(),
+		[]types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-3), 0}, []bool{false, false, true},
+		[]int64{2, -3, 0}, []bool{false, false, true}, nil)
+	assertBitwiseAggregateCast(t, proc, types.T_float8.ToType(),
+		[]types.Float8{types.Float8FromFloat32(6)}, []bool{false},
+		[]int64{6}, []bool{false}, nil)
+}
+
+func TestBitwiseAggregatePreservesBlobType(t *testing.T) {
+	for _, width := range []int32{0, 511} {
+		operand := types.NewWithCharset(types.T_blob, width, 0, types.CharsetBinary)
+		for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+			resolved, err := GetFunctionByName(context.Background(), name, []types.Type{operand})
+			require.NoError(t, err, name)
+			require.Equal(t, operand, resolved.GetReturnType())
+		}
+	}
 }

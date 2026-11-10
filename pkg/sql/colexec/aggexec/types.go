@@ -523,14 +523,16 @@ func makeGroupAgg(
 			}
 		}
 	}
-	if extraInformation != nil {
-		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
+	// the account first, as the window and time-window operators bind it, so an aggregate
+	// can admit its configuration's memory before parsing it
+	if allocation != nil {
+		if err := groupExec.SetAllocationAccount(allocation); err != nil {
 			groupExec.Free()
 			return nil, err
 		}
 	}
-	if allocation != nil {
-		if err := groupExec.SetAllocationAccount(allocation); err != nil {
+	if extraInformation != nil {
+		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
 			groupExec.Free()
 			return nil, err
 		}
@@ -547,6 +549,13 @@ func makeAgg(
 	legacyDecimalSumResult bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
+	// Compact spill vectors inherit their type from this execution contract;
+	// ordinary partial-state vectors also validate their own wire metadata.
+	for _, typ := range param {
+		if err := requireLegacyAggregateType(typ); err != nil {
+			return nil, err
+		}
+	}
 	exec, ok, err := makeSpecialAggExec(
 		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
 		legacyDecimalSumState, legacyDecimalSumResult, param...)
@@ -633,6 +642,9 @@ func makeSpecialAggExec(
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
 		return exec, true, err
+	case AggIdOfVectorMatmul:
+		exec, err := makeVectorMatmul(mp, id, isDistinct, params)
+		return exec, true, err
 	case AggIdOfPercentileCont:
 		if len(params) != 1 {
 			return nil, true, moerr.NewInternalErrorNoCtx("percentile_cont requires one value argument")
@@ -644,6 +656,9 @@ func makeSpecialAggExec(
 			return nil, true, moerr.NewInternalErrorNoCtx("percentile_disc requires one value argument")
 		}
 		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
+		return exec, true, err
+	case AggIdOfQuantileExactWeighted:
+		exec, err := makeQuantileExactWeightedExec(mp, id, isDistinct, params)
 		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)

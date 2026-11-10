@@ -90,6 +90,9 @@ deallocate prepare pick_composite_mixed_stmt;
 -- parameter binding path, so PREPARE must reject their markers explicitly.
 -- @regex("prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers",true)
 prepare pick_subquery_parameter_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys(select id, shard from composite_pick_src where id = ?) when conflict accept';
+-- Formatting must not hide a marker after a qualified reserved identifier.
+-- @regex("prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers",true)
+prepare pick_qualified_parameter_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys(select t.begin + ?, t.shard from (select 3 as `begin`, ''bound'' as shard) t) when conflict accept';
 
 create database issue_28377_source;
 create table issue_28377_source.db_base(id int primary key, v varchar(20));

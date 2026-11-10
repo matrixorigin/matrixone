@@ -70,6 +70,7 @@ type sortType interface {
 	} | ~[]bool | ~[]int | ~[]int8 | ~[]int16 | ~[]int32 | ~[]int64 |
 		~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64 | ~[]uintptr |
 		~[]float32 | ~[]float64 |
+		~[]types.BF16 | ~[]types.Float16 | ~[]types.Float8 | ~[]types.Float4 |
 		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
 		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
 		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
@@ -89,6 +90,7 @@ func IsSupportedType(typ types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_uuid, types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_enum, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -96,7 +98,8 @@ func IsSupportedType(typ types.T) bool {
 		types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -105,6 +108,12 @@ func IsSupportedType(typ types.T) bool {
 
 func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
+}
+
+// LowPrecisionLess orders bf16, float16, float8 and float4 values by their float32 values,
+// the order Sort gives them.
+func LowPrecisionLess[T types.LowPrecFloat](a, b T) bool {
+	return a.ToFloat32() < b.ToFloat32()
 }
 
 // ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
@@ -297,6 +306,50 @@ func sortByVector(
 		} else {
 			genericSort(col, os, genericGreater[float64])
 		}
+	case types.T_bf16:
+		col := vector.MustFixedColNoTypeCheck[types.BF16](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.BF16])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.BF16])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.BF16])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.BF16])
+		}
+	case types.T_float16:
+		col := vector.MustFixedColNoTypeCheck[types.Float16](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float16])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float16])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float16])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float16])
+		}
+	case types.T_float8:
+		col := vector.MustFixedColNoTypeCheck[types.Float8](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float8])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float8])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float8])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float8])
+		}
+	case types.T_float4:
+		col := vector.MustFixedColNoTypeCheck[types.Float4](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float4])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float4])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float4])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float4])
+		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		if !desc {
@@ -373,7 +426,28 @@ func sortByVector(
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
-		if !desc {
+		if sqlOrder && types.IsCaseInsensitiveCollation(vec.GetType().Charset) {
+			// Case-insensitive collations must use the same resolved ORDER BY
+			// comparison domain as top/merge comparison and peer partitioning.
+			// The legacy byte comparator remains the fast path for all other
+			// string types, and physical/storage callers pass sqlOrder=false.
+			typ := *vec.GetType()
+			if !desc {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringOrderValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) < 0
+				})
+			} else {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringOrderValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) > 0
+				})
+			}
+		} else if !desc {
 			genericSort(col, os, varlenaLess)
 		} else {
 			genericSort(col, os, varlenaGreater)
@@ -420,6 +494,19 @@ func sortByVector(
 		} else {
 			genericSort(col, os, arrayElementGreater[uint8])
 		}
+	case types.T_array_float8, types.T_array_float4:
+		// Order by the dequantized values, as vecf32 does, comparing the cells in place.
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
+		genericSort(col, os, func(v struct {
+			data []types.Varlena
+			area []byte
+		}, i, j int64) bool {
+			return types.CompareBlockScaledFromBytes(v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area), desc) < 0
+		})
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 		if !desc {
@@ -500,6 +587,73 @@ func SortByVectors(
 	nullsLast []bool,
 ) {
 	SortByVectorsWithScratch(os, vectors, desc, nullsLast, nil)
+}
+
+// SortByVectorsWithTypes is the SQL-order variant of SortByVectors with the
+// semantic type of each expression supplied by the plan. A materialized
+// vector may retain only its physical string OID after a storage/spill round
+// trip; using the plan type keeps native Unicode collations active in that
+// case without mutating the owned vector metadata.
+func SortByVectorsWithTypes(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+) {
+	SortByVectorsWithTypesAndScratch(os, vectors, desc, nullsLast, semanticTypes, nil)
+}
+
+// SortByVectorsWithTypesAndScratch is the allocation-aware counterpart of
+// SortByVectorsWithTypes.
+func SortByVectorsWithTypesAndScratch(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+	scratch *ByVectorsScratch,
+) {
+	if len(semanticTypes) != 0 && len(semanticTypes) != len(vectors) {
+		panic("sort: mismatched multi-column semantic types")
+	}
+	if len(semanticTypes) == 0 {
+		SortByVectorsWithScratch(os, vectors, desc, nullsLast, scratch)
+		return
+	}
+	views := make([]*vector.Vector, len(vectors))
+	for i, vec := range vectors {
+		views[i] = vectorWithSemanticType(vec, semanticTypes[i])
+	}
+	SortByVectorsWithScratch(os, views, desc, nullsLast, scratch)
+}
+
+// vectorWithSemanticType creates a read-only metadata view. Sorting and
+// partitioning only inspect the vector, so the shallow view does not acquire
+// ownership and cannot affect the source vector's allocation or payload.
+func vectorWithSemanticType(vec *vector.Vector, typ types.Type) *vector.Vector {
+	if vec == nil || *vec.GetType() == typ {
+		return vec
+	}
+	// The semantic type is only allowed to decorate a vector when it has the
+	// same physical OID.  In particular, replacing an int8 vector's metadata
+	// with an int64 plan type would make the fixed-width sort path reinterpret
+	// its backing bytes and can panic.  String vectors are the one case where
+	// the plan carries comparison semantics (charset/collation) that may be
+	// absent after materialization, so retain that overlay for a matching OID.
+	physical := vec.GetType().Oid
+	if physical != typ.Oid {
+		return vec
+	}
+	switch physical {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
+		view := *vec
+		view.SetType(typ)
+		return &view
+	default:
+		return vec
+	}
 }
 
 // SortByVectorsWithScratch sorts row selectors like SortByVectors and reuses
@@ -591,6 +745,24 @@ func float32OrderAscLess(data []float32, i, j int64) bool {
 
 func float32OrderDescLess(data []float32, i, j int64) bool {
 	return types.Float32OrderDescCompare(data[i], data[j]) < 0
+}
+
+// Low-precision float comparators widen each element to float32 (raw bits do not order
+// floats) and reuse the float32 SQL NaN-aware ordering.
+func lowPrecOrderAscLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return types.Float32OrderAscCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
+}
+
+func lowPrecOrderDescLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return types.Float32OrderDescCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
+}
+
+func lowPrecLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return data[i].ToFloat32() < data[j].ToFloat32()
+}
+
+func lowPrecGreater[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return data[i].ToFloat32() > data[j].ToFloat32()
 }
 
 func float64OrderAscLess(data []float64, i, j int64) bool {

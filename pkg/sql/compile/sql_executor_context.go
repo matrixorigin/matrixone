@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -65,7 +67,8 @@ type compilerContext struct {
 	sql                  string
 	mu                   sync.Mutex
 
-	lower int64
+	lower               int64
+	indexRelationPolicy *executor.IndexRelationPolicy
 }
 
 func (c *compilerContext) NewViewDescriptionCompilerContext(
@@ -75,7 +78,8 @@ func (c *compilerContext) NewViewDescriptionCompilerContext(
 		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
 		statsCache: c.statsCache, lower: c.lower, viewChild: true,
 		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
-		sql: c.sql,
+		sql:                 c.sql,
+		indexRelationPolicy: c.indexRelationPolicy.Clone(),
 	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		provider, ok := delegate.(plan.ViewDescriptionContextProvider)
@@ -163,7 +167,7 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	_, tableDef, err := c.Resolve(dbName, table, nil)
+	_, tableDef, err := c.Resolve(dbName, table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,8 +223,13 @@ func (c *compilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.
 	if c.viewChild {
 		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
 	}
+	if c.indexRelationPolicy != nil {
+		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
+	}
 	panic("not supported in internal sql executor")
 }
+
+func (c *compilerContext) IndexMaintenanceRestricted() bool { return c.indexRelationPolicy != nil }
 
 func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
 	if c.viewDelegate != nil {
@@ -229,7 +238,7 @@ func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, databas
 		}
 		return c.viewDelegate.ResolveUdf(name, args)
 	}
-	if !c.viewChild || c.proc == nil {
+	if (!c.viewChild && c.indexRelationPolicy == nil) || c.proc == nil {
 		return nil, moerr.NewNotSupported(c.GetContext(), "View UDF resolution requires an isolated compiler context")
 	}
 	if err := c.GetContext().Err(); err != nil {
@@ -347,7 +356,7 @@ func (c *compilerContext) statsWithTableDefVersion(
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if plan.StatsInfoUsable(s) {
+			if plan.StatsCacheEligible(c.proc, snapshot) && plan.StatsInfoUsableForCache(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -360,8 +369,16 @@ func (c *compilerContext) statsWithTableDefVersion(
 		return nil, err
 	}
 
-	// Cache the result
-	if c.GetStatsCache().SetAndReportReset(tableID, result) {
+	// NDV/range consumers read the table-ID wrapper during this planning pass.
+	// Keep snapshot maps there without permitting a later ordinary fast hit;
+	// return the completed observation itself so named empty remains usable.
+	cachedResult := result
+	if plan.IsSnapshotValid(snapshot) && result != nil {
+		copy := *result
+		copy.TableName = ""
+		cachedResult = &copy
+	}
+	if c.GetStatsCache().SetAndReportReset(tableID, cachedResult) {
 		clear(c.statsCacheVersions)
 	}
 	if tableDefVersion != nil {
@@ -582,11 +599,15 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	if dbName == "" || tableName == "" {
 		return nil, nil, nil
 	}
-	return c.Resolve(dbName, tableName, snapshot)
+	return c.Resolve(dbName, tableName, snapshot, nil)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	if delegate := c.resolveDelegate(); delegate != nil {
+		return delegate.ResolveIndexTableByRef(ref, tblName, snapshot, nil)
+	}
+	obj, def, err := c.resolve(plan.DbNameOfObjRef(ref), tblName, snapshot, true)
 	if obj != nil && ref.NotLockMeta {
 		obj.NotLockMeta = true
 	}
@@ -603,13 +624,94 @@ func (c *compilerContext) resolveDelegate() plan.CompilerContext {
 	return nil
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	if err := c.checkIndexRelationName(tableName); err != nil {
+		return nil, nil, err
+	}
+	obj, def, err := c.resolve(dbName, tableName, snapshot, true)
+	return c.checkIndexRelationDefinition(tableName, obj, def, err)
+}
+
+func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	if err := c.checkIndexRelationName(tableName); err != nil {
+		return nil, nil, err
+	}
+	obj, def, err := c.resolve(dbName, tableName, snapshot, false)
+	return c.checkIndexRelationDefinition(tableName, obj, def, err)
+}
+
+func (c *compilerContext) checkIndexRelationName(name string) error {
+	if c.indexRelationPolicy == nil || c.indexRelationPolicy.CallerMayAccess {
+		return nil
+	}
+	proc := &process.Process{Ctx: process.WithUserIndexRelationAccess(c.GetContext()), Base: &process.BaseProcess{}}
+	return process.CheckIndexRelationAccess(proc, name, "", 0)
+}
+
+func (c *compilerContext) checkIndexRelationDefinition(name string, obj *plan.ObjectRef, def *plan.TableDef, err error) (*plan.ObjectRef, *plan.TableDef, error) {
+	if err != nil || c.indexRelationPolicy == nil || c.indexRelationPolicy.CallerMayAccess || (obj == nil && def == nil) {
+		return obj, def, err
+	}
+	proc := &process.Process{Ctx: process.WithUserIndexRelationAccess(c.GetContext()), Base: &process.BaseProcess{}}
+	if err := process.CheckIndexRelationDefinitionAccess(proc, name, def); err != nil {
+		return nil, nil, err
+	}
+	if def != nil && def.Name != name {
+		if err := process.CheckIndexRelationDefinitionAccess(proc, def.Name, def); err != nil {
+			return nil, nil, err
+		}
+	}
+	return obj, def, nil
+}
+
+func (c *compilerContext) ResolveTemporaryTable(dbName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if delegate := c.resolveDelegate(); delegate != nil {
+		var obj *plan.ObjectRef
+		var def *plan.TableDef
+		var err error
+		if resolver, ok := delegate.(interface {
+			ResolveTemporaryTable(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)
+		}); ok {
+			obj, def, err = resolver.ResolveTemporaryTable(dbName, tableName, snapshot)
+		} else {
+			obj, def, err = delegate.Resolve(dbName, tableName, snapshot, nil)
+		}
+		// A temporary namespace miss is not an attempted relation access.
+		if err != nil || (obj == nil && def == nil) {
+			return obj, def, err
+		}
+		if err := c.checkIndexRelationName(tableName); err != nil {
+			return nil, nil, err
+		}
+		return c.checkIndexRelationDefinition(tableName, obj, def, nil)
+	}
+	if c.proc != nil {
+		if ses := c.proc.GetSession(); ses != nil {
+			if dbName == "" {
+				dbName = c.DefaultDatabase()
+			}
+			if _, ok := ses.GetTempTable(dbName, tableName); !ok {
+				if owner, ok := ses.(process.TemporaryTableDDL); !ok || !owner.OwnsTemporaryTable(dbName, tableName) {
+					return nil, nil, nil
+				}
+			}
+		}
+	}
+	return c.Resolve(dbName, tableName, snapshot, nil)
+}
+
+func (c *compilerContext) resolve(dbName string, tableName string, snapshot *plan.Snapshot, resolveTemporaryAlias bool) (*plan.ObjectRef, *plan.TableDef, error) {
 	// CTAS follow-up compilation carries the original frontend compiler
 	// context. Delegate relation resolution as one operation so subscription,
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
 	if delegate := c.resolveDelegate(); delegate != nil {
-		return delegate.Resolve(dbName, tableName, snapshot)
+		if !resolveTemporaryAlias {
+			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
+		}
+		return delegate.Resolve(dbName, tableName, snapshot, nil)
 	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
@@ -628,7 +730,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	// Resolve temporary table alias in current session for internal SQL execution.
 	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
 	isTmpTable := false
-	if ses := c.proc.GetSession(); ses != nil {
+	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias {
 		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
 			tableName = realName
 			isTmpTable = true
@@ -667,12 +769,22 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
-	if err := plan.MigrateLegacyHexTableDef(c.proc, tableDef); err != nil {
+	if err := plan.MigrateLegacyFloatStringTableDef(c, tableDef); err != nil {
+		return nil, nil, err
+	}
+	if err := plan.MigrateLegacyCatalogTableDef(ctx, c.proc, tableDef); err != nil {
 		return nil, nil, err
 	}
 	ownedTemporary := false
 	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tableName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan.TemporaryTableAccessAllowed(c.GetContext(), c.proc.GetSession(), dbName, tableName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, nil
 	}
 	if isTmpTable || ownedTemporary || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
@@ -700,11 +812,17 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Replay may carry the original frontend context; other internal SQL can
 	// carry a partial session resolver on its process (e.g. ALTER TABLE).
-	// Prefer the former, then request only the persisted division variable.
+	// Prefer the former, then forward explicit precision, DOP and FK-check settings.
+	// ALTER COPY population must inherit the outer statement's FK-check mode;
+	// defaulting it to nil silently re-enables checks during the internal INSERT.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
-	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
+	if isSystemVar && !isGlobalVar && c.proc != nil &&
+		(strings.EqualFold(varName, "div_precision_increment") ||
+			strings.EqualFold(varName, "max_dop") ||
+			strings.EqualFold(varName, "foreign_key_checks") ||
+			strings.EqualFold(varName, "mo_pk_check_by_cn")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}
@@ -719,6 +837,15 @@ func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlo
 		}
 	}
 	return plan.Type{}, nil
+}
+
+func (c *compilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableRegexpCastResolver); ok {
+			return resolver.ResolveVariableRegexpStringResult(varName)
+		}
+	}
+	return false, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -785,4 +912,9 @@ func (c *compilerContext) getRelation(
 		return nil, nil, err
 	}
 	return ctx, table, nil
+}
+
+// BorrowedTableStillCurrent declines native borrowing for internal SQL compilation.
+func (*compilerContext) BorrowedTableStillCurrent(*process.Process, *plan.BorrowedTable) bool {
+	return false
 }

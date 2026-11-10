@@ -300,6 +300,7 @@ func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {
 	)
 	lockedQuotaSQL := quotaSQL + " for update"
 	countSQL := branchQuotaUsageSQL(accountID)
+	require.NotContains(t, countSQL, "for update")
 
 	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})

@@ -312,7 +312,7 @@ func TestGetTimestampWithNotified(t *testing.T) {
 
 func TestNotifyWaiters(t *testing.T) {
 	tw := &timestampWaiter{}
-	var values []*timestampWaiterEntry
+	values := make([]*timestampWaiterEntry, 0, 5)
 
 	w, err := tw.addToWait(newTestTimestamp(1))
 	assert.NoError(t, err)

@@ -37,4 +37,30 @@ select @result;
 -- call llm_chat('[{"role":"user", "content":"2+2=?"}]', @result);
 -- select @result;
 
+-- A failed connection must not leave a typed-nil client for the next chat.
+set @saved_llm_model = @llm_model;
+create procedure llm_failure_sequence(in mode varchar, out first_error varchar, out second_error varchar) language 'starlark'
+$$
+prompt = '[{"role":"user","content":"ok"}]'
+_, err1 = mo.llm_connect("", "", "", "") if mode == "connect" else mo.llm_chat(prompt)
+_, err2 = mo.llm_chat(prompt)
+out_first_error = str(err1)
+out_second_error = str(err2)
+$$;
+set @llm_model = NULL;
+call llm_failure_sequence('connect', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+call llm_failure_sequence('implicit', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+set @llm_model = 1;
+call llm_failure_sequence('connect', @first, @second);
+select @first like 'invalid input:%' as first_error, @second like 'invalid input:%' as second_error;
+-- Explicit arguments take precedence over an invalid session value.
+call llm_chat('[{"role":"user","content":"ok"}]', @result);
+select @result;
+set @llm_model = x'6563686f';
+call llm_ask('ok', @result);
+select @result;
+set @llm_model = @saved_llm_model;
+
 drop database if exists procedure_test;

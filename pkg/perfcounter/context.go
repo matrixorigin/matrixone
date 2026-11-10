@@ -67,7 +67,7 @@ func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 
 func WithCounterSetFrom(ctx context.Context, fromCtx context.Context) context.Context {
 	if v := fromCtx.Value(CtxKeyCounters); v != nil {
-		var sets []*CounterSet
+		sets := make([]*CounterSet, 0, len(v.(CounterSets)))
 		for set := range v.(CounterSets) {
 			sets = append(sets, set)
 		}
@@ -84,11 +84,6 @@ type S3RequestKey struct{}
 // AttachS3RequestKey attaches a *CounterSet to the given context with an S3RequestKey.
 func AttachS3RequestKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, S3RequestKey{}, counter)
-}
-
-func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
-	counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet)
-	return counter, ok
 }
 
 // Background Executor Internal Executor
@@ -140,16 +135,4 @@ type CalcTableStatsKey struct{}
 
 func AttachCalcTableStatsKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, CalcTableStatsKey{}, true)
-}
-
-type CalcTableSizeKey struct{}
-
-func AttachCalcTableSizeKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, CalcTableSizeKey{}, true)
-}
-
-type CalcTableRowsKey struct{}
-
-func AttachCalcTableRowsKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, CalcTableRowsKey{}, true)
 }

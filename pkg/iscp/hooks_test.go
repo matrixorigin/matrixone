@@ -74,7 +74,7 @@ func TestGetMissing(t *testing.T) {
 // snapshotHooks captures the current registry and returns a function
 // that restores it. Use as `defer snapshotHooks()()` so tests that
 // mutate the registry don't leak state into siblings (especially the
-// production-equivalent hooks installed by hooks_testinit_test.go).
+// production hooks installed by hooks_testinit_test.go).
 func snapshotHooks() func() {
 	hooksMu.Lock()
 	saved := make(map[string]Hooks, len(hooks))

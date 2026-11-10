@@ -97,7 +97,7 @@ func TestRemoteDecimalLiteralPlacementAndDestinationValidation(t *testing.T) {
 	client.version = defines.MORPCVersion88
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainDecimalLiteralWorkers(query))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
@@ -105,7 +105,7 @@ func TestRemoteDecimalLiteralPlacementAndDestinationValidation(t *testing.T) {
 	client.version = defines.MORPCVersion89
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainDecimalLiteralWorkers(query))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)

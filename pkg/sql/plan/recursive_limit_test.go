@@ -32,7 +32,6 @@ import (
 
 func TestRecursiveCTEPrefixLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		limit, offset, want uint64
 	}{
@@ -87,7 +86,7 @@ func TestRecursiveCTEPrefixLimit(t *testing.T) {
 func TestRecursiveCTEOffsetOutsideFeedback(t *testing.T) {
 	for _, union := range []string{"union all", "union distinct"} {
 		t.Run(union, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			t.Cleanup(optimizer.CurrentContext().GetProcess().Free)
 			logicPlan, err := runOneStmt(optimizer, t, fmt.Sprintf(`
 				with recursive c(n) as (

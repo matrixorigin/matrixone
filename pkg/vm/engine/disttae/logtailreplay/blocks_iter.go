@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -209,8 +210,9 @@ func (p *PartitionState) GetChangedTombstoneObjsBetween(from types.TS) (objs []o
 
 // GetChangedObjsBetween gets object changes in (begin, end]. Objects at begin
 // are already part of the transaction snapshot. An object created and deleted
-// wholly inside the interval is ignored because the transaction cannot have a
-// tombstone that references it.
+// wholly inside the interval is ignored by this snapshot-based projection.
+// In-memory tombstone transfer uses its own projection below because retained
+// RowIDs may have already been rewritten into intermediate objects.
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
@@ -218,6 +220,77 @@ func (p *PartitionState) GetChangedObjsBetween(
 	deleted map[objectio.ObjectNameShort]struct{},
 	inserted map[objectio.ObjectNameShort]struct{},
 ) {
+	return p.getChangedObjsBetween(begin, end, false)
+}
+
+// VisitChangedDataObjects visits the same committed object projection as
+// GetChangedObjsBetween followed by GetObject, without retaining a set whose
+// size grows with the change history. Returning false stops the visit.
+func (p *PartitionState) VisitChangedDataObjects(
+	ctx context.Context, begin, end types.TS,
+	visit func(objectio.ObjectEntry, bool) (bool, error),
+) error {
+	iter := p.dataObjectTSIndex.Iter()
+	defer iter.Release()
+	for ok := iter.Seek(ObjectIndexByTSEntry{Time: begin}); ok; ok = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		event := iter.Item()
+		if event.Time.GT(&end) {
+			break
+		}
+		if !event.Time.GT(&begin) {
+			continue
+		}
+		obj, ok := p.GetObject(event.ShortObjName)
+		if !ok {
+			continue
+		}
+
+		// Suppress only a create followed by a delete inside the window. The
+		// time-index comparator does not distinguish create from delete at the
+		// same time, so consult the actual counterpart rather than assuming it
+		// exists from the object's lifecycle fields.
+		if event.IsDelete && obj.CreateTime.GT(&begin) && obj.CreateTime.LT(&event.Time) {
+			other, exists := p.dataObjectTSIndex.Get(ObjectIndexByTSEntry{
+				Time: obj.CreateTime, ShortObjName: event.ShortObjName,
+			})
+			if exists && !other.IsDelete {
+				continue
+			}
+		} else if !event.IsDelete && !obj.DeleteTime.IsEmpty() &&
+			obj.DeleteTime.GT(&event.Time) && obj.DeleteTime.LE(&end) {
+			other, exists := p.dataObjectTSIndex.Get(ObjectIndexByTSEntry{
+				Time: obj.DeleteTime, ShortObjName: event.ShortObjName,
+			})
+			if exists && other.IsDelete {
+				continue
+			}
+		}
+		next, err := visit(obj, event.IsDelete)
+		if err != nil {
+			return err
+		}
+		if !next {
+			return nil
+		}
+	}
+	return ctx.Err()
+}
+
+// GetChangedObjsBetweenForTombstoneTransfer includes deleted intermediate
+// objects: in-memory RowIDs can reference them after a statement rollback
+// because an earlier transfer rewrites retained batches in place.
+func (p *PartitionState) GetChangedObjsBetweenForTombstoneTransfer(
+	begin, end types.TS,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
+	return p.getChangedObjsBetween(begin, end, true)
+}
+
+func (p *PartitionState) getChangedObjsBetween(
+	begin, end types.TS, includeIntermediateDeletes bool,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
@@ -237,12 +310,10 @@ func (p *PartitionState) GetChangedObjsBetween(
 		}
 
 		if entry.IsDelete {
-			// if the object is inserted and deleted between [begin, end], it will be ignored.
-			if _, ok := inserted[entry.ShortObjName]; !ok {
+			if _, created := inserted[entry.ShortObjName]; !created || includeIntermediateDeletes {
 				deleted[entry.ShortObjName] = struct{}{}
-			} else {
-				delete(inserted, entry.ShortObjName)
 			}
+			delete(inserted, entry.ShortObjName)
 		} else {
 			inserted[entry.ShortObjName] = struct{}{}
 		}

@@ -71,7 +71,7 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 			require.NotEqual(t, 0, len(metadata.Partitions))
 			require.Equal(t, method, metadata.Method)
 
-			var tables []string
+			tables := make([]string, 0, len(metadata.Partitions))
 			for idx, p := range metadata.Partitions {
 				tables = append(tables, p.PartitionTableName)
 				require.NotEqual(t, uint64(0), p.PartitionID)
@@ -163,9 +163,10 @@ func runPartitionClusterTestWithReuse(
 	createFunc := func() (embed.Cluster, error) {
 		options = append(
 			[]embed.Option{
-				embed.WithCNCount(3),
-				// The shared test cluster runs one TN and three CNs on the same
-				// CI worker. Keep the test-only RPC deadline above transient
+				// These SQL and metadata contracts only use CN0. Distributed
+				// shard contracts belong to the shard test package.
+				embed.WithCNCount(1),
+				// Keep the test-only RPC deadline above transient
 				// scheduling stalls without changing production defaults.
 				embed.WithHAKeeperHeartbeatTimeout(15 * time.Second),
 			},

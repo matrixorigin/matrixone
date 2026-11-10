@@ -35,33 +35,69 @@ import (
 )
 
 func TestIssue28234ExceptAllCluster(t *testing.T) {
-	releaseSharedSingleCNCluster(t)
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1))
+	if cluster != nil {
+		t.Cleanup(func() {
+			var listeners []string
+			cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+				if service.ServiceType() == metadata.ServiceType_CN {
+					listeners = append(listeners, fmt.Sprintf("127.0.0.1:%d", service.GetServiceConfig().CN.Frontend.Port))
+				}
+				return true
+			})
+			require.NoError(t, cluster.Close())
+			for _, address := range listeners {
+				require.Eventually(t, func() bool {
+					conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+					if err != nil {
+						return true
+					}
+					_ = conn.Close()
+					return false
+				}, 5*time.Second, 50*time.Millisecond, "CN listener must close: %s", address)
+			}
+		})
+	}
+	require.NoError(t, err)
+	// Seed once before subtest selection, so either topology can run alone.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	db.SetMaxOpenConns(1)
+	exec := func(query string) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, query)
+		require.NoError(t, err, query)
+	}
+	const n = objectio.BlockMaxRows * 2
+	exec("create database except_all_cluster")
+	exec("use except_all_cluster")
+	// Persist two left blocks so multi-CN scheduling has actual remote
+	// input, not merely a MULTICN label on local execution.
+	exec("create table l(k int)")
+	exec("create table r(k int)")
+	exec(fmt.Sprintf("insert into l select result %% 4 from generate_series(0,%d) g", n-1))
+	exec(fmt.Sprintf("insert into r select result %% 4 from generate_series(0,%d) g", n/2-1))
+	exec("insert into l values(null),(null)")
+	exec("insert into r values(null)")
+	exec("create table chars(v char(8))")
+	exec("insert into chars values('a')")
+	exec("create table strings(v varchar(8))")
+	exec("insert into strings values('a '),('a ')")
+	for _, table := range []string{"l", "r", "chars", "strings"} {
+		exec("select mo_ctl('dn','flush','except_all_cluster." + table + "')")
+	}
 	for _, cnCount := range []int{1, 2} {
 		t.Run(fmt.Sprintf("cn=%d", cnCount), func(t *testing.T) {
-			cluster, err := embed.StartTestCluster(embed.WithCNCount(cnCount))
-			if cluster != nil {
-				var listeners []string
-				cluster.ForeachServices(func(service embed.ServiceOperator) bool {
-					if service.ServiceType() == metadata.ServiceType_CN {
-						listeners = append(listeners, fmt.Sprintf("127.0.0.1:%d", service.GetServiceConfig().CN.Frontend.Port))
-					}
-					return true
-				})
-				t.Cleanup(func() {
-					require.NoError(t, cluster.Close())
-					for _, address := range listeners {
-						require.Eventually(t, func() bool {
-							conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-							if err != nil {
-								return true
-							}
-							_ = conn.Close()
-							return false
-						}, 5*time.Second, 50*time.Millisecond, "CN listener must close: %s", address)
-					}
-				})
+			// The local phase runs before adding a peer. Both physical paths use
+			// one private cluster; no shared fixture's topology is changed.
+			if cnCount == 2 {
+				require.NoError(t, cluster.StartNewCNService(1))
 			}
-			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			cn, err := cluster.GetCNService(0)
@@ -93,24 +129,7 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 				_, err := db.ExecContext(ctx, query)
 				require.NoError(t, err, query)
 			}
-			exec("create database except_all_cluster")
 			exec("use except_all_cluster")
-			// Persist two left blocks so multi-CN scheduling has actual remote
-			// input, not merely a MULTICN label on local execution.
-			const n = objectio.BlockMaxRows * 2
-			exec("create table l(k int)")
-			exec("create table r(k int)")
-			exec(fmt.Sprintf("insert into l select result %% 4 from generate_series(0,%d) g", n-1))
-			exec(fmt.Sprintf("insert into r select result %% 4 from generate_series(0,%d) g", n/2-1))
-			exec("insert into l values(null),(null)")
-			exec("insert into r values(null)")
-			exec("create table chars(v char(8))")
-			exec("insert into chars values('a')")
-			exec("create table strings(v varchar(8))")
-			exec("insert into strings values('a '),('a ')")
-			for _, table := range []string{"l", "r", "chars", "strings"} {
-				exec("select mo_ctl('dn','flush','except_all_cluster." + table + "')")
-			}
 			if cnCount == 2 {
 				// This fixture is private and closed below: no shared work-state
 				// is mutated. Exclude ingress from placement so the subtraction

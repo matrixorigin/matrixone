@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -59,10 +61,10 @@ func (s *planSearchGeneration) release() {
 	s.proc, s.snapshot, s.route, s.search = nil, nil, nil, nil
 }
 
-// NewPlanReaders creates disjoint local PRE readers, retaining logical CN
-// identity for centroid cache keys. No entry reader opens until initialization
+// NewPlanReaders creates PRE readers within one logical CN partition, retaining
+// its identity for centroid cache keys and persisted-object ownership. No entry reader opens until initialization
 // has sealed the shared domain, snapshot, version and centroid route.
-func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
+func NewPlanReaders(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
 	if parallelism <= 0 || int64(parallelism) > int64(^uint32(0)>>1) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid local vector parallelism")
 	}
@@ -71,8 +73,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		return nil, err
 	}
 	prototype := prototypeReader.(*planReader)
-	if proc.Ctx == nil || !req.MembershipFilterRequired || req.Identity.PartitionCount > 1 || req.Identity.PartitionIndex != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("local PRE readers require a coordinator context and exact domain")
+	distributed := req.Identity.PartitionCount > 1
+	if proc.Ctx == nil || !req.MembershipFilterRequired || req.Identity.PartitionIndex < 0 ||
+		(distributed && req.Identity.PartitionIndex >= req.Identity.PartitionCount) ||
+		(!distributed && req.Identity.PartitionIndex != 0) {
+		return nil, moerr.NewInvalidInputNoCtx("PRE readers require a valid logical partition and exact domain")
 	}
 	if err := proc.Ctx.Err(); err != nil {
 		return nil, err
@@ -81,39 +86,50 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 	if err != nil {
 		return nil, err
 	}
-	if parallelism > 1 && (async || req.HasFirstRound || spec.FirstRoundLimit != nil || spec.BucketExpandStep > 0 || spec.ScanWork == nil) {
+	multiRound, err := ivfflatplan.MultiRound(spec)
+	if err != nil {
+		return nil, err
+	}
+	if (parallelism > 1 || distributed) && (async || multiRound || spec.ScanWork == nil) {
 		return nil, moerr.NewInvalidInputNoCtx("vector execution mode does not support local DOP")
 	}
-	if req.CandidateBudget == 0 || len(req.MembershipFilter) == 0 {
+	if distributed && (parallelism != 1 || spec.ScanWork.Objects < 2 || spec.ScanWork.Rows <= 0 || math.IsNaN(spec.ScanWork.Rows) || math.IsInf(spec.ScanWork.Rows, 0) || spec.ScanWork.VectorBytesPerRow <= 0 || math.IsNaN(spec.ScanWork.VectorBytesPerRow) || math.IsInf(spec.ScanWork.VectorBytesPerRow, 0) || spec.ScanWork.Blocks <= 0) {
+		return nil, moerr.NewInvalidInputNoCtx("distributed PRE requires one reader per logical partition and multiple objects")
+	}
+	if req.CandidateBudget == 0 || req.MembershipFilter.Rows() == 0 {
 		readers := make([]engine.Reader, parallelism)
 		for i := range readers {
 			readers[i] = &planReader{initialized: true}
 		}
 		return readers, nil
 	}
-	var keys vector.Vector
-	if err := keys.UnmarshalBinary(req.MembershipFilter); err != nil {
+	keys := req.MembershipFilter
+	if err := keys.Visit(proc.Ctx, func(v *vector.Vector) error {
+		if v.HasNull() {
+			return moerr.NewInvalidInputNoCtx("PRE membership contains NULL")
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	defer keys.Free(nil)
 	pk := spec.SourceTableDef.GetPkey()
 	if pk == nil {
 		return nil, moerr.NewInvalidInputNoCtx("PRE source has no primary key")
 	}
 	pos, ok := spec.SourceTableDef.Name2ColIndex[pk.PkeyColName]
-	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) || keys.HasNull() ||
-		keys.GetType().Oid != types.T(spec.SourceTableDef.Cols[pos].Typ.Id) {
+	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) ||
+		!types.MembershipKeyTypeCompatible(keys.Type().Oid, types.T(spec.SourceTableDef.Cols[pos].Typ.Id)) {
 		return nil, moerr.NewInvalidInputNoCtx("PRE membership key type does not match the source primary key")
 	}
-	if parallelism > 1 && !docfilter.SupportsBitset(*keys.GetType()) {
+	if (parallelism > 1 || distributed) && !docfilter.SupportsBitset(keys.Type()) {
 		return nil, moerr.NewInvalidInputNoCtx("local PRE DOP requires an exact integer domain")
 	}
 	session := &planSearchGeneration{proc: proc.NewContextChildProc(0), snapshot: proc.GetTxnOperator(), parallelism: int32(parallelism)}
 	session.refs.Store(1) // construction owns one reference until all readers exist
 	defer session.release()
-	if docfilter.SupportsBitset(*keys.GetType()) && keys.Length() > 0 {
+	if docfilter.SupportsBitset(keys.Type()) && keys.Rows() > 0 {
 		admission := docfilter.AdmissionForService(proc.GetService())
-		payload, err := docfilter.BuildWithMemoryAdmission(&keys, admission)
+		payload, err := docfilter.BuildKeysWithMemoryAdmission(proc.Ctx, keys, admission)
 		if err != nil {
 			return nil, err
 		}
@@ -123,6 +139,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		}
 		if !session.membership.Exact() {
 			return nil, moerr.NewInvalidStateNoCtx("integer PRE domain is not exact")
+		}
+	} else if keys.Rows() > 0 {
+		session.membership, err = docfilter.NewExactKeys(proc.Ctx, keys, types.MustTypeFromPlan(spec.SourceTableDef.Cols[pos].Typ), docfilter.AdmissionForService(proc.GetService()))
+		if err != nil {
+			return nil, err
 		}
 	}
 	if snapshot := req.Identity.Snapshot; snapshot != nil && snapshot.TS != nil &&
@@ -152,8 +173,12 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		r.generation, r.ownsContext = session, true
 		session.refs.Add(1)
 		r.scanner.generation = session
-		r.scanner.partitionCount, r.scanner.partitionIndex = int32(parallelism), int32(i)
-		r.scanner.ownsInMemory = i == 0
+		if distributed {
+			r.scanner.ownsInMemory = !req.Identity.IsRemote
+		} else {
+			r.scanner.partitionCount, r.scanner.partitionIndex = int32(parallelism), int32(i)
+			r.scanner.ownsInMemory = i == 0
+		}
 		if i == 0 && r.executionStats != nil {
 			r.executionStats.Merge(session.prepareStats)
 		}

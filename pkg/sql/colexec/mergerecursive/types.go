@@ -89,7 +89,3 @@ func (mergeRecursive *MergeRecursive) clean(proc *process.Process) {
 	}
 	mergeRecursive.ctr = container{}
 }
-
-func (mergeRecursive *MergeRecursive) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

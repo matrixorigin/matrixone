@@ -71,7 +71,7 @@ func waitForErrorMetadata(t *testing.T, fetcher watermarkRowFetcher, key *Waterm
 // TestRetryCountTracking verifies that retry counts are properly tracked and persisted
 func TestRetryCountTracking(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{
@@ -160,7 +160,7 @@ func TestRetryCountTracking(t *testing.T) {
 // TestNonRetryableErrorNoCount verifies non-retryable errors don't track retry count
 func TestNonRetryableErrorNoCount(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{
@@ -213,7 +213,7 @@ func TestNonRetryableErrorNoCount(t *testing.T) {
 // TestErrorTypeChange verifies retry count resets when error type changes
 func TestErrorTypeChange(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{

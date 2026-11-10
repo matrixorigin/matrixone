@@ -17,9 +17,9 @@ show tables;
 foo  𝄀
 foo_shadow
 desc foo_shadow;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from foo_shadow;
 ➤ count(*)[-5,64,0]  𝄀
 0

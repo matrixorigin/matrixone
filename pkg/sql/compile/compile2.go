@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -30,13 +31,11 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -134,12 +133,83 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	// statistical information record and trace.
+	compileStart := time.Now()
+	hasUnresolvedFullTextPlan := false
+	hasUnresolvedIndexHintPlan := false
+	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(execTopContext, e)
+			c.proc.Error(execTopContext, "panic in compile",
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+				zap.String("error", err.Error()))
+		}
+		task.End()
+		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
+	}()
+
+	requiresCapturedExecution := plan2.HasCapturedExecutionAccess(queryPlan)
+	if requiresCapturedExecution && (!c.capturedExecutionAllowed(execTopContext) || !c.capturedExecutionPlacementAllowed(queryPlan)) {
+		return ErrExecutionIntentDrift
+	}
+	if c.preflightPending && (c.capturedExecutionTopology || requiresCapturedExecution) &&
+		!c.capturedExecutionAllowed(execTopContext) {
+		return ErrExecutionIntentDrift
+	}
+	if c.preflightPending {
+		if c.txnOffsetPending {
+			c.TxnOffset = txnOffsetOfCompile(c.proc)
+			c.txnOffsetPending = false
+		}
+		c.proc.SetMessageBoard(c.MessageBoard)
+		c.preflightPending = false
+	}
+
+	// Reject unsupported lock policies before query scheduling, source/scope
+	// construction, Sirius offload, or any later MergeRun can publish work.
+	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
+		return err
+	}
+	c.capturedExecutionTopology = c.capturedExecutionTopology || requiresCapturedExecution
+
+	// Refresh borrowed CREATE plans before effects without advancing or
+	// rolling back the caller's workspace statement. This also covers
+	// frontend background execution and reused Compile instances.
+	if c.proc != nil && c.proc.IncrStatementDisabled() {
+		if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
+			return err
+		}
+		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
+		if err != nil {
+			return err
+		}
+	}
+	if err = validateJSONStringConsumerProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
+	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+		return err
+	}
+	if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
 	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
+	if c.indexMaintenanceSpec != nil {
+		c.indexMaintenanceNodeID, err = selectIndexMaintenanceNode(queryPlan.GetQuery(), c.indexMaintenanceSpec, c.indexMaintenanceLiterals)
+		if err != nil {
+			return err
+		}
+	}
+
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -157,42 +227,8 @@ func (c *Compile) Compile(
 	// inherits this execution value even if the deployment gate changes.
 	c.bindStringShuffleHashAlgorithmForCompile()
 
-	// statistical information record and trace.
-	compileStart := time.Now()
-	hasUnresolvedFullTextPlan := false
-	hasUnresolvedIndexHintPlan := false
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(execTopContext, e)
-			c.proc.Error(execTopContext, "panic in compile",
-				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
-				zap.String("error", err.Error()))
-		}
-		task.End()
-		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
-	}()
-
-	// trace for pessimistic txn and check if it needs to lock meta table.
+	// Check whether a pessimistic transaction needs to lock the metadata table.
 	if txnOperator := c.proc.GetTxnOperator(); txnOperator != nil && txnOperator.Txn().IsPessimistic() {
-		seq := txnOperator.NextSequence()
-		txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-			txnOperator,
-			client.CompileEvent,
-			seq,
-			0,
-			0,
-			err)
-		defer func() {
-			txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-				txnOperator,
-				client.CompileEvent,
-				seq,
-				0,
-				time.Since(compileStart),
-				err)
-		}()
-
 		// check if it needs to lock meta table.
 		if qry, ok := queryPlan.Plan.(*plan.Plan_Query); ok {
 			switch qry.Query.StmtType {
@@ -235,6 +271,13 @@ func (c *Compile) Compile(
 	}
 	if materialization.query != nil {
 		defer materialization.restore()
+	}
+	restorePreparedLimit, limitErr := c.materializePreparedLimitZero(queryPlan)
+	if limitErr != nil {
+		return limitErr
+	}
+	if restorePreparedLimit != nil {
+		defer restorePreparedLimit()
 	}
 	if offloaded, offloadErr := c.tryCompileSiriusRead(execTopContext, queryPlan); offloadErr != nil {
 		return offloadErr
@@ -367,12 +410,8 @@ func nodeContainsUnresolvedFullText(node *plan.Node) bool {
 			return true
 		}
 	}
-	if scan := node.VectorIndexScan; scan != nil {
-		if expressionsContainUnresolvedFullText(scan.PreFilters) ||
-			expressionsContainUnresolvedFullText([]*plan.Expr{
-				scan.QueryVector, scan.CandidateLimit, scan.FirstRoundLimit,
-				scan.DistanceRange.GetLowerBound(), scan.DistanceRange.GetUpperBound(),
-			}) {
+	if scan := node.IndexSearchScan; scan != nil {
+		if expressionsContainUnresolvedFullText(plan2.IndexSearchScanExprs(scan)) {
 			return true
 		}
 	}
@@ -416,6 +455,17 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	defer func() { err = process.UnwrapPipelineFailure(err) }()
+	if err = validateTemporalResultProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if c.pn.GetDdl().GetDropTable() != nil {
+		// Retry generations share this statement owner. Other statements do
+		// not need a temporary DROP retirement journal.
+		c.temporaryDropRetryStage = &temporaryDropRetireStage{}
+		c.temporaryDropRetryActive = true
+		defer c.finishTemporaryDropRetry()
+	}
 	promoteGroupConcatCut, err := c.strictWriteGroupConcatPromotionEnabled()
 	if err != nil {
 		return nil, err
@@ -427,10 +477,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
 	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateJSONStringConsumerProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if err = validateIncompleteTemporalStringProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	var txnOperator = c.proc.GetTxnOperator()
@@ -440,26 +496,24 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
-		return nil, err
+	if c.runSqlToken == 0 {
+		if err = TryMarkQueryRunning(c, txnOperator); err != nil {
+			return nil, err
+		}
+		defer MarkQueryDone(c, txnOperator)
+	} else {
+		// The internal executor admitted this same statement before workspace
+		// preparation. Its owner exits after all statement cleanup.
+		c.proc.SetBaseProcessRunningStatus(true)
+		defer c.proc.SetBaseProcessRunningStatus(false)
 	}
-	defer func() {
-		MarkQueryDone(c, txnOperator)
-	}()
 
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
 
-	var executeSQL = c.originSQL
-	if len(executeSQL) == 0 {
-		executeSQL = c.sql
-	}
-
-	// track the entire execution lifecycle and release memory after it ends.
-	var sequence = uint64(0)
+	// Track workspace writes across statement retries.
 	var writeOffset = uint64(0)
 	if txnOperator != nil {
-		sequence = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
 	}
@@ -503,7 +557,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.counterSet.Reset()
 	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, c.counterSet)
 	c.proc.ReplaceTopCtx(execTopContext)
-	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, sequence)
+
 	defer func() {
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
@@ -517,23 +571,20 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		timeCost := time.Since(runStart)
 		v2.TxnStatementExecuteDurationHistogram.Observe(timeCost.Seconds())
 
-		affectRows := 0
-		if queryResult != nil {
-			affectRows = int(queryResult.AffectRows)
-		}
-		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
-			txnOperator, executeSQL, timeCost, sequence, affectRows, err)
-
 		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 			c.setHaveDDL(true)
 		}
 	}()
 
 	// running and retry.
+	c.lastInsertIDBaseline = c.proc.GetLastInsertID()
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
+		if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
+			return nil, err
+		}
 		err = c.runSiriusRead(execTopContext)
 		warningsSucceeded = err == nil
 		return queryResult, err
@@ -717,28 +768,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
-		c.onLoadUniqueIndexPromotionRetry(defChanged || forcePreMode)
-		if forcePreMode {
-			// NOTE: This in-place modification of the AST will persist if the statement
-			// is part of a prepared statement. This is generally desirable as it
-			// avoids re-triggering adaptive mode logic on subsequent executions.
-			updated := rewriteAutoModeToPre(c.stmt)
-			if !updated {
-				// If no explicit 'auto' was rewritten, but we got a retry request,
-				// it means it was implicit auto mode (from session variable).
-				// We force the AST to 'pre' mode to rebuild the plan correctly.
-				if !forceModePre(c.stmt) {
-					logutil.Warnf("Failed to force 'pre' mode on AST during retry: SQL=%s", c.sql)
-				}
-			}
-			// Force rebuild of physical plan for explain analyze after rewrite.
-			if c.anal != nil {
-				c.anal.phyPlan = nil
-				c.anal.remotePhyPlans = nil
-				c.anal.explainPhyBuffer = nil
-			}
-		}
+		c.onLoadUniqueIndexPromotionRetry(defChanged)
 
 		retryTransitionStart := time.Now()
 		coordinatorPhaseStart = retryTransitionStart
@@ -756,6 +786,36 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			)
 			attemptOpen = false
 			return nil, err
+		}
+		// Tier-2 allocation-retry arbitration (design §4 D, G1/F1): the
+		// authoritative admission phase runs exactly here — at the retry
+		// quiescence boundary, after prepareRetryTransition's producer join
+		// and before the retry generation is rebuilt below. A converted
+		// sequence exhaustion pending on this statement is re-verified
+		// (publication flag, sticky window, frozen envelope facts, isolation,
+		// generic acceptance). When publication won the race the retry is
+		// declined and the client receives the ORIGINAL named exhaustion
+		// error exactly once — the delivered prefix is never replayed or
+		// duplicated.
+		if retryState := c.proc.GetSequenceRetryState(); retryState != nil {
+			if pendings := retryState.ConsumePendings(); len(pendings) > 0 {
+				admitted, verdictErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
+				if !admitted {
+					resourceRecorder.finishAttempt(
+						uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+						attemptScopes, attemptAnal, c.addr, false,
+					)
+					attemptOpen = false
+					// Prefer cancellation or the expiry decision's named
+					// terminal; ordinary declines retain the first pending.
+					cause := verdictErr
+					if cause == nil {
+						cause = pendings[0].Pending.Original
+					}
+					err = abortSinkAttempt(cause)
+					return nil, err
+				}
+			}
 		}
 		if c.resultSink != nil {
 			if abortErr := c.resultSink.AbortAttempt(c.executionGeneration, err); abortErr != nil {
@@ -792,7 +852,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		// Retry compilation can itself emit expression diagnostics.
 		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
-		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
+		nextRunC, buildErr := c.buildRetryCompile(defChanged, false, nil)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
 		if buildErr != nil {
@@ -807,6 +867,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		runC = nextRunC
 		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
+		runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 		attemptScopes = runC.scopes
 		attemptAnal = runC.anal
 		if c.resultSink != nil {
@@ -897,194 +958,6 @@ func releaseRetryCompile(c *Compile) {
 	c.Release()
 }
 
-// rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
-// in the RankOption of vector search queries.
-// NOTE: RankOption is configured at the top-level SQL, so deep traversal here is defensive.
-//
-// This function is called when the adaptive mode (auto) determines that post-filter mode
-// returns empty results and a retry with pre-filter mode is needed.
-//
-// The rewrite is performed in-place on the AST, so the same statement can be re-compiled
-// with the updated mode setting.
-//
-// Parameters:
-//   - stmt: The SQL statement AST to rewrite
-//
-// Returns:
-//   - true if any 'mode=auto' was found and rewritten to 'mode=pre'
-//   - false if no rewrite was performed (no explicit 'auto' mode found)
-func rewriteAutoModeToPre(stmt tree.Statement) bool {
-	switch s := stmt.(type) {
-	case *tree.Select:
-		return rewriteAutoModeInSelect(s)
-	case *tree.ExplainStmt:
-		return rewriteAutoModeToPre(s.Statement)
-	case *tree.ExplainAnalyze:
-		return rewriteAutoModeToPre(s.Statement)
-	case *tree.ExplainPhyPlan:
-		return rewriteAutoModeToPre(s.Statement)
-	case *tree.ExplainFor:
-		return rewriteAutoModeToPre(s.Statement)
-	case *tree.Insert:
-		return rewriteAutoModeInSelect(s.Rows)
-	case *tree.MultiInsert:
-		return rewriteAutoModeInSelect(s.Source)
-	case *tree.Replace:
-		return rewriteAutoModeInSelect(s.Rows)
-	default:
-		return false
-	}
-}
-
-// forceModePre forces the AST to use 'pre' mode even when no explicit mode was specified.
-//
-// This function is called when auto mode was enabled via session variable (implicit)
-// rather than explicit SQL option, and we need to rebuild the plan with pre-filter mode.
-// Unlike rewriteAutoModeToPre, this function will set 'mode=pre' regardless of the
-// current mode value, creating the RankOption structure if it doesn't exist.
-//
-// Parameters:
-//   - stmt: The SQL statement AST to modify
-//
-// Returns:
-//   - true if the mode was successfully set to 'pre'
-//   - false if the statement type doesn't support RankOption
-func forceModePre(stmt tree.Statement) bool {
-	var sel *tree.Select
-	switch s := stmt.(type) {
-	case *tree.Select:
-		sel = s
-	case *tree.ExplainStmt:
-		return forceModePre(s.Statement)
-	case *tree.ExplainAnalyze:
-		return forceModePre(s.Statement)
-	case *tree.ExplainPhyPlan:
-		return forceModePre(s.Statement)
-	case *tree.ExplainFor:
-		return forceModePre(s.Statement)
-	case *tree.Insert:
-		sel = s.Rows
-	case *tree.MultiInsert:
-		sel = s.Source
-	case *tree.Replace:
-		sel = s.Rows
-	default:
-		return false
-	}
-
-	if sel == nil {
-		return false
-	}
-	if sel.RankOption == nil {
-		sel.RankOption = &tree.RankOption{
-			Option: map[string]string{"mode": "pre"},
-		}
-	} else {
-		if sel.RankOption.Option == nil {
-			sel.RankOption.Option = map[string]string{"mode": "pre"}
-		} else {
-			sel.RankOption.Option["mode"] = "pre"
-		}
-	}
-	return true
-}
-
-// rewriteAutoModeInSelect rewrites 'mode=auto' to 'mode=pre' in a Select statement.
-// It checks both the top-level RankOption and recursively processes nested subqueries.
-func rewriteAutoModeInSelect(sel *tree.Select) bool {
-	if sel == nil {
-		return false
-	}
-	updated := false
-	// Check and rewrite the RankOption at the current Select level
-	if sel.RankOption != nil && sel.RankOption.Option != nil {
-		if mode, ok := sel.RankOption.Option["mode"]; ok && strings.EqualFold(mode, "auto") {
-			sel.RankOption.Option["mode"] = "pre"
-			updated = true
-		}
-	}
-	// Recursively process nested select statements (subqueries)
-	if sel.Select != nil {
-		if rewriteAutoModeInSelectStatement(sel.Select) {
-			updated = true
-		}
-	}
-	return updated
-}
-
-// rewriteAutoModeInSelectStatement recursively processes different types of SelectStatement nodes.
-// This handles Select, ParenSelect (parenthesized selects), UnionClause, and SelectClause.
-func rewriteAutoModeInSelectStatement(stmt tree.SelectStatement) bool {
-	switch s := stmt.(type) {
-	case *tree.Select:
-		return rewriteAutoModeInSelect(s)
-	case *tree.ParenSelect:
-		return rewriteAutoModeInSelect(s.Select)
-	case *tree.UnionClause:
-		// Process both sides of UNION/INTERSECT/EXCEPT
-		updated := rewriteAutoModeInSelectStatement(s.Left)
-		if rewriteAutoModeInSelectStatement(s.Right) {
-			updated = true
-		}
-		return updated
-	case *tree.SelectClause:
-		return rewriteAutoModeInSelectClause(s)
-	default:
-		return false
-	}
-}
-
-// rewriteAutoModeInSelectClause processes a SelectClause by checking its FROM clause
-// for subqueries that may contain vector search with auto mode.
-func rewriteAutoModeInSelectClause(clause *tree.SelectClause) bool {
-	if clause == nil || clause.From == nil {
-		return false
-	}
-	updated := false
-	for _, tbl := range clause.From.Tables {
-		if rewriteAutoModeInTableExpr(tbl) {
-			updated = true
-		}
-	}
-	return updated
-}
-
-// rewriteAutoModeInTableExpr recursively processes table expressions to find subqueries.
-// This handles Subquery, JoinTableExpr, ApplyTableExpr, ParenTableExpr, AliasedTableExpr,
-// and StatementSource (for derived tables).
-func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
-	switch t := expr.(type) {
-	case *tree.Subquery:
-		return rewriteAutoModeInSelectStatement(t.Select)
-	case *tree.JoinTableExpr:
-		updated := false
-		if t.Left != nil {
-			updated = rewriteAutoModeInTableExpr(t.Left)
-		}
-		if t.Right != nil {
-			updated = rewriteAutoModeInTableExpr(t.Right) || updated
-		}
-		return updated
-	case *tree.ApplyTableExpr:
-		updated := false
-		if t.Left != nil {
-			updated = rewriteAutoModeInTableExpr(t.Left)
-		}
-		if t.Right != nil {
-			updated = rewriteAutoModeInTableExpr(t.Right) || updated
-		}
-		return updated
-	case *tree.ParenTableExpr:
-		return rewriteAutoModeInTableExpr(t.Expr)
-	case *tree.AliasedTableExpr:
-		return rewriteAutoModeInTableExpr(t.Expr)
-	case *tree.StatementSource:
-		return rewriteAutoModeToPre(t.Statement)
-	default:
-		return false
-	}
-}
-
 // prepareRetryTransition quiesces the failed generation and advances its
 // transaction workspace. It is charged to the attempt that requested retry.
 func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
@@ -1092,6 +965,24 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 	if err := c.cancelAndWaitRunningSQL(remoteWait); err != nil {
 		return err
+	}
+	// A prepared-cursor EXECUTE retains its output rows for COM_STMT_FETCH
+	// instead of publishing them, so the failed generation's prefix sits in
+	// the cursor's retained set (never delivered). Replay would append the
+	// fresh result behind that stale prefix; release the failed generation's
+	// retained rows, byte reservation and staged saved-result blocks before
+	// any new-generated output is captured (#30359 review). Running only
+	// after the generation quiesced above guarantees no pipeline can still
+	// append to the set being discarded.
+	if hook := c.proc.GetSessionInfo().RetryDiscardOutput; hook != nil {
+		// Attempt-cleanup failures abort the transition: surfacing the
+		// error declines this retry instead of rebuilding a replay over
+		// output that survived its cleanup (#30359 review). The failed
+		// cleanup retains its owner, so terminal statement cleanup can
+		// still reach those files.
+		if err := hook(); err != nil {
+			return err
+		}
 	}
 
 	topContext := c.proc.GetTopContext()
@@ -1105,6 +996,19 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	// retry generation. Otherwise a rolled-back value can change LASTVAL or
 	// CURRVAL on the retry even when the retried plan never calls that sequence.
 	c.restoreSequenceStatementState()
+	// The rewind above is a statement-failure boundary: a SETVAL/restart the
+	// failed attempt staged (SequenceObligationSet.StageRemoval) never
+	// persisted its reposition, so the issued-value protection it hid must
+	// come back — mirroring the frontend statement-rollback restore
+	// (txn.go). Without this the retried attempt would see the staged
+	// boundary as still applied and could re-issue pre-boundary values
+	// before SETVAL executes again (#30359 review). Issued-value obligations
+	// raised by the failed attempt stay recorded: RollbackLastStatement
+	// rewound the workspace but not any observed emissions, so
+	// envelope-restored protection only ever produces gaps, never reuse.
+	if seqSet := c.proc.GetSequenceObligationSet(); seqSet != nil {
+		seqSet.RestoreStaged()
+	}
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
@@ -1112,10 +1016,11 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	}
 	// A retry is a new statement execution generation. Do not let a generated
 	// value from the rolled-back attempt win the new attempt's result, and
-	// restore the session-visible LAST_INSERT_ID baseline until the retry
+	// restore the LAST_INSERT_ID this statement started with until the retry
 	// generates a replacement value.
 	c.proc.SetStatementLastInsertID(0)
-	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
+	c.proc.SetLastInsertID(c.lastInsertIDBaseline)
+	c.proc.ResetODKUResult()
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
@@ -1167,8 +1072,18 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
+func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffset *int) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
+	if safeFallback {
+		rebuildPlan = true
+	}
+	if !safeFallback && c.capturedExecutionRetryNeedsRebuild() {
+		if c.buildFallbackPlanFunc == nil {
+			return nil, moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
+		}
+		rebuildPlan = true
+		safeFallback = true
+	}
 	// Invalidate a completed proof before a different logical generation can be
 	// built or observed.
 	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
@@ -1177,9 +1092,52 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	// NewCompile installs a fresh tier-2 retry state for a NEW statement, but
+	// a retry generation is the SAME logical statement: the sticky retry
+	// window and the publication flag must survive the rebuild (design §4 D
+	// G1/G2). Carry the existing instance over the reseed instead of letting
+	// each retried compilation restart (and so indefinitely extend) the
+	// statement's bounded retry window.
+	seqRetryState := c.proc.GetSequenceRetryState()
+	setup := ImmediateSetup
+	labels := c.cnLabel
+	if c.executionIntent != nil {
+		labels = maps.Clone(labels)
+		setup = RetryPreflightSetup
+		if existingOffset != nil {
+			setup = PreflightSetup
+		}
+	}
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, labels, c.startAt, setup)
+	runC.indexMaintenanceSpec = c.indexMaintenanceSpec.Clone()
+	runC.indexMaintenanceLiterals = append([]string(nil), c.indexMaintenanceLiterals...)
+	if seqRetryState != nil {
+		c.proc.ReplaceSequenceRetryState(seqRetryState)
+	}
+	keepRun := false
+	releaseRun := func() {
+		if c.executionIntent != nil {
+			releaseRetryCompile(runC)
+		} else {
+			runC.Release()
+		}
+	}
+	defer func() {
+		if !keepRun && runC != nil {
+			releaseRun()
+		}
+	}()
+	if existingOffset != nil {
+		runC.TxnOffset = *existingOffset
+		runC.txnOffsetPending = false
+	}
+	runC.temporaryDropRetryStage = c.temporaryDropRetryStage
+	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
 	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	// Executor-owned schema transformations belong to the statement, not to
+	// one physical attempt. A retry must install the same catalog shape.
+	runC.adjustTableExtraFunc = c.adjustTableExtraFunc
 	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
@@ -1187,24 +1145,34 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
+	runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
+	if !safeFallback {
+		runC.SetValidatedExecutionIntent(c.executionIntent)
+	}
+	if !rebuildPlan {
+		runC.capturedExecutionTopology = c.capturedExecutionTopology
+	}
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			runC.Release()
-			panic(recovered)
-		}
-		if e != nil {
-			runC.Release()
-		}
-	}()
 	planForRetry := c.pn
 	if rebuildPlan {
 		runC.preparedJoinDiagnosticFree = false
-		planForRetry, e = c.buildPlanFunc(topContext)
+		if safeFallback {
+			if c.buildFallbackPlanFunc == nil {
+				e = moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
+				return nil, e
+			}
+			planForRetry, e = c.buildFallbackPlanFunc(topContext)
+		} else {
+			planForRetry, e = c.buildPlanFunc(topContext)
+		}
 		if e != nil {
+			return nil, e
+		}
+		if safeFallback && plan2.HasCapturedExecutionAccess(planForRetry) {
+			e = moerr.NewInternalError(topContext, "unscoped retry retained captured execution")
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
@@ -1217,7 +1185,17 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 			}
 		}
 	}
+	if c.createNamePinsAdmitted && !sameCreateNameDomain(createTableForNameAdmission(c.pn), createTableForNameAdmission(planForRetry)) {
+		e = moerr.NewLockConflictNoCtx()
+		return nil, e
+	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
+		if errors.Is(e, ErrExecutionIntentDrift) && !safeFallback {
+			offset := runC.TxnOffset
+			releaseRun()
+			runC = nil
+			return c.buildRetryCompile(true, true, &offset)
+		}
 		return nil, e
 	}
 	if rebuildPlan {
@@ -1225,6 +1203,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.capturedExecutionTopology = runC.capturedExecutionTopology
 		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
@@ -1233,6 +1212,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 			c.anal.qry = qry.Query
 		}
 	}
+	keepRun = true
 	return runC, nil
 }
 
@@ -1247,7 +1227,7 @@ func (c *Compile) validateRetryResultMetadata(
 		// result never reaches the row callback that also checks arity.
 		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
 	}
-	if !c.resultMetadataFrozen || sameResultMetadata(c.pn, rebuilt) {
+	if !c.resultMetadataFrozen.Load() || sameResultMetadata(c.pn, rebuilt) {
 		return nil
 	}
 	// Returning the definition-change error from buildRetryCompile is terminal

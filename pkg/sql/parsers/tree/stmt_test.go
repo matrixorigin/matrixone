@@ -20,6 +20,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLoadGlobalIgnorePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stmt *Load
+		want bool
+	}{
+		{"nil", nil, false},
+		{"ordinary", &Load{DuplicateHandling: &DuplicateKeyError{}}, false},
+		{"ignore", &Load{DuplicateHandling: &DuplicateKeyIgnore{}}, true},
+		{"local", &Load{Local: true, DuplicateHandling: &DuplicateKeyError{}}, false},
+		{"local_ignore", &Load{Local: true, DuplicateHandling: &DuplicateKeyIgnore{}}, true},
+		{"local_replace", &Load{Local: true, DuplicateHandling: &DuplicateKeyReplace{}}, false},
+		{"replace", &Load{DuplicateHandling: &DuplicateKeyReplace{}}, false},
+		{"header_only", &Load{Param: &ExternParam{ExParamConst: ExParamConst{Tail: &TailParameter{IgnoredLines: 1}}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, IsIgnoreStatement(tc.stmt)) })
+	}
+}
+
 func TestQueryType(t *testing.T) {
 	type fields struct {
 		types map[StatementType]string
@@ -46,6 +65,7 @@ func TestQueryType(t *testing.T) {
 					&CreateView{}:          QueryTypeDDL,
 					&CreateIndex{}:         QueryTypeDDL,
 					&CreateFunction{}:      QueryTypeDDL,
+					&CreateExtension{}:     QueryTypeDDL,
 					&AlterView{}:           QueryTypeDDL,
 					&AlterDataBaseConfig{}: QueryTypeDDL,
 					&DropDatabase{}:        QueryTypeDDL,
@@ -91,6 +111,7 @@ func TestQueryType(t *testing.T) {
 					&ReleaseSavePoint{}:    QueryTypeTCL,
 					&RollbackToSavePoint{}: QueryTypeTCL,
 					// Other
+					&LoadExtension{}:  QueryTypeOth,
 					&AnalyzeStmt{}:    QueryTypeOth,
 					&ExplainAnalyze{}: QueryTypeOth,
 					&ExplainFor{}:     QueryTypeOth,
@@ -165,4 +186,29 @@ func Test_DropCDC_StmtKind_InternalFlag(t *testing.T) {
 	require.Equal(t, defaultStatusTyp, d1.StmtKind())
 	d2 := &DropCDC{Internal: false}
 	require.Equal(t, frontendStatusTyp, d2.StmtKind())
+}
+
+func TestExtensionStatementMetadata(t *testing.T) {
+	check := func(t *testing.T, stmt Statement, name, query string) {
+		t.Helper()
+		require.Equal(t, name, stmt.GetStatementType())
+		require.Equal(t, query, stmt.GetQueryType())
+		require.Equal(t, MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, EXEC_IN_FRONTEND), stmt.StmtKind())
+	}
+	t.Run("create", func(t *testing.T) {
+		check(t, &CreateExtension{}, "Create Extension", QueryTypeDDL)
+		stmt := NewCreateExtension("pg", "ext", "/missing.so")
+		defer stmt.Free()
+		check(t, stmt, "Create Extension", QueryTypeDDL)
+		stmt.reset()
+		check(t, stmt, "Create Extension", QueryTypeDDL)
+	})
+	t.Run("load", func(t *testing.T) {
+		check(t, &LoadExtension{}, "Load Extension", QueryTypeOth)
+		stmt := NewLoadExtension("ext")
+		defer stmt.Free()
+		check(t, stmt, "Load Extension", QueryTypeOth)
+		stmt.reset()
+		check(t, stmt, "Load Extension", QueryTypeOth)
+	})
 }

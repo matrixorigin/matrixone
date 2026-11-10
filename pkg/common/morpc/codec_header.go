@@ -52,7 +52,11 @@ func (hc *deadlineContextCodec) Decode(msg *RPCMessage, data []byte) (int, error
 		msg.Ctx = context.Background()
 	}
 
+	native := msg.Ctx.Value(methodServerContextKey{}) != nil
 	msg.Ctx, msg.Cancel = context.WithTimeoutCause(msg.Ctx, time.Duration(buf.Byte2Int64(data)), moerr.CauseDeadlineContextCodec)
+	if native {
+		msg.nativeContextDone = msg.Ctx.Done()
+	}
 	return 8, nil
 }
 

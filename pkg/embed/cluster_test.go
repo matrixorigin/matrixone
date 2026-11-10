@@ -16,24 +16,34 @@ package embed
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +53,7 @@ type closeTrackingService struct {
 	closeCount atomic.Int32
 	startErr   error
 	closeErr   error
+	onClose    func()
 }
 
 func (s *closeTrackingService) Start() error {
@@ -50,12 +61,16 @@ func (s *closeTrackingService) Start() error {
 }
 
 func (s *closeTrackingService) Close() error {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	s.closeCount.Add(1)
 	return s.closeErr
 }
 
 type closeTrackingFileService struct {
 	closeCount atomic.Int32
+	onClose    func()
 }
 
 // A diagnostic error does not imply that the owner still uses dependencies.
@@ -66,12 +81,160 @@ type completedCloseService struct {
 
 func (s *completedCloseService) CloseComplete() bool { return s.complete }
 
+func TestClusterAdmissionAtStart(t *testing.T) {
+	// Isolate process-scoped admission from other test processes.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionAtStart$") {
+		return
+	}
+	newFixture := func(t *testing.T) (*cluster, *int) {
+		t.Helper()
+		ports, err := acquireClusterPortLease()
+		require.NoError(t, err)
+		c := &cluster{services: []*operator{{serviceType: metadata.ServiceType_CN}},
+			portLease: ports, portLeaseBase: ports.base, portLeaseNext: ports.base}
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		WithTesting()(c)
+		starts := new(int)
+		c.startFn = func(*operator) error { *starts++; return nil }
+		return c, starts
+	}
+	t.Run("invalid-pool", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "invalid")
+		c, starts := newFixture(t)
+		require.ErrorContains(t, c.Start(), clusteradmission.ProcessPoolSizeEnv)
+		require.Zero(t, *starts)
+		require.Nil(t, c.testAdmission)
+	})
+	for _, pool := range []string{"1", "2"} {
+		t.Run("canceled-admission/pool="+pool, func(t *testing.T) {
+			t.Setenv(clusteradmission.ProcessPoolSizeEnv, pool)
+			c, starts := newFixture(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			WithTestAdmissionContext(ctx)(c)
+			require.ErrorIs(t, c.Start(), context.Canceled)
+			require.Zero(t, *starts)
+			require.Equal(t, stopped, c.state)
+			require.Nil(t, c.testAdmission)
+			require.NoError(t, c.Close())
+			require.Nil(t, c.portLease)
+			require.True(t, c.CloseComplete())
+
+			// A failed admission must leave the cluster and manager reusable.
+			WithTestAdmissionContext(t.Context())(c)
+			require.NoError(t, c.Start())
+			require.Equal(t, 1, *starts)
+			ports := c.portLease
+			require.NoError(t, c.Stop())
+			require.Same(t, ports, c.portLease)
+			require.Nil(t, c.testAdmission)
+			WithTestAdmissionContext(ctx)(c)
+			require.ErrorIs(t, c.Start(), context.Canceled)
+			require.Equal(t, 1, *starts, "cancelled restart must not start services")
+			require.Same(t, ports, c.portLease)
+			WithTestAdmissionContext(t.Context())(c)
+			require.NoError(t, c.Start())
+			require.Equal(t, 2, *starts)
+			require.NoError(t, c.Close())
+			require.Nil(t, c.testAdmission)
+			require.Nil(t, c.portLease)
+			require.True(t, c.CloseComplete())
+		})
+		for _, allow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("pool=%s/local=%v", pool, allow), func(t *testing.T) {
+				t.Setenv(clusteradmission.ProcessPoolSizeEnv, pool)
+				first, firstStarts := newFixture(t)
+				second, secondStarts := newFixture(t)
+				require.NotEqual(t, first.portLease.base, second.portLease.base)
+				require.NoError(t, first.Start())
+				require.Equal(t, 1, *firstStarts)
+				if allow {
+					WithConcurrentTestClusters()(second)
+				}
+				err := second.Start()
+				if allow {
+					require.NoError(t, err)
+					require.Equal(t, 1, *secondStarts)
+					require.NotNil(t, second.testAdmission)
+				} else {
+					require.ErrorContains(t, err, "already active")
+					require.Zero(t, *secondStarts)
+					require.Nil(t, second.testAdmission)
+				}
+				require.NoError(t, first.Close())
+				require.NoError(t, second.Close())
+				for _, c := range []*cluster{first, second} {
+					require.Nil(t, c.testAdmission)
+					require.Nil(t, c.portLease)
+					require.True(t, c.CloseComplete())
+				}
+			})
+		}
+	}
+	// Synthetic rollback belongs to the same private admission namespace. It
+	// must not queue behind real clusters or need a second helper process.
+	t.Run("completed-error-rollback", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
+		failure := errors.New("startup and withdrawal failed")
+		svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+		c, _ := newFixture(t)
+		c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+		require.ErrorIs(t, c.Start(), failure)
+		require.Nil(t, c.testAdmission)
+		require.False(t, c.services[0].needsCleanup())
+		require.Equal(t, int32(1), svc.closeCount.Load())
+
+		next, starts := newFixture(t)
+		require.NoError(t, next.Start(), "completed rollback must admit the next owner")
+		require.Equal(t, 1, *starts)
+	})
+
+}
+
+func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
+	t.Helper()
+	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
+		return false
+	}
+	args := []string{"-test.run=" + runPattern}
+	// Keep subprocess counters in the directory collected by go test.
+	if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+coverageDir.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
+	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return true
+}
+
 func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	failure := errors.New("final metadata withdrawal failed")
 	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
 	dependency := &closeTrackingService{}
 	fs := &closeTrackingFileService{}
-	op := &operator{state: started}
+	op := &operator{sid: t.Name(), state: started}
+	rt := commonruntime.DefaultRuntime()
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
+	t.Cleanup(func() { commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt) })
+	cn.onClose = func() { require.Same(t, rt, commonruntime.ServiceRuntime(op.sid)) }
+	joined := make(chan struct{})
+	op.reset.stopper = stopper.NewStopper(t.Name())
+	t.Cleanup(op.reset.stopper.Stop)
+	require.NoError(t, op.reset.stopper.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		assert.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
+		close(joined)
+	}))
+	fs.onClose = func() {
+		require.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
+		select {
+		case <-joined:
+		default:
+			t.Fatal("file service closed before stopper joined")
+		}
+	}
 	op.reset.svc, op.reset.fs = cn, fs
 	dep := &operator{state: started}
 	dep.reset.svc = dependency
@@ -80,19 +243,22 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.NoError(t, err)
 	c.portLease = ports
 	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
-	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	lease, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err)
 	c.testAdmission = lease
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
 	err = c.Close()
 	require.ErrorIs(t, err, failure)
 	require.False(t, op.needsCleanup())
+	require.Nil(t, op.reset.rt)
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
 	require.Equal(t, int32(1), fs.closeCount.Load())
 	require.Equal(t, int32(1), dependency.closeCount.Load())
 	require.Nil(t, c.testAdmission)
 	require.Nil(t, c.portLease)
 	require.True(t, c.CloseComplete())
-	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	next, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err, "completed close must not poison the next cluster")
 	t.Cleanup(func() { require.NoError(t, next.Release()) })
 	require.NoError(t, c.Close())
@@ -123,39 +289,42 @@ func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
 
 func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	svc := &completedCloseService{}
-	op := &operator{}
+	op := &operator{sid: t.Name()}
+	rt := commonruntime.DefaultRuntime()
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
+	t.Cleanup(func() { commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt) })
 	op.reset.svc = svc // partial startup did not reach state=started
 	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
 	require.Same(t, svc, op.reset.svc)
 	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
 	require.True(t, op.needsCleanup())
+	require.Same(t, rt, op.reset.rt)
+	require.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
 	svc.complete = true
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
-}
-
-func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
-	failure := errors.New("startup and withdrawal failed")
-	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
-	op := &operator{serviceType: metadata.ServiceType_CN}
-	c := &cluster{services: []*operator{op}}
-	c.options.testing = true
-	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	require.ErrorIs(t, c.Start(), failure)
-	require.Nil(t, c.testAdmission)
-	require.False(t, op.needsCleanup())
-	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	s.closeCount.Add(1)
 }
 
 func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	startErr := errors.New("service partially started")
 	svc := &closeTrackingService{startErr: startErr}
-	op := &operator{}
+	op := &operator{sid: t.Name()}
+	rt, replacement := commonruntime.DefaultRuntime(), commonruntime.DefaultRuntime()
+	t.Cleanup(func() {
+		commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt)
+		commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, replacement)
+	})
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
 
 	err := op.startConstructedServiceLocked(svc)
 	require.ErrorIs(t, err, startErr)
@@ -164,17 +333,22 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.Equal(t, int32(1), svc.closeCount.Load())
 	require.False(t, op.needsCleanup())
-}
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), svc.closeCount.Load())
 
-func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
-	op := new(operator)
-	op.serviceType = metadata.ServiceType_CN
-	op.cfg.ServiceType = metadata.ServiceType_CN.String()
-	op.cfg.CN.Sirius.Enabled = true
-	op.cfg.CN.Sirius.BenchmarkNoGC = true
-	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
-	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
-	require.ErrorContains(t, op.Start(), "launcher-verified")
+	// A partial start can own just a runtime; a newer registration is separate.
+	op.reset.rt = rt
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	require.True(t, op.needsCleanup())
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	commonruntime.SetupServiceBasedRuntime(op.sid, replacement)
+	require.NoError(t, op.Close())
+	require.Nil(t, op.reset.rt)
+	require.Same(t, replacement, commonruntime.ServiceRuntime(op.sid), "old owner must not delete replacement")
+	require.True(t, commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, replacement))
+	op.reset.rt = rt // missing registration also retires successfully
+	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 }
 
@@ -213,13 +387,19 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 
 	require.Same(t, cfg.TNCompatible, cfg.TN_please_use_getTNServiceConfig)
 	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+	cfg.TN_please_use_getTNServiceConfig = nil
+	op := &operator{cfg: *cfg, serviceType: metadata.ServiceType_TN}
+	adjustTestingClusterTiming(op)
+	require.Equal(t, 5*time.Second, cfg.TNCompatible.LockService.KeepBindTimeout.Duration)
 }
 
 func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	// This scenario owns its cluster independently of earlier shared-fixture tests.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
 			if svc.ServiceType() == metadata.ServiceType_CN {
 				svc.Adjust(func(config *ServiceConfig) {
 					config.CN.AutomaticUpgrade = true
@@ -268,13 +448,23 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 
 	// Preserve the original dynamic-expansion coverage with the generated CN
 	// defaults after the first three CNs have exercised automatic upgrade.
-	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
+	c.(*cluster).options.preStart = nil
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
-	require.Equal(t, 1024, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+	require.Equal(t, 0, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+
+	services := c.(*cluster).services
+	for _, svc := range services {
+		require.NotNil(t, commonruntime.ServiceRuntime(svc.ServiceID()))
+	}
+	require.NoError(t, c.Close())
+	for _, svc := range services {
+		require.Nil(t, commonruntime.ServiceRuntime(svc.ServiceID()), "closed service %s retained runtime", svc.ServiceID())
+		require.Nil(t, svc.reset.rt)
+	}
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -344,7 +534,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
 
-			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true",
 				cn0.GetServiceConfig().CN.Frontend.Port,
 			)
 
@@ -354,6 +544,95 @@ func TestRunSQLWithFrontend(t *testing.T) {
 
 			_, err = db.Exec("show databases")
 			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			var originalMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalMode))
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
+				defer done()
+				_, err := conn.ExecContext(cleanupCtx, "set sql_mode=?", originalMode)
+				assert.NoError(t, err)
+			}()
+			cases := []struct {
+				name, query string
+				want        []string
+			}{
+				{"future comment has no result", "/*!99999 select 42 */;", nil},
+				{"future comment in mixed statements", "select 1; /*!99999 select 2; select 3 */; select 4", []string{"1", "4"}},
+				{"overlong version", "select 2 /*!999999999 */", []string{"2"}},
+				{"whole long guard with matching five-digit prefix", "select 2 /*!800300 + 1 */", []string{"2"}},
+				{"current version", "select /*!80030 6 */", []string{"6"}},
+				{"unversioned comment", "select /*! 6 */", []string{"6"}},
+				{"future SET has no mode side effect", "/*!99999 set sql_mode='ANSI_QUOTES' */; select @@sql_mode", []string{""}},
+				{"future SET during staged execution", "set sql_mode='NO_BACKSLASH_ESCAPES'; /*!99999 set sql_mode='ANSI_QUOTES'; select 99 */; select @@sql_mode", []string{"NO_BACKSLASH_ESCAPES"}},
+				{"versioned comment", "/*!50000 select 1; select 2 */;", []string{"1", "2"}},
+				{"ordinary prefix", "select 1; /*!50000 select 2; select 3 */;", []string{"1", "2", "3"}},
+				{"final inner delimiter", "/*! select 1; select 2; */;", []string{"1", "2"}},
+				{"consecutive wrappers", "/*! select 1; select 2 */; /*! select 3; select 4 */", []string{"1", "2", "3", "4"}},
+				{"mode transition and ordinary suffix", "select 1; /*! set sql_mode='ANSI_QUOTES'; select 2; select 3 */; select 4", []string{"1", "2", "3", "4"}},
+				{"mode sensitive continuation", `/*! set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2; */`, []string{`x\`, "2"}},
+			}
+			// Two bounded passes reuse the session and exercise repeated/cache paths.
+			for round := 0; round < 2; round++ {
+				for _, tc := range cases {
+					t.Run(fmt.Sprintf("%s/round_%d", tc.name, round), func(t *testing.T) {
+						_, err := conn.ExecContext(ctx, "set sql_mode=''")
+						require.NoError(t, err)
+						// QueryContext sends the entire string as one COM_QUERY.
+						rows, err := conn.QueryContext(ctx, tc.query)
+						require.NoError(t, err)
+						defer rows.Close()
+						var got []string
+						for {
+							columns, err := rows.Columns()
+							require.NoError(t, err)
+							if len(columns) != 0 {
+								require.Len(t, columns, 1)
+								require.True(t, rows.Next())
+								var value string
+								require.NoError(t, rows.Scan(&value))
+								got = append(got, value)
+								require.False(t, rows.Next())
+							}
+							require.NoError(t, rows.Err())
+							if !rows.NextResultSet() {
+								break
+							}
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, tc.want, got)
+					})
+				}
+			}
+			// Errors may arrive in a later result set; drain before checking recovery.
+			for _, query := range []string{
+				"/*! set sql_mode='ANSI_QUOTES'; select from */",
+				"select /*!99999 6 */",
+				"select 1; select /*!99999 6 */",
+			} {
+				t.Run("invalid query and recovery/"+query, func(t *testing.T) {
+					rows, err := conn.QueryContext(ctx, query)
+					if err == nil {
+						defer rows.Close()
+						for {
+							for rows.Next() {
+							}
+							if !rows.NextResultSet() {
+								break
+							}
+						}
+						err = rows.Err()
+					}
+					require.Error(t, err)
+					var value int
+					require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
+					require.Equal(t, 9, value)
+				})
+			}
 		},
 	)
 }
@@ -495,6 +774,9 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 }
 
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
+	// This lock-only test must own its namespace: other cluster processes may
+	// legitimately acquire a released range before this test reacquires it.
+	isolateClusterPortLeases(t)
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -538,6 +820,91 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	require.NoError(t, firstCluster.releasePortLeaseLocked())
 }
 
+func TestClusterStopRetainsPortLease(t *testing.T) {
+	isolateClusterPortLeases(t)
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c := &cluster{portLease: ports, portLeaseBase: ports.base, portLeaseNext: ports.base,
+		services: []*operator{{serviceType: metadata.ServiceType_CN}}}
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	service := &closeTrackingService{}
+	c.startFn = func(op *operator) error {
+		op.state = started
+		op.reset.svc = service
+		return nil
+	}
+	port, err := c.nextBasePort()
+	require.NoError(t, err)
+	for generation := 0; generation < 2; generation++ {
+		require.NoError(t, c.Start())
+		require.NoError(t, c.Stop())
+		require.NoError(t, c.Stop(), "stopping twice must retain the same lease")
+		require.False(t, c.CloseComplete(), "stopped clusters still own ports")
+		contender, locked, err := tryAcquireClusterPortLease(ports.base)
+		if contender != nil {
+			t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+		}
+		require.NoError(t, err)
+		require.False(t, locked, "another cluster must not take a stopped cluster's range")
+		require.Same(t, ports, c.portLease)
+		require.Equal(t, uint64(port), c.portLease.next.Load())
+	}
+	require.Equal(t, int32(2), service.closeCount.Load())
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop(), "Stop after final Close must not reacquire ports")
+	require.True(t, c.CloseComplete())
+	contender, locked, err := tryAcquireClusterPortLease(ports.base)
+	if contender != nil {
+		t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+	}
+	require.NoError(t, err)
+	require.True(t, locked, "final Close must release the range")
+}
+
+func TestClusterStopCleanupOwnership(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete=%t", complete), func(t *testing.T) {
+			failure := errors.New("service withdrawal failed")
+			service := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: complete}
+			op := &operator{state: started}
+			op.reset.svc = service
+			dependency := &closeTrackingService{}
+			dep := &operator{state: started}
+			dep.reset.svc = dependency
+			ports, err := acquireClusterPortLease()
+			require.NoError(t, err)
+			c := &cluster{state: started, services: []*operator{dep, op}, portLease: ports,
+				portLeaseBase: ports.base, portLeaseNext: ports.base}
+			t.Cleanup(func() {
+				service.complete = true
+				service.closeErr = nil
+				require.NoError(t, c.Close())
+			})
+			manager := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+			admission, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err)
+			c.testAdmission = admission
+			require.ErrorIs(t, c.Stop(), failure)
+			require.Same(t, ports, c.portLease)
+			if !complete {
+				require.Zero(t, dependency.closeCount.Load())
+				require.Same(t, admission, c.testAdmission)
+				require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+				service.complete = true
+				require.ErrorIs(t, c.Stop(), failure)
+			}
+			require.Nil(t, c.testAdmission)
+			require.Equal(t, int32(1), dependency.closeCount.Load())
+			require.Same(t, ports, c.portLease)
+			next, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err, "completed Stop must release admission")
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+			require.NoError(t, c.Close())
+			require.True(t, c.CloseComplete())
+		})
+	}
+}
+
 func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 	capacity, err := portBaseCapacity()
 	require.NoError(t, err)
@@ -552,7 +919,7 @@ func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 }
 
 func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{id: 1, portLease: lease, portLeaseNext: lastValid}
@@ -564,7 +931,7 @@ func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
 }
 
 func TestStartNewCNServiceRejectsCapacityWithoutMutatingTopology(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{
@@ -592,14 +959,29 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 	require.Nil(t, value)
 	require.ErrorContains(t, err, "CN count cannot be negative")
 
-	c := &cluster{state: started, portLease: &clusterPortLease{base: minPort}}
-	c.portLease.next.Store(minPort)
+	c := &cluster{state: started, portLease: &clusterPortLease{base: portlease.MinPort}}
+	c.portLease.next.Store(portlease.MinPort)
 	err = c.StartNewCNService(-1)
 	require.ErrorContains(t, err, "additional CN count cannot be negative")
 	require.Zero(t, c.options.cn)
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	// The child process initializes the global admission manager with a private
+	// TMPDIR, so unrelated test processes cannot hold this synthetic lifecycle.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionCoversFullLifecycle$") {
+		return
+	}
+	for _, poolSize := range []string{"1", "2"} {
+		t.Run("pool="+poolSize, func(t *testing.T) {
+			t.Setenv(clusteradmission.ProcessPoolSizeEnv, poolSize)
+			testClusterAdmissionLifecycle(t)
+		})
+	}
+}
+
+func testClusterAdmissionLifecycle(t *testing.T) {
+	t.Helper()
 	portLease, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	c := &cluster{
@@ -609,10 +991,9 @@ func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
 		portLeaseNext: portLease.base,
 	}
 	c.options.testing = true
-	// This synthetic cluster has no services. Allow it to exercise admission
-	// lifecycle while the package's shared base cluster may be alive.
 	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
+		require.NoError(t, c.Close())
 		if c.portLease != nil {
 			require.NoError(t, c.releasePortLeaseLocked())
 		}
@@ -640,7 +1021,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
-			require.Equal(t, 1024, cfg.CN.Txn.Trace.BufferSize)
+			require.Equal(t, 0, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -661,11 +1042,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 	}
 }
 
-func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
-	cfg := newServiceConfig()
-	cfg.CN.Txn.Trace.BufferSize = 4096
-	applyTestingTxnTraceBuffer(&cfg)
-	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
+func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 	for _, testingMode := range []bool{false, true} {
 		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
 			opts := []Option{WithCNCount(2)}
@@ -673,13 +1050,61 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				opts = append(opts, WithTesting())
 			}
 			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				cfg := svc.GetServiceConfig()
+				if svc.ServiceType() == metadata.ServiceType_TN {
+					// Non-testing construction keeps the production default unset.
+					want := time.Duration(0)
+					if testingMode {
+						want = 5 * time.Second
+					}
+					require.Equal(t, want, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						tn := cfg.TN_please_use_getTNServiceConfig
+						if tn == nil {
+							tn = cfg.TNCompatible
+						}
+						tn.LockService.KeepBindTimeout.Duration = 7 * time.Second
+					})
+				}
+				if svc.ServiceType() == metadata.ServiceType_CN {
+					want := time.Duration(0)
+					if testingMode {
+						want = 100 * time.Millisecond
+					}
+					require.Equal(t, want, cfg.CN.LockService.KeepBindDuration.Duration)
+					wantFetch := time.Duration(0)
+					if testingMode {
+						wantFetch = time.Second
+					}
+					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
+					require.Equal(t, wantFetch, cfg.CN.ISCP.SyncTaskInterval.Duration)
+					require.Equal(t, wantFetch, cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second
+						cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+						cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
+					})
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
+				}
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					cfg := svc.GetServiceConfig()
+					wantRTT := uint64(200)
+					wantRetry := time.Second
+					if testingMode {
+						wantRTT = 50
+						wantRetry = basicClusterHAKeeperBootstrapRetryInterval
+					}
+					require.Equal(t, wantRTT, cfg.LogService.RTTMillisecond)
+					require.Equal(t, wantRetry, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+					// This interval also defines the bootstrap failure budget.
+					require.Equal(t, 3*time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.LogService.RTTMillisecond = 75 })
+				}
+
 				if svc.ServiceType() != metadata.ServiceType_CN {
 					return
 				}
 				want := 0
-				if testingMode {
-					want = 1024
-				}
 				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
 			}))
@@ -688,10 +1113,24 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, c.Close()) })
 			}
 			require.NoError(t, err)
+			for _, svc := range c.(*cluster).services {
+				if svc.ServiceType() == metadata.ServiceType_TN {
+					cfg := svc.GetServiceConfig()
+					require.Equal(t, 7*time.Second, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
+				}
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					require.Equal(t, uint64(75), svc.GetServiceConfig().LogService.RTTMillisecond)
+				}
+			}
+
 			for i := range 2 {
 				cn, err := c.GetCNService(i)
 				require.NoError(t, err)
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
+				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
+				require.Equal(t, 17*time.Millisecond, cn.GetServiceConfig().CN.ISCP.SyncTaskInterval.Duration)
+				require.Equal(t, 23*time.Millisecond, cn.GetServiceConfig().CN.ISCP.IndexFlushWatermarkInterval.Duration)
 			}
 		})
 	}
@@ -1034,11 +1473,10 @@ func TestClusterCloseStopsAtServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	err = c.Close()
@@ -1112,11 +1550,10 @@ func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
 		state:    started,
 		services: []*operator{logOp, tnOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
@@ -1232,4 +1669,135 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 	hotspot, err := exec.Exec(ctx, "select * from system.sql_statement_hotspot limit 1", executor.Options{})
 	hotspot.Close()
 	require.NoError(t, err)
+}
+
+func TestRetiredTransactionTracePreservesHistoricalArtifacts(t *testing.T) {
+	// Stopped restart requires an owned cluster, so release the reusable fixture
+	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
+	root := t.TempDir()
+	var parsed cnservice.Config
+	md, err := toml.Decode(fmt.Sprintf(`[txn.trace]
+enable = true
+buffer-size = -1
+flush-bytes = "1KiB"
+force-flush-duration = "1ms"
+dir = %q
+tables = [1]
+load-to-mo = true
+`, root), &parsed)
+	require.NoError(t, err)
+	require.Empty(t, md.Undecoded())
+	c, err := NewCluster(WithTesting(), WithCNCount(1), WithPreStart(func(svc ServiceOperator) {
+		adjustBasicClusterService(svc)
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(func(cfg *ServiceConfig) {
+				// Enabled controls and invalid former queue capacity must be inert.
+				cfg.CN.Txn.Trace = parsed.Txn.Trace
+			})
+		}
+	}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	// Seed the actual former collector-owned layout before startup.
+	legacyRoot := filepath.Join(cn.GetServiceConfig().DataDir, parsed.Txn.Trace.Dir)
+	legacyDir := filepath.Join(legacyRoot, fmt.Sprintf("cn-%x", sha256.Sum256([]byte(cn.ServiceID()))))
+	require.NoError(t, os.MkdirAll(legacyDir, 0700))
+	marker := filepath.Join(legacyDir, "historical.csv")
+	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))
+	require.NoError(t, c.Start())
+
+	check := func(seed bool) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		if seed {
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
+			require.Zero(t, count, "fresh clusters must not create retired trace tables")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='mo_debug'").Scan(&count))
+			require.Zero(t, count, "fresh clusters must not create the retired trace database")
+			// Recreate the relevant released layout through internal SQL to exercise
+			// preservation; public writes remain subject to catalog authorization.
+			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+			for _, query := range []string{
+				"create database mo_debug",
+				trace.TraceStatementTableSQL,
+				trace.FeaturesTablesSQL,
+				"insert into mo_debug.trace_features values ('txn','disable'),('txn-action','disable'),('data','disable'),('statement','disable'),('txn-workspace','disable')",
+				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
+				"update mo_debug.trace_features set state='enable'",
+			} {
+				res, err := exec.Exec(ctx, query, executor.Options{})
+				require.NoError(t, err)
+				res.Close()
+			}
+		}
+		for _, setting := range []string{"0", "1"} {
+			_, err = conn.ExecContext(ctx, "set disable_txn_trace="+setting)
+			require.NoError(t, err)
+			tx, err := conn.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			func() {
+				defer tx.Rollback()
+				_, err = tx.ExecContext(ctx, "select 1")
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+			}()
+		}
+		_, err = conn.ExecContext(ctx, "select mo_ctl('cn','txn-trace','enable txn')")
+		require.ErrorContains(t, err, "command TXN-TRACE not supported")
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_statement").Scan(&count))
+		require.Equal(t, 1, count, "retired collector must not append statements")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='enable'").Scan(&count))
+		require.Equal(t, 5, count, "historical controls must not be rewritten")
+		data, err := os.ReadFile(marker)
+		require.NoError(t, err)
+		require.Equal(t, "historical trace data", string(data))
+		entries, err := os.ReadDir(legacyDir)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "retired trace must not create output")
+	}
+	check(true)
+	require.NoError(t, c.Stop())
+	require.NoError(t, c.Start())
+	check(false)
+}
+
+func isolateClusterPortLeases(t *testing.T) {
+	previous := clusterPortAllocator
+	clusterPortAllocator = portlease.Allocator{Directory: t.TempDir()}
+	t.Cleanup(func() { clusterPortAllocator = previous })
+}
+
+func TestClusterAndLegacyPortAllocatorsShareLeases(t *testing.T) {
+	clusterLease, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clusterLease.lock.Close()) })
+	port, err := tests.GetAvailablePort("127.0.0.1")
+	require.NoError(t, err)
+	value, err := strconv.ParseUint(port, 10, 64)
+	require.NoError(t, err)
+	require.True(t, value < clusterLease.base || value >= clusterLease.base+portLeaseSpan)
+	// The legacy allocation remains reserved even though no listener was started.
+	base := portlease.MinPort + (value-portlease.MinPort)/portlease.Span*portlease.Span
+	contender, locked, err := tryAcquireClusterPortLease(base)
+	require.NoError(t, err)
+	if contender != nil {
+		require.NoError(t, contender.lock.Close())
+	}
+	require.False(t, locked)
 }

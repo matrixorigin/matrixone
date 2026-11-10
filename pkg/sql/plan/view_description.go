@@ -72,8 +72,15 @@ func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef,
 	c.refs = appendPrepareSchemas(c.refs, ref)
 }
 
-func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot)
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewDescriptionDependencyContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
+func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot, nil)
 	if err == nil && obj != nil && def != nil {
 		c.record(obj, def, snapshot)
 	}
@@ -103,16 +110,46 @@ func (c *viewDescriptionDependencyContext) ResolveViewDependencyAccount(
 	return accountID, err
 }
 
-// viewDescriptionRelation returns the column row source used by SHOW's existing
-// formatting and filtering expressions. No rows are read from the persisted
-// View column snapshot, and no generated definition is written back.
-func viewDescriptionRelation(
-	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
-) (string, []*ObjectRef, bool, error) {
+// describeViewForMetadata owns the isolated binding used by SHOW consumers.
+// Columns and their complete dependency evidence must travel together: callers
+// may embed the description in a reusable plan without retaining source scans.
+func describeViewForMetadata(
+	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32,
+) ([]*ColDef, []*ObjectRef, bool, error) {
+	if HasViewMetadataRequest(ctx.GetContext()) {
+		if obj == nil {
+			return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata target has no identity")
+		}
+		database := obj.SchemaName
+		if obj.SubscriptionName != "" {
+			database = obj.SubscriptionName
+		}
+		result, err := DescribeViewMetadata(ctx.GetContext(), database, obj.ObjName, ctx.GetSnapshot())
+		if err != nil {
+			return nil, nil, false, err
+		}
+		defer result.Release()
+		columns, err := result.Columns()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		dependencies, err := result.Dependencies()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		caller, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		// S2 captures relation evidence, not function versions. Conservatively
+		// use the existing SHOW rebind flag until that evidence is available:
+		// a VALUES plan must not survive an untracked function replacement.
+		return columns, viewMetadataDependencyRefs(dependencies, caller), true, nil
+	}
 	if provider, ok := ctx.(ViewDescriptionContextProvider); ok {
 		child, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx.GetContext())
 		if err != nil {
-			return "", nil, false, err
+			return nil, nil, false, err
 		}
 		defer cleanup()
 		if sub := ctx.GetQueryingSubscription(); sub != nil {
@@ -121,7 +158,7 @@ func viewDescriptionRelation(
 		}
 		ctx = child
 	} else if ctx.GetQueryingSubscription() != nil {
-		return "", nil, false, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
+		return nil, nil, false, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
 	}
 	dependencies := &viewDescriptionDependencyContext{CompilerContext: ctx}
 	if ctx.GetQueryingSubscription() != nil {
@@ -130,23 +167,36 @@ func viewDescriptionRelation(
 	}
 	cols, err := DescribeViewColumns(dependencies, def.ViewSql.View)
 	if err != nil {
-		return "", nil, false, err
+		return nil, nil, false, err
 	}
 	if len(cols) > MaxViewMetadataColumns {
-		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
+		return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
 	}
 	if len(cols) == 0 {
-		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
+		return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
+	}
+	return cols, dependencies.refs, dependencies.dependsOnUdf, nil
+}
+
+// viewDescriptionRelation returns the column row source used by SHOW's existing
+// formatting and filtering expressions. No rows are read from the persisted
+// View column snapshot, and no generated definition is written back.
+func viewDescriptionRelation(
+	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32, databaseName, viewName string,
+) (string, []*ColDef, []*ObjectRef, bool, error) {
+	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, obj, accountID)
+	if err != nil {
+		return "", nil, nil, false, err
 	}
 	rows := make([]string, 0, len(cols))
 	for i, col := range cols {
 		if err := ctx.GetContext().Err(); err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		typ := MakeTypeByPlan2Type(col.Typ)
 		typeBytes, err := types.Encode(&typ)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		defaultDef := col.Default
 		if defaultDef == nil {
@@ -154,7 +204,7 @@ func viewDescriptionRelation(
 		}
 		defaultBytes, err := types.Encode(defaultDef)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		notNull := 0
 		if col.Typ.NotNullable {
@@ -168,5 +218,5 @@ func viewDescriptionRelation(
 	}
 	return "(select * from (values " + strings.Join(rows, ",") + ") as view_columns(" +
 		"account_id,att_relname_id,att_database,att_relname,attname,attnum,atttyp,attr_enum,attnotnull," +
-		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies.refs, dependencies.dependsOnUdf, nil
+		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", cols, dependencies, dependsOnUdf, nil
 }

@@ -1,0 +1,41 @@
+drop database if exists locking_read_limit_retry;
+create database locking_read_limit_retry;
+use locking_read_limit_retry;
+create table t(id varchar(8) primary key, c int);
+insert into t values ('a',0),('b',0),('c',0);
+begin;
+update t set c=1 where id='a';
+use locking_read_limit_retry;
+set session transaction_isolation='READ-COMMITTED';
+begin;
+select c from t where id='a' limit 1 for update;
+c
+1
+commit;
+begin;
+update t set c=1 where id='b';
+prepare locking_read_stmt from 'select c from t where id=? limit 1 offset 0 for update';
+set @locking_read_id='b';
+begin;
+execute locking_read_stmt using @locking_read_id;
+c
+1
+commit;
+deallocate prepare locking_read_stmt;
+begin;
+update t set c=1 where id='c';
+set @saved_locking_read_limit=@@sql_select_limit;
+set session sql_select_limit=1;
+begin;
+select c from t where id='c' for update;
+c
+1
+commit;
+set session sql_select_limit=cast(@saved_locking_read_limit as unsigned);
+set session transaction_isolation=default;
+select id,c from t order by id;
+id    c
+a    1
+b    1
+c    1
+drop database locking_read_limit_retry;

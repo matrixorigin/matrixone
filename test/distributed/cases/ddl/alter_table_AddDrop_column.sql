@@ -560,13 +560,13 @@ grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 -- @session
 grant alter table on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 alter table newRename rename to `newRename`;
@@ -606,8 +606,11 @@ show create table enum01;
 desc enum01;
 select * from enum01;
 insert into enum01 values (2,'B');
+set @add_drop_enum_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into enum01 values (3,'D');
 select * from enum01;
+set session sql_mode = @add_drop_enum_saved_sql_mode;
 alter table enum01 drop column name;
 show create table enum01;
 select * from enum01;

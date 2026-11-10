@@ -58,6 +58,18 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 // time interface check below catches missing methods.
 type CatalogHooks struct{}
 
+// MaintenanceOperands projects config fields onto the relations IVF-PQ consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.Ivfpq_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.Ivfpq_TblType_Storage, Name: cfg.IndexTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 // HiddenTableTypes lists the IndexAlgoTableType strings this algorithm
 // uses for its hidden tables. The order does not matter; downstream code
 // keys into the map by name. IVF-PQ needs two: metadata + storage.
@@ -66,6 +78,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Ivfpq_TblType_Metadata,
 		catalog.Ivfpq_TblType_Storage,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -99,17 +112,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"ivfpq_threads_build",
 		"lower_case_table_names",
-	}
-}
-
-// DefaultOptions is the params map produced when CREATE INDEX is issued
-// without a WITH(...) clause. Return nil if your algorithm requires
-// explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-		catalog.Quantization:         metric.Quantization_F32_Str,
-		catalog.DistributionMode:     vectorindex.DistributionMode_SINGLE_GPU_Str,
 	}
 }
 
@@ -282,6 +284,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.QuantizerTrainLimit > 0 {
 		res[catalog.IndexAlgoParamQuantizerTrainLimit] = strconv.FormatInt(idx.IndexOption.QuantizerTrainLimit, 10)
+	}
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 
 	return res, nil

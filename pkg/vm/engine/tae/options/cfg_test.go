@@ -16,7 +16,9 @@ package options
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +34,25 @@ func TestLogtailServerCfg(t *testing.T) {
 }
 
 func TestOptionsFillDefaultsCheckpointIncrementalInterval(t *testing.T) {
-	opts := new(Options).FillDefaults("")
+	fs := &fileservice.LocalFS{}
+	opts := (&Options{Fs: fs, LocalFs: fs, TmpFs: &fileservice.TmpFileService{}}).FillDefaults("")
 	require.Equal(t, DefaultCheckpointIncrementalInterval, opts.CheckpointCfg.IncrementalInterval)
+}
+
+func TestOptionsFillDefaultsCatalogGCInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *CatalogCfg
+		want time.Duration
+	}{
+		{name: "omitted", want: 3 * time.Minute},
+		{name: "zero", cfg: &CatalogCfg{}, want: 3 * time.Minute},
+		{name: "explicit", cfg: &CatalogCfg{GCInterval: time.Second}, want: time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fileservice.LocalFS{}
+			opts := (&Options{Fs: fs, LocalFs: fs, TmpFs: &fileservice.TmpFileService{}, CatalogCfg: tc.cfg}).FillDefaults("")
+			require.Equal(t, tc.want, opts.CatalogCfg.GCInterval)
+		})
+	}
 }

@@ -94,7 +94,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
+			return minMaxTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
+			return minMaxTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -250,6 +250,9 @@ var supportedAggInNewFramework = []FuncNew{
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
+			if widened, ok := jsonAggWidenedType(inputs[0]); ok {
+				return newCheckResultWithCast(0, []types.Type{widened})
+			}
 			return newCheckResultWithSuccess(0)
 		},
 		Overloads: []overload{
@@ -287,6 +290,9 @@ var supportedAggInNewFramework = []FuncNew{
 			switch val.Oid {
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if widened, ok := jsonAggWidenedType(val); ok {
+				val = widened
 			}
 			return newCheckResultWithCast(0, []types.Type{key, val})
 		},
@@ -567,6 +573,62 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 	{
+		functionId: VECTOR_MATMUL,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			// vector_matmul(topk, id, vec, queries [, options]); queries is a JSON array of
+			// vectors or a BLOB of little-endian float32 values, options a JSON object as
+			// text or JSON
+			if len(inputs) != 4 && len(inputs) != 5 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			finalTypes := append([]types.Type(nil), inputs...)
+			needCast := false
+			switch {
+			case finalTypes[0].Oid == types.T_int64:
+			case finalTypes[0].Oid == types.T_any || finalTypes[0].Oid.IsInteger() || finalTypes[0].Oid.IsMySQLString():
+				// a prepared parameter is typed as text at PREPARE
+				finalTypes[0] = types.T_int64.ToType()
+				needCast = true
+			default:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			for i := 3; i < len(finalTypes); i++ {
+				switch finalTypes[i].Oid {
+				case types.T_char, types.T_varchar, types.T_text, types.T_json:
+				case types.T_blob:
+					// queries as little-endian float32 values
+					if i != 3 {
+						return newCheckResultWithFailure(failedAggParametersWrong)
+					}
+				case types.T_any:
+					finalTypes[i] = types.T_varchar.ToType()
+					needCast = true
+				default:
+					return newCheckResultWithFailure(failedAggParametersWrong)
+				}
+			}
+			if !aggexec.VectorMatmulIDSupported(finalTypes[1].Oid) ||
+				!aggexec.VectorMatmulVecSupported(finalTypes[2].Oid) {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if needCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.VectorMatmulReturnType,
+				aggName:    "vector_matmul",
+			},
+		},
+	},
+	{
 		functionId: PERCENTILE_CONT,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
@@ -591,6 +653,24 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg:      true,
 				retType:    aggexec.PercentileDiscReturnType,
 				aggName:    "percentile_disc",
+			},
+		},
+	},
+
+	// function `QUANTILE_EXACT_WEIGHTED`: exact weighted percentile aggregate.
+	// Exact weighted percentile over (value, weight) rows; the third argument
+	// is stripped into compile-time aggregate configuration.
+	{
+		functionId: QUANTILE_EXACT_WEIGHTED,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    quantileExactWeightedCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.QuantileExactWeightedReturnType,
+				aggName:    "quantileExactWeighted",
 			},
 		},
 	},
@@ -624,7 +704,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_varbinary})
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -674,16 +754,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -739,7 +810,10 @@ func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 	}
+	// Only MIN/MAX have typed JSON key comparison. MAX_BY may return JSON,
+	// but its ordering and tie keys must not reach the bytewise fallback.
 	if !typeInList(casts[0].Oid, AnyValueSupportedTypes) ||
+		casts[1].Oid == types.T_json || casts[2].Oid == types.T_json ||
 		!typeInList(casts[1].Oid, MinMaxSupportedTypes) ||
 		!typeInList(casts[2].Oid, MinMaxSupportedTypes) {
 		return newCheckResultWithFailure(failedAggParametersWrong)
@@ -759,22 +833,47 @@ func typeInList(typ types.T, supported []types.T) bool {
 	return false
 }
 
-// mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
-// and standard-deviation aggregates. Unlike SUM, these aggregates accept
-// string and temporal expressions and evaluate their numeric representation.
 // BIT's storage domain is unsigned, but its legacy aggregate state is not
 // widened. Bind through the existing UINT64 aggregate instead of changing the
 // interpretation of old BIT partial states or treating BIT width as precision.
 func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
-		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+		// MySQL consumes ENUM ordinals in the approximate aggregate domain.
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	}
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}
+	if len(inputs) == 1 && inputs[0].Oid == types.T_json {
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	}
+	// The low-precision float types have no native aggregate; widen to float32
+	// (lossless) so SUM/AVG run on float32 and return float64, mirroring the
+	// enum/bit widening above.
+	if len(inputs) == 1 && isLowPrecFloat(inputs[0].Oid) {
+		return newCheckResultWithCast(0, []types.Type{types.T_float32.ToType()})
+	}
+	if len(inputs) == 1 && (inputs[0].Oid.IsMySQLString() || inputs[0].Oid.IsDateRelate()) {
+		return mysqlNumericAggTypeCheck(inputs)
+	}
+	// Preserve the existing numeric domains and bare NULL's UINT8 binding.
 	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 }
 
+// minMaxTypeCheck widens a low-precision float input to float32 (lossless) so MIN/MAX
+// order by float value via the float32 executor -- newGenericMinMaxExec compares the
+// raw uint bits, which do not order floats. Other types keep native MIN/MAX support.
+func minMaxTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && isLowPrecFloat(inputs[0].Oid) {
+		return newCheckResultWithCast(0, []types.Type{types.T_float32.ToType()})
+	}
+	return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
+}
+
+// mysqlNumericAggTypeCheck supplies MySQL numeric domains for statistical
+// aggregates. BOOL uses 0/1 and ENUM uses its ordinal. SUM/AVG only delegate
+// string and temporal inputs here, preserving their separate BOOL mode gate.
+// JSON resolves to DOUBLE; SQL binding supplies its warning conversion.
 func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) != 1 {
 		return newCheckResultWithFailure(failedAggParametersWrong)
@@ -782,6 +881,12 @@ func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 
 	t := inputs[0]
 	switch {
+	case t.Oid == types.T_bool:
+		return newCheckResultWithCast(0, []types.Type{types.T_int8.ToType()})
+	case t.Oid == types.T_enum:
+		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+	case t.Oid == types.T_json:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case t.Oid == types.T_any:
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case typeInList(t.Oid, SumSupportedTypes):
@@ -822,6 +927,7 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
+	types.T_json,
 }
 
 var AnyValueSupportedTypes = []types.T{
@@ -840,6 +946,7 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_array_float32, types.T_array_float64,
 	types.T_array_bf16, types.T_array_float16,
 	types.T_array_int8, types.T_array_uint8,
+	types.T_array_float8, types.T_array_float4,
 	types.T_geometry, types.T_geometry32,
 	types.T_enum,
 	types.T_Rowid,
@@ -852,11 +959,14 @@ func ReturnFirstArgType(typs []types.Type) types.Type {
 var BitOpsSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-	types.T_binary, types.T_varbinary,
+	types.T_binary, types.T_varbinary, types.T_blob,
 	types.T_bit,
 }
 
 func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+	}
 	if len(inputs) == 1 && aggexec.IsBitwiseAggregateOperandTooWide(inputs[0]) {
 		return newCheckResultWithFailure(failedBitwiseAggregateOperandsSize)
 	}
@@ -864,8 +974,20 @@ func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 var BitOpsReturnType = func(typs []types.Type) types.Type {
-	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary || typs[0].Oid == types.T_blob {
 		return typs[0]
 	}
 	return types.T_uint64.ToType()
+}
+
+// jsonAggWidenedType maps bf16/float16/float8/float4 to float32 and vecf8/vecf4 to vecf32
+// of the same dimension, the types the JSON aggregates render; ok is false otherwise.
+func jsonAggWidenedType(t types.Type) (types.Type, bool) {
+	switch {
+	case t.Oid.IsLowPrecisionFloat():
+		return types.T_float32.ToType(), true
+	case t.Oid.IsBlockScaledArray():
+		return types.New(types.T_array_float32, t.Width, 0), true
+	}
+	return t, false
 }

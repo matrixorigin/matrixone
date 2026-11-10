@@ -27,7 +27,7 @@ import (
 )
 
 func TestIssue28579PreparedIntegerDivKeepsPrecision(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare issue28579 from 'select cast(9223372036854775807 as signed) div ?'")
 	require.NoError(t, err)
 
@@ -48,30 +48,33 @@ func TestIssue28579PreparedIntegerDivKeepsPrecision(t *testing.T) {
 
 func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 	tests := []struct {
-		name  string
-		sql   string
-		param ParamValue
+		name     string
+		sql      string
+		param    ParamValue
+		wantLeft types.T
 	}{
 		{
-			name:  "signed divisor",
-			sql:   "prepare issue28578_signed from 'select cast(10 as unsigned) div cast(? as signed)'",
-			param: ParamValue{Value: "-3", PrepareParamKind: vector.PrepareParamInteger},
+			name:     "signed divisor",
+			wantLeft: types.T_uint64,
+			sql:      "prepare issue28578_signed from 'select cast(10 as unsigned) div cast(? as signed)'",
+			param:    ParamValue{Value: "-3", PrepareParamKind: vector.PrepareParamInteger},
 		},
 		{
-			name:  "decimal divisor",
-			sql:   "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
-			param: ParamValue{Value: "-3.00", PrepareParamKind: vector.PrepareParamDecimal},
+			name:     "decimal divisor",
+			wantLeft: types.T_decimal256,
+			sql:      "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
+			param:    ParamValue{Value: "-3.00", PrepareParamKind: vector.PrepareParamDecimal},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			queryPlan := prepared.GetDcl().GetPrepare().Plan
 			fn := findPlanFunctionExpr(queryPlan, "div")
 			require.NotNil(t, fn)
-			require.Equal(t, int32(types.T_uint64), fn.GetF().Args[0].Typ.Id)
+			require.Equal(t, int32(test.wantLeft), fn.GetF().Args[0].Typ.Id)
 			require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[1].Typ.Id)
 
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), queryPlan, []any{test.param})

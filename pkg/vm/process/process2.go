@@ -93,6 +93,8 @@ func NewTopProcess(
 		// 2. fields from make.
 		LastInsertID:          new(uint64),
 		StatementLastInsertID: new(uint64),
+		ODKUResult:            &ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
 		AffectedRows:          new(int64),
 
 		// 3. other fields.
@@ -156,6 +158,7 @@ func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base:        proc.Base,
+		dependent:   proc.dependent,
 		Session:     proc.Session,
 		WarningSink: proc.WarningSink,
 	}
@@ -176,6 +179,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
 		Base:        proc.Base,
+		dependent:   proc.dependent,
 		Session:     proc.Session,
 		WarningSink: proc.WarningSink,
 	}
@@ -220,6 +224,25 @@ func (proc *Process) ReplaceTopCtx(topCtx context.Context) {
 	proc.Base.sqlContext.outerContext = topCtx
 }
 
+// SetReadOnlyTxnAccessMode stamps the effective client-facing READ ONLY
+// transaction access mode for the executing statement on the shared
+// BaseProcess.
+func (proc *Process) SetReadOnlyTxnAccessMode(readOnly bool) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.readOnlyTxnAccessMode.Store(readOnly)
+}
+
+// ReadOnlyTxnAccessMode reports the stamped client-facing READ ONLY
+// transaction access mode of the executing statement.
+func (proc *Process) ReadOnlyTxnAccessMode() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	return proc.Base.readOnlyTxnAccessMode.Load()
+}
+
 // SaveToTopContext for easy access to change the top context.
 // it's same to a combined operator list like `GetTopContext() + ReplaceTopCtx() + GetTopContext()`.
 func (proc *Process) SaveToTopContext(key, value any) context.Context {
@@ -245,7 +268,8 @@ func (proc *Process) doPrepareForRunningWithoutPipeline() {
 // GetQueryCtxFromProc returns the query context and its cancel function.
 // just for easy access.
 func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
-	return proc.Base.sqlContext.queryContext, proc.Base.sqlContext.queryCancel
+	base := proc.ExecutionContextBase()
+	return base.queryContext, base.queryCancel
 }
 
 // ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
@@ -258,7 +282,7 @@ func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.Cance
 
 // GetQueryContextError return error once top context or query context with error.
 func (proc *Process) GetQueryContextError() error {
-	base := proc.Base.GetContextBase()
+	base := proc.ExecutionContextBase()
 	if base.outerContext != nil && base.outerContext.Err() != nil {
 		return base.outerContext.Err()
 	}
@@ -270,6 +294,12 @@ func (proc *Process) GetQueryContextError() error {
 
 // ResetQueryContext cleans the context and cancel function for process reuse.
 func (proc *Process) ResetQueryContext() {
+	if proc.dependent != nil {
+		if proc.Cancel != nil {
+			proc.Cancel(context.Canceled)
+		}
+		return
+	}
 	if proc.Base.sqlContext.queryCancel != nil {
 		proc.Base.sqlContext.queryCancel()
 		proc.Base.sqlContext.queryCancel = nil
@@ -280,6 +310,10 @@ func (proc *Process) ResetQueryContext() {
 
 // ResetCloneTxnOperator cleans the clone txn operator for process reuse.
 func (proc *Process) ResetCloneTxnOperator() {
+	if proc.dependent != nil {
+		proc.dependent.cloneTxn = nil
+		return
+	}
 	if proc.Base.CloneTxnOperator != nil {
 		proc.Base.CloneTxnOperator = nil
 	}
@@ -288,6 +322,11 @@ func (proc *Process) ResetCloneTxnOperator() {
 // Free do memory clean for the process.
 func (proc *Process) Free() {
 	if proc == nil {
+		return
+	}
+
+	if proc.dependent != nil {
+		proc.CloseDependentProcess()
 		return
 	}
 

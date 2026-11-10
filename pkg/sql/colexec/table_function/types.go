@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,27 +32,18 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets     []*plan.ColDef
-	Args     []*plan.Expr
-	Attrs    []string
-	Params   []byte
-	FuncName string
-	Limit    *plan.Expr
-	IsSingle bool
-
-	// Planner-resolved references for internal FULLTEXT SQL over a subscription.
-	// They are never populated from table-function arguments.
-	FulltextSourceRef *plan.ObjectRef
-	FulltextIndexRef  *plan.ObjectRef
+	Rets             []*plan.ColDef
+	Args             []*plan.Expr
+	Attrs            []string
+	Params           []byte
+	FuncName         string
+	Limit            *plan.Expr
+	IsSingle         bool
+	IndexMaintenance *executor.IndexMaintenanceSpec
 
 	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
 	// the planner only, never from TVF arguments (#27941).
 	ScanSnapshot *plan.Snapshot
-
-	// probe side runtime filter specs
-	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
-	IndexReaderParam *plan.IndexReaderParam
 
 	OffsetTotal [][2]int64
 	CanOpt      bool
@@ -179,10 +171,6 @@ func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed b
 	if tableFunction.ctr.state != nil {
 		tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
 	}
-}
-
-func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) cleanExecutors() {

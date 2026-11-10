@@ -68,6 +68,80 @@ func AllocationAccountSelectionsEqual(
 		left.capacityClass == right.capacityClass
 }
 
+func allocationAccountSelectionsShareProvenance(
+	left, right *AllocationAccountSelection,
+) bool {
+	return left != nil && right != nil &&
+		left.account == right.account &&
+		left.owner == right.owner &&
+		left.dataSite == right.dataSite &&
+		left.areaSite == right.areaSite &&
+		left.nullsSite == right.nullsSite &&
+		left.groupingSite == right.groupingSite
+}
+
+// ShuffleWithAllocationAccount is Shuffle with a capacity class selected for
+// the replacement storage. The alternate selection must preserve the vector's
+// account, owner, and sites: this changes admission only, never allocation
+// provenance. Existing and replacement buffers keep their own physical leases,
+// so restoring the ordinary selection after the call cannot relabel memory.
+func (v *Vector) ShuffleWithAllocationAccount(
+	sels []int64,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) error {
+	if v == nil ||
+		!allocationAccountSelectionsShareProvenance(v.allocationAccount, selection) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if err := selection.validate(); err != nil {
+		return err
+	}
+	ordinary := v.allocationAccount
+	v.allocationAccount = selection
+	defer func() {
+		v.allocationAccount = ordinary
+	}()
+	return v.Shuffle(sels, mp)
+}
+
+// UnionBatchWithAllocationAccount is UnionBatch with an alternate capacity
+// class for allocations made by this copy only. The destination keeps its
+// ordinary selection so a downstream Dup or append cannot accidentally spend
+// the producing operator's private recovery floor.
+func (v *Vector) UnionBatchWithAllocationAccount(
+	source *Vector,
+	offset int64,
+	count int,
+	flags []uint8,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) error {
+	if v == nil ||
+		!allocationAccountSelectionsShareProvenance(v.allocationAccount, selection) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if err := selection.validate(); err != nil {
+		return err
+	}
+	ordinary := v.allocationAccount
+	v.allocationAccount = selection
+	defer func() {
+		v.allocationAccount = ordinary
+	}()
+	return v.UnionBatch(source, offset, count, flags, mp)
+}
+
+// NewAccountedBuffer creates owned auxiliary bytes under this destination's
+// immutable provenance and capacity class. The caller must Free the buffer or
+// transfer it to an owner that releases it through its MPool.
+func (s *AllocationAccountSelection) NewAccountedBuffer(mp *mpool.MPool) (*mpool.AccountedBuffer, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return mpool.NewAccountedBufferWithCapacityClass(mp, s.account, s.owner, s.dataSite, s.capacityClass)
+}
+
 func NewAllocationAccountSelection(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
@@ -291,7 +365,7 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 ||
+	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -312,7 +386,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
 // after replacement. Accounted bitmap storage is explicit external storage.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.dataLease != nil || v.areaLease != nil ||
+	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||
@@ -417,9 +491,8 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 		rows = v.Capacity()
 	}
 	if v.allocationAccount != nil {
-		// InplaceSort has an infallible public API and reorders all row
-		// metadata together. Reserve its NULL and grouping sidecars while an
-		// MPool is available, before publishing binary row metadata.
+		// Reserve the NULL and grouping sidecars alongside binary row
+		// metadata so later row reordering can move all bitmaps together.
 		if err := v.ensureNullCapacity(rows, mp); err != nil {
 			return err
 		}

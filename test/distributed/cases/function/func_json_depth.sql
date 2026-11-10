@@ -17,7 +17,7 @@ INSERT INTO t_json_depth VALUES (0, '{"a":[1]}'), (1, 'not-json'), (2, '{"a":{"b
 SELECT id, JSON_DEPTH(doc) FROM t_json_depth ORDER BY id;
 DROP TABLE t_json_depth;
 
--- Invalid document and rejected source domains.
+-- Invalid document, non-string source, and binary charset are distinct errors.
 SELECT JSON_DEPTH('not-json') AS result;
 SELECT JSON_DEPTH(1) AS result;
 SELECT JSON_DEPTH(CAST('1' AS BINARY)) AS result;

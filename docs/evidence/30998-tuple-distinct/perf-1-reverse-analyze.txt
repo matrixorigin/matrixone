@@ -1,0 +1,15 @@
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)
+  ->  Aggregate
+        Analyze: timeConsumed=2ms group_time=[total=2ms,min=0ms,max=0ms,dop=8] mergegroup_time=[0ms] waitTime=36ms inputRows=1000000 outputRows=1 (min=1, max=1) InputSize=7.63 MiB OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=640.00 KiB (min=128.00 KiB, max=128.00 KiB)
+        Aggregate Functions: count(#[0,0])
+        ->  Aggregate
+              Analyze: timeConsumed=269ms group_time=[total=131ms,min=15ms,max=17ms,dop=8] waitTime=0ms inputRows=0 outputRows=1000000 (min=124475, max=125613) InputSize=0 bytes OutputSize=7.63 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=79.98 MiB (min=9.50 MiB, max=9.50 MiB)
+              Group Key: #[0,0], #[0,1] shuffle: hash(#[0,0])
+              ->  Aggregate
+                    Analyze: timeConsumed=132ms group_time=[total=132ms,min=13ms,max=23ms,dop=8] waitTime=0ms inputRows=1000000 outputRows=1000000 (min=115264, max=131072) InputSize=11.44 MiB OutputSize=11.44 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=75.56 MiB (min=9.41 MiB, max=9.50 MiB)
+                    Group Key: natural_unique5m.k, natural_unique5m.g8
+                    ->  Table Scan on qa30982_history_20261024.natural_unique5m
+                          Analyze: timeConsumed=6ms scan_time=[total=6ms,min=0ms,max=0ms,dop=8] waitTime=2ms inputBlocks=123 inputRows=1007616 outputRows=1000000 (min=115264, max=131072) InputSize=11.53 MiB OutputSize=11.44 MiB ReadSize=3.88 MiB|0 bytes|0 bytes MemorySize=2.46 MiB (min=312.00 KiB, max=320.00 KiB)
+                          Filter Cond: (natural_unique5m.k < 1000000)
+                          Block Filter Cond: (natural_unique5m.k < 1000000)

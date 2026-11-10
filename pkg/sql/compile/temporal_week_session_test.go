@@ -56,7 +56,7 @@ func TestWeekRemoteSessionRoundTrip(t *testing.T) {
 	require.Nil(t, remote.GetResolveVariableFunc())
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "week", []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}})
 	require.NoError(t, err)
-	eval := func(p *process.Process) uint8 {
+	eval := func(p *process.Process) int32 {
 		input := batch.NewWithSize(1)
 		input.Vecs[0] = vector.NewVec(types.T_date.ToType())
 		defer input.Clean(p.Mp())
@@ -67,17 +67,18 @@ func TestWeekRemoteSessionRoundTrip(t *testing.T) {
 		defer e.Free()
 		out, err := e.Eval(p, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
-		return vector.MustFixedColNoTypeCheck[uint8](out)[0]
+		require.Equal(t, types.T_int32, out.GetType().Oid)
+		return vector.MustFixedColWithTypeCheck[int32](out)[0]
 	}
 	a, b := eval(local), eval(remote)
 	t.Logf("same WEEK(date-column): initiating CN=%d decoded process=%d", a, b)
-	require.Equal(t, uint8(53), a)
-	require.Equal(t, uint8(53), b)
+	require.Equal(t, int32(53), a)
+	require.Equal(t, int32(53), b)
 	mode = 0
 	second, err := local.BuildProcessInfo("select week(d)")
 	require.NoError(t, err)
 	remote.Base.SessionInfo, err = process.ConvertToProcessSessionInfo(second.SessionInfo)
 	require.NoError(t, err)
-	require.Equal(t, uint8(0), eval(local))
-	require.Equal(t, uint8(0), eval(remote))
+	require.Equal(t, int32(0), eval(local))
+	require.Equal(t, int32(0), eval(remote))
 }

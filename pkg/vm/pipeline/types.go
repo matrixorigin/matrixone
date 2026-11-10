@@ -55,14 +55,14 @@ func resetOperatorTree(
 	resetFirst, ok := op.(resetBeforeChildren)
 	resetFirstEnabled := !alreadyReset && ok && resetFirst.ResetBeforeChildren()
 	if resetFirstEnabled {
-		op.Reset(proc, pipelineFailed, err)
+		vm.Reset(op, proc, pipelineFailed, err)
 		resetDone[op] = struct{}{}
 	}
 	for _, child := range op.GetOperatorBase().Children {
 		resetOperatorTree(child, skip, resetDone, proc, pipelineFailed, err)
 	}
 	if !alreadyReset && !resetFirstEnabled {
-		op.Reset(proc, pipelineFailed, err)
+		vm.Reset(op, proc, pipelineFailed, err)
 		resetDone[op] = struct{}{}
 	}
 }
@@ -83,7 +83,7 @@ func resetChildOwners(
 		return
 	}
 	if resetFirst, ok := op.(resetBeforeChildren); ok && resetFirst.ResetBeforeChildren() {
-		op.Reset(proc, pipelineFailed, err)
+		vm.Reset(op, proc, pipelineFailed, err)
 		resetDone[op] = struct{}{}
 	}
 	for _, child := range op.GetOperatorBase().Children {
@@ -149,18 +149,24 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 	if p.rootOp == nil {
 		return
 	}
-	p.rootOp.Reset(proc, pipelineFailed, err)
+	vm.Reset(p.rootOp, proc, pipelineFailed, err)
 	cleanupDeferredSpool(p.rootOp)
 	if !isPrepare {
-		p.rootOp.Free(proc, pipelineFailed, err)
+		vm.Free(p.rootOp, proc, pipelineFailed, err)
 	}
 }
 
 // Cleanup do memory release work for whole pipeline.
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
-	// cancel the context to stop its pre-pipelines.
-	proc.Cancel(err)
+	// Cancel controls liveness; it is not the execution result. Successful
+	// consumers retire inputs with explicit provenance, while failures survive.
+	err = process.NormalizePipelineCleanupError(pipelineFailed, err)
+	cause := err
+	if cause == nil {
+		cause = process.ErrPipelineStopped
+	}
+	proc.Cancel(cause)
 	resetDone := make(map[vm.Operator]struct{})
 	resetChildOwners(p.rootOp, resetDone, proc, pipelineFailed, err)
 
@@ -197,7 +203,7 @@ func (p *Pipeline) cleanupInOrder(
 
 		if !isPrepare {
 			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-				op.Free(proc, pipelineFailed, err)
+				vm.Free(op, proc, pipelineFailed, err)
 				return nil
 			})
 		}
@@ -220,15 +226,15 @@ func (p *Pipeline) cleanupSenderReceiverPipeline(
 
 	go func() {
 		defer wg.Done()
-		mergeOperator.Reset(proc, pipelineFailed, err)
+		vm.Reset(mergeOperator, proc, pipelineFailed, err)
 		if !isPrepare {
-			mergeOperator.Free(proc, pipelineFailed, err)
+			vm.Free(mergeOperator, proc, pipelineFailed, err)
 		}
 	}()
 
-	p.rootOp.Reset(proc, pipelineFailed, err)
+	vm.Reset(p.rootOp, proc, pipelineFailed, err)
 	if !isPrepare {
-		p.rootOp.Free(proc, pipelineFailed, err)
+		vm.Free(p.rootOp, proc, pipelineFailed, err)
 	}
 	wg.Wait()
 	cleanupDeferredSpool(p.rootOp)
@@ -251,7 +257,7 @@ func (p *Pipeline) cleanupChildrenExceptMerge(
 				if op == skip {
 					return nil
 				}
-				op.Free(proc, pipelineFailed, err)
+				vm.Free(op, proc, pipelineFailed, err)
 				return nil
 			})
 		}
@@ -290,15 +296,15 @@ func (p *Pipeline) cleanupLoopPipeline(
 
 	go func() {
 		defer wg.Done()
-		mergeOperator.Reset(proc, pipelineFailed, err)
+		vm.Reset(mergeOperator, proc, pipelineFailed, err)
 		if !isPrepare {
-			mergeOperator.Free(proc, pipelineFailed, err)
+			vm.Free(mergeOperator, proc, pipelineFailed, err)
 		}
 	}()
 
-	dispatchOperator.Reset(proc, pipelineFailed, err)
+	vm.Reset(dispatchOperator, proc, pipelineFailed, err)
 	if !isPrepare {
-		dispatchOperator.Free(proc, pipelineFailed, err)
+		vm.Free(dispatchOperator, proc, pipelineFailed, err)
 	}
 	wg.Wait()
 	cleanupDeferredSpool(dispatchOperator)

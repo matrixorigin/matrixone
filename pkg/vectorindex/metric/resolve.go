@@ -15,7 +15,7 @@
 // NOTE: This file is intentionally UNTAGGED (no //go:build constraint).
 // The distance KERNELS live in build-tag alternatives — distance_func.go
 // (scalar, !(amd64 && goexperiment.simd)) and distance_func_amd64.go (SIMD,
-// amd64 && go1.26 && goexperiment.simd) — so only one compiles per build. The
+// amd64 && go1.27 && goexperiment.simd) — so only one compiles per build. The
 // resolver / orchestration helpers below are build-tag-independent (they just
 // pick and call a kernel), so they must NOT live in a tagged file, or they
 // would vanish on the SIMD build and break every caller (kmeans / brute_force /
@@ -30,8 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// IMPORTANT: Elkans Kmeans always use L2Distance for dense vector or images.  After getting the centroids, we can use other distance function
-// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
+// ResolveKmeansDistanceFn selects the clustering metric. Dense clustering uses
+// true L2; spherical clustering may normalize and use spherical distance.
+// Centroid assignment later uses the user-selected search metric.
 
 func ResolveKmeansDistanceFn[T types.RealNumbers](metric MetricType, spherical bool) (DistanceFunction[T], bool, error) {
 	if spherical {
@@ -48,7 +49,7 @@ func ResolveKmeansDistanceFnForDense[T types.RealNumbers](metric MetricType) (Di
 		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_L2sqDistance:
-		// Elkans Kmeans always uses true L2Distance regardless of user metric.
+		// Dense clustering uses true L2Distance regardless of the search metric.
 		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_InnerProduct:
@@ -123,7 +124,7 @@ func resolveRealKernel[T types.RealNumbers](metric MetricType) (DistanceFunction
 // float32/int64 and are cast to R — casting their float64 down to float32 is
 // bit-identical to a native-float32 kernel, since the intermediate is exact).
 //
-// IMPORTANT: Don't use it for Elkans Kmeans (use ResolveKmeansDistanceFn).
+// Clustering uses ResolveKmeansDistanceFn, which owns normalization and true-L2 semantics.
 // NOTE: Metric_L2Distance returns squared L2; callers needing true L2 sqrt the
 // result (as GoPairWiseDistance does).
 func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricType) (func(a, b []T) (R, error), error) {

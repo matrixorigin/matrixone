@@ -48,7 +48,7 @@ func TestExtractMinuteDatetimeVector(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 		ExtractFromDatetime,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -83,7 +83,7 @@ func TestExtractMinuteDatetimeVectorFallbackAndNulls(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, want, resultNulls),
 		ExtractFromDatetime,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -111,7 +111,7 @@ func TestExtractMinuteTimestampUsesSessionTimezone(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{15, 0, 0, 44}, []bool{false, false, true, false}),
 		ExtractFromTimestamp,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -125,7 +125,7 @@ func TestExtractMinuteTimestampUsesSessionTimezone(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{15, 15, 15}, nil),
 		ExtractFromTimestamp,
 	)
-	succeed, info = constantTimestamp.Run()
+	succeed, info = constantTimestamp.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -145,7 +145,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7, 7, 7}, nil),
 		ExtractFromDatetime,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -166,7 +166,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0}, []bool{true, true, true}),
 		ExtractFromDatetime,
 	)
-	succeed, info = nullUnitCase.Run()
+	succeed, info = nullUnitCase.RunAndFree()
 	if !succeed {
 		t.Fatal(info)
 	}
@@ -180,6 +180,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, nil),
 		ExtractFromDatetime,
 	)
+	defer emptyBatch.Free()
 	if err := emptyBatch.result.PreExtendAndReset(0); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestExtractMinuteFastPathLeavesOtherUnitsUnchanged(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, []bool{tc.unit == "not-a-unit"}),
 				ExtractFromDatetime,
 			)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			if !succeed {
 				t.Fatal(info)
 			}
@@ -246,7 +247,7 @@ func benchmarkExtractMinuteVector(
 	b *testing.B,
 	inputType types.Type,
 	values any,
-	fn fEvalFn,
+	fn executeLogicOfOverload,
 	zone *time.Location,
 	wantLastMinute int,
 ) {
@@ -268,6 +269,7 @@ func benchmarkExtractMinuteVector(
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		fn,
 	)
+	defer fc.Free()
 	runBatch := func() {
 		b.Helper()
 		if err := fc.result.PreExtendAndReset(rows); err != nil {

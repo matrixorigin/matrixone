@@ -112,7 +112,7 @@ func TestLocalETLFS(t *testing.T) {
 		assert.Nil(t, err)
 
 		filePathInB := filepath.Join(bPath, "foo")
-		fs, readPath, err := GetForETL(ctx, nil, filePathInB)
+		fs, readPath, err := GetForETL(WithSQLFileAccess(ctx, "sys", "moadmin"), nil, filePathInB)
 		assert.Nil(t, err)
 
 		vec := IOVector{

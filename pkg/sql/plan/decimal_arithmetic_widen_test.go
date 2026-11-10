@@ -87,7 +87,7 @@ func TestDecimalArithmeticSmallIntegerLiteralKeepsDecimal128(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_decimal128), result.Typ.Id)
-	require.Equal(t, int32(38), result.Typ.Width)
+	require.Equal(t, int32(21), result.Typ.Width)
 }
 
 func TestDecimalMultiplyIntegerLiteralUsesRefinedCast(t *testing.T) {
@@ -145,7 +145,7 @@ func TestWideDecimalProductRemainsWideInComparison(t *testing.T) {
 }
 
 func TestCTASPublishesDecimal256ProductBoundary(t *testing.T) {
-	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table decimal_product_boundary as select "+
 			"cast(n_nationkey as decimal(38,0)) * "+
 			"cast(n_nationkey as decimal(27,0)) as product from nation")
@@ -176,7 +176,7 @@ func TestWideFractionalLiteralMultiplicationPreservesHighBits(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			stmt, err := runOneExprStmt(NewMockOptimizer(false), t,
+			stmt, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"select cast(1235467899687894561 as decimal(19,0)) * "+test.literal)
 			require.NoError(t, err)
 			expr := stmt.GetQuery().Nodes[1].ProjectList[0]

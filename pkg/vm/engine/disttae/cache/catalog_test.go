@@ -720,7 +720,7 @@ func TestParseColumnsBatchPreservesUnsignedFlag(t *testing.T) {
 }
 
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoTablesTypes))
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))
@@ -729,7 +729,7 @@ func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
 }
 
 func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoColumnsTypes))
 	var vec *vector.Vector
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
@@ -824,7 +824,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 }
 
 func newTestDatabaseBatch(mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoDatabaseTypes))
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))

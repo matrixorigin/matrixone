@@ -26,16 +26,21 @@ import (
 func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 	for _, mode := range []string{"fill", "merge"} {
 		for _, kind := range []string{
-			"any", "fixed-min", "fixed-min-loser", "fixed-min-transient",
+			"any", "fixed-min", "fixed-min-loser", "fixed-min-transient", "fixed-min-target-only", "fixed-min-source-only",
 			"bytes-min", "max-by-equal",
 		} {
 			t.Run(mode+"/"+kind, func(t *testing.T) {
 				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
 				require.NoError(t, err)
 				controller := &rejectNthAggregateAllocation{}
 				account, err := registry.OpenWithController(128<<20, controller)
 				require.NoError(t, err)
+				t.Cleanup(func() {
+					finishTestAggregateAllocation(t, registry, account)
+					require.Zero(t, controller.used)
+				})
 				allocation, err := NewAllocationAccount(
 					account, mpool.AllocationOwnerGroup, AllocationAccountSites{
 						VectorData: 1, VectorArea: 2, VectorNulls: 3,
@@ -45,12 +50,17 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 				makeExec := func(id int64, params ...types.Type) GroupAggFuncExec {
 					exec, err := MakeGroupAgg(mp, id, false, allocation, nil, params...)
 					require.NoError(t, err)
+					t.Cleanup(func() {
+						exec.Free()
+						require.NoError(t, exec.ClearAllocationAccount(allocation))
+					})
 					SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
 					require.NoError(t, exec.GroupGrow(2))
 					return exec
 				}
 				makeText := func(values []string, sources []types.StringSource) *vector.Vector {
 					vec := vector.NewVec(types.T_text.ToType())
+					t.Cleanup(func() { vec.Free(mp) })
 					for _, value := range values {
 						require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 					}
@@ -59,6 +69,7 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 				}
 				makeInt := func(values []int64) *vector.Vector {
 					vec := vector.NewVec(types.T_int64.ToType())
+					t.Cleanup(func() { vec.Free(mp) })
 					for _, value := range values {
 						require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 					}
@@ -80,18 +91,26 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 						[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})}
 					wantFirst = types.StringSourceLiteral
 					wantSecond = types.StringSourceCOMStmt
-				case "fixed-min", "fixed-min-loser", "fixed-min-transient":
+				case "fixed-min", "fixed-min-loser", "fixed-min-transient", "fixed-min-target-only", "fixed-min-source-only":
 					left = makeExec(AggIdOfMin, types.T_int64.ToType())
 					seed := makeInt([]int64{5, 5})
-					require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
+					if kind != "fixed-min-source-only" {
+						require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
+					}
 					require.NoError(t, left.BatchFill(0, []uint64{1, 2}, []*vector.Vector{seed}))
-					seed.Free(mp)
 					values := []int64{5, 5}
 					sources := []types.StringSource{
 						types.StringSourceCOMStmt, types.StringSourceLiteral}
-					if kind == "fixed-min-loser" {
+					if kind == "fixed-min-source-only" {
+						values = []int64{4, 4}
+						wantFirst = types.StringSourceCOMStmt
+					} else if kind == "fixed-min-loser" {
 						values = []int64{6, 5}
 						wantFirst = types.StringSourceLiteral
+					} else if kind == "fixed-min-target-only" {
+						values = []int64{4}
+						sources = []types.StringSource{types.StringSourceExpression}
+						groups = []uint64{1}
 					} else if kind == "fixed-min-transient" {
 						values = []int64{4, 3, 5}
 						sources = []types.StringSource{
@@ -104,13 +123,15 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 					}
 					input := makeInt(values)
 					require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
+					if kind == "fixed-min-target-only" {
+						require.False(t, input.HasStringSourceMetadata())
+					}
 					candidate = []*vector.Vector{input}
 				case "bytes-min":
 					left = makeExec(AggIdOfMin, types.T_text.ToType())
 					seed := makeText([]string{"5", "5"}, []types.StringSource{
 						types.StringSourceLiteral, types.StringSourceLiteral})
 					require.NoError(t, left.BatchFill(0, []uint64{1, 2}, []*vector.Vector{seed}))
-					seed.Free(mp)
 					candidate = []*vector.Vector{makeText([]string{"5", "5"}, []types.StringSource{
 						types.StringSourceCOMStmt, types.StringSourceLiteral})}
 				case "max-by-equal":
@@ -122,9 +143,6 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 						makeInt([]int64{1, 1}), makeInt([]int64{1, 1}),
 					}
 					require.NoError(t, left.BatchFill(0, []uint64{1, 2}, seed))
-					for _, vec := range seed {
-						vec.Free(mp)
-					}
 					candidate = []*vector.Vector{
 						makeText([]string{"value", "value"}, []types.StringSource{
 							types.StringSourceCOMStmt, types.StringSourceLiteral}),
@@ -138,6 +156,10 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 					right, err = MakeGroupAgg(
 						mp, left.AggID(), false, allocation, nil, argTypes...)
 					require.NoError(t, err)
+					t.Cleanup(func() {
+						right.Free()
+						require.NoError(t, right.ClearAllocationAccount(allocation))
+					})
 					SyncAggregatorsToChunkSize([]AggFuncExec{right}, AggBatchSize)
 					require.NoError(t, right.GroupGrow(len(groups)))
 					rightGroups := make([]uint64, len(groups))
@@ -155,9 +177,12 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 					preflightErr = left.PreflightBatchMerge(right, 0, groups)
 				}
 				require.NoError(t, preflightErr)
-				require.Equal(t, []types.StringSource{
-					types.StringSourceLiteral, types.StringSourceLiteral,
-				}, state.GetStringSources(), "preflight must reserve without publishing metadata")
+				wantSeedSource := types.StringSourceLiteral
+				if kind == "fixed-min-source-only" {
+					wantSeedSource = types.StringSourceExpression
+				}
+				require.Equal(t, []types.StringSource{wantSeedSource, wantSeedSource},
+					state.GetStringSources(), "preflight must reserve without publishing metadata")
 				admitted := mp.CurrNB()
 				controller.failAt = controller.calls + 1
 				if mode == "fill" {
@@ -171,18 +196,9 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 					"runtime may normalize and release a now-uniform sidecar")
 				require.Equal(t, wantFirst, state.GetStringSourceAt(0))
 				require.Equal(t, wantSecond, state.GetStringSourceAt(1))
-
-				for _, vec := range candidate {
-					vec.Free(mp)
+				if kind == "fixed-min-target-only" {
+					require.Equal(t, []int64{4, 5}, vector.MustFixedColNoTypeCheck[int64](state))
 				}
-				left.Free()
-				require.NoError(t, left.ClearAllocationAccount(allocation))
-				if right != nil {
-					right.Free()
-					require.NoError(t, right.ClearAllocationAccount(allocation))
-				}
-				finishTestAggregateAllocation(t, registry, account)
-				require.Zero(t, mp.CurrNB())
 			})
 		}
 	}

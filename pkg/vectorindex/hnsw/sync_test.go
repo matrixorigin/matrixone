@@ -15,6 +15,10 @@
 package hnsw
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
@@ -71,7 +77,7 @@ func mockMoIndexes() []*plan.IndexDef {
 			IndexTableName:     "__storage",
 			TableExist:         true,
 			IndexAlgo:          "hnsw",
-			IndexAlgoTableType: catalog.Hnsw_TblType_Metadata,
+			IndexAlgoTableType: catalog.Hnsw_TblType_Storage,
 			IndexAlgoParams:    "{\"op_type\": \"vector_l2_ops\", \"m\":\"128\",\"ef_construction\":\"256\", \"ef_search\":\"100\"}",
 		},
 	}
@@ -97,8 +103,13 @@ func (e *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (ex
 }
 
 func (e *MockTxnExecutor) Txn() client.TxnOperator {
-	return nil
+	return mockTxnOperator{}
 }
+
+// mockTxnOperator is a transaction with an ID, all a model file write reads of it.
+type mockTxnOperator struct{ client.TxnOperator }
+
+func (mockTxnOperator) Txn() txn.TxnMeta { return txn.TxnMeta{ID: []byte("mock-txn")} }
 
 // give metadata [index_id, checksum, timestamp]
 func mock_runSql_empty(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
@@ -112,29 +123,61 @@ func mock_runTxn(sqlproc *sqlexec.SqlProcess, fn func(exec executor.TxnExecutor)
 	return err
 }
 
-func TestSyncRunSqls(t *testing.T) {
-	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
-	sqlproc := sqlexec.NewSqlProcess(proc)
-
+func TestSyncSaveTransactionFailure(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	sp := sqlexec.NewSqlProcess(proc)
+	path := filepath.Join(t.TempDir(), "model")
+	require.NoError(t, os.WriteFile(path, []byte("owned model"), 0600))
+	idx := &HnswModel[float32]{Id: "idx", Path: path}
+	idx.Dirty.Store(true)
+	cfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store", MetadataTable: "meta_save_failure"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+	syncer := &HnswSync[float32]{indexes: []*HnswModel[float32]{idx}, tblcfg: cfg}
+	old := runTxn
+	t.Cleanup(func() { runTxn = old })
+	fail := errors.New("transaction failed")
+	runTxn = func(*sqlexec.SqlProcess, func(executor.TxnExecutor) error) error { return fail }
+	require.ErrorIs(t, syncer.Save(sp), fail)
+	require.True(t, idx.Dirty.Load(), "failed persistence remains retryable")
 	runTxn = mock_runTxn
+	require.NoError(t, syncer.Save(sp))
+}
 
-	sync := &HnswSync[float32]{}
-	defer sync.Destroy()
+// Save writes each dirty model file through the index files the sync was given.
+func TestSyncSaveWritesThroughIndexFiles(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	sp := sqlexec.NewSqlProcess(proc)
+	path := filepath.Join(t.TempDir(), "model")
+	require.NoError(t, os.WriteFile(path, []byte("owned model"), 0600))
+	idx := &HnswModel[float32]{Id: "idx", Path: path}
+	idx.Dirty.Store(true)
+	cfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store", MetadataTable: "meta_save_files"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+	files := &indexfile.Files{}
+	syncer := &HnswSync[float32]{indexes: []*HnswModel[float32]{idx}, tblcfg: cfg, files: files}
 
-	sqls := []string{"fake"}
-	err := sync.runSqls(sqlproc, sqls)
-	require.NotNil(t, err)
-
-	sqls = []string{"sql"}
-	err = sync.runSqls(sqlproc, sqls)
-	require.Nil(t, err)
+	oldTxn, oldWrite := runTxn, writeIndexFile
+	t.Cleanup(func() { runTxn, writeIndexFile = oldTxn, oldWrite })
+	runTxn = mock_runTxn
+	var refs []indexfile.Ref
+	writeIndexFile = func(_ *sqlexec.SqlProcess, got *indexfile.Files, _ client.TxnOperator, ref indexfile.Ref,
+		src io.Reader, _ string, _ func(string) error) (int64, error) {
+		require.Same(t, files, got)
+		refs = append(refs, ref)
+		return io.Copy(io.Discard, src)
+	}
+	require.NoError(t, syncer.Save(sp))
+	require.Len(t, refs, 1)
+	require.Equal(t, "idx", refs[0].IndexID)
+	require.Equal(t, vectorindex.CheckSumFromBuffer([]byte("owned model")), refs[0].Checksum)
 }
 
 func TestSyncEmptyCatalogError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_empty
@@ -157,14 +200,14 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 		}
 	}
 
-	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.NotNil(t, err)
 }
 
 func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSQL := runSql
@@ -203,7 +246,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -213,7 +256,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 
 func TestSyncVariableError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -244,7 +287,7 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.NotNil(t, err)
 
 	//err = sync.RunOnce(sqlproc, &cdc)
@@ -262,14 +305,14 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	_, err = NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	_, err = NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.NotNil(t, err)
 }
 
 func TestSyncUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -291,7 +334,7 @@ func TestSyncUpsert(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -301,7 +344,7 @@ func TestSyncUpsert(t *testing.T) {
 func TestSyncDelete(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -319,7 +362,7 @@ func TestSyncDelete(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -329,7 +372,7 @@ func TestSyncDelete(t *testing.T) {
 func TestSyncDeleteAndInsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -356,7 +399,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -366,7 +409,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 func TestSyncUpdate(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -385,7 +428,7 @@ func TestSyncUpdate(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -395,7 +438,7 @@ func TestSyncUpdate(t *testing.T) {
 func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -422,7 +465,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -433,7 +476,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 func TestSyncAddOneModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -466,7 +509,7 @@ func TestSyncAddOneModel(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	defer sync.Destroy()
 
@@ -482,7 +525,7 @@ func TestSyncAddOneModel(t *testing.T) {
 func TestSyncDelete2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -500,7 +543,7 @@ func TestSyncDelete2Files(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -510,7 +553,7 @@ func TestSyncDelete2Files(t *testing.T) {
 func TestSyncDeleteShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -533,7 +576,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 	r := rand.New(rand.NewSource(seed))
 	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -543,7 +586,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -565,7 +608,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -575,7 +618,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -601,12 +644,12 @@ func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "", nil)
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
@@ -623,7 +666,7 @@ func TestSyncUpdateInsertShuffle2FilesF64(t *testing.T) {
 
 func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -660,12 +703,12 @@ func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testin
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "", nil)
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
@@ -679,7 +722,7 @@ func TestSyncUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 
 func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -735,11 +778,11 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 		require.Nil(t, err)
 
 	case float64:
-		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "", nil)
 		require.Nil(t, err)
 	}
 
@@ -774,7 +817,7 @@ func TestSyncContinuousUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 // so the logical Len does not diverge from the physical index size.
 func TestSyncInsertDuplicateKeyFailsCleanly(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -800,7 +843,7 @@ func TestSyncInsertDuplicateKeyFailsCleanly(t *testing.T) {
 		{Type: vectorindex.CDC_INSERT, PKey: 1000, Vec: v},
 	}}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "", nil)
 	require.Nil(t, err)
 	defer sync.Destroy()
 

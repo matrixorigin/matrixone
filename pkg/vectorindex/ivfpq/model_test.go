@@ -17,13 +17,11 @@
 package ivfpq
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -82,20 +80,6 @@ func generateTestData(nVectors, dim int) []float32 {
 
 // ---- mock SQL helpers ----
 
-func mock_runSql_streaming_error(
-	ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	sql string,
-	ch chan executor.Result,
-	err_chan chan error,
-) (executor.Result, error) {
-	defer func() {
-		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-		time.Sleep(10 * time.Millisecond)
-	}()
-	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-}
-
 func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesize int64) *batch.Batch {
 	bat := batch.NewWithSize(4)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
@@ -111,23 +95,8 @@ func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesi
 	return bat
 }
 
-func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
-
-	dat, err := os.ReadFile(tarPath)
-	if err != nil {
-		panic(fmt.Sprintf("makeIndexBatch: cannot read %s: %v", tarPath, err))
-	}
-	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
-	bat.SetRowCount(1)
-	return bat
-}
-
-// buildTestModel builds an IvfpqModel, calls Build, and saves via ToSql.
-// Index is nil after ToSql (GPU memory freed). Path/Checksum/FileSize are set.
+// buildTestModel builds an IvfpqModel, calls Build, and saves via PreparePersistence.
+// Index is nil after PreparePersistence (GPU memory freed). Path/Checksum/FileSize are set.
 func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, float32] {
 	t.Helper()
 
@@ -153,10 +122,9 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 	err = m.Build()
 	require.NoError(t, err)
 
-	tblcfg := testTblcfg()
-	sqls, err := m.ToSql(tblcfg)
+	err = m.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, m.FileSize)
 	require.NotEmpty(t, m.Path)
 	require.NotEmpty(t, m.Checksum)
 	require.Greater(t, m.FileSize, int64(0))
@@ -170,12 +138,11 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 
 func TestModelStreamError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	orig := runSql_streaming
-	runSql_streaming = mock_runSql_streaming_error
-	defer func() { runSql_streaming = orig }()
+	files := swapIndexFiles(t)
+	files.openErr = moerr.NewInternalErrorNoCtx("index file read failed")
 
 	// LoadIndex now fires tag=1 / tag=2 goroutines via runSql; mock those
 	// to return empty so they don't hit the production executor.
@@ -200,7 +167,7 @@ func TestModelStreamError(t *testing.T) {
 
 func TestModelBuildAndLoad(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -227,9 +194,9 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.Equal(t, int64(testNVectors), built.Len)
 
 	// ---- Save to file ----
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Greater(t, len(sqls), 0)
+	require.Positive(t, built.FileSize)
 
 	tarPath := built.Path
 	checksum := built.Checksum
@@ -293,7 +260,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 
 func TestModelLoadFromDB(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -308,20 +275,12 @@ func TestModelLoadFromDB(t *testing.T) {
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 
-	// Inject streaming mock.
-	orig := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = orig }()
+	swapIndexFiles(t).putFile(t, "test-from-db", tarPath)
 
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		// LoadIndex now also fires tag=1 (deleted pkids) and tag=2 (overflow)
-		// SELECTs in parallel with the model tar streaming. Return an empty
-		// result for those — the test exercises the no-CDC-delta path.
+		// LoadIndex also reads the tag=1 CDC event chunks. Return an empty result for
+		// them — the test exercises the no-CDC-delta path.
 		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
 			return executor.Result{Mp: proc.Mp()}, nil
 		}
@@ -384,10 +343,10 @@ func TestModelNil(t *testing.T) {
 	_, _, err = idx2.SearchQuantize(nil, 1, 0)
 	require.NotNil(t, err)
 
-	// ToSql on a never-built model returns empty.
-	sqls, err := idx.ToSql(tblcfg)
+	// PreparePersistence on a never-built model returns empty.
+	err = idx.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, idx.FileSize)
 
 	// ToDeleteSql always works.
 	deleteSqls, err := idx.ToDeleteSql(tblcfg)
@@ -409,14 +368,13 @@ func TestModelNil(t *testing.T) {
 
 func TestModelEmptyBuild(t *testing.T) {
 	idxcfg := testIdxcfg()
-	tblcfg := testTblcfg()
 
 	built, err := NewIvfpqModelForBuild[float32, float32]("test-empty", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
-	// Not dirty → ToSql returns empty slice.
+	// Not dirty → PreparePersistence returns empty slice.
 	built.Dirty = false
-	sqls, err := built.ToSql(tblcfg)
+	err = built.PreparePersistence()
 	require.NoError(t, err)
-	require.Equal(t, 0, len(sqls))
+	require.Zero(t, built.FileSize)
 }

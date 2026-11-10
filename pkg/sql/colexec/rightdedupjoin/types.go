@@ -48,18 +48,13 @@ const (
 	rightDedupJoinAllocationSiteResultGrouping
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 	itr   hashmap.Iterator
 
 	exprExecs []colexec.ExpressionExecutor
 
-	evecs []evalVector
+	evecs []colexec.ExpressionExecutor
 	vecs  []*vector.Vector
 
 	mp *message.JoinMap
@@ -73,6 +68,7 @@ type container struct {
 
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
+	autoSpill      bool
 	resultBatch    *batch.Batch
 }
 
@@ -96,6 +92,7 @@ type RightDedupJoin struct {
 	DedupColName      string
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type
+	DedupKeyExprs     []*plan.Expr
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
@@ -223,10 +220,6 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanEvalVectors()
 }
 
-func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
 		if ctr.exprExecs[i] != nil {
@@ -296,10 +289,9 @@ func (ctr *container) cleanResultBatch(proc *process.Process) {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+		if ctr.evecs[i] != nil {
+			ctr.evecs[i].Free()
 		}
-		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil

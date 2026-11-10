@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -99,14 +101,19 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	publish func(*Engine),
 	options ...EngineOptions,
 ) *Engine {
-	cluster := clusterservice.GetMOCluster(service)
-	services := cluster.GetAllTNServices()
-
-	var tnID string
-	if len(services) > 0 {
-		tnID = services[0].ServiceID
+	if publish == nil {
+		panic("disttae engine requires an owner")
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		panic(err)
+	}
+	_, err = clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	if err != nil {
+		panic(err)
 	}
 
 	ls, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.LockService)
@@ -122,7 +129,6 @@ func New(
 		hakeeper: hakeeper,
 		cli:      cli,
 		idGen:    hakeeper,
-		tnID:     tnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -136,6 +142,16 @@ func New(
 			},
 		),
 	}
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if err := e.Close(); err != nil {
+			logutil.Error("failed to retire disttae engine construction", zap.Error(err))
+		}
+	}()
+	publish(e)
 	// Initialize snapshot manager
 	e.snapshotMgr = NewSnapshotManager()
 	e.snapshotMgr.Init()
@@ -147,6 +163,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		func(owner *GlobalStats) { e.globalStats = owner },
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &message.MessageCenter{
@@ -209,19 +226,210 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	constructed = true
 	return e
 }
 
+// snapshotShutdownObligations reads the shutdown obligations — the
+// queue length, the producer count and the arrival sequence of the
+// queue — as ONE consistent triple (issue #25590 round-16 review): the
+// queue mutex first, then gcMu, held together while all three values
+// are read. The orphan-handoff window (clear to enqueue) runs whole
+// under the same queue mutex, and every producer registration runs
+// under gcMu BEFORE its transfer enters that window with its decrement
+// only after the enqueue: a triple therefore observes a transfer
+// either before its registration (names still transaction-owned), at
+// registration mid-window (producers >= 1 — the queue-mutex exclusion
+// keeps the triple out of the window itself), or after the enqueue
+// (names queued and the arrival sequence bumped). A conclusion drawn
+// on a triple with producers == 0, an empty queue and an unchanged
+// arrival horizon therefore cut none of the two observations of a
+// transfer apart the way the round-15 loop's separately-read count
+// could, and the no-progress rule can tell a genuinely progress-free
+// attempt from one whose retirable names a mid-attempt enqueue
+// compensated. The order — queue mutex then gcMu — is the only nested
+// acquisition of the two in the package, and no site acquires gcMu
+// while holding the queue mutex, so the triple cannot deadlock.
+func (e *Engine) snapshotShutdownObligations() (
+	producers int64, queued int, arrivals uint64,
+) {
+	e.unpublishedPending.mu.Lock()
+	e.gcMu.Lock()
+	queued = len(e.unpublishedPending.names)
+	producers = e.gcProducers
+	arrivals = e.unpublishedPending.arrivalSeq
+	e.gcMu.Unlock()
+	e.unpublishedPending.mu.Unlock()
+	return producers, queued, arrivals
+}
+
 func (e *Engine) Close() error {
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
+	e.closeOnce.Do(func() {
+		// Linearize statistics admission before waiting on any engine-owned
+		// resource. A callback must not start work after engine teardown begins.
+		e.dynamicCtx.closed.Store(true)
+		if e.globalStats != nil && e.globalStats.cancel != nil {
+			e.globalStats.cancel()
+		}
 
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
+		// The scheduler reads pClient and snapshotMgr. Stop and join it before
+		// retiring either dependency so a tick already in flight cannot use a
+		// closed resource.
+		e.gcMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
 
-	return nil
+		// Statistics roots and accepted jobs can issue internal SQL and subscribe
+		// through pClient. Cancel and join producers before closing logtail.
+		if err := e.dynamicCtx.Close(); err != nil {
+			e.closeErr = err
+			return
+		}
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
+
+		// Shutdown drains under ONE overall deadline (issue #25590
+		// round-11 review): the bounded join of an already-running drain,
+		// the final deletion attempt and the GC pool release all fit in
+		// the same budget. A deletion that honors its context aborts on
+		// the engine-owned cancellation; one that IGNORES it (LocalFS
+		// deleteSingle does synchronous filesystem work without looking
+		// at its context) can no longer hold Close: the final attempt
+		// detaches behind the deadline and keeps the engine, the file
+		// service and the queue alive by reference until it finishes —
+		// ownership is untouched, only a successful delete retires
+		// names, and what a still-dirty file service keeps leaks exactly
+		// like a crash-mid-queue would.
+		closeDeadline := time.Now().Add(unpublishedPendingCloseDrainTimeout)
+		e.cancelUnpublishedPendingDrains()
+		e.waitUnpublishedPendingDrains(time.Until(closeDeadline))
+
+		// The one shutdown deadline every tail step below shares — the
+		// GC pool release and the final delete attempt both fit inside
+		// it, each consuming only what it needs.
+		closeCtx, closeCancel := context.WithDeadline(
+			context.Background(), closeDeadline)
+		defer closeCancel()
+
+		if err := e.pClient.Close(); err != nil {
+			e.closeErr = err
+		}
+		if e.ccprTxnCache != nil {
+			e.ccprTxnCache.Close()
+		}
+		if e.snapshotMgr != nil {
+			e.snapshotMgr.Close()
+		}
+
+		if e.gcPool != nil {
+			// The pool release stops waiting on the SAME deadline: ants
+			// closes the pool immediately and bounds only the worker-exit
+			// wait, so a worker parked in a context-blind deletion cannot
+			// hold Close here either — it finishes and exits on its own,
+			// its pool and task references keeping the unfinished work's
+			// dependencies alive (issue #25590 round-11 review). A failed
+			// release joins into closeErr but never stops the tail: the
+			// parked worker is exactly what the detached final deletion
+			// attempt below exists for, and skipping it would leave the
+			// freed callers' unsent tails with no attempt at all.
+			if err := e.gcPool.ReleaseContext(closeCtx); err != nil {
+				e.closeErr = errors.Join(e.closeErr, err)
+			}
+		}
+
+		// One bounded drain of the engine-owned unpublished-pending
+		// queue: names that survived a refused scheduling or an exhausted
+		// ladder get their final attempt at graceful shutdown, while
+		// Close never waits for a drain ladder (issue #25590 round-9
+		// review). The attempt runs detached under the same deadline and
+		// logs its own failure, removing only successfully deleted names.
+		// It runs AFTER the GC pool release on purpose (issue #25590
+		// round-13): releasing the pool is what frees every GC caller
+		// parked in the worker wait with the pool-closed error, and each
+		// freed caller hands its unsent tail to this queue exactly then.
+		// The loop is co-ordinated with those callers and with
+		// transaction-owned orphan handoffs through the producer count
+		// (issue #25590 round-14 and round-15 reviews). Round 16 makes
+		// every conclusion read that count and the queue as ONE
+		// consistent pair — snapshot under the queue mutex and gcMu,
+		// never behind gcMu alone — because the orphan-transferring
+		// window (clear to enqueue) now runs whole under the queue
+		// mutex: a handoff that registers while the drain is mid-flight
+		// can no longer slip behind a decision the drain already made
+		// off a stale separately-read count, and the no-progress rule
+		// decides on a FRESH pair taken after its own attempt (issue
+		// #25590 round-16 review). It stops once the queue is empty of
+		// names and producing callers alike, on the deadline, or when
+		// an attempt retires nothing with nobody en route; whatever
+		// remains stays owned by the queue exactly like a crash
+		// mid-queue would.
+		finalDone := make(chan struct{})
+		go func() {
+			defer close(finalDone)
+			for {
+				producers, queued, arrivals := e.snapshotShutdownObligations()
+				switch {
+				case queued == 0 && producers == 0:
+					return
+				case queued > 0:
+					attemptErr := e.deleteQueuedUnpublishedPendingOnce(closeCtx)
+					if closeCtx.Err() != nil {
+						return
+					}
+					// The no-progress rule decides on a triple taken
+					// AFTER this attempt: a handoff that registered
+					// while the attempt ran must hold the loop open,
+					// and an enqueue that landed mid-attempt is owed
+					// a fresh decision even when its arrivals
+					// compensate the retired count.
+					producersAfter, remaining, arrivalsAfter :=
+						e.snapshotShutdownObligations()
+					if attemptErr == nil || remaining < queued ||
+						arrivalsAfter != arrivals {
+						continue
+					}
+					if producersAfter == 0 {
+						return
+					}
+					// Nothing retired while a producer is still en
+					// route: poll inside the deadline instead of
+					// spinning on stalled storage.
+					select {
+					case <-time.After(10 * time.Millisecond):
+					case <-closeCtx.Done():
+						return
+					}
+				default:
+					// Only producers outstanding: the queue is empty
+					// while a caller still owns names on its way to an
+					// owner. Wait for it inside the same deadline.
+					select {
+					case <-time.After(10 * time.Millisecond):
+					case <-closeCtx.Done():
+						return
+					}
+				}
+			}
+		}()
+		select {
+		case <-finalDone:
+		case <-closeCtx.Done():
+			logutil.Warn(
+				"WORKSPACE-UNPUBLISHED-PENDING-CLOSE-DETACH",
+				zap.Time("deadline", closeDeadline),
+			)
+		}
+		e.cloneTxnCache = nil
+		e.ccprTxnCache = nil
+	})
+
+	return e.closeErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -306,6 +514,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
 	accountId, userId, _, err := getAccessInfo(ctx)
@@ -350,7 +560,7 @@ func (e *Engine) loadDatabaseFromStorage(
 	name string,
 	op client.TxnOperator,
 ) (*cache.DatabaseItem, error) {
-	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, name)
+	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, sqlquote.String(name))
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
@@ -546,6 +756,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -593,7 +804,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -649,7 +860,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,
@@ -716,6 +927,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 
 	// Get the database to be deleted
 	toDelDB, err := e.Database(ctx, name, op)
@@ -743,11 +956,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	res, err := execReadSql(
-		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true,
+		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, sqlquote.String(name)), true,
 	)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",
@@ -773,7 +987,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
+	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
+	if err != nil {
+		bat.Clean(txn.proc.Mp())
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
@@ -1322,7 +1541,6 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
 	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
 	e.globalStats.RemoveTid(tblId)
-	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
 func (e *Engine) PushClient() *PushClient {
@@ -1433,15 +1651,46 @@ func (e *Engine) AcquireLogtailReadBarrier(
 	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
-// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
-func (e *Engine) RunGCScheduler(ctx context.Context) {
+// StartGCScheduler starts the engine-owned GC scheduler. The scheduler is
+// started at most once and is joined by Close.
+func (e *Engine) StartGCScheduler(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("engine GC scheduler context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine is closed")
+	}
+	if e.gcSchedulerDone != nil {
+		return nil
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	e.gcSchedulerCancel = cancel
+	e.gcSchedulerDone = make(chan struct{})
+	done := e.gcSchedulerDone
+	go func() {
+		defer close(done)
+		e.runGCScheduler(schedulerCtx)
+	}()
+	return nil
+}
+
+// runGCScheduler runs all GC tasks in a single goroutine with different intervals.
+func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)
+	unpublishedPendingObjectTicker := time.NewTicker(gcUnpublishedPendingObjectTicker)
 
 	defer unusedTableTicker.Stop()
 	defer partitionStateTicker.Stop()
 	defer snapshotTicker.Stop()
+	defer unpublishedPendingObjectTicker.Stop()
 
 	for {
 		select {
@@ -1460,6 +1709,14 @@ func (e *Engine) RunGCScheduler(ctx context.Context) {
 		case <-snapshotTicker.C:
 			// GC snapshot partitions
 			e.snapshotMgr.MaybeStartGC()
+
+		case <-unpublishedPendingObjectTicker.C:
+			// The engine-owned retry of the unpublished-pending queue: a
+			// backlog stranded by a refused submission or an exhausted
+			// drain ladder may not wait for the next orphan — the tick
+			// costs one mutex round-trip while the queue is empty and
+			// coalesces behind an in-flight drain (issue #25590 round-9).
+			e.scheduleUnpublishedPendingDrain()
 		}
 	}
 }

@@ -100,7 +100,7 @@ SELECT a FROM t1 WHERE a IN(1, (SELECT IF(1=0,1,2/1)));
 2
 DROP TABLE t1;
 select IF(0,"ERROR","this"),IF(1,"is","ERROR"),IF(NULL,"ERROR","a"),IF(1,2,3)|0,IF(1,2.0,3.0)+0 ;
-➤ IF(0, ERROR, this)[12,5,0]  ¦  IF(1, is, ERROR)[12,5,0]  ¦  IF(null, ERROR, a)[12,5,0]  ¦  IF(1, 2, 3) | 0[-5,64,0]  ¦  IF(1, 2.0, 3.0) + 0[3,38,1]  𝄀
+➤ IF(0, ERROR, this)[12,5,0]  ¦  IF(1, is, ERROR)[12,5,0]  ¦  IF(null, ERROR, a)[12,5,0]  ¦  IF(1, 2, 3) | 0[-5,64,0]  ¦  IF(1, 2.0, 3.0) + 0[3,21,1]  𝄀
 this  ¦  is  ¦  a  ¦  2  ¦  2.0
 CREATE TABLE t1 (st varchar(255) NOT NULL, u int(11) NOT NULL);
 INSERT INTO t1 VALUES ('a',1),('A',1),('aa',1),('AA',1),('a',1),('aaa',0),('BBB',0);
@@ -276,12 +276,12 @@ T
 SELECT IF('0o17', 'T', 'F') AS if_octal_prefix_true;
 ➤ if_octal_prefix_true[12,1,0]  𝄀
 T
-SELECT IF('NaN', 'T', 'F') AS if_nan_true;
-➤ if_nan_true[12,1,0]  𝄀
-T
-SELECT IF('Inf', 'T', 'F') AS if_inf_true;
-➤ if_inf_true[12,1,0]  𝄀
-T
+SELECT IF('NaN', 'T', 'F') AS if_nan_false;
+➤ if_nan_false[12,1,0]  𝄀
+F
+SELECT IF('Inf', 'T', 'F') AS if_inf_false;
+➤ if_inf_false[12,1,0]  𝄀
+F
 SELECT IF(CAST(0 AS DOUBLE), 'T', 'F') AS if_double_zero_false;
 ➤ if_double_zero_false[12,1,0]  𝄀
 F
@@ -497,7 +497,7 @@ SELECT data_type, column_type
 FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_metadata' AND column_name = 'b';
 ➤ data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
-binary  ¦  BINARY(4)
+binary  ¦  binary(4)
 SELECT HEX(b) AS case_fixed_binary_hex FROM if_control_flow_binary_metadata;
 ➤ case_fixed_binary_hex[12,8,0]  𝄀
 61000000
@@ -510,7 +510,40 @@ FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_width_metadata'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
-if_b  ¦  varbinary  ¦  VARBINARY(8)  𝄀
-case_b  ¦  varbinary  ¦  VARBINARY(8)
+if_b  ¦  varbinary  ¦  varbinary(8)  𝄀
+case_b  ¦  varbinary  ¦  varbinary(8)
 DROP TABLE if_control_flow_binary_width_metadata;
+SELECT IF(1, 'x', TRUE) AS if_str_bool_t, IF(0, 'x', TRUE) AS if_str_bool_f, IF(0, TRUE, 'y') AS if_bool_str_f;
+➤ if_str_bool_t[12,65535,0]  ¦  if_str_bool_f[12,65535,0]  ¦  if_bool_str_f[12,65535,0]  𝄀
+x  ¦  1  ¦  y
+SELECT CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_str_bool_t, CASE WHEN 0 THEN 'x' ELSE FALSE END AS case_str_bool_f;
+➤ case_str_bool_t[12,65535,0]  ¦  case_str_bool_f[12,65535,0]  𝄀
+x  ¦  0
+SELECT IF(1, 'true', FALSE) AS if_word_t, IF(0, 'true', FALSE) AS if_word_f;
+➤ if_word_t[12,65535,0]  ¦  if_word_f[12,65535,0]  𝄀
+true  ¦  0
+CREATE TABLE if_case_str_bool_t(id INT, s VARCHAR(10), b BOOL);
+INSERT INTO if_case_str_bool_t VALUES (1, 'abc', TRUE), (2, 'def', FALSE);
+SELECT id, IF(b, s, b) AS if_col, CASE WHEN b THEN s ELSE b END AS case_col FROM if_case_str_bool_t ORDER BY id;
+➤ id[4,32,0]  ¦  if_col[12,65535,0]  ¦  case_col[12,65535,0]  𝄀
+1  ¦  abc  ¦  abc  𝄀
+2  ¦  0  ¦  0
+SELECT IF(NULL, 'x', TRUE) AS if_null_cond;
+➤ if_null_cond[12,65535,0]  𝄀
+1
+SELECT IF(IF(1, NULL, FALSE) IS NULL, 'isnull', 'hasvalue') AS if_null_branch,
+IF(CASE WHEN 1 THEN NULL ELSE TRUE END IS NULL, 'isnull', 'hasvalue') AS case_null_branch;
+➤ if_null_branch[12,8,0]  ¦  case_null_branch[12,8,0]  𝄀
+isnull  ¦  isnull
+CREATE TABLE if_case_str_bool_meta AS
+SELECT IF(1, 'x', TRUE) AS if_b, CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_b,
+IF(1, NULL, FALSE) AS if_null_branch, CASE WHEN 1 THEN NULL ELSE TRUE END AS case_null_branch;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_meta' ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+if_b  ¦  varchar  𝄀
+case_b  ¦  varchar  𝄀
+if_null_branch  ¦  tinyint  𝄀
+case_null_branch  ¦  tinyint
+DROP TABLE if_case_str_bool_meta;
+DROP TABLE if_case_str_bool_t;
 SET TIME_ZONE = "SYSTEM";

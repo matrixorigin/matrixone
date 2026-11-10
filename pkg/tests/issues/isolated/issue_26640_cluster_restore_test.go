@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -39,7 +38,6 @@ import (
 // A cluster restore replaces cluster-wide catalog tables. Keep this regression
 // in the isolated package so a failed restore cannot poison shared issue tests.
 func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
-	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -402,7 +400,7 @@ func runIssue28742RestoreWithMetadataProbe(
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 120*time.Second)
 	defer cancelProbe()
 	go func() {
-		probeDone <- issue28742RequireViewMetadataRevalidation(probeCtx, probeExecutor)
+		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
 	}()
 	probeStarted = true
 
@@ -440,28 +438,6 @@ func runIssue28742RestoreWithMetadataProbe(
 			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0",
 	).Scan(&generation))
 	require.Greater(t, generation, uint64(0))
-}
-
-func issue28742RequireViewMetadataRevalidation(
-	ctx context.Context,
-	sqlExecutor executor.SQLExecutor,
-) error {
-	for {
-		err := compile.RequireViewMetadataRevalidation(ctx, sqlExecutor)
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		// A single production fence attempt is deliberately bounded. The restore
-		// regression can run for longer on a loaded race runner, so model the
-		// admission loop by retrying the complete transaction until the test's
-		// outer deadline expires.
-		if !errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-	}
 }
 
 func issue28742LockServices(cluster embed.Cluster) []lockservice.LockService {

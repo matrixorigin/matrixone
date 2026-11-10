@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -48,12 +47,27 @@ type IndexConsumer struct {
 	cnTxnClient  client.TxnClient
 	jobID        JobID
 	info         *ConsumerInfo
-	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
 	rowdata      []any
 	rowdelete    []any
 	sqlBufSendCh chan []byte
 	algo         string
+	ignored      *ignoredRows
+}
+
+// ignoredRowWriter is a writer that leaves out the rows its index cannot store.
+type ignoredRowWriter interface {
+	setIgnored(*ignoredRows)
+}
+
+// ignoredTableWriter is a writer whose index statements record the rows the index cannot store.
+type ignoredTableWriter interface {
+	// followingSql returns, once, the statement to run after the one the last ToSql returned.
+	followingSql() []byte
+	// checkIgnored stops the job when the index left out too many rows.
+	checkIgnored(ctx context.Context, service string, txn client.TxnOperator, rebuild bool) error
+	// hasIgnored reports whether the index has an ignored table.
+	hasIgnored() bool
 }
 
 var _ Consumer = new(IndexConsumer)
@@ -126,6 +140,16 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
+	var ignored *ignoredRows
+	if w, ok := sqlwriter.(ignoredRowWriter); ok {
+		if ignored, err = newIgnoredRows(info.DBName, tableDef, ie.indexes); err != nil {
+			return nil, err
+		}
+		if ignored != nil {
+			w.setIgnored(ignored)
+		}
+	}
+
 	// Give the fulltext2 sink the CN engine/txn handles so it can open a short txn with a
 	// FULL sqlproc to resolve DATALINK columns to file CONTENT during CDC (stage:// +
 	// PDF/DOCX extraction) — parity with the sync build. Done here because the write path
@@ -141,14 +165,13 @@ func NewIndexConsumer(cnUUID string,
 		cnTxnClient: cnTxnClient,
 		jobID:       jobID,
 		info:        info,
-		tableDef:    tableDef,
 		sqlWriter:   sqlwriter,
 		rowdata:     make([]any, len(tableDef.Cols)),
 		rowdelete:   make([]any, 1),
 		algo:        ie.algo,
+		ignored:     ignored,
 		//sqlBufSendCh: make(chan []byte),
 	}
-
 	return c, nil
 }
 
@@ -183,6 +206,13 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
+					if c.recordsIgnored() {
+						if err := c.RunTxn(ctx, r, 5*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
+							return c.flushIgnoredOf(sqlproc, true)
+						}); err != nil {
+							reportIndexConsumerErr(errch, err)
+						}
+					}
 					return
 				}
 
@@ -239,6 +269,9 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 							if objectio.ISCPIndexWatermarkErrInjected() {
 								return injectedISCPIndexErr("watermark")
 							}
+							if err := c.flushIgnored(sqlproc); err != nil {
+								return err
+							}
 							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
 
@@ -274,11 +307,11 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 //
 // The generic parameter T is the vector element type (float32 or
 // float64), matched against the writer type at the call site.
-func RunHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+func RunHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	runHnsw[T](c, ctx, errch, r)
 }
 
-func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 
 	datatype := r.GetDataType()
 	indexName := c.indexName()
@@ -365,6 +398,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 						if err != nil {
 							return
 						}
+						if err = c.flushIgnored(sqlproc); err != nil {
+							return
+						}
 
 						// update watermark
 						if datatype == ISCPDataType_Tail {
@@ -397,8 +433,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			}
 
 			// sql -> cdc
+			// UnmarshalJSON decodes float32 batches exactly; see it before changing the decoder.
 			var cdc vectorindex.VectorIndexCdc[T]
-			err = sonic.Unmarshal(sql, &cdc)
+			err = cdc.UnmarshalJSON(sql)
 			if err != nil {
 				reportIndexConsumerErr(errch, err)
 				return
@@ -461,6 +498,30 @@ func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
 	}
 	logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", key, indexName)
 	return ctx.Err()
+}
+
+// flushIgnored writes the iteration's ignored rows in the transaction that commits it.
+func (c *IndexConsumer) flushIgnored(sqlproc *sqlexec.SqlProcess) error {
+	return c.flushIgnoredOf(sqlproc, false)
+}
+
+// flushIgnoredOf is flushIgnored of an iteration that rebuilds the index or not.
+func (c *IndexConsumer) flushIgnoredOf(sqlproc *sqlexec.SqlProcess, rebuild bool) error {
+	if w, ok := c.sqlWriter.(ignoredTableWriter); ok {
+		return w.checkIgnored(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), rebuild)
+	}
+	if c.ignored == nil {
+		return nil
+	}
+	return c.ignored.flush(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), c.indexName())
+}
+
+// recordsIgnored reports whether the index records the rows it cannot store.
+func (c *IndexConsumer) recordsIgnored() bool {
+	if w, ok := c.sqlWriter.(ignoredTableWriter); ok {
+		return w.hasIgnored()
+	}
+	return c.ignored != nil
 }
 
 func (c *IndexConsumer) indexName() string {
@@ -551,6 +612,18 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	// (iteration.go), which is the wrong tenant for a per-account stage lookup.
 	if w, ok := c.sqlWriter.(*Fulltext2SqlWriter); ok {
 		w.srcAccountID = r.GetAccountID()
+	}
+
+	if c.ignored != nil {
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, cbdata any) error {
+				return c.ignored.load(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), datatype == ISCPDataType_Snapshot, resolveHostSpillDir(sqlproc))
+			})
+		defer c.ignored.close()
+		if err != nil {
+			return err
+		}
+		c.ignored.setTs(r.GetToTS())
 	}
 
 	// create thread to poll sql
@@ -682,6 +755,9 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsert
 	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
 		return err
 	}
+	if c.ignored != nil {
+		c.ignored.setTs(upsertIter.Item().Ts)
+	}
 
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
 		// last op is not INSERT, sendSql first
@@ -771,6 +847,17 @@ func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer In
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	if w, ok := writer.(ignoredTableWriter); ok {
+		if following := w.followingSql(); following != nil {
+			select {
+			case c.sqlBufSendCh <- following:
+			case err := <-errch:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	//os.Stderr.WriteString(string(sql))
 	//os.Stderr.WriteString("\n")

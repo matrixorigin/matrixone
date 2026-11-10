@@ -51,8 +51,8 @@ func TestPositionDeleteMaskUsesGlobalRowOrdinal(t *testing.T) {
 	if state.Profile.PositionRowsFiltered != 2 {
 		t.Fatalf("unexpected profile: %+v", state.Profile)
 	}
-	if got := RowOrdinals(10, 3); len(got) != 3 || got[0] != 10 || got[2] != 12 {
-		t.Fatalf("unexpected row ordinals: %v", got)
+	if got, err := RowOrdinals(10, 3); err != nil || len(got) != 3 || got[0] != 10 || got[2] != 12 {
+		t.Fatalf("unexpected row ordinals: %v, err %v", got, err)
 	}
 }
 
@@ -179,5 +179,41 @@ func TestDeleteApplySpillEnabledFailsFastUntilImplemented(t *testing.T) {
 	}
 	if !state.Profile.SpillEnabled {
 		t.Fatalf("expected profile to record spill intent: %+v", state.Profile)
+	}
+}
+
+func TestPositionDeleteRejectsOverflowedRowOrdinals(t *testing.T) {
+	state := NewApplyState(Options{MaxMemoryBytes: 1024})
+	state.Position.Add("data.parquet", math.MaxInt64-1)
+	state.Position.Add("data.parquet", math.MaxInt64)
+
+	for _, tc := range []struct {
+		name  string
+		start int64
+		count int
+	}{
+		{name: "overflow past max int64", start: math.MaxInt64 - 1, count: 3},
+		{name: "negative ordinal base", start: -1, count: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ordinals, ordinalErr := RowOrdinals(tc.start, tc.count)
+			if ordinalErr == nil || !strings.Contains(ordinalErr.Error(), "ICEBERG_METADATA_INVALID") || ordinals != nil {
+				t.Fatalf("RowOrdinals(%d,%d) returned %v, %v", tc.start, tc.count, ordinals, ordinalErr)
+			}
+			keep, err := state.ApplyPositionMask(context.Background(), "data.parquet", tc.start, tc.count)
+			if err == nil || !strings.Contains(err.Error(), "ICEBERG_METADATA_INVALID") || keep != nil {
+				t.Fatalf("ApplyPositionMask(%d,%d) returned %v, %v", tc.start, tc.count, keep, err)
+			}
+		})
+	}
+
+	// A range ending exactly at MaxInt64 must still be valid.
+	ordinals, err := RowOrdinals(math.MaxInt64-1, 2)
+	if err != nil || len(ordinals) != 2 || ordinals[1] != math.MaxInt64 {
+		t.Fatalf("valid boundary ordinals=%v err=%v", ordinals, err)
+	}
+	mask, err := state.ApplyPositionMask(context.Background(), "data.parquet", math.MaxInt64-1, 2)
+	if err != nil || len(mask) != 2 || mask[0] || mask[1] {
+		t.Fatalf("valid boundary delete mask=%v err=%v", mask, err)
 	}
 }

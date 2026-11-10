@@ -308,7 +308,8 @@ func TestSharedDecodeAdmissionFailureAndGenerations(t *testing.T) {
 func TestSharedDecodeKeyIsolation(t *testing.T) {
 	r := newDecodedReadRegistry(1024)
 	base := decodedReadKey{path: "a", offset: 1, size: 2, decoded: 16, codec: DecodeSharing{Codec: "x"}}
-	keys := []decodedReadKey{base}
+	keys := make([]decodedReadKey, 0, 8)
+	keys = append(keys, base)
 	for _, change := range []func(*decodedReadKey){func(k *decodedReadKey) { k.path = "b" }, func(k *decodedReadKey) { k.offset++ }, func(k *decodedReadKey) { k.size++ }, func(k *decodedReadKey) { k.decoded++ }, func(k *decodedReadKey) { k.policy = SkipFullFilePreloads }, func(k *decodedReadKey) { k.codec.Codec = "y" }, func(k *decodedReadKey) { k.codec.Parameters[0]++ }} {
 		k := base
 		change(&k)
@@ -421,7 +422,8 @@ func TestSharedDecodeFillAdmissionAndKeyIsolation(t *testing.T) {
 
 	t.Run("key and properties", func(t *testing.T) {
 		r := newDecodedReadRegistry(1024)
-		keys := []decodedReadKey{base}
+		keys := make([]decodedReadKey, 0, 8)
+		keys = append(keys, base)
 		for _, change := range []func(*decodedReadKey){
 			func(k *decodedReadKey) { k.path = "b" },
 			func(k *decodedReadKey) { k.offset++ },

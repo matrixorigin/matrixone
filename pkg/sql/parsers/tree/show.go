@@ -286,6 +286,7 @@ type ShowGrants struct {
 	Username      string
 	Hostname      string
 	Roles         []*Role
+	CurrentUser   bool
 	ShowGrantType ShowGrantType
 }
 
@@ -306,7 +307,9 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 		}
 	} else {
 		ctx.WriteString("show grants")
-		if node.Username != "" {
+		if node.CurrentUser {
+			ctx.WriteString(" for current_user")
+		} else if node.Username != "" {
 			ctx.WriteString(" for ")
 			ctx.WriteString(node.Username)
 			if node.Hostname != "" {
@@ -589,6 +592,42 @@ func NewShowIndex(t *UnresolvedObjectName, w *Where) *ShowIndex {
 		Where:     w,
 	}
 }
+
+// ShowIndexIgnored lists the rows the indexes of a table left out because they cannot store them.
+type ShowIndexIgnored struct {
+	showImpl
+	TableName *UnresolvedObjectName
+	Where     *Where
+}
+
+func (node *ShowIndexIgnored) Format(ctx *FmtCtx) {
+	ctx.WriteString("show index ignored from ")
+	node.TableName.Format(ctx)
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowIndexIgnored) GetStatementType() string { return "Show Index Ignored" }
+func (node *ShowIndexIgnored) GetQueryType() string     { return QueryTypeOth }
+
+// ShowIndexStatus shows the state of the indexes of a table that are kept in sync.
+type ShowIndexStatus struct {
+	showImpl
+	TableName *UnresolvedObjectName
+	Where     *Where
+}
+
+func (node *ShowIndexStatus) Format(ctx *FmtCtx) {
+	ctx.WriteString("show index status from ")
+	node.TableName.Format(ctx)
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowIndexStatus) GetStatementType() string { return "Show Index Status" }
+func (node *ShowIndexStatus) GetQueryType() string     { return QueryTypeOth }
 
 // show Function or Procedure statement
 

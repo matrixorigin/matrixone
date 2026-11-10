@@ -136,6 +136,29 @@ func checkPlan(ctx context.Context, lines []string, checkExpr []string) error {
 }
 
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
+	if options == nil {
+		options = NewExplainDefaultOptions()
+	}
+	if buffer == nil {
+		return moerr.NewInvalidInput(ctx, "explain data buffer is nil")
+	}
+	if options.Format == EXPLAIN_FORMAT_JSON {
+		if options.Analyze {
+			return moerr.NewNotSupported(ctx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+		}
+		if len(options.CheckExpr) > 0 {
+			return moerr.NewNotSupported(ctx, "EXPLAIN FORMAT=JSON does not support CHECK")
+		}
+		data, err := BuildSQLJSONPlan(ctx, e.QueryPlan)
+		if err != nil {
+			return err
+		}
+		buffer.Start = 0
+		buffer.End = 0
+		buffer.CurrentLine = 0
+		buffer.Lines = []string{string(data)}
+		return nil
+	}
 	err := explainPlanTree(e.QueryPlan, ctx, buffer, options)
 	if err != nil {
 		return err
@@ -482,12 +505,7 @@ func explainSinglePlan(qry *plan.Query, ctx context.Context, buffer *ExplainData
 
 	for index, rootNodeID := range qry.Steps {
 		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
-		settings := FormatSettings{
-			buffer: buffer,
-			offset: 0,
-			indent: 2,
-			level:  0,
-		}
+		settings := FormatSettings{buffer: buffer}
 
 		if isForest {
 			title := fmt.Sprintf("Plan %v:", index)
@@ -537,7 +555,7 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 		expdata.Steps = append(expdata.Steps, *step)
 	}
 	if stats := statistic.StatsInfoFromContext(ctx); stats != nil {
-		expdata.NewPlanStats = *stats
+		expdata.NewPlanStats = stats.Snapshot()
 	}
 	return expdata
 }

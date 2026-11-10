@@ -327,7 +327,7 @@ func (zma ZoneMapArea) GetZoneMap(idx uint16, BlockID uint32) ZoneMap {
 	blockOff := types.DecodeUint32(zma[offStart:offEnd])
 	blockLength := types.DecodeUint32(zma[offStart+blockLen : offEnd+blockLen])
 	offset := blockOff + uint32(idx)*ZoneMapSize
-	return ZoneMap(zma[offset : offset+blockLength])
+	return persistedZoneMapView(ZoneMap(zma[offset : offset+blockLength]))
 
 }
 
@@ -383,13 +383,6 @@ func IsSameObjectLocVsMeta(location Location, meta ObjectDataMeta) bool {
 		return false
 	}
 	return location.ShortName().Equal(meta.BlockHeader().ShortName()[:])
-}
-
-func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
-	if len(location) == 0 || short == nil {
-		return false
-	}
-	return location.ShortName().Equal(short[:])
 }
 
 // test used

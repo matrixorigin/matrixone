@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
@@ -53,17 +54,22 @@ func TestDeletedObjectFilterUsesExactTransferWindow(t *testing.T) {
 
 func TestTransferBatchLimit(t *testing.T) {
 	tests := []struct {
-		name            string
-		rowCount        int
-		byteSize        int
-		sourceBatchDone bool
-		want            bool
+		name      string
+		rowCount  int
+		byteSize  int
+		checkSize bool
+		want      bool
 	}{
-		{name: "empty", byteSize: transferBatchSizeLimit, sourceBatchDone: true},
+		{name: "empty", byteSize: transferBatchSizeLimit, checkSize: true},
 		{
 			name:     "below both limits",
 			rowCount: transferBatchRowLimit - 1,
 			byteSize: transferBatchSizeLimit - 1,
+		},
+		{
+			name:     "above row limit",
+			rowCount: transferBatchRowLimit + 1,
+			want:     true,
 		},
 		{
 			name:     "row limit",
@@ -71,14 +77,14 @@ func TestTransferBatchLimit(t *testing.T) {
 			want:     true,
 		},
 		{
-			name:            "size limit after source batch",
-			rowCount:        1,
-			byteSize:        transferBatchSizeLimit,
-			sourceBatchDone: true,
-			want:            true,
+			name:      "size limit when checked",
+			rowCount:  1,
+			byteSize:  transferBatchSizeLimit,
+			checkSize: true,
+			want:      true,
 		},
 		{
-			name:     "size is not measured per row",
+			name:     "size check deferred",
 			rowCount: 1,
 			byteSize: transferBatchSizeLimit,
 		},
@@ -87,9 +93,44 @@ func TestTransferBatchLimit(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, transferBatchLimitReached(
-				test.rowCount, test.byteSize, test.sourceBatchDone))
+				test.rowCount, test.byteSize, test.checkSize))
 		})
 	}
+	t.Run("wide input and reset", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		func() {
+			staged := batch.NewWithSchema(false, []string{"rowid", "pk", "entry", "position"}, []types.Type{
+				types.T_Rowid.ToType(), types.T_varchar.ToType(), types.T_int32.ToType(), types.T_int32.ToType(),
+			})
+			defer staged.Clean(mp)
+			key := make([]byte, types.MaxVarcharLen)
+			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(objectio.NewObjectid(), 0, 0)
+			lastSize := 0
+			for !transferBatchLimitReached(staged.RowCount(), staged.Size(), true) {
+				lastSize = staged.Size()
+				require.NoError(t, vector.AppendFixed(staged.Vecs[0], rowid, false, mp))
+				require.NoError(t, vector.AppendBytes(staged.Vecs[1], key, false, mp))
+				for _, v := range staged.Vecs[2:] {
+					require.NoError(t, vector.AppendFixed(v, int32(0), false, mp))
+				}
+				staged.SetRowCount(staged.Vecs[0].Length())
+			}
+			require.Less(t, lastSize, transferBatchSizeLimit)
+			require.GreaterOrEqual(t, staged.Size(), transferBatchSizeLimit)
+			require.Less(t, staged.RowCount(), int(transferBatchRowLimit))
+			require.LessOrEqual(t, staged.Size()-lastSize, len(key)+types.RowidSize+types.VarlenaSize+8)
+			for _, v := range staged.Vecs {
+				v.Reset(*v.GetType())
+			}
+			staged.SetRowCount(0)
+			require.Zero(t, staged.Size(), "retained capacity cannot trigger another flush")
+			require.False(t, transferBatchLimitReached(staged.RowCount(), staged.Size(), true))
+			require.NoError(t, vector.AppendBytes(staged.Vecs[1], []byte("inline"), false, mp))
+			require.Less(t, staged.Size(), transferBatchSizeLimit)
+		}()
+		require.Zero(t, mp.CurrNB())
+	})
+
 }
 
 func TestTransferFlowBatchesAcrossObjectBlocks(t *testing.T) {
@@ -151,10 +192,24 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveAppendableStats := objectio.NewObjectStatsWithObjectID(
 		&liveAppendableID, true, false, false)
 	require.NoError(t, objectio.SetObjectStatsSize(liveAppendableStats, 1))
-	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
-		ObjectStats: *liveAppendableStats,
-		CreateTime:  types.BuildTS(5, 0),
-	}, false))
+	// Feed a live logtail object-list event, not the checkpoint callback.
+	liveBatch := batch.NewWithSize(10)
+	defer liveBatch.Clean(mp)
+	var err error
+	for i := range liveBatch.Vecs {
+		liveBatch.Vecs[i], err = vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 1, mp)
+		require.NoError(t, err)
+	}
+	liveBatch.Vecs[2].Free(mp)
+	liveBatch.Vecs[2], err = vector.NewConstBytes(types.T_binary.ToType(), liveAppendableStats.Marshal(), 1, mp)
+	require.NoError(t, err)
+	liveBatch.Vecs[6].Free(mp)
+	liveBatch.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
+	require.NoError(t, err)
+	liveBatch.SetRowCount(1)
+	liveProto, err := batch.BatchToProtoBatch(liveBatch)
+	require.NoError(t, err)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveProto}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 

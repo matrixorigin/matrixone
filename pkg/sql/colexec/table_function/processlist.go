@@ -44,7 +44,7 @@ func (s *processlistState) start(tf *TableFunction, proc *process.Process, nthRo
 	bat := s.batch
 
 	// get all sessions
-	sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.Base.QueryClient)
+	sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.GetSessionInfo().User, proc.GetSessionInfo().Role, proc.Base.QueryClient)
 	if err != nil {
 		return err
 	}
@@ -154,11 +154,14 @@ func isSysTenant(tenant string) bool {
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
 func fetchSessions(
 	ctx context.Context,
-	tenant string,
+	tenant, user, role string,
 	qc qclient.QueryClient,
 ) ([]*status.Session, error) {
 	var nodes []string
-	sysTenant := isSysTenant(tenant)
+	// Sys membership alone grants no access to another user's SQL.
+	validIdentity := tenant != "" && user != "" && role != ""
+	sysTenant := validIdentity && isSysTenant(tenant) && strings.EqualFold(role, "moadmin")
+	accountAdmin := validIdentity && !isSysTenant(tenant) && strings.EqualFold(role, "accountadmin")
 	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
@@ -180,7 +183,7 @@ func fetchSessions(
 	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
 		if rsp != nil && rsp.ShowProcessListResponse != nil {
 			for _, ss := range rsp.ShowProcessListResponse.Sessions {
-				if sysTenant || strings.EqualFold(ss.Account, tenant) {
+				if ss != nil && validIdentity && (sysTenant || (strings.EqualFold(ss.Account, tenant) && (accountAdmin || ss.User == user))) {
 					sessions = append(sessions, ss)
 				}
 			}

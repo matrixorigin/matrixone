@@ -209,7 +209,7 @@ func handleObjectList(
 			// Convert batch column type to MySQL type
 			if i < len(resultBatch.Vecs) {
 				typ := resultBatch.Vecs[i].GetType()
-				err := convertEngineTypeToMysqlType(ctx, typ.Oid, col)
+				err := convertEngineColumnTypeToMysqlType(ctx, *typ, col)
 				if err != nil {
 					return err
 				}
@@ -313,7 +313,16 @@ func collectObjectListForTable(
 		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get table: %v", err))
 	}
 
-	if strings.ToUpper(table.GetTableDef(ctx).TableType) == "V" {
+	def := table.GetTableDef(ctx)
+	if def == nil {
+		return moerr.NewInternalError(ctx, "table definition is unavailable for index relation admission")
+	}
+	if caller := hiddenIndexCaller(ctx); caller != nil {
+		if err := checkResolvedIndexRelation(&ExecCtx{reqCtx: ctx, ses: caller}, tablename, def.Name, def.TableType, def.FeatureFlag); err != nil {
+			return err
+		}
+	}
+	if strings.ToUpper(def.TableType) == "V" {
 		return nil
 	}
 
@@ -538,6 +547,12 @@ func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdOb
 	if err != nil {
 		return err
 	}
+	// An explicit table-level snapshot is a user-selected root, including a
+	// legacy snapshot of a physical index. Keep generated index children of
+	// an authorized base table on their existing internal collection path.
+	if scope.TableName != "" {
+		ctx = withHiddenIndexCaller(ctx, ses)
+	}
 
 	// Build tree.ObjectList statement for ProcessObjectList
 	stmt := &tree.ObjectList{
@@ -593,7 +608,7 @@ func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdOb
 			}
 			if i < len(resultBatch.Vecs) {
 				typ := resultBatch.Vecs[i].GetType()
-				err := convertEngineTypeToMysqlType(ctx, typ.Oid, col)
+				err := convertEngineColumnTypeToMysqlType(ctx, *typ, col)
 				if err != nil {
 					return err
 				}

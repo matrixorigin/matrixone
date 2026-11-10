@@ -19,8 +19,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -44,8 +47,14 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
 	// The json term shape travels with the config so this path and the CREATE
-	// build agree on the terms they emit.
-	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
+	// build agree on the terms they emit. The token_filter chain (stop) travels the
+	// same way so the CDC tail strips the same tokens as create/query.
+	filters, err := tokenfilter.Build(w.cfg.TokenFilters)
+	if err != nil {
+		errch <- err
+		return
+	}
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions(), filters...)
 	if err != nil {
 		errch <- err
 		return
@@ -60,8 +69,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	// ISCPTaskExecutorFactory; resolve it by this CN's UUID. spillDir="" (no LOCAL
 	// attached / executor not found) falls back to the OS temp dir, unchanged behavior.
 	var spillDir string
+	files := &indexfile.Files{Engine: c.cnEngine}
 	if exec, ok := GetExecutorRuntime(c.cnUUID); ok {
 		spillDir = fulltext2.LocalSpillDir(ctx, exec.rootFS)
+		files.Cache = fileservice.GetIndexFileCache(exec.rootFS)
 	}
 	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, spillDir, tokenize, bopts...)
 	if err != nil {
@@ -74,8 +85,13 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	nevents := 0
 
 	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e := <-errch:
 			errch <- e
@@ -94,23 +110,22 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 							return err
 						}
 						// The frames are already on disk (TailBuilder spilled them into packed spool
-						// files): INSERT them via load_file, batched at maxInsertTuples rows per
-						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
-						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
-						// contiguous in frame order, so recency is unchanged.
+						// files): persist their bytes. Frames of one chunk are batched at
+						// maxInsertTuples rows per statement ACROSS frames; each larger frame is
+						// written as one index file. chunk_ids stay contiguous in frame order, so
+						// recency is unchanged.
 						// The frames' rows record the version this flush applied, written in
 						// THIS transaction alongside the bytes they describe -- so an index's
 						// recorded coverage can never disagree with what it actually stores,
 						// which a watermark read from elsewhere cannot promise.
-						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
-							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
-						for _, s := range sqls {
-							res, e := sqlexec.RunSql(sqlproc, s)
-							if e != nil {
-								return e
-							}
-							res.Close()
+						chunkID, err := tb.PersistFinished(sqlproc, w.cfg, files, startChunk, r.GetToTS().Physical())
+						if err != nil {
+							return err
 						}
+						if err = c.flushIgnored(sqlproc); err != nil {
+							return err
+						}
+
 						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
 						// flushes often, so this would flood production logs at Info (see the 46 GB
 						// stdout incident). Available at Debug when diagnosing CDC ingest.
@@ -126,10 +141,18 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
-				// A successful CDC flush only makes the new tail durable. Search-cache
-				// freshness is governed by the normal generation/stale/TTL lifecycle;
-				// CDC must not evict or refresh a warm read-only search object here.
-				// This also avoids making every ordinary tail flush contend with readers.
+				// The tail this flush committed is now durable, but the querying CN may
+				// still serve a warm cache loaded before it (an index created empty has
+				// no tag=0 base, so that warm copy is doc-less). Drop it IF idle so the
+				// next query reloads the tail; a busy entry stays warm (RemoveIdle is a
+				// no-op on it) and refreshes later via the IsStale sweep, so this never
+				// thrashes concurrent readers. No-op when nothing was written. Without
+				// this, an incremental INSERT/UPDATE/DELETE stays invisible until the
+				// ~10-minute housekeeping sweep (#30401); the reloaded object is still
+				// read-only, so the read-only-cache contract is unchanged.
+				if len(segs) > 0 {
+					fulltext2.EvictIdleCache(w.cfg.IndexTable)
+				}
 				return
 			}
 

@@ -595,7 +595,10 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx, "select field(cast(? as decimal(20,0)), abs(cast(9007199254740992 as decimal(20,0))))")
 			require.NoError(t, err)
 			defer func() { require.NoError(t, stmt.Close()) }()
-			require.Error(t, stmt.QueryRowContext(ctx, "invalid").Scan(&field))
+			// The failing-execution witness must stay a genuine hard error: since
+			// issue #30417, lexically invalid DECIMAL text converts leniently, so
+			// a non-finite literal (still a hard error) takes the witness role.
+			require.Error(t, stmt.QueryRowContext(ctx, "Inf").Scan(&field))
 			require.NoError(t, stmt.QueryRowContext(ctx, uint64(9007199254740993)).Scan(&field))
 			require.Zero(t, field)
 		})
@@ -760,7 +763,8 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				runs         []fieldBoundaryRun
 				preparedWant []int64
 			}
-			cases := []fieldBoundaryCase{
+			cases := make([]fieldBoundaryCase, 0, 36)
+			cases = append(cases, []fieldBoundaryCase{
 				{
 					name: "explicit char peer", expr: "field(?, cast(9007199254740993 as char))",
 					runs: []fieldBoundaryRun{
@@ -928,7 +932,7 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					name: "extra text null candidate", expr: "field(?, ?, abs(" + first + "), abs(" + second + "))",
 					runs: []fieldBoundaryRun{{"exact search", []string{second, "null"}, []int64{2}}},
 				},
-			}
+			}...)
 			// One fixture, with one witness for each relational ownership boundary.
 			for _, relation := range []string{
 				"(select ? as x limit 1) d",
@@ -984,6 +988,29 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					}
 				})
 			}
+		})
+		t.Run("SQL EXECUTE union keeps each marker value", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "prepare union_sources from 'select ? union all select ?'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare union_sources") }()
+			_, err = conn.ExecContext(ctx, "set @union_left=1.25e0, @union_right=2.5e0")
+			require.NoError(t, err)
+			read := func(query string) []string {
+				rows, queryErr := conn.QueryContext(ctx, query)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				var values []string
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					values = append(values, value)
+				}
+				require.NoError(t, rows.Err())
+				return values
+			}
+			direct := read("select @union_left union all select @union_right")
+			require.Equal(t, []string{"1.25", "2.5"}, direct)
+			require.Equal(t, direct, read("execute union_sources using @union_left,@union_right"))
 		})
 	})
 }

@@ -361,7 +361,15 @@ What `MO_CL_CUDA=1` flips:
 Guardrails:
 
 - Missing Pixi activation or CUDA/cuVS files: use `pixi run --frozen` and
-  verify the locked environment. There is no system CUDA fallback.
+  verify the locked environment. There is no system CUDA fallback. A shell
+  stays activated after
+  `eval "$(pixi shell-hook --manifest-path optools/gpu/pixi.toml --frozen)"`;
+  plain `make MO_CL_CUDA=1 -j8` then works from the repository root.
+- `gmake[2]: *** internal error: invalid --jobserver-auth string 'fifo:...'`:
+  CMake ran the host `gmake` under Pixi's make 4.4. The Pixi activation sets
+  `CMAKE_GENERATOR=Ninja`; the error means the build ran without it. Do not pass
+  `--jobserver-style=pipe`: ninja ignores a pipe jobserver and schedules
+  outside the outer `-j` budget.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
 - Use the top-level build owner. It content-binds and atomically stages
   `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not

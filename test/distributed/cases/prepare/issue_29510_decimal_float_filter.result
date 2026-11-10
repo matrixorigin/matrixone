@@ -1,0 +1,186 @@
+drop database if exists issue_29510_decimal_float;
+create database issue_29510_decimal_float;
+use issue_29510_decimal_float;
+create table t(d decimal(12,2));
+insert into t select result from generate_series(1, 20000) g;
+insert into t values (0.10), (0.11), (-12345.00);
+explain select count(*) from t where d = cast(12345 as double);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Filter Cond: (t.d = 12345.00)  𝄀
+              Block Filter Cond: (t.d = 12345.00)
+explain analyze select count(*) from t where d = cast(12345 as double);
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=8195 outputRows=1 (min=1, max=1) InputSize=64.02 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|35.21 KiB MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (t.d = 12345.00)  𝄀
+              Block Filter Cond: (t.d = 12345.00)
+select count(*) from t where d = cast(12345 as double);
+➤ count(*)[-5,64,0]  𝄀
+1
+explain select count(*) from t where d = cast(12345.00 as double);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Filter Cond: (t.d = 12345.00)  𝄀
+              Block Filter Cond: (t.d = 12345.00)
+select count(*) from t where d = cast(12345.00 as double);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where d = cast(0.1 as double);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where d = cast(0.11 as double(3,1));
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where d = cast(0.14 as double(3,1));
+➤ count(*)[-5,64,0]  𝄀
+1
+explain select count(*) from t where d = cast(0.104 as double);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Filter Cond: (cast(t.d AS DOUBLE) = 0.104)
+              -- HINT: Cast expression may prevent index usage
+select count(*) from t where d = cast(0.104 as double);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t where d < cast(0.104 as double);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t where d <= cast(0.1 as double);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t where d = cast(-12345 as double);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where d = cast(100000000000 as double);
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare p from 'select count(*) from t where d = ?';
+set @v = cast(12345 as double);
+explain force execute p using @v;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Filter Cond: (cast(t.d AS DOUBLE) = 12345)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              Block Filter Cond: (cast(t.d AS DOUBLE) = 12345)
+explain analyze force execute p using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.t  𝄀
+              Analyze: timeConsumed=1ms waitTime=0ms inputBlocks=2 inputRows=8195 outputRows=1 (min=1, max=1) InputSize=64.02 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (cast(t.d AS DOUBLE) = 12345)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              Block Filter Cond: (cast(t.d AS DOUBLE) = 12345)
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @v = cast(0.104 as double);
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare p;
+create table wide(d decimal(20,0));
+insert into wide values (9007199254740992), (9007199254740993);
+explain select count(*) from wide where d = cast(9007199254740992 as double);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29510_decimal_float.wide  𝄀
+              Filter Cond: (cast(wide.d AS DOUBLE) = 9007199254740992)
+              -- HINT: Cast expression may prevent index usage
+select count(*) from wide where d = cast(9007199254740992 as double);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from wide where d = 9.007199254740992e15;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from wide where d in (9.007199254740992e15, -9e20);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t where d >= 1.04e-1 and d < 1e0;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table precise(d decimal(20,20));
+insert into precise values (0.00000000000000000003), (null);
+select count(*) from precise where d = 2.9999999999999997e-20;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from precise where d > 2.9999999999999997e-20;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare p from 'select count(*) from precise where d = ?';
+set @v = 2.9999999999999997e-20;
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @v = 3e-20;
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare p;
+create table floating(f float, bounded_f float(4,1), bounded_d double(4,1));
+insert into floating values (0.1, 1.3, 1.3), (16777216, null, null);
+select count(*) from floating where f = 1e-1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from floating where f = abs(cast(16777217 as signed));
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from floating where bounded_f = 1.25e0;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from floating where bounded_d between 1.25e0 and 1.25e0;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into floating values (null, 1, 1), (null, 0.5, 0.5), (null, -0.5, -0.5);
+select count(*) from floating where bounded_f = 1;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from floating where bounded_f in (1, 5e-1, -5e-1);
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from floating where bounded_f not in (1, 5e-1, -5e-1);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from floating where bounded_f between -5e-1 and 5e-1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from floating where bounded_f > 1000;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from floating where bounded_f = 1.2999999523162842e0;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare p from 'select count(*) from floating where bounded_f = cast(? as double)';
+set @v = 5e-1;
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @v = 1.25e0;
+execute p using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare p;
+drop database issue_29510_decimal_float;

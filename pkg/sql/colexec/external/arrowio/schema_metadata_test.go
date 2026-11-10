@@ -65,7 +65,7 @@ func TestIPCSchemaVectorCountRejectedBeforeArrowGoForFileAndStream(t *testing.T)
 
 func TestIPCSchemaFieldAndDepthLimits(t *testing.T) {
 	t.Run("total field boundary", func(t *testing.T) {
-		fields := make([]arrow.Field, maxArrowSchemaFields)
+		fields := make([]arrow.Field, maxArrowSchemaFields, maxArrowSchemaFields+1)
 		for index := range fields {
 			fields[index] = arrow.Field{Name: "f", Type: arrow.PrimitiveTypes.Int8}
 		}

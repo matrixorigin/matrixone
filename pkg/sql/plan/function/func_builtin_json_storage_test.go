@@ -89,6 +89,7 @@ func TestJsonStorageSize(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
 			JsonStorageSize)
+		defer fc.Free()
 		succeed, info := fc.Run()
 		require.True(t, succeed, info)
 		require.Zero(t, fc.GetResultVectorDirectly().Length())
@@ -99,7 +100,7 @@ func TestJsonStorageSize(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), texts, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 			JsonStorageSize)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	})
 	for _, typ := range []types.Type{
@@ -111,7 +112,7 @@ func TestJsonStorageSize(t *testing.T) {
 				[]FunctionTestInput{NewFunctionTestInput(typ, texts, nil)},
 				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 				JsonStorageSize)
-			succeed, info := fc.Run()
+			succeed, info := fc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -125,7 +126,7 @@ func TestJsonStorageSize(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 			JsonStorageSize)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -134,7 +135,7 @@ func TestJsonStorageSize(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, true})},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
 			JsonStorageSize)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -167,7 +168,7 @@ func TestJsonStorageFree(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(typ, values, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 			JsonStorageFree)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, "%s: %s", typ, info)
 	}
 
@@ -176,7 +177,7 @@ func TestJsonStorageFree(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, true})},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
 			JsonStorageFree)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -197,6 +198,7 @@ func TestJsonStorageFree(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
 			JsonStorageFree)
+		defer fc.Free()
 		succeed, info := fc.Run()
 		require.True(t, succeed, info)
 		require.Zero(t, fc.GetResultVectorDirectly().Length())
@@ -205,11 +207,11 @@ func TestJsonStorageFree(t *testing.T) {
 
 func TestJsonStorageRejectsInvalidJSON(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, fn := range []fEvalFn{JsonStorageSize, JsonStorageFree} {
+	for _, fn := range []executeLogicOfOverload{JsonStorageSize, JsonStorageFree} {
 		fc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json"}, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	}
 }
@@ -238,7 +240,7 @@ func TestJsonStorageSizeNumericTextUsesByteJsonMarshal(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), texts, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 		JsonStorageSize)
-	succeed, info := fc.Run()
+	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -282,14 +284,14 @@ func TestJsonStorageSizeUsesPersistedSpecialByteJson(t *testing.T) {
 func TestJsonStorageRejectsPreparedNonStringDomains(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	for _, fn := range []fEvalFn{JsonStorageSize, JsonStorageFree} {
+	for _, fn := range []executeLogicOfOverload{JsonStorageSize, JsonStorageFree} {
 		fc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil)},
 			NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	}
-	for _, fn := range []fEvalFn{JsonStorageSize, JsonStorageFree} {
+	for _, fn := range []executeLogicOfOverload{JsonStorageSize, JsonStorageFree} {
 		for _, tc := range []struct {
 			name string
 			typ  types.T
@@ -323,6 +325,7 @@ func TestJsonStorageRejectsPreparedNonStringDomains(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{9}, nil),
 		JsonStorageSize)
+	defer fc.Free()
 	fc.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
 	fc.parameters[0].SetPrepareParamType(types.T_varchar)
 	succeed, info := fc.Run()
@@ -334,7 +337,7 @@ func TestJsonStorageErrorRecoveryAfterInvalidText(t *testing.T) {
 	defer proc.Free()
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want int64
 	}{
 		{name: "size", fn: JsonStorageSize, want: 4},

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -428,6 +429,29 @@ func TestTruncateLog(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
+}
+
+func TestTruncateLogRejectsFutureWithoutHidingLaterAppend(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		require.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		first, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		err = store.truncateLog(ctx, 1, first+100)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
+		second, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		truncated, err := store.getTruncatedLsn(ctx, 1)
+		require.NoError(t, err)
+		assert.Zero(t, truncated)
+		entries, _, err := store.queryLog(ctx, 1, first, math.MaxUint64)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries)
+		assert.Equal(t, second, entries[len(entries)-1].Lsn)
+		assert.Equal(t, cmd, entries[len(entries)-1].Data)
+	})
 }
 
 func TestGetTruncatedIndex(t *testing.T) {
@@ -1224,6 +1248,33 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+
+		// The preflight read belongs to the mutation's caller budget too.
+		// An unknown CN distinguishes a detached read (missing-CN error or
+		// successful no-op deletion) from rejection of the expired request.
+		expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1, 0))
+		defer cancelExpired()
+		for _, tc := range []struct {
+			name string
+			run  func(context.Context) error
+		}{
+			{"label", func(ctx context.Context) error {
+				return store.updateCNLabel(ctx, pb.CNStoreLabel{UUID: "missing-cn"})
+			}},
+			{"work_state", func(ctx context.Context) error {
+				return store.updateCNWorkState(ctx, pb.CNWorkState{UUID: "missing-cn"})
+			}},
+			{"patch", func(ctx context.Context) error {
+				return store.patchCNStore(ctx, pb.CNStateLabel{UUID: "missing-cn"})
+			}},
+			{"delete", func(ctx context.Context) error {
+				return store.deleteCNStore(ctx, pb.DeleteCNStore{StoreID: "missing-cn"})
+			}},
+		} {
+			t.Run("expired_"+tc.name, func(t *testing.T) {
+				require.ErrorIs(t, tc.run(expired), dragonboat.ErrInvalidDeadline)
+			})
+		}
 	}
 	runStoreTest(t, fn)
 }
@@ -1519,6 +1570,16 @@ func TestWaitHAKeeperLeaderReady(t *testing.T) {
 		ready, err := store.waitHAKeeperLeaderReady(context.Background(), 0)
 		require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
 		require.False(t, ready)
+		// State assertions retain the same missing-shard failure as full reads.
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+			defer cancel()
+			for _, query := range []*hakeeper.StateQuery{{}, {StateOnly: true}} {
+				state, err := store.readCheckerState(ctx, query)
+				require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+				require.Equal(t, &pb.CheckerState{}, state)
+			}
+		}()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -1566,6 +1627,42 @@ func TestGetLeaderID(t *testing.T) {
 		assert.Equal(t, uint64(2), leaderID)
 	}
 	runStoreTest(t, fn)
+}
+
+func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	leaderID, term, err := store1.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), leaderID)
+	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
+	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	var lastTransfer time.Time
+	require.Eventually(t, func() bool {
+		id, currentTerm, leaderErr := store2.leaderState(1)
+		if leaderErr == nil && id == 2 && currentTerm > term {
+			return true
+		}
+		if time.Since(lastTransfer) >= time.Second {
+			if leaderID, _, err := store1.leaderState(1); err == nil && leaderID == 1 {
+				_ = store1.requestLeaderTransfer(1, 2)
+			}
+			lastTransfer = time.Now()
+		}
+		return false
+	}, 20*time.Second, 10*time.Millisecond)
+	// The old owner and revision still match: only the new Raft term may
+	// reject this reset before the new DataSync worker claims an owner.
+	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	state, err := store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
 }
 
 func TestAddLogShard(t *testing.T) {
@@ -2346,4 +2443,85 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	}
 	assert.True(t, started[zombieKey{shardID: 1, replicaID: 2}], "legit replica must be started")
 	assert.False(t, started[zombieKey{shardID: 1, replicaID: 99}], "zombie replica must be skipped")
+}
+
+func TestHAKeeperCheckWakeupCoalescesAfterShutdown(t *testing.T) {
+	l := &store{
+		hakeeperCheckWakeup: make(chan struct{}, 1),
+		tickerStopper:       stopper.NewStopper("check-wakeup"),
+		stopper:             stopper.NewStopper("store-wakeup"),
+	}
+	// Notification does not depend on a started worker and does not create one.
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			for range 100 {
+				l.notifyHAKeeperCheck()
+			}
+		})
+	}
+	wg.Wait()
+	require.Len(t, l.hakeeperCheckWakeup, 1)
+	require.NoError(t, l.close())
+	l.notifyHAKeeperCheck()
+	<-l.hakeeperCheckWakeup
+	l.notifyHAKeeperCheck()
+	require.Len(t, l.hakeeperCheckWakeup, 1)
+	// A disabled or partially initialized store also cannot block a producer.
+	(&store{}).notifyHAKeeperCheck()
+}
+
+// checkWakeupGate observes the existing checker owner without another driver.
+type checkWakeupGate struct {
+	entered chan struct{}
+	release <-chan struct{}
+	calls   int
+}
+
+func (g *checkWakeupGate) Check(_ util.IDAllocator, _ pb.CheckerState, _ bool) []pb.ScheduleCommand {
+	g.calls++
+	if g.calls <= 2 {
+		g.entered <- struct{}{}
+	}
+	if g.calls == 1 {
+		<-g.release
+	}
+	return nil
+}
+
+func TestHAKeeperCheckWakeupRechecksDuringActiveCheck(t *testing.T) {
+	runManualHAKeeperStoreTest(t, false, func(t *testing.T, l *store) {
+		proceedHAKeeperToRunning(t, l)
+		l.cfg.HAKeeperCheckInterval.Duration = time.Hour
+		l.cfg.HAKeeperTickInterval.Duration = time.Hour
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		gate := &checkWakeupGate{entered: make(chan struct{}, 2), release: release}
+		l.checker = gate
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); l.ticker(ctx) }()
+		defer func() { cancel(); unblock(); <-done }()
+		wait := func() {
+			t.Helper()
+			select {
+			case <-gate.entered:
+			case <-time.After(30 * time.Second):
+				t.Fatal("existing checker did not consume state-change notification")
+			}
+		}
+		// Manual initial configuration queued a notification before worker startup.
+		wait()
+		for range 100 {
+			l.notifyHAKeeperCheck()
+		}
+		require.Len(t, l.hakeeperCheckWakeup, 1)
+		unblock()
+		// A hint received while the owner is executing must survive for a next pass.
+		wait()
+		cancel()
+		<-done
+		require.GreaterOrEqual(t, gate.calls, 2)
+	})
 }

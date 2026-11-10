@@ -591,9 +591,9 @@ func TestSignedHTTPFileServiceStatFallbacksAndHelpers(t *testing.T) {
 			t.Fatalf("contentRangeSize(%q) ok=%v want %v", value, ok, wantOK)
 		}
 	}
-	clone := cloneStringMap(map[string]string{"a": "b"})
+	clone := api.CloneNonEmptyMap(map[string]string{"a": "b"})
 	clone["a"] = "c"
-	if cloneStringMap(nil) != nil || clone["a"] != "c" {
+	if api.CloneNonEmptyMap(map[string]string(nil)) != nil || clone["a"] != "c" {
 		t.Fatalf("cloneStringMap returned unexpected result")
 	}
 }

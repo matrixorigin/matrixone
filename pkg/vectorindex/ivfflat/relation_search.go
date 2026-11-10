@@ -19,11 +19,13 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -121,7 +123,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		prefixFilter *plan.Expr
 	)
 	indexParam := &plan.IndexReaderParam{
-		Limit:   ivfUint64Expr(uint64(limit)),
+		Limit:   ivfTopKLimitExpr(uint64(limit)),
 		OrderBy: []*plan.OrderBySpec{{Flag: orderFlag}},
 	}
 	if len(centroidIDs) > 0 || allCentroids && sqlproc.IvfHasMembershipFilter {
@@ -174,7 +176,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 			}
 			allFilters = append(allFilters, versionFilter)
 		}
-		if sqlproc.IvfHasMembershipFilter && !((storageTopK || filteredStorageTopK) && exactStorageMembership(sqlproc)) {
+		if sqlproc.IvfHasMembershipFilter && !exactStorageMembership(sqlproc) {
 			membershipFilter, membershipErr := ivfRuntimeMembershipExpr(
 				sqlproc.GetContext(), sqlproc.IvfRuntimeFilterData,
 				ivfColExpr(2, plan.Type{Id: tblcfg.PKeyType}))
@@ -194,13 +196,19 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		blockFilters = []*plan.Expr{prefixFilter}
 	}
 	filterHint := engine.FilterHint{}
-	if (storageTopK || filteredStorageTopK) && exactStorageMembership(sqlproc) {
+	if exactStorageMembership(sqlproc) {
 		filterHint.BF = sqlproc.IvfMembershipFilterObject.Share()
 	} else if storageTopK && sqlproc.IvfHasMembershipFilter {
 		// Optional domains retain their existing transported-filter contract.
 		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
 	}
+	// A search reads the probed lists, a small share of each entries object.
+	readPolicy := fileservice.Policy(fileservice.NarrowRead)
+	if sqlproc.IvfHasMembershipFilter || len(filters) > 0 {
+		readPolicy = fileservice.SkipFullFilePreloads
+	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+		ReadPolicy:        readPolicy,
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
 		Columns:           columns,
@@ -217,6 +225,25 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				return moerr.NewInternalErrorNoCtxf(
 					"ivfflat storage Top-K returned %d vectors, expected %d", len(bat.Vecs), len(columns)+1)
 			}
+			var loadedColumns []int
+			if storageDistance && bat.RowCount() != 0 {
+				// Storage Top-K may omit the embedding after scoring. Only that
+				// slot may be empty; scalar and distance columns must stay aligned.
+				if bat.Vecs[3].Length() == 0 {
+					loadedColumns = make([]int, 0, len(bat.Vecs)-1)
+				}
+				for pos, vec := range bat.Vecs {
+					if pos == 3 && loadedColumns != nil {
+						continue
+					}
+					if vec.Length() != bat.RowCount() {
+						return moerr.NewInternalErrorNoCtxf("ivfflat storage Top-K column %d has %d rows, expected %d", pos, vec.Length(), bat.RowCount())
+					}
+					if loadedColumns != nil {
+						loadedColumns = append(loadedColumns, pos)
+					}
+				}
+			}
 			if !storageDistance {
 				if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
 					metric.MetricTypeToDistFuncName[metricType]); transformErr != nil {
@@ -224,7 +251,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				}
 			}
 			if transformErr := idx.filterEntryDistanceRange(&batchResult, sqlproc.IndexReaderParam.GetDistRange(),
-				tblcfg.OrigFuncName, metricType); transformErr != nil {
+				tblcfg.OrigFuncName, metricType, loadedColumns, sqlproc.Proc.Mp()); transformErr != nil {
 				return transformErr
 			}
 			// Distance and exact filters have consumed the high-width entry vector.
@@ -456,7 +483,9 @@ func ivfCentroidPrefixFilter(
 	// as well would claim sortedness even for an element type its switch does not
 	// handle, which is the assumption this fix exists to remove. Compaction is why
 	// Len below is taken from the vector, not from centroidIDs.
-	prefixVec.InplaceSortAndCompact()
+	if err := prefixVec.InplaceSortAndCompact(mp); err != nil {
+		return nil, err
+	}
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -484,39 +513,31 @@ func ivfCentroidPrefixFilter(
 }
 
 func entryScanColumns(includeColumns []string) []string {
-	columns := []string{
+	columns := make([]string, 0, 4+len(includeColumns))
+	columns = append(columns,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-	}
+	)
 	for _, col := range includeColumns {
 		columns = append(columns, catalog.SystemSI_IVFFLAT_IncludeColPrefix+col)
 	}
 	return columns
 }
 
-func ivfRuntimeMembershipExpr(ctx context.Context, data []byte, left *plan.Expr) (*plan.Expr, error) {
-	if len(data) == 0 || left == nil {
+func ivfRuntimeMembershipExpr(ctx context.Context, keys *keycodec.KeyPayload, left *plan.Expr) (*plan.Expr, error) {
+	if keys.Rows() == 0 || left == nil {
 		return nil, moerr.NewInvalidInputNoCtx("IVF runtime membership filter is empty")
 	}
-	keyVec := new(vector.Vector)
-	if err := keyVec.UnmarshalBinary(data); err != nil {
+	if keys.ChunkCount() != 1 {
+		return nil, moerr.NewInvalidStateNoCtx("chunked IVF membership requires the exact reader filter")
+	}
+	var data []byte
+	if err := keys.VisitEncoded(ctx, func(chunk []byte) error { data = append([]byte(nil), chunk...); return nil }); err != nil {
 		return nil, err
 	}
-	if keyVec.Length() == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("IVF runtime membership key set is empty")
-	}
-	if keyVec.Length() > int(^uint32(0)>>1) {
-		return nil, moerr.NewInvalidInputNoCtx("IVF runtime membership key set is too large")
-	}
-	right := &plan.Expr{
-		Typ: left.Typ,
-		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(keyVec.Length()),
-			Data: append([]byte(nil), data...),
-		}},
-	}
+	right := &plan.Expr{Typ: left.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(keys.Rows()), Data: data}}}
 	return ivfFuncExpr(ctx, function.InFunctionName, left, right)
 }
 
@@ -525,6 +546,8 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	distRange *plan.DistRange,
 	origFuncName string,
 	metricType metric.MetricType,
+	loadedColumns []int,
+	mp *mpool.MPool,
 ) error {
 	if distRange == nil || res == nil {
 		return nil
@@ -575,12 +598,8 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 				sels = append(sels, int64(row))
 			}
 		}
-		switch {
-		case len(sels) == bat.RowCount():
-		case len(sels) == 0:
-			bat.CleanOnlyData()
-		default:
-			bat.Shrink(sels, false)
+		if _, err := selectRelationBatchRows(bat, sels, loadedColumns, mp); err != nil {
+			return err
 		}
 	}
 	return nil

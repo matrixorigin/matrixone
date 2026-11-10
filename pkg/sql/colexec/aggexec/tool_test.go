@@ -24,6 +24,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newAggExecTestPool(t *testing.T) *mpool.MPool {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		bytes, objects := mp.OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
+	})
+	return mp
+}
+
 func makeOffHeapFixedVector[T any](
 	t testing.TB,
 	mp *mpool.MPool,

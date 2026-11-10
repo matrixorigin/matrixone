@@ -72,7 +72,9 @@ type RPCMessage struct {
 	internal       bool
 	stream         bool
 	streamSequence uint32
-	createAt       time.Time
+	// Native timeout cancellation provenance, never encoded on the wire.
+	// Values alone cannot prove ancestry after context.WithoutCancel.
+	nativeContextDone <-chan struct{}
 }
 
 // StreamTerminalToken proves that the server IO loop validated a particular
@@ -95,6 +97,8 @@ func StreamTerminalTokenFromContext(ctx context.Context) (StreamTerminalToken, b
 
 // StreamFinisher is implemented by server-side sessions that can synchronously
 // flush a final response and atomically retire the stream sequence state.
+// FinishStream consumes a non-nil response on every outcome; callers must not
+// access or release it after handing it off.
 type StreamFinisher interface {
 	FinishStream(context.Context, StreamTerminalToken, Message) error
 }

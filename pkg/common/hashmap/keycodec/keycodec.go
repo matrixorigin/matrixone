@@ -73,6 +73,30 @@ const (
 	ExactRuntimeFilterFloatZeroClosed
 )
 
+// RuntimeFilterIntegerWidth classifies integer widths and signedness for exact runtime filters.
+func RuntimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true, true
+	case types.T_int16:
+		return 16, true, true
+	case types.T_int32:
+		return 32, true, true
+	case types.T_int64:
+		return 64, true, true
+	case types.T_uint8:
+		return 8, false, true
+	case types.T_uint16:
+		return 16, false, true
+	case types.T_uint32:
+		return 32, false, true
+	case types.T_uint64:
+		return 64, false, true
+	default:
+		return 0, false, false
+	}
+}
+
 // SupportsExactRawRuntimeFilter reports whether a raw vector payload can be
 // used as an exact join runtime filter for this type without transformation.
 // Keep this as an explicit allowlist: a new type must prove that its raw
@@ -124,6 +148,12 @@ func LegacyExactRawProducerSafe(oid types.T) bool {
 // interval without false negatives.
 func ExactRuntimeFilterEncodingForPair(probeType, payloadType types.Type) ExactRuntimeFilterEncoding {
 	if probeType.Oid != payloadType.Oid {
+		return ExactRuntimeFilterUnsupported
+	}
+	// Raw runtime-filter payloads have no collation-key envelope. Native UCA
+	// text must use the ordinary comparison path until the runtime-filter wire
+	// contract carries the text identity and transformed key domain.
+	if types.IsUnicodeCollation(probeType.Charset) || types.IsUnicodeCollation(payloadType.Charset) {
 		return ExactRuntimeFilterUnsupported
 	}
 	switch probeType.Oid {
@@ -253,11 +283,16 @@ func AppendCanonicalChar(dst, value []byte) []byte {
 // buffer; keeping the size calculation beside the codec prevents canonical
 // JSON/vector keys from being copied into a buffer sized for their raw form.
 func CanonicalValueSize(typ types.Type, value []byte) int {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return len(types.CollationKeyOrOriginal(typ.Charset, value))
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return len(CanonicalCharValue(value))
 	case types.T_json:
 		return CanonicalJSONSize(value)
+	case types.T_array_float8, types.T_array_float4:
+		return CanonicalVecBlockSize(value)
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_float32, types.T_float64:
@@ -272,6 +307,9 @@ func CanonicalValueSize(typ types.Type, value []byte) int {
 // argument must still keep the original payload, because canonical encodings
 // are not necessarily valid values for result reconstruction.
 func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return append(dst, types.CollationKeyOrOriginal(typ.Charset, value)...)
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return AppendCanonicalChar(dst, value)
@@ -283,6 +321,8 @@ func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
 		return AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return AppendCanonicalVecBlock(dst, value)
 	case types.T_float32:
 		if len(value) == types.T_float32.TypeLen() {
 			decoded := types.DecodeFixed[float32](value)
@@ -304,6 +344,9 @@ func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
 // use this on duplicate candidates, where allocating two data-sized temporary
 // slices would bypass the aggregate allocation account.
 func CanonicalValuesEqual(typ types.Type, left, right []byte) bool {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return types.CompareStringValues(typ, left, right) == 0
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return bytes.Equal(CanonicalCharValue(left), CanonicalCharValue(right))
@@ -337,6 +380,9 @@ func CanonicalValuesEqual(typ types.Type, left, right []byte) bool {
 		return canonicalVecEqual(left, right, 8)
 	case types.T_array_bf16, types.T_array_float16:
 		return canonicalVecEqual(left, right, 2)
+	case types.T_array_float8, types.T_array_float4:
+		// the decoded values compared element-wise; malformed cells by bytes
+		return types.CompareBlockScaledFromBytes(left, right, false) == 0
 	default:
 		return bytes.Equal(left, right)
 	}
@@ -553,6 +599,34 @@ func AppendCanonicalVecF16(dst, value []byte) []byte {
 	return dst
 }
 
+// AppendCanonicalVecBlock appends the equality key of a vecf8/vecf4 cell: its decoded
+// float32 values, little endian, with signed zero mapped to zero. Cells that encode the
+// same values (another block or global scale) get one key, as SQL equality compares the
+// decoded values. A malformed cell keeps its bytes.
+func AppendCanonicalVecBlock(dst, value []byte) []byte {
+	cell, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return append(dst, value...)
+	}
+	var buf [32]float32
+	for off := 0; off < cell.Dim; off += len(buf) {
+		n := min(len(buf), cell.Dim-off)
+		cell.DequantizeRange(off, buf[:n])
+		for _, v := range buf[:n] {
+			dst = binary.LittleEndian.AppendUint32(dst, CanonicalFloat32Bits(v))
+		}
+	}
+	return dst
+}
+
+// CanonicalVecBlockSize is the length of AppendCanonicalVecBlock's key.
+func CanonicalVecBlockSize(value []byte) int {
+	if cell, err := types.ParseBlockScaledCell(value); err == nil {
+		return 4 * cell.Dim
+	}
+	return len(value)
+}
+
 // HashCombine merges one column hash into the hash state for a composite key.
 func HashCombine(hash, columnHash uint64) uint64 {
 	return hash ^ (columnHash + 0x9e3779b97f4a7c15 + (hash << 6) + (hash >> 2))
@@ -579,6 +653,13 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			computeGroupingXXHash(vec, hashValues)
 			continue
 		}
+		if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+			charset := vec.GetType().Charset
+			computeCanonicalVarlenaXXHash(vec, hashValues, func(dst, value []byte) []byte {
+				return append(dst, types.CollationKeyOrOriginal(charset, value)...)
+			})
+			continue
+		}
 		switch vec.GetType().Oid {
 		case types.T_float32:
 			computeFloat32XXHash(vec, hashValues)
@@ -600,6 +681,9 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			continue
 		case types.T_array_bf16, types.T_array_float16:
 			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF16)
+			continue
+		case types.T_array_float8, types.T_array_float4:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecBlock)
 			continue
 		}
 		if vec.IsConst() {
@@ -733,6 +817,10 @@ func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, r
 	if vec.IsConst() {
 		row = 0
 	}
+	if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+		key := types.CollationKeyOrOriginal(vec.GetType().Charset, vec.GetRawBytesAt(row))
+		return key, key
+	}
 	switch vec.GetType().Oid {
 	case types.T_float32:
 		values := vector.MustFixedColNoTypeCheck[float32](vec)
@@ -758,6 +846,9 @@ func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, r
 		return scratch, scratch
 	case types.T_array_bf16, types.T_array_float16:
 		scratch = AppendCanonicalVecF16(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float8, types.T_array_float4:
+		scratch = AppendCanonicalVecBlock(scratch, vec.GetRawBytesAt(row))
 		return scratch, scratch
 	default:
 		return vec.GetRawBytesAt(row), scratch

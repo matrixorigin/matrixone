@@ -29,13 +29,18 @@ INCLUDES := -I. $(MO_GPU_CFLAGS) $(foreach root,$(MO_GPU_RAPIDS_INCLUDE_DIRS),-I
 # being dropped with a -Wunknown-pragmas warning.
 #
 # HOST_ARCH gates the auto-vectorize ISA tier used by the host compiler for
-# the cmp loops in filter.hpp's eval_pred_word_typed. Default is -march=haswell
+# the cmp loops in filter.hpp's eval_pred_word_typed. ARM defaults to armv8-a.
+# The x86 default is -march=haswell
 # (AVX2 + BMI2 + FMA, the lowest tier we ship), so the shipped artifact runs
 # on any x86_64 datacenter node from Haswell forward. To target a newer floor
 # at build time, pass HOST_ARCH=znver3 / skylake-avx512 / native — but NEVER
 # leave HOST_ARCH=native in CI artifacts: deploying onto an older node will
 # fail with SIGILL the moment an AVX-512 (or newer) instruction executes.
+ifeq ($(MO_GPU_TARGET_ARCH),aarch64)
+HOST_ARCH ?= armv8-a
+else
 HOST_ARCH ?= haswell
+endif
 NVCC_FLAGS := -O3 -std=c++20 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
@@ -56,15 +61,22 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -fopenmp"
 # objects on the next make. Overbuilds vs. true compiler-tracked deps (.d
 # files), but doesn't need a prior compile to populate dep info and never
 # misses a header — touch a .hpp and the next `make` rebuilds.
-HEADERS := $(wildcard *.h *.hpp)
+HEADERS := $(wildcard *.h *.hpp) ../membership.h ../cbitmap.h ../croaring.h ../sorted64.h
 
 # Source files
-C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
+C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp blockscaled_matmul_c.cpp
 CPP_SRCS := helper.cpp host_meminfo.cpp
 TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu test/device_memory_test.cu test/host_meminfo_test.cu test/host_memory_test.cu test/rows_fitting_test.cu
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
+# The membership probes filter.hpp calls (cgo/cbitmap.c, cgo/croaring.c,
+# cgo/sorted64.c, with the vendored CRoaring). libmo.so links the cgo/ objects;
+# libmocuvs.so leaves them undefined; the binaries here that link $(OBJS) or
+# include filter.hpp link these copies.
+MO_C_OBJS := obj/mo_c/cbitmap.o obj/mo_c/croaring.o obj/mo_c/sorted64.o
+MO_C_LIBS := ../../thirdparties/install/lib/libroaring.a
+MO_C_CFLAGS := -std=c11 -O3 -fPIC -I../../thirdparties/install/include
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 .PHONY: all clean debug asan release test
@@ -77,13 +89,14 @@ all: libmocuvs.so
 # deadlock. Building them here is what catches an API break at build time --
 # bench_upload_cost silently rotted through the cuVS 26.08 migration precisely
 # because no target compiled it, and only turned up when built by hand.
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter test_blockscaled_matmul \
       bench_hostview bench_wiki88 bench_upload_cost
 
 release: all
 
 debug: override NVCC_FLAGS := $(filter-out -O%,$(NVCC_FLAGS)) -O0 -g -lineinfo
 debug: override LDFLAGS := $(filter-out -O%,$(LDFLAGS)) -O0 -g
+debug: override MO_C_CFLAGS := $(filter-out -O%,$(MO_C_CFLAGS)) -O0 -g
 debug: all
 
 # AddressSanitizer build of the host (CPU) side of every cuvs .cpp/.hpp.
@@ -104,6 +117,7 @@ debug: all
 #     ./cuvs.test -test.run TestIndexInfoComprehensive -test.count=50 -test.v
 asan: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O1 -g -lineinfo -Xcompiler "-fsanitize=address -fno-omit-frame-pointer"
 asan: LDFLAGS    := $(filter-out -O3,$(LDFLAGS)) -g -Xcompiler "-fsanitize=address"
+asan: MO_C_CFLAGS := $(filter-out -O3,$(MO_C_CFLAGS)) -O1 -g -fsanitize=address -fno-omit-frame-pointer
 asan: all
 
 libmocuvs.so: $(OBJS)
@@ -118,6 +132,13 @@ obj/test/%.o: test/%.cu $(HEADERS)
 	@echo "NVCC $<"
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
+obj/mo_c/%.o: ../%.c ../%.h ../bitmap.h
+	@mkdir -p $(dir $@)
+	$(CC) $(MO_C_CFLAGS) -c $< -o $@
+
+test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans uint8_quant_bug wiki1m_uint8_bug: $(MO_C_OBJS)
+test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans uint8_quant_bug wiki1m_uint8_bug: LIBS += $(MO_C_LIBS)
+
 test_cuvs_worker: $(TEST_OBJS) $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
@@ -131,6 +152,10 @@ benchmark_filter: obj/test/benchmark_filter.o $(OBJS)
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
 test_kmeans: obj/test/test_kmeans.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+test_blockscaled_matmul: obj/test/blockscaled_matmul_test.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
@@ -184,5 +209,5 @@ bench_upload_cost: obj/test/bench_upload_cost.o
 
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_blockscaled_matmul test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
 	rm -rf obj

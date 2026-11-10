@@ -140,9 +140,6 @@ uuid = "{{.I}}-cn-{{.ID}}"
 port-base = {{call .NextBasePort}}
 auto-upgrade = false
 
-[cn.txn.trace]
-dir = "trace{{.I}}"
-
 [cn.Engine]
 type = "distributed-tae"
 

@@ -17,11 +17,14 @@ package partition
 import (
 	"bytes"
 	"context"
+	"math/bits"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -39,7 +42,7 @@ type partitionTestCase struct {
 func makeTestCases(t *testing.T) []partitionTestCase {
 	return []partitionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &Partition{
 				OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: 0}},
 			},
@@ -84,7 +87,7 @@ func TestPartition(t *testing.T) {
 }
 
 func TestPartitionOutputHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Partition{
 		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}},
 	}
@@ -106,6 +109,313 @@ func TestPartitionOutputHonorsCancellation(t *testing.T) {
 	arg.Free(proc, true, err)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+type partitionComparator = compare.Compare
+
+type countedPartitionCompare struct {
+	partitionComparator
+	calls       int
+	comparisons int
+}
+
+func (c *countedPartitionCompare) Set(i int, vec *vector.Vector) {
+	c.calls++
+	c.partitionComparator.Set(i, vec)
+}
+
+func (c *countedPartitionCompare) Compare(left, right int, leftRow, rightRow int64) int {
+	c.comparisons++
+	return c.partitionComparator.Compare(left, right, leftRow, rightRow)
+}
+
+func TestPartitionHeapMergeScalesWithRunCount(t *testing.T) {
+	const runs, rowsPerRun = 32, 16
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, arg.Prepare(proc))
+	for run := 0; run < runs; run++ {
+		keys := make([]int32, rowsPerRun)
+		payload := make([]int64, rowsPerRun)
+		for row := range keys {
+			keys[row] = int32(row*runs + run)
+			payload[row] = int64(keys[row])
+		}
+		arg.ctr.batchList = append(arg.ctr.batchList, makeHashPartitionBatch(t, proc, keys, nil, payload))
+		require.NoError(t, arg.ctr.evaluateOrderColumn(proc, run))
+	}
+	arg.ctr.indexList = make([]int64, runs)
+	counter := &countedPartitionCompare{partitionComparator: arg.ctr.compares[0]}
+	arg.ctr.compares[0] = counter
+	for key := 0; key < runs*rowsPerRun; key++ {
+		result := vm.NewCallResult()
+		done, err := arg.ctr.pickAndSend(proc, &result)
+		require.NoError(t, err)
+		require.Equal(t, []int64{int64(key)}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+		require.Equal(t, key == runs*rowsPerRun-1, done)
+	}
+	// Count comparisons, not elapsed time: each singleton group needs at most
+	// two comparisons per heap level plus bounded initialization/boundary work.
+	require.Less(t, counter.comparisons, runs*rowsPerRun*(2*bits.Len(uint(runs))+4))
+	require.Empty(t, arg.ctr.batchList)
+	require.Empty(t, arg.ctr.mergeHeap)
+}
+
+func TestPartitionHeapMergeCompleteLargeGroupAndCancellation(t *testing.T) {
+	for _, cancelDuringCopy := range []bool{false, true} {
+		name := "complete_group"
+		if cancelDuringCopy {
+			name = "cancel_during_group"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
+			var child *colexec.MockOperator
+			t.Cleanup(func() {
+				// Free must also release partially consumed heap inputs without Reset.
+				arg.Free(proc, cancelDuringCopy, nil)
+				if child != nil {
+					child.Free(proc, false, nil)
+				}
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			const rows = colexec.DefaultBatchSize
+			keys := make([]int32, rows)
+			payload := make([]int64, rows, rows+1)
+			for row := range keys {
+				keys[row], payload[row] = 1, int64(row)
+			}
+			first := makeHashPartitionBatch(t, proc, keys, nil, payload)
+			second := makeHashPartitionBatch(t, proc, []int32{1, 2}, nil, []int64{rows, rows + 1})
+			child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+			if cancelDuringCopy {
+				// Child/expression calls also check cancellation, so enter the merge
+				// directly to make this oracle about cancellation during group copying.
+				for i, input := range []*batch.Batch{first, second} {
+					owned, err := input.Dup(proc.Mp())
+					require.NoError(t, err)
+					arg.ctr.batchList = append(arg.ctr.batchList, owned)
+					require.NoError(t, arg.ctr.evaluateOrderColumn(proc, i))
+				}
+				arg.ctr.indexList = []int64{0, 0}
+				proc.Ctx = newCancelAfterDoneChecksContext(5)
+				result := vm.NewCallResult()
+				_, err := arg.ctr.pickAndSend(proc, &result)
+				require.ErrorIs(t, err, context.Canceled)
+				require.NotEmpty(t, arg.ctr.mergeHeap)
+				require.NotNil(t, arg.ctr.buf)
+				require.Greater(t, arg.ctr.buf.Vecs[0].Length(), 0)
+				require.Less(t, arg.ctr.buf.Vecs[0].Length(), rows)
+				return
+			}
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, rows+1, result.Batch.RowCount(), "a Window consumer requires one complete group, even above the ordinary batch size")
+			require.Equal(t, append(payload, rows), vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, []int64{rows + 1}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+			require.Equal(t, vm.ExecStop, result.Status)
+		})
+	}
+}
+
+func TestPartitionHeapMergeComparatorDomain(t *testing.T) {
+	for _, tc := range []struct {
+		typ     types.T
+		enabled bool
+	}{
+		{types.T_int32, true},
+		{types.T_varchar, true},
+		{types.T_float64, false}, // NaN is not a strict legacy ordering.
+	} {
+		ctr := container{}
+		ctr.generateCompares([]*plan.OrderBySpec{{Expr: newExpression(0, tc.typ)}})
+		require.Equal(t, tc.enabled, ctr.useMergeHeap, tc.typ.String())
+	}
+}
+
+func BenchmarkPartitionGroupMerge(b *testing.B) {
+	for _, mode := range []string{"linear", "heap"} {
+		b.Run(mode, func(b *testing.B) {
+			const runs, rowsPerRun = 64, 128
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
+			arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
+			inputs := make([]*batch.Batch, 0, runs)
+			b.Cleanup(func() {
+				arg.Free(proc, false, nil)
+				for _, input := range inputs {
+					input.Clean(proc.Mp())
+				}
+				proc.Free()
+				require.Zero(b, proc.Mp().CurrNB())
+			})
+			for run := 0; run < runs; run++ {
+				keys := make([]int32, rowsPerRun)
+				payload := make([]int64, rowsPerRun)
+				for row := range keys {
+					keys[row] = int32((row/8)*runs + run)
+					payload[row] = int64(row*runs + run)
+				}
+				inputs = append(inputs, makeHashPartitionBatch(b, proc, keys, nil, payload))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for iteration := 0; iteration < b.N; iteration++ {
+				b.StopTimer()
+				require.NoError(b, arg.Prepare(proc))
+				arg.ctr.useMergeHeap = mode == "heap"
+				for i, input := range inputs {
+					owned, err := input.Dup(proc.Mp())
+					require.NoError(b, err)
+					arg.ctr.batchList = append(arg.ctr.batchList, owned)
+					require.NoError(b, arg.ctr.evaluateOrderColumn(proc, i))
+				}
+				arg.ctr.indexList = make([]int64, runs)
+				b.StartTimer()
+				rows := 0
+				for len(arg.ctr.batchList) != 0 {
+					result := vm.NewCallResult()
+					_, err := arg.ctr.pickAndSend(proc, &result)
+					require.NoError(b, err)
+					rows += result.Batch.RowCount()
+				}
+				b.StopTimer()
+				require.Equal(b, runs*rowsPerRun, rows)
+				arg.Reset(proc, false, nil)
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func TestPartitionGroupSearchDoesNotRevisitEarlierHeads(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
+	t.Cleanup(func() {
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, arg.Prepare(proc))
+	for i := 0; i < 2; i++ {
+		arg.ctr.batchList = append(arg.ctr.batchList,
+			makeHashPartitionBatch(t, proc, []int32{2}, nil, []int64{20 + int64(i)}))
+	}
+	arg.ctr.batchList = append(arg.ctr.batchList, makeHashPartitionBatch(t, proc,
+		[]int32{1, 1, 1, 1, 1, 1, 1, 1, 3}, nil,
+		[]int64{0, 1, 2, 3, 4, 5, 6, 7, 30}))
+	for i := range arg.ctr.batchList {
+		require.NoError(t, arg.ctr.evaluateOrderColumn(proc, i))
+	}
+	arg.ctr.indexList = make([]int64, len(arg.ctr.batchList))
+	counter := &countedPartitionCompare{partitionComparator: arg.ctr.compares[0]}
+	arg.ctr.compares[0] = counter
+	result := vm.NewCallResult()
+	done, err := arg.ctr.pickAndSend(proc, &result)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	// Fixed initialization/final checks plus linear work within this group.
+	// Earlier heads remain 2 throughout: rechecking both for every 1 is waste.
+	require.LessOrEqual(t, counter.calls, 4*result.Batch.RowCount()+4*len(arg.ctr.batchList))
+}
+
+func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
+	nullKey := &plan.OrderBySpec{Expr: &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}}
+	literalKey := &plan.OrderBySpec{Expr: &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 7}}},
+	}}
+	idKey := &plan.OrderBySpec{Expr: newExpression(0, types.T_int32)}
+	for _, tc := range []struct {
+		name     string
+		flag     plan.OrderBySpec_OrderByFlag
+		keys     [][]int32
+		nulls    [][]bool
+		labels   [][]string
+		specs    []*plan.OrderBySpec
+		oneGroup bool
+		want     [][]int64
+	}{
+		{name: "ascending", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}},
+		{name: "null_before_id", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{nullKey, idKey}},
+		{name: "literals_after_id", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{idKey, literalKey, nullKey}},
+		{name: "only_literals", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{nullKey, literalKey}, oneGroup: true},
+		{
+			name: "composite_string", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}},
+			labels: [][]string{{"a", "b", "z"}, {"a", "x"}, {"z", "z", "z", "b", "z"}},
+			specs:  []*plan.OrderBySpec{idKey, {Expr: newExpression(2, types.T_varchar)}},
+			want:   [][]int64{{5, 6, 7}, {0, 3}, {1, 8}, {4}, {2, 9}},
+		},
+		{
+			name: "descending_nulls_last", flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST,
+			keys:  [][]int32{{2, 2, 0}, {2, 1}, {3, 3, 3, 2, 0}},
+			nulls: [][]bool{{false, false, true}, nil, {false, false, false, false, true}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			specs := tc.specs
+			if specs == nil {
+				specs = []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: tc.flag}}
+			}
+			arg := &Partition{OrderBySpecs: specs}
+			t.Cleanup(func() {
+				arg.Reset(proc, false, nil)
+				arg.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			for run := 0; run < 2; run++ {
+				require.NoError(t, arg.Prepare(proc))
+				payloads := [][]int64{{0, 1, 2}, {3, 4}, {5, 6, 7, 8, 9}}
+				for i, keys := range tc.keys {
+					var ns []bool
+					if tc.nulls != nil {
+						ns = tc.nulls[i]
+					}
+					input := makeHashPartitionBatch(t, proc, keys, ns, payloads[i])
+					arg.ctr.batchList = append(arg.ctr.batchList, input)
+					if tc.labels != nil {
+						labels := vector.NewVec(types.T_varchar.ToType())
+						input.Vecs = append(input.Vecs, labels)
+						for _, label := range tc.labels[i] {
+							require.NoError(t, vector.AppendBytes(labels, []byte(label), false, proc.Mp()))
+						}
+					}
+					require.NoError(t, arg.ctr.evaluateOrderColumn(proc, i))
+				}
+				arg.ctr.indexList = make([]int64, len(arg.ctr.batchList))
+				var groups [][]int64
+				for len(arg.ctr.batchList) != 0 {
+					result := vm.NewCallResult()
+					_, err := arg.ctr.pickAndSend(proc, &result)
+					require.NoError(t, err)
+					groups = append(groups, append([]int64(nil), vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])...))
+				}
+				if tc.oneGroup {
+					require.Equal(t, [][]int64{{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}, groups)
+				} else if tc.want != nil {
+					require.Equal(t, tc.want, groups)
+				} else {
+					require.Equal(t, [][]int64{{5, 6, 7}, {0, 1, 3, 8}, {4}, {2, 9}}, groups)
+				}
+				arg.Reset(proc, false, nil)
+			}
+		})
+	}
 }
 
 func newExpression(pos int32, typeID types.T) *plan.Expr {

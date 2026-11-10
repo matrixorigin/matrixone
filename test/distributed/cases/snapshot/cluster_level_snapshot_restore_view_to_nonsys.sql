@@ -476,7 +476,7 @@ drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
 drop view if exists employees_by_salary_view;
 drop view if exists avg_salary_per_department_view;
-drop table employees;
+drop table test02.employees;
 drop database test02;
 -- @session
 drop snapshot sp10;

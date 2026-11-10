@@ -66,6 +66,64 @@ func ReadBlockBySearchAndTopN(
 	mp *mpool.MPool,
 	policy fileservice.Policy,
 ) (rows []int64, distances []float64, fromCache bool, err error) {
+	return readBlockBySearchAndTopN(ctx, filterColumns, filterTypes, outputColumns,
+		outputTypes, outputDestinations, topColumn, topType, selectRows, false,
+		topReader, fs, location, mp, policy)
+}
+
+// ReadBlockByMembershipAndTopN evaluates a supported read-only membership
+// operation inside ObjectIO. finalize may apply tombstones to owned row offsets;
+// it never receives a writable alias to the pinned filter columns. The caller
+// must keep search's membership filter alive until this call returns.
+func ReadBlockByMembershipAndTopN(
+	ctx context.Context,
+	filterColumns []uint16,
+	filterTypes []types.Type,
+	outputColumns []uint16,
+	outputTypes []types.Type,
+	outputDestinations []*vector.Vector,
+	topColumn uint16,
+	topType types.Type,
+	search *ReadFilterMembership,
+	sorted bool,
+	finalize func([]int64, int) ([]int64, error),
+	topReader *IndexReaderTopOp,
+	fs fileservice.FileService,
+	location Location,
+	mp *mpool.MPool,
+	policy fileservice.Policy,
+) (rows []int64, distances []float64, fromCache bool, err error) {
+	if search == nil || search.member == nil || !search.member.Valid() || finalize == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil exact membership block topn input")
+	}
+	return readBlockBySearchAndTopN(ctx, filterColumns, filterTypes, outputColumns,
+		outputTypes, outputDestinations, topColumn, topType,
+		func(vectors []vector.Vector) ([]int64, error) {
+			selected := search.search(vectors, sorted)
+			if selected == nil {
+				selected = []int64{}
+			}
+			return finalize(selected, vectors[0].Length())
+		}, true, topReader, fs, location, mp, policy)
+}
+
+func readBlockBySearchAndTopN(
+	ctx context.Context,
+	filterColumns []uint16,
+	filterTypes []types.Type,
+	outputColumns []uint16,
+	outputTypes []types.Type,
+	outputDestinations []*vector.Vector,
+	topColumn uint16,
+	topType types.Type,
+	selectRows func([]vector.Vector) ([]int64, error),
+	scopedMembership bool,
+	topReader *IndexReaderTopOp,
+	fs fileservice.FileService,
+	location Location,
+	mp *mpool.MPool,
+	policy fileservice.Policy,
+) (rows []int64, distances []float64, fromCache bool, err error) {
 	if len(filterColumns) == 0 || len(filterColumns) != len(filterTypes) {
 		return nil, nil, false, moerr.NewInvalidInputNoCtx("invalid exact-filter columns for block topn")
 	}
@@ -121,7 +179,13 @@ func ReadBlockBySearchAndTopN(
 	}()
 	for i := range filterColumns {
 		fromCache = fromCache && filterRead.Entries[i].WasFromCache()
-		if err = MustVectorToCached(&filterVectors[i], filterRead.Entries[i].CachedData); err != nil {
+		if scopedMembership {
+			err = bindCachedVectorForScope(&filterVectors[i], filterRead.Entries[i].CachedData)
+		} else {
+			// Arbitrary callbacks retain the independent-snapshot boundary.
+			err = MustVectorToCached(&filterVectors[i], filterRead.Entries[i].CachedData)
+		}
+		if err != nil {
 			return nil, nil, false, err
 		}
 	}

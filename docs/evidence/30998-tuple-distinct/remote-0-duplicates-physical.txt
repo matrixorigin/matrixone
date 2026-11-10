@@ -1,0 +1,116 @@
+Overview:
+	MemoryUsage:730762632B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0
+	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
+	CPU Usage: 
+		- Total CPU Time: 3723277396ns 
+		- CPU Time Detail: Parse(98500)+BuildPlan(212125)+Compile(423708)+PhyExec(3725994857)+PrepareRun(240959)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(3692753)-IOMerge(0)
+		- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+Physical Plan Deployment:
+Scope 1 (Magic: Merge, addr:127.0.0.1:54200, mcpu: 1, Receiver: [20, 21]) PrepareTimeConsumed: 3417ns
+  Pipeline: └── output(idx:-1, isFirst:false, isLast:false)
+                └── projection(idx:4, isFirst:true, isLast:true)
+                    └── merge group(idx:3, isFirst:false, isLast:true)
+                        └── merge(idx:3, isFirst:false, isLast:false)
+  PreScopes: {
+    Scope 1 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [9]) PrepareTimeConsumed: 5166ns
+      Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [20]
+                    └── merge(idx:3, isFirst:false, isLast:false)
+      PreScopes: {
+        Scope 1 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [1, 2(20798a)]) PrepareTimeConsumed: 0ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [9]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+          PreScopes: {
+            Scope 1 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 0ns
+              Pipeline: └── dispatch(idx:2, isFirst:false, isLast:false) shuffle to all of MergeReceiver [1, 3, 5, 7] cross-cn receiver info: [addr: 127.0.0.1:54200, uuid: 01a16b5b-2d49-757e-b25e-b6fe388a7f02], [addr: 127.0.0.1:54200, uuid: 01a16b5b-2d49-7582-a7cf-714c6650ff78], [addr: 127.0.0.1:54200, uuid: 01a16b5b-2d49-7583-b67f-e5e21de4c546], [addr: 127.0.0.1:54200, uuid: 01a16b5b-2d49-759d-8387-f9bcae173ca6]
+                            └── shuffle(idx:2, isFirst:false, isLast:false)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+              PreScopes: {
+                Scope 1 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 4, Receiver: []) PrepareTimeConsumed: 0ns
+                  DataSource: qa30995.remote_pairs[a b]
+                  Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [0]
+                                └── group(idx:1, isFirst:true, isLast:true)
+                                    └── tablescan(idx:0, isFirst:true, isLast:true)
+              }
+          }
+        Scope 2 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [3, 4(130ba7)]) PrepareTimeConsumed: 0ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [9]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+        Scope 3 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [5, 6(0d7942)]) PrepareTimeConsumed: 0ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [9]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+        Scope 4 (Magic: Remote, addr:127.0.0.1:54500, mcpu: 1, Receiver: [7, 8(4daacb)]) PrepareTimeConsumed: 0ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [9]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+      }
+    Scope 2 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [19]) PrepareTimeConsumed: 5334ns
+      Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [21]
+                    └── merge(idx:3, isFirst:false, isLast:false)
+      PreScopes: {
+        Scope 1 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [11(8a7f02), 12]) PrepareTimeConsumed: 4291ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [19]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+          PreScopes: {
+            Scope 1 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [10]) PrepareTimeConsumed: 1916ns
+              Pipeline: └── dispatch(idx:2, isFirst:false, isLast:false) shuffle to all of MergeReceiver [12, 14, 16, 18] cross-cn receiver info: [addr: 127.0.0.1:54500, uuid: 01a16b5b-2d49-75a5-b144-1375ab20798a], [addr: 127.0.0.1:54500, uuid: 01a16b5b-2d49-75a9-b811-f65725130ba7], [addr: 127.0.0.1:54500, uuid: 01a16b5b-2d49-75aa-91ca-31a4370d7942], [addr: 127.0.0.1:54500, uuid: 01a16b5b-2d49-75ab-8c24-0081c94daacb]
+                            └── shuffle(idx:2, isFirst:false, isLast:false)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+              PreScopes: {
+                Scope 1 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 4, Receiver: []) PrepareTimeConsumed: 55209ns
+                  DataSource: qa30995.remote_pairs[a b]
+                  Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [10]
+                                └── group(idx:1, isFirst:true, isLast:true)
+                                    └── tablescan(idx:0, isFirst:true, isLast:true)
+                  PreScopes: {
+                    Scope 1 (Magic: Normal, addr:, mcpu: 0, Receiver: []) PrepareTimeConsumed: 3500ns
+                      PreScopes: {
+                        Scope 1 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 125ns
+                          DataSource: qa30995.remote_pairs[a b]
+                          Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [10]
+                                        └── group(idx:1, isFirst:true, isLast:true)
+                                            └── tablescan(idx:0, isFirst:true, isLast:true)
+                        Scope 2 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 166ns
+                          DataSource: qa30995.remote_pairs[a b]
+                          Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [10]
+                                        └── group(idx:1, isFirst:true, isLast:true)
+                                            └── tablescan(idx:0, isFirst:true, isLast:true)
+                        Scope 3 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 584ns
+                          DataSource: qa30995.remote_pairs[a b]
+                          Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [10]
+                                        └── group(idx:1, isFirst:true, isLast:true)
+                                            └── tablescan(idx:0, isFirst:true, isLast:true)
+                        Scope 4 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 42ns
+                          DataSource: qa30995.remote_pairs[a b]
+                          Pipeline: └── connect(idx:2, isFirst:false, isLast:false) to MergeReceiver [10]
+                                        └── group(idx:1, isFirst:true, isLast:true)
+                                            └── tablescan(idx:0, isFirst:true, isLast:true)
+                      }
+                  }
+              }
+          }
+        Scope 2 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [13(50ff78), 14]) PrepareTimeConsumed: 1667ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [19]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+        Scope 3 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [15(e4c546), 16]) PrepareTimeConsumed: 2167ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [19]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+        Scope 4 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: [17(173ca6), 18]) PrepareTimeConsumed: 2000ns
+          Pipeline: └── connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [19]
+                        └── group(idx:3, isFirst:true, isLast:false)
+                            └── group(idx:2, isFirst:true, isLast:true)
+                                └── merge(idx:2, isFirst:false, isLast:false)
+      }
+  }

@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -85,7 +86,7 @@ func installHashJoinTestAllocation(
 // TestGetSpilledInputBatchNoBuckets verifies that getSpilledInputBatch
 // returns nil when the engine has no buckets.
 func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -99,9 +100,7 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 1),
@@ -199,7 +198,7 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 // (ctr.mp == nil) without panicking. This is the path taken when a spill
 // bucket returns BucketEmptyBuild for outer joins.
 func TestEmptyProbeDoesNotPanic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	hashJoin := &HashJoin{
@@ -243,9 +242,7 @@ func TestEmptyProbeDoesNotPanic(t *testing.T) {
 // consumer must repartition it before producing the exact join cardinality.
 func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
@@ -313,7 +310,7 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 
 func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
 	tc := newTestCase(
-		t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil,
+		t, []types.Type{types.T_int32.ToType()}, nil,
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
 	defer func() {
@@ -381,9 +378,7 @@ func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
 
 func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 0),
@@ -533,9 +528,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 				}},
 			}}
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{test.typ},
+				t, []types.Type{test.typ},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{keyExpr, keyExpr},
 			)
@@ -603,9 +596,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 
 func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
@@ -670,7 +661,10 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 			break
 		}
 	}
-	require.ElementsMatch(t, values, resultValues)
+	// Values are generated in order. Sort the owned output copy to compare
+	// the complete multiset without quadratic pairwise matching.
+	slices.Sort(resultValues)
+	require.Equal(t, values, resultValues)
 	require.Positive(t, tc.barg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
 	require.LessOrEqual(t, account.Snapshot().Peak, account.Snapshot().Limit)
 	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)

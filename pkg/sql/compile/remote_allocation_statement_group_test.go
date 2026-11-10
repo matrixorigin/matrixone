@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,7 +57,8 @@ func acquireRemoteAllocationStatementTestParticipant(
 	t.Helper()
 	key := fmt.Sprintf("test@%p", board)
 	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
-	return acquireRemoteAllocationStatementParticipant(key, board, expected, cancel)
+	p, _, err := acquireRemoteAllocationStatementParticipant(key, board, expected, cancel)
+	return p, err
 }
 
 func clearRemoteAllocationStatementTestTombstone(key string) {
@@ -139,7 +141,7 @@ func TestCollectRemoteFragmentCountsExcludesLazyOwnedCandidates(t *testing.T) {
 	board := message.NewMessageBoard()
 	executionID := newRemoteExecutionID()
 	key := remoteAllocationStatementGroupKey(executionID, "cn-b:6001")
-	participant, err := acquireRemoteAllocationStatementParticipant(key, board, counts["cn-b:6001"], nil)
+	participant, _, err := acquireRemoteAllocationStatementParticipant(key, board, counts["cn-b:6001"], nil)
 	require.NoError(t, err)
 	terminal, err := participant.finish(nil)
 	require.NoError(t, err)
@@ -183,7 +185,7 @@ func TestLazyRemoteCandidatesUseIndependentExactGenerations(t *testing.T) {
 	require.Equal(t, ordinaryID, executionID)
 
 	postBoard := message.NewMessageBoard()
-	postParticipant, err := acquireRemoteAllocationStatementParticipant(
+	postParticipant, _, err := acquireRemoteAllocationStatementParticipant(
 		remoteAllocationStatementGroupKey(postID, "cn-b:6001"), postBoard, 1, nil)
 	require.NoError(t, err)
 	terminal, err := postParticipant.finish(nil)
@@ -206,7 +208,7 @@ func TestLazyRemoteCandidatesUseIndependentExactGenerations(t *testing.T) {
 	} {
 		board := message.NewMessageBoard()
 		key := remoteAllocationStatementGroupKey(preID, tc.address)
-		participant, acquireErr := acquireRemoteAllocationStatementParticipant(key, board, 1, nil)
+		participant, _, acquireErr := acquireRemoteAllocationStatementParticipant(key, board, 1, nil)
 		require.NoError(t, acquireErr)
 		_, finishErr := participant.finish(tc.cancel)
 		if tc.cancel == nil {
@@ -356,7 +358,9 @@ func TestRemoteAllocationStatementGroupRejectsTopologyMismatch(t *testing.T) {
 
 func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	previousTimeout := remoteAllocationStatementRegistrationTimeout
-	remoteAllocationStatementRegistrationTimeout = 10 * time.Millisecond
+	// Park the timer until the participant has finished. The separate
+	// registration-timer test verifies that a real timer invokes expiration.
+	remoteAllocationStatementRegistrationTimeout = time.Duration(1<<63 - 1)
 	t.Cleanup(func() {
 		remoteAllocationStatementRegistrationTimeout = previousTimeout
 	})
@@ -364,6 +368,7 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	board := message.NewMessageBoard()
+	t.Cleanup(func() { board.CloseAndDrain() })
 	producer := newTestAllocationLifecycleCompile(t, registry, func(
 		mpool.AllocationAccountTerminalSnapshot,
 	) {
@@ -372,6 +377,10 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	producer.MessageBoard = board
 	attempt, err := producer.beginAllocationAccountAttempt()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		attempt.exporter = nil
+		_, _ = attempt.finish()
+	})
 	buffer, err := producer.proc.Mp().AllocAccounted(
 		64,
 		attempt.account,
@@ -380,26 +389,42 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	var destroyed atomic.Int32
-	message.SendMessage(&remoteAllocationAccountedMessage{
+	msg := &remoteAllocationAccountedMessage{
 		mp:        producer.proc.Mp(),
 		buffer:    buffer,
 		destroyed: &destroyed,
-	}, board)
+	}
+	t.Cleanup(msg.Destroy)
+	message.SendMessage(msg, board)
 
 	participant, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		stopRemoteAllocationStatementTestTimer(participant)
+		participant.stage(attempt, producer.proc.Mp())
+		_, _ = participant.finish(errors.New("test cleanup"))
+		expireRemoteAllocationStatementGroup(participant.group)
+	})
 	participant.stage(attempt, producer.proc.Mp())
 	terminal, err := participant.finish(nil)
 	require.NoError(t, err)
 	require.Empty(t, terminal.allocation)
 	require.False(t, terminal.complete)
-	require.Eventually(t, func() bool {
-		return destroyed.Load() == 1 &&
-			registry.LiveAllocationMetadata() == 0 &&
-			!remoteAllocationStatementGroupRegistered(board)
-	}, time.Second, time.Millisecond)
+	require.True(t, stopRemoteAllocationStatementTestTimer(participant), "registration timer must still be pending after finish")
+	expireRemoteAllocationStatementGroup(participant.group)
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Zero(t, registry.LiveAllocationMetadata())
+	require.False(t, remoteAllocationStatementGroupRegistered(board))
 	require.Contains(t, board.DebugString(), "closed")
 	require.False(t, registry.AdmissionSuspended())
+}
+
+// Stop the parked registration timer without clearing its pointer: a nil
+// timer would cause an incomplete group to arm another timer on finish.
+func stopRemoteAllocationStatementTestTimer(participant *remoteAllocationStatementParticipant) bool {
+	remoteAllocationStatementGroups.Lock()
+	defer remoteAllocationStatementGroups.Unlock()
+	return participant.group.timer != nil && participant.group.timer.Stop()
 }
 
 func TestRemoteAllocationStatementRegistrationTimerStartsBeforeFinish(t *testing.T) {
@@ -502,26 +527,27 @@ func TestRemoteAllocationStatementGroupRejectsLateFragmentAfterAbort(t *testing.
 	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
 
 	board := message.NewMessageBoard()
-	participant, err := acquireRemoteAllocationStatementParticipant(
+	participant, _, err := acquireRemoteAllocationStatementParticipant(
 		key,
 		board,
 		2,
 		nil,
 	)
 	require.NoError(t, err)
-	terminal, err := participant.finish(errors.New("first fragment aborted"))
+	failure := moerr.NewOutOfRangeNoCtx("int8", "1000")
+	terminal, err := participant.finish(failure)
 	require.Error(t, err)
 	require.True(t, terminal.complete)
 	require.False(t, remoteAllocationStatementGroupRegistered(board))
 
 	lateBoard := message.NewMessageBoard()
-	_, err = acquireRemoteAllocationStatementParticipant(key, lateBoard, 2, nil)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	_, _, err = acquireRemoteAllocationStatementParticipant(key, lateBoard, 2, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	lateBoard.CloseAndDrain()
 
 	retryKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
 	retryBoard := message.NewMessageBoard()
-	retry, err := acquireRemoteAllocationStatementParticipant(
+	retry, _, err := acquireRemoteAllocationStatementParticipant(
 		retryKey,
 		retryBoard,
 		1,
@@ -539,7 +565,7 @@ func TestRemoteAllocationStatementGroupExpiryRejectsLateFragment(t *testing.T) {
 	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
 
 	board := message.NewMessageBoard()
-	participant, err := acquireRemoteAllocationStatementParticipant(
+	participant, _, err := acquireRemoteAllocationStatementParticipant(
 		key,
 		board,
 		2,
@@ -553,13 +579,13 @@ func TestRemoteAllocationStatementGroupExpiryRejectsLateFragment(t *testing.T) {
 	require.False(t, remoteAllocationStatementGroupRegistered(board))
 
 	lateBoard := message.NewMessageBoard()
-	_, err = acquireRemoteAllocationStatementParticipant(key, lateBoard, 2, nil)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	_, _, err = acquireRemoteAllocationStatementParticipant(key, lateBoard, 2, nil)
+	require.Contains(t, err.Error(), "registration timed out")
 	lateBoard.CloseAndDrain()
 
 	retryKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
 	retryBoard := message.NewMessageBoard()
-	retry, err := acquireRemoteAllocationStatementParticipant(
+	retry, _, err := acquireRemoteAllocationStatementParticipant(
 		retryKey,
 		retryBoard,
 		1,
@@ -574,7 +600,7 @@ func TestRemoteAllocationStatementGroupExpiryRejectsLateFragment(t *testing.T) {
 func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
 	activeKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
 	activeBoard := message.NewMessageBoard()
-	first, err := acquireRemoteAllocationStatementParticipant(
+	first, _, err := acquireRemoteAllocationStatementParticipant(
 		activeKey,
 		activeBoard,
 		3,
@@ -619,7 +645,7 @@ func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
 	})
 
 	// The reservation belongs to the generation, not each fragment.
-	second, err := acquireRemoteAllocationStatementParticipant(
+	second, _, err := acquireRemoteAllocationStatementParticipant(
 		activeKey,
 		activeBoard,
 		3,
@@ -629,7 +655,7 @@ func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
 
 	newKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
 	newBoard := message.NewMessageBoard()
-	_, err = acquireRemoteAllocationStatementParticipant(newKey, newBoard, 1, nil)
+	_, _, err = acquireRemoteAllocationStatementParticipant(newKey, newBoard, 1, nil)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
 	newBoard.CloseAndDrain()
 
@@ -687,7 +713,7 @@ func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T)
 
 func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testing.T) {
 	previousTimeout := remoteAllocationStatementRegistrationTimeout
-	remoteAllocationStatementRegistrationTimeout = 10 * time.Millisecond
+	remoteAllocationStatementRegistrationTimeout = time.Duration(1<<63 - 1)
 	t.Cleanup(func() {
 		remoteAllocationStatementRegistrationTimeout = previousTimeout
 	})
@@ -695,7 +721,8 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
 	require.NoError(t, err)
 	board := message.NewMessageBoard()
-	newAttempt := func() (*Compile, *statementAllocationAttempt, []byte) {
+	t.Cleanup(func() { board.CloseAndDrain() })
+	newAttempt := func() (*Compile, *statementAllocationAttempt, []byte, func()) {
 		c := newTestAllocationLifecycleCompile(t, registry, func(
 			mpool.AllocationAccountTerminalSnapshot,
 		) {
@@ -704,6 +731,10 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 		c.MessageBoard = board
 		attempt, openErr := c.beginAllocationAccountAttempt()
 		require.NoError(t, openErr)
+		t.Cleanup(func() {
+			attempt.exporter = nil
+			_, _ = attempt.finish()
+		})
 		buffer, allocErr := c.proc.Mp().AllocAccounted(
 			64,
 			attempt.account,
@@ -711,36 +742,64 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 			mpool.AllocationSite(1),
 		)
 		require.NoError(t, allocErr)
-		return c, attempt, buffer
+		free := func() {
+			if buffer != nil {
+				c.proc.Mp().Free(buffer)
+				buffer = nil
+			}
+		}
+		t.Cleanup(free)
+		return c, attempt, buffer, free
 	}
 
-	firstCompile, firstAttempt, firstBuffer := newAttempt()
-	secondCompile, secondAttempt, secondBuffer := newAttempt()
-	canceled := make(chan error, 2)
+	firstCompile, firstAttempt, _, freeFirst := newAttempt()
+	secondCompile, secondAttempt, secondBuffer, freeSecond := newAttempt()
+	var firstCanceled, secondCanceled atomic.Int32
+	secondCause := make(chan error, 1)
 	first, err := acquireRemoteAllocationStatementTestParticipant(
 		t,
-		board, 3, func(cause error) { canceled <- cause },
+		board, 3, func(error) { firstCanceled.Add(1) },
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		stopRemoteAllocationStatementTestTimer(first)
+		freeFirst()
+		first.stage(firstAttempt, firstCompile.proc.Mp())
+		_, _ = first.finish(errors.New("test cleanup"))
+		expireRemoteAllocationStatementGroup(first.group)
+	})
+	require.True(t, stopRemoteAllocationStatementTestTimer(first), "registration timer must still be pending")
 	second, err := acquireRemoteAllocationStatementTestParticipant(
 		t,
-		board, 3, func(cause error) { canceled <- cause },
+		board, 3, func(cause error) {
+			secondCanceled.Add(1)
+			select {
+			case secondCause <- cause:
+			default:
+			}
+		},
 	)
 	require.NoError(t, err)
-	firstCompile.proc.Mp().Free(firstBuffer)
+	t.Cleanup(func() {
+		freeSecond()
+		second.stage(secondAttempt, secondCompile.proc.Mp())
+		_, _ = second.finish(errors.New("test cleanup"))
+	})
+	freeFirst()
 	first.stage(firstAttempt, firstCompile.proc.Mp())
 	terminal, err := first.finish(nil)
 	require.NoError(t, err)
 	require.Empty(t, terminal.allocation)
-
-	require.Eventually(t, func() bool {
-		return strings.Contains(board.DebugString(), "closed")
-	}, time.Second, time.Millisecond)
-	require.Error(t, <-canceled)
+	require.False(t, terminal.complete)
+	expireRemoteAllocationStatementGroup(first.group)
+	require.True(t, board.IsClosed())
+	require.Zero(t, firstCanceled.Load(), "finished participant must not be canceled")
+	require.Equal(t, int32(1), secondCanceled.Load(), "active participant must be canceled once")
 	select {
-	case unexpected := <-canceled:
-		t.Fatalf("finished participant was canceled: %v", unexpected)
+	case cause := <-secondCause:
+		require.ErrorContains(t, cause, "registration timed out")
 	default:
+		t.Fatal("active participant was not canceled")
 	}
 	// Expiration closes the shared transport but cannot terminally inspect a
 	// registered fragment that is still executing.
@@ -749,7 +808,7 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 	require.Equal(t, uint64(cap(secondBuffer)), secondAttempt.account.Snapshot().Used)
 	require.False(t, secondAttempt.account.Snapshot().Sealed)
 
-	secondCompile.proc.Mp().Free(secondBuffer)
+	freeSecond()
 	second.stage(secondAttempt, secondCompile.proc.Mp())
 	terminal, err = second.finish(errors.New("active fragment observed cancellation"))
 	require.Error(t, err)
@@ -762,4 +821,180 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 	require.Zero(t, terminal.quality)
 	require.Zero(t, registry.LiveAllocationMetadata())
 	require.False(t, remoteAllocationStatementGroupRegistered(board))
+}
+
+func TestRemoteAllocationStatementLateFailurePreservesNativeErrorAndBoardOwner(t *testing.T) {
+	board := message.NewMessageBoard()
+	key := fmt.Sprintf("late-native@%p", board)
+	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
+	first, owned, err := acquireRemoteAllocationStatementParticipant(key, board, 3, nil)
+	require.NoError(t, err)
+	require.True(t, owned)
+	second, _, err := acquireRemoteAllocationStatementParticipant(key, board, 3, nil)
+	require.NoError(t, err)
+	native := moerr.NewOutOfRangeNoCtx("int8", "1000")
+	first.recordFailure(native)
+	_, _ = first.finish(native)
+	assertLate := func(board *message.MessageBoard, wantOwned bool) {
+		p, owns, got := acquireRemoteAllocationStatementParticipant(key, board, 3, nil)
+		require.Nil(t, p)
+		require.Equal(t, wantOwned, owns)
+		var wire *moerr.Error
+		require.ErrorAs(t, got, &wire)
+		require.Equal(t, native.MySQLCode(), wire.MySQLCode())
+		require.Equal(t, native.SqlState(), wire.SqlState())
+		require.False(t, errors.Is(got, mpool.ErrAllocationAccountInvariant))
+	}
+	assertLate(board, true) // The active sibling retains the shared board.
+	assertLate(message.NewMessageBoard(), false)
+	_, owns, err := acquireRemoteAllocationStatementParticipant(key, board, 2, nil)
+	require.True(t, owns)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	foreignBoard := message.NewMessageBoard()
+	foreign, _, err := acquireRemoteAllocationStatementParticipant(key+"-foreign", foreignBoard, 1, nil)
+	require.NoError(t, err)
+	_, owns, err = acquireRemoteAllocationStatementParticipant(key, foreignBoard, 3, nil)
+	require.True(t, owns)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	_, _ = foreign.finish(nil)
+	_, _ = second.finish(context.Canceled)
+	assertLate(message.NewMessageBoard(), false) // Tombstone retains the first SQL cause.
+}
+
+func TestRemoteAllocationStatementErrorSnapshotIsBounded(t *testing.T) {
+	native := moerr.NewInternalErrorNoCtx(strings.Repeat("x", 8192))
+	got := snapshotRemoteStatementError(errors.Join(native, context.Canceled))
+	require.NotSame(t, native, got)
+	require.LessOrEqual(t, len(got.Error()), 4096)
+	require.Equal(t, native.ErrorCode(), got.ErrorCode())
+	require.Equal(t, native.MySQLCode(), got.MySQLCode())
+	require.Equal(t, native.SqlState(), got.SqlState())
+}
+
+type remoteTerminalBarrierMessage struct {
+	*remoteAllocationAccountedMessage
+	entered, release chan struct{}
+}
+
+func (m *remoteTerminalBarrierMessage) Destroy() {
+	close(m.entered)
+	<-m.release
+}
+
+func TestRemoteAllocationStatementLateFragmentDuringBoardDrain(t *testing.T) {
+	board := message.NewMessageBoard()
+	key := fmt.Sprintf("draining@%p", board)
+	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	message.SendMessage(&remoteTerminalBarrierMessage{
+		remoteAllocationAccountedMessage: &remoteAllocationAccountedMessage{},
+		entered:                          entered, release: release,
+	}, board)
+	p, _, err := acquireRemoteAllocationStatementParticipant(key, board, 2, nil)
+	require.NoError(t, err)
+	native := moerr.NewOutOfRangeNoCtx("int8", "1000")
+	done := make(chan struct{})
+	go func() { _, _ = p.finish(native); close(done) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("board drain not entered")
+	}
+	late, owned, err := acquireRemoteAllocationStatementParticipant(key, board, 2, nil)
+	require.Nil(t, late)
+	require.True(t, owned)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "draining board must retain native error")
+	once.Do(func() { close(release) })
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("board drain not completed")
+	}
+}
+
+func TestRemoteAllocationStatementRejectedCleanupSealsBeforeAdmission(t *testing.T) {
+	board := message.NewMessageBoard()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	message.SendMessage(&remoteTerminalBarrierMessage{
+		remoteAllocationAccountedMessage: &remoteAllocationAccountedMessage{},
+		entered:                          entered, release: release,
+	}, board)
+	firstDone := make(chan bool, 1)
+	go func() {
+		sealed := sealUnownedRemoteAllocationStatementBoard(board)
+		if sealed {
+			board.CloseAndDrain()
+		}
+		firstDone <- sealed
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("rejected board drain not entered")
+	}
+	require.True(t, board.IsClosed())
+	// A second rejected fragment must not hold admission while waiting for
+	// the first fragment's blocked destruction.
+	secondSealed, secondDone := make(chan struct{}), make(chan bool, 1)
+	go func() {
+		sealed := sealUnownedRemoteAllocationStatementBoard(board)
+		close(secondSealed)
+		if sealed {
+			board.CloseAndDrain()
+		}
+		secondDone <- sealed
+	}()
+	select {
+	case <-secondSealed:
+	case <-time.After(time.Second):
+		t.Fatal("second cleanup waited for destruction while holding admission")
+	}
+	type admission struct {
+		p   *remoteAllocationStatementParticipant
+		err error
+	}
+	admitted := make(chan admission, 1)
+	go func() {
+		_, owned, err := acquireRemoteAllocationStatementParticipant(fmt.Sprintf("sealed@%p", board), board, 1, nil)
+		if owned || !errors.Is(err, mpool.ErrAllocationAccountInvariant) {
+			admitted <- admission{err: fmt.Errorf("sealed board acquired: owned=%v err=%v", owned, err)}
+			return
+		}
+		fresh := message.NewMessageBoard()
+		p, _, err := acquireRemoteAllocationStatementParticipant(fmt.Sprintf("fresh@%p", fresh), fresh, 1, nil)
+		admitted <- admission{p: p, err: err}
+	}()
+	select {
+	case got := <-admitted:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.p)
+		_, err := got.p.finish(nil)
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("rejected cleanup blocked unrelated admission")
+	}
+	once.Do(func() { close(release) })
+	for _, done := range []chan bool{firstDone, secondDone} {
+		select {
+		case closed := <-done:
+			require.True(t, closed)
+		case <-time.After(time.Second):
+			t.Fatal("rejected cleanup not joined")
+		}
+	}
+}
+
+func TestRemoteAllocationStatementOwnedBoardRejectsCleanup(t *testing.T) {
+	board := message.NewMessageBoard()
+	p, _, err := acquireRemoteAllocationStatementParticipant(fmt.Sprintf("owned@%p", board), board, 1, nil)
+	require.NoError(t, err)
+	require.False(t, sealUnownedRemoteAllocationStatementBoard(board))
+	require.False(t, board.IsClosed(), "rejected fragment must not seal an admitted sibling")
+	_, err = p.finish(nil)
+	require.NoError(t, err)
+	require.True(t, board.IsClosed())
 }

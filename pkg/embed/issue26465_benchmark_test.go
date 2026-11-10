@@ -264,12 +264,13 @@ func issue26465DropDatabase(b *testing.B, db *sql.DB, database string) {
 }
 
 func issue26465DepartmentsDDL() string {
-	defs := []string{
+	defs := make([]string, 0, 4+issue26465BenchmarkDepartmentIndexes)
+	defs = append(defs,
 		"id INT NOT NULL AUTO_INCREMENT",
 		"name VARCHAR(100) NOT NULL COMMENT '部门名称'",
 		"marker INT NULL",
 		"PRIMARY KEY (id)",
-	}
+	)
 	for i := range issue26465BenchmarkDepartmentIndexes {
 		defs = append(defs, fmt.Sprintf("KEY departments_idx_%04d (marker)", i))
 	}
@@ -277,12 +278,13 @@ func issue26465DepartmentsDDL() string {
 }
 
 func issue26465UsersDDL() string {
-	defs := []string{
+	defs := make([]string, 0, 4+issue26465BenchmarkUserIndexes+issue26465BenchmarkUserFKeys)
+	defs = append(defs,
 		"id INT NOT NULL AUTO_INCREMENT",
 		"department_id INT NULL COMMENT '所属部门ID（关联 departments 表）'",
 		"marker INT NULL",
 		"PRIMARY KEY (id)",
-	}
+	)
 	for i := range issue26465BenchmarkUserIndexes {
 		defs = append(defs, fmt.Sprintf("KEY users_idx_%04d (marker)", i))
 	}
@@ -296,7 +298,8 @@ func issue26465UsersDDL() string {
 }
 
 func issue26465CandidatesDDL() string {
-	defs := []string{
+	defs := make([]string, 0, 9+3*(issue26465BenchmarkCandidateFKeys/3))
+	defs = append(defs,
 		"id INT NOT NULL AUTO_INCREMENT",
 		"job_id INT NULL",
 		"talent_pool_id INT NULL",
@@ -306,7 +309,7 @@ func issue26465CandidatesDDL() string {
 		"KEY candidates_payload_idx_0 (payload)",
 		"KEY candidates_payload_idx_1 (payload)",
 		"KEY candidates_payload_idx_2 (payload)",
-	}
+	)
 	for i := range issue26465BenchmarkCandidateFKeys / 3 {
 		defs = append(defs,
 			fmt.Sprintf("CONSTRAINT candidates_jobs_fk_%04d FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL ON UPDATE CASCADE", i),

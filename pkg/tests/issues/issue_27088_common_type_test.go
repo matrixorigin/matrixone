@@ -22,12 +22,314 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
+
+func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		mustExec(t, ctx, conn, "create database issue_26879_followup")
+		defer mustExec(t, ctx, conn, "drop database issue_26879_followup")
+		mustExec(t, ctx, conn, "use issue_26879_followup")
+		mustExec(t, ctx, conn, "create table t(id int primary key,d decimal(38,10))")
+		mustExec(t, ctx, conn, "insert into t values (1,9007199254740992.0000000001),(2,9007199254740992.0000000002),(3,9007199254740992.0000000003)")
+		for _, tc := range []struct {
+			name, expression             string
+			want, changed, null, invalid []int
+		}{
+			{"marker-only child", "greatest(d,coalesce(?,?))", []int{2, 3}, []int{3}, nil, []int{1, 2, 3}},
+			{"ifnull child", "greatest(?,ifnull(?,d))", []int{2}, []int{3}, nil, nil},
+			{"marker-derived result", "greatest(abs(?),coalesce(?,?))", []int{2}, []int{3}, nil, nil},
+			{"null-first peer", "coalesce(?,NULL,d)", []int{1, 2, 3}, []int{1, 2, 3}, []int{1, 2, 3}, nil},
+			{"null-last peer", "coalesce(?,d,NULL)", []int{2}, []int{3}, []int{1, 2, 3}, nil},
+			{"typed-null peer", "coalesce(?,cast(NULL as decimal(38,10)),d)", []int{2}, []int{3}, []int{1, 2, 3}, nil},
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				t.Run(tc.name+"/"+protocol, func(t *testing.T) {
+					query := "select id from t where " + tc.expression + "=d order by id"
+					count := strings.Count(tc.expression, "?")
+					var stmt *sql.Stmt
+					if protocol == "sql" {
+						mustExec(t, ctx, conn, "prepare followup from '"+query+"'")
+						defer mustExec(t, ctx, conn, "deallocate prepare followup")
+					} else {
+						stmt, err = conn.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer stmt.Close()
+					}
+					for _, value := range []any{nil, "9007199254740992.0000000002", "9007199254740992.0000000003", nil, "not-a-number", "9007199254740992.0000000002"} {
+						func() {
+							var rows *sql.Rows
+							var queryErr error
+							if protocol == "sql" {
+								literal := "NULL"
+								if value != nil {
+									literal = "'" + value.(string) + "'"
+								}
+								mustExec(t, ctx, conn, "set @followup="+literal)
+								rows, queryErr = conn.QueryContext(ctx, "execute followup using "+strings.TrimSuffix(strings.Repeat("@followup,", count), ","))
+							} else {
+								args := make([]any, count)
+								for i := range args {
+									args[i] = value
+								}
+								rows, queryErr = stmt.QueryContext(ctx, args...)
+							}
+							require.NoError(t, queryErr)
+							defer rows.Close()
+							var got []int
+							for rows.Next() {
+								var id int
+								require.NoError(t, rows.Scan(&id))
+								got = append(got, id)
+							}
+							require.NoError(t, rows.Err())
+							want := tc.want
+							switch value {
+							case nil:
+								want = tc.null
+							case "not-a-number":
+								want = tc.invalid
+							case "9007199254740992.0000000003":
+								want = tc.changed
+							}
+							require.Equal(t, want, got, "value=%v", value)
+						}()
+					}
+				})
+			}
+		}
+	})
+}
+
+func TestIssue26879PreparedCommonValuePeerOverflow(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, expression := range []string{
+			"greatest(cast(1 as decimal(65,30)),coalesce(?,?),cast(1 as decimal(38,0)))",
+			"greatest(cast(1 as decimal(38,0)),coalesce(?,?),cast(1 as decimal(65,30)))",
+			"greatest(cast(1 as decimal(65,30)),?,?,cast(1 as decimal(38,0)))",
+			"greatest(cast(1 as decimal(38,0)),?,?,cast(1 as decimal(65,30)))",
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				t.Run(expression+"/"+protocol, func(t *testing.T) {
+					query := "select " + expression
+					var stmt *sql.Stmt
+					if protocol == "sql" {
+						mustExec(t, ctx, conn, "prepare peer_scales from '"+query+"'")
+						defer mustExec(t, ctx, conn, "deallocate prepare peer_scales")
+					} else {
+						stmt, err = conn.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer stmt.Close()
+					}
+					for _, value := range []string{strings.Repeat("9", 65), strings.Repeat("9", 47), strings.Repeat("9", 46), "1", strings.Repeat("9", 65), "1"} {
+						var got string
+						var queryErr error
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "set @peer_scales='"+value+"'")
+							queryErr = conn.QueryRowContext(ctx, "execute peer_scales using @peer_scales,@peer_scales").Scan(&got)
+						} else {
+							queryErr = stmt.QueryRowContext(ctx, value, value).Scan(&got)
+						}
+						if len(value) > 46 {
+							var sqlError *mysql.MySQLError
+							require.ErrorAs(t, queryErr, &sqlError)
+							require.Equal(t, uint16(1690), sqlError.Number)
+							continue
+						}
+						require.NoError(t, queryErr)
+						require.Equal(t, value+"."+strings.Repeat("0", 30), got)
+					}
+				})
+			}
+		}
+	})
+}
+
+func TestIssue26879PreparedJointMarkerDomains(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			name, expression string
+		}{
+			{"direct", "greatest(cast(1 as decimal(38,0)),?,?)"},
+			{"coalesce", "greatest(cast(1 as decimal(38,0)),coalesce(?,?))"},
+			{"ifnull", "greatest(cast(1 as decimal(38,0)),ifnull(?,?))"},
+			{"deep", "greatest(cast(1 as decimal(38,0)),coalesce(?,coalesce(?,?)))"},
+			{"siblings", "greatest(cast(1 as decimal(38,0)),coalesce(?,?),coalesce(?,?))"},
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				for _, reversed := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/reversed=%t", tc.name, protocol, reversed), func(t *testing.T) {
+						query := "select " + tc.expression
+						var stmt *sql.Stmt
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "prepare joint_markers from '"+query+"'")
+							defer mustExec(t, ctx, conn, "deallocate prepare joint_markers")
+						} else {
+							stmt, err = conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						}
+						for _, integral := range []string{strings.Repeat("9", 65), "1", strings.Repeat("9", 77), strings.Repeat("9", 65)} {
+							pair := []string{integral, "1e-30"}
+							if reversed {
+								pair[0], pair[1] = pair[1], pair[0]
+							}
+							count := strings.Count(tc.expression, "?")
+							values := make([]any, count)
+							variables := make([]string, count)
+							for i := range values {
+								value := pair[i%2]
+								if tc.name == "siblings" {
+									value = pair[i/2]
+								} else if i >= 2 {
+									value = pair[1-i%2]
+								}
+								values[i] = value
+								variables[i] = fmt.Sprintf("@joint_%d", i)
+								if protocol == "sql" {
+									mustExec(t, ctx, conn, "set "+variables[i]+"='"+value+"'")
+								}
+							}
+							var got string
+							if protocol == "sql" {
+								err = conn.QueryRowContext(ctx, "execute joint_markers using "+strings.Join(variables, ",")).Scan(&got)
+							} else {
+								err = stmt.QueryRowContext(ctx, values...).Scan(&got)
+							}
+							if len(integral) == 77 {
+								var sqlError *mysql.MySQLError
+								require.ErrorAs(t, err, &sqlError)
+								require.Equal(t, uint16(1690), sqlError.Number)
+								continue
+							}
+							require.NoError(t, err)
+							scale := 30
+							if len(integral) == 65 {
+								scale = 11
+							}
+							want := integral
+							if reversed && (tc.name == "coalesce" || tc.name == "ifnull" || tc.name == "deep") {
+								want = "1"
+							}
+							require.Equal(t, want+"."+strings.Repeat("0", scale), got)
+						}
+					})
+				}
+			}
+		}
+	})
+}
+
+func TestIssue26879PreparedRootStringBoundary(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, name := range []string{"least", "greatest"} {
+			for _, child := range []string{"?,?", "coalesce(?,?)", "ifnull(?,?)", "coalesce(?,coalesce(?,?))", "coalesce(?,?),coalesce(?,?)"} {
+				for _, protocol := range []string{"sql", "binary"} {
+					t.Run(name+"/"+child+"/"+protocol, func(t *testing.T) {
+						query := "select " + name + "(cast(1 as decimal(38,0)),?," + child + ")"
+						var stmt *sql.Stmt
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "prepare root_boundary from '"+query+"'")
+							defer mustExec(t, ctx, conn, "deallocate prepare root_boundary")
+						} else {
+							stmt, err = conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						}
+						for _, root := range []string{"abc", "!", "", "0xx", "abc"} {
+							for _, spelling := range []string{"0002", strings.Repeat("9", 77)} {
+								count := strings.Count(query, "?")
+								values := make([]any, count)
+								variables := make([]string, count)
+								for i := range values {
+									value := spelling
+									if i == 0 {
+										value = root
+									}
+									values[i] = value
+									variables[i] = fmt.Sprintf("@root_boundary_%d", i)
+									if protocol == "sql" {
+										mustExec(t, ctx, conn, "set "+variables[i]+"='"+value+"'")
+									}
+								}
+								var got string
+								if protocol == "sql" {
+									err = conn.QueryRowContext(ctx, "execute root_boundary using "+strings.Join(variables, ",")).Scan(&got)
+								} else {
+									err = stmt.QueryRowContext(ctx, values...).Scan(&got)
+								}
+								numeric := protocol == "binary" || root == "0xx"
+								if numeric && len(spelling) == 77 {
+									var sqlError *mysql.MySQLError
+									require.ErrorAs(t, err, &sqlError)
+									require.Equal(t, uint16(1690), sqlError.Number)
+									continue
+								}
+								require.NoError(t, err)
+								var want string
+								if numeric {
+									want = "0"
+									if name == "greatest" {
+										want = "2"
+									}
+								} else if name == "least" {
+									want = min("1", root, spelling)
+								} else {
+									want = max("1", root, spelling)
+								}
+								require.Equal(t, want, got)
+							}
+						}
+					})
+				}
+			}
+		}
+	})
+}
 
 func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
@@ -238,7 +540,8 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
 			(1, 9007199254740992, 9007199254740992),
 			(2, 9007199254740993, 9007199254740993),
-			(3, 9007199254740994, 9007199254740994)`)
+			(3, 9007199254740994, 9007199254740994),
+			(4, 100, 100)`)
 
 		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
 			for _, column := range []string{"u", "b"} {
@@ -256,6 +559,20 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 						require.NoError(t, rows.Err())
 					}
 					queryAndAssert("9007199254740993", 2)
+					queryAndAssert("9007199254740993.0", 2)
+					queryAndAssert("100.0", 4)
+					queryAndAssert("1e2", 4)
+					if column == "b" {
+						rows, queryErr := stmt.QueryContext(ctx, "100.5")
+						if rows != nil {
+							defer rows.Close()
+							require.NoError(t, rows.Err())
+						}
+						require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+					} else {
+						queryAndAssert("100.5")
+					}
+					queryAndAssert("1e2", 4)
 					queryAndAssert(uint64(9007199254740993), 2)
 					queryAndAssert(nil)
 					queryAndAssert("9007199254740993", 2)
@@ -283,6 +600,25 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
 				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993.0'")
+				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.0'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.5'")
+				if column == "b" {
+					rows, queryErr := conn.QueryContext(ctx, "execute "+statementName+" using @issue27492_value")
+					if rows != nil {
+						defer rows.Close()
+						require.NoError(t, rows.Err())
+					}
+					require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+				} else {
+					querySQLAndAssert()
+				}
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
 				mustExec(t, ctx, conn, "set @issue27492_value = null")
 				querySQLAndAssert()
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")

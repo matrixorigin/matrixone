@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -32,10 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -397,195 +393,6 @@ func InitTestDB(
 			return !end.GE(&min)
 		}, cmd_util.CheckerKeyMinTS)
 	return db
-}
-
-func writeIncrementalCheckpoint(
-	ctx context.Context,
-	t *testing.T,
-	start, end types.TS,
-	c *catalog.Catalog,
-	checkpointSize int,
-	fs fileservice.FileService,
-) objectio.Location {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, checkpointSize, fs)
-	data, err := factory(c)
-	assert.NoError(t, err)
-	defer data.Close()
-	location, _, err := data.Sync(ctx, fs)
-	assert.NoError(t, err)
-	return location
-}
-
-func checkTNCheckpointData(
-	ctx context.Context,
-	t *testing.T,
-	loc1 objectio.Location,
-	end types.TS,
-	e *TestEngine,
-) {
-
-	c2 := mockAndReplayCatalog(
-		ctx, t, loc1, e,
-	)
-	checkCatalog(t, e.Catalog, c2, end)
-}
-
-func checkCatalog(
-	t *testing.T, c1, c2 *catalog.Catalog, end types.TS,
-) {
-	p := &catalog.LoopProcessor{}
-	objFn := func(oe *catalog.ObjectEntry) error {
-		createAt := oe.GetCreatedAt()
-		if createAt.GT(&end) {
-			return nil
-		}
-		db, err := c2.GetDatabaseByID(oe.GetTable().GetDB().ID)
-		assert.NoError(t, err)
-		tbl, err := db.GetTableEntryByID(oe.GetTable().ID)
-		assert.NoError(t, err)
-		oe2, err := tbl.GetObjectByID(oe.ID(), oe.IsTombstone)
-		assert.NoError(t, err)
-		createAt2 := oe2.GetCreatedAt()
-		assert.True(t, createAt.EQ(&createAt2))
-		delete := oe.GetDeleteAt()
-		if delete.GT(&end) {
-			return nil
-		}
-		delete2 := oe2.GetDeleteAt()
-		assert.True(t, delete.EQ(&delete2))
-		return nil
-	}
-	p.ObjectFn = objFn
-	p.TombstoneFn = objFn
-	err := c1.RecurLoop(p)
-	assert.NoError(t, err)
-}
-
-type objlistReplayer struct{}
-
-func (r *objlistReplayer) Submit(_ uint64, fn func()) {
-	fn()
-}
-
-func mockAndReplayCatalog(
-	ctx context.Context,
-	t *testing.T,
-	loc objectio.Location,
-	e *TestEngine,
-) *catalog.Catalog {
-	dataFactory := tables.NewDataFactory(e.Runtime, e.Dir)
-	c := catalog.MockCatalog(dataFactory)
-	reader := logtail.NewCKPReader(
-		logtail.CheckpointCurrentVersion,
-		loc,
-		common.DebugAllocator,
-		e.Opts.Fs,
-	)
-	err := reader.ReadMeta(ctx)
-	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, c, true, reader)
-	assert.NoError(t, err)
-
-	readTxn, err := e.StartTxn(nil)
-	assert.NoError(t, err)
-	closeFn := c.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, e.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
-	assert.NoError(t, readTxn.Commit(ctx))
-
-	reader = logtail.NewCKPReader(
-		logtail.CheckpointCurrentVersion,
-		loc,
-		common.DebugAllocator,
-		e.Opts.Fs,
-	)
-	err = reader.ReadMeta(ctx)
-	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, c, false, reader)
-	assert.NoError(t, err)
-
-	return c
-}
-
-func checkCheckpointDataByTableID(
-	ctx context.Context,
-	t *testing.T,
-	tbl *catalog.TableEntry,
-	end types.TS,
-	loc objectio.Location,
-	e *TestEngine,
-) {
-	objCount := 0
-	reader := logtail.NewCKPReaderWithTableID_V2(
-		logtail.CheckpointCurrentVersion,
-		loc,
-		tbl.ID,
-		common.DebugAllocator,
-		e.Opts.Fs,
-	)
-	err := reader.ReadMeta(ctx)
-	assert.NoError(t, err)
-	err = reader.ConsumeCheckpointWithTableID(
-		ctx,
-		func(
-			ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool,
-		) (err error) {
-			objCount++
-			obj2, err := tbl.GetObjectByID(
-				obj.ObjectName().ObjectId(), isTombstone,
-			)
-			assert.NoError(t, err)
-			create2 := obj2.CreatedAt
-			assert.True(t, create2.EQ(&obj.CreateTime))
-			delete2 := obj2.DeletedAt
-			if delete2.GT(&end) {
-				return nil
-			}
-			assert.True(t, delete2.EQ(&obj.DeleteTime))
-			return
-		},
-	)
-	assert.NoError(t, err)
-	objInCatalogCount := 0
-	p := &catalog.LoopProcessor{}
-	objFn := func(oe *catalog.ObjectEntry) error {
-		if oe.CreatedAt.LE(&end) {
-			objInCatalogCount++
-		}
-		return nil
-	}
-	p.ObjectFn = objFn
-	p.TombstoneFn = objFn
-	err = tbl.RecurLoop(p)
-	assert.NoError(t, err)
-	assert.Equal(t, objCount, objInCatalogCount)
-}
-
-// TODO: use ctx
-func CheckCheckpointReadWrite(
-	t *testing.T,
-	end types.TS,
-	c *catalog.Catalog,
-	checkpointSize int,
-	e *TestEngine,
-) {
-	start := types.TS{}
-	ctx := context.Background()
-	location := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointSize, e.Opts.Fs)
-
-	checkTNCheckpointData(ctx, t, location, end, e)
-	p := &catalog.LoopProcessor{}
-
-	p.TableFn = func(te *catalog.TableEntry) error {
-		checkCheckpointDataByTableID(ctx, t, te, end, location, e)
-		return nil
-	}
 }
 
 func (e *TestEngine) CheckCollectTombstoneInRange() {

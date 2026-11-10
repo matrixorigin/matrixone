@@ -42,3 +42,23 @@ its task-owned `mo28164_freeze` database. It never changes the parent oracle.
 Normal Go tests read the committed fixtures offline; Docker is needed only to
 collect new oracle answers. The V1 regression hashes must not be regenerated
 merely to make a changed implementation pass.
+
+## UCA400 foundation (2026-09-29)
+
+`mysql_8_4_11_uca400.json.gz` is an independent read-only MySQL 8.4.11 arm64
+oracle for the new domains. It does not replace either V1 fixture. Regenerate
+against a dedicated local Unix-socket server (no shared database writes):
+
+```sh
+python3 pkg/common/collation/testdata/generate_uca400.py \
+  --mysql /usr/local/mysql/bin/mysql --socket /tmp/YOUR_TASK/mysql.sock \
+  --output pkg/common/collation/testdata/mysql_8_4_11_uca400.json.gz
+```
+
+The generator checks the exact reported version/architecture and records
+98 sample strings, 9,604 comparisons, 65,536 scalar answers (all 63,488 valid
+BMP scalars plus 2,048 supplementary samples). MySQL mb3 sample comparisons
+and raw weights are independently checked against the shared BMP answers.
+The generator performs SELECT only; start/stop your isolated server separately.
+The U4P1 byte freeze is in the Go test and must not be updated simply to make
+an implementation change pass. See `docs/design/issue-29206-uca400-backend.md`.

@@ -191,9 +191,11 @@ SELECT DATE_FORMAT("2009-01-01",'%W %d %M %Y') as valid_date;
 valid_date
 Thursday 01 January 2009
 SELECT DATE_FORMAT('0000-01-01','%W %d %M %Y') as valid_date;
-invalid input: invalid datetime value 0000-01-01
+➤ valid_date[12,137,0]  𝄀
+null
 SELECT DATE_FORMAT('0000-02-28','%W %d %M %Y') as valid_date;
-invalid input: invalid datetime value 0000-02-28
+➤ valid_date[12,137,0]  𝄀
+null
 SELECT DATE_FORMAT('9999-02-28','%W %d %M %Y') as valid_date;
 valid_date
 Sunday 28 February 9999
@@ -218,4 +220,5 @@ date_format(concat('19980131',131415),'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%
 select date_format(19980021000000,'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
 invalid argument function date_format, bad value [BIGINT VARCHAR]
 select date_format('19980021000000','%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
-invalid input: invalid datetime value 19980021000000
+➤ date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w')[12,279,0]  𝄀
+null

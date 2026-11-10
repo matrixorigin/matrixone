@@ -40,13 +40,13 @@ explain select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
@@ -54,13 +54,13 @@ explain select id, title, note
 from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 select id, title, note
 from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 -- Scalar PRE must finish the non-covered note domain before candidate Top-K.
 -- Reused prepared executions have independent domains, including exact empty.

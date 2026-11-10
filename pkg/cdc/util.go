@@ -103,33 +103,6 @@ func extractRowFromEveryVector(
 	return nil
 }
 
-//func extractRowFromWantedVecs(
-//	ctx context.Context,
-//	dataSet *batch.Batch,
-//	rowIndex int,
-//	wantedVecIdxes []int,
-//	row []any,
-//) error {
-//	for i := 0; i < len(row); i++ {
-//		vec := dataSet.Vecs[wantedVecIdxes[i]]
-//		rowIndexBackup := rowIndex
-//		if vec.IsConstNull() {
-//			row[i] = nil
-//			continue
-//		}
-//		if vec.IsConst() {
-//			rowIndex = 0
-//		}
-//
-//		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
-//		if err != nil {
-//			return err
-//		}
-//		rowIndex = rowIndexBackup
-//	}
-//	return nil
-//}
-
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
@@ -162,6 +135,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
 	case types.T_float32:
 		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		row[i], _ = vector.GetLowPrecisionFloatAt(vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
@@ -185,6 +160,9 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
 	case types.T_array_uint8:
 		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
+	case types.T_array_float8, types.T_array_float4:
+		// The block-scaled cell; convertColIntoSql renders it as text.
+		row[i] = vec.GetBytesAt(rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
@@ -285,7 +263,7 @@ func convertColIntoSql(
 	case types.T_uint64:
 		value := data.(uint64)
 		sqlBuff = appendUint64(sqlBuff, value)
-	case types.T_float32:
+	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		value := data.(float32)
 		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
 	case types.T_float64:
@@ -322,6 +300,16 @@ func convertColIntoSql(
 	// Narrow vector element types — ArrayToString is generic over
 	// types.ArrayElement, so each decodes to its own slice type and formats the
 	// same way. Quoted like the f32/f64 cases.
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text: replaying it stores the same cell, where the decoded values would
+		// be quantized again (a vecf4 global scale follows the decoded maximum)
+		text, err := types.BlockScaledToJSON(data.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, text)
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_bf16:
 		value := data.([]types.BF16)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -446,152 +434,6 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	}
 	return buf
 }
-
-func floatArrayToString[T float32 | float64](arr []T) string {
-	str := "'["
-	for i, v := range arr {
-		if i == 0 {
-			str += fmt.Sprintf("%f", v)
-		} else {
-			str += fmt.Sprintf(",%f", v)
-		}
-	}
-	str += "]'"
-	return str
-}
-
-//func getPkIdxesAndTypes(ctx context.Context, tableDef *plan.TableDef) (pkIdxes []int, pkAndTsTypes []*types.Type, err error) {
-//	pkIdxes = make([]int, 0, len(tableDef.Pkey.Names))
-//	pkAndTsTypes = make([]*types.Type, 0, len(tableDef.Pkey.Names)+1)
-//	for _, colName := range tableDef.Pkey.Names {
-//		idx, ok := tableDef.Name2ColIndex[colName]
-//		if !ok {
-//			err = moerr.NewInternalErrorf(ctx, "pk column %s not found", colName)
-//			return
-//		}
-//
-//		pkIdxes = append(pkIdxes, int(idx))
-//
-//		col := tableDef.Cols[idx]
-//		pkAndTsTypes = append(pkAndTsTypes, &types.Type{
-//			Oid:   types.T(col.Typ.Id),
-//			Width: col.Typ.Width,
-//			Scale: col.Typ.Scale,
-//		})
-//	}
-//	pkAndTsTypes = append(pkAndTsTypes, &types.Type{
-//		Oid:  types.T_TS,
-//		Size: types.TxnTsSize,
-//	})
-//	return
-//}
-//
-//// getPksFromBat gets the pk from the bat, pk is separated by ',' if it's a multi-column pk
-//func getAllPkAndTsFromBat(
-//	ctx context.Context,
-//	bat *batch.Batch,
-//	tableDef *plan.TableDef,
-//	isDelete bool,
-//) (pks []string, err error) {
-//	if bat == nil || len(bat.Vecs) == 0 {
-//		return
-//	}
-//
-//	pkIdxes, pkAndTsTypes, err := getPkIdxesAndTypes(ctx, tableDef)
-//	if err != nil {
-//		return
-//	}
-//
-//	// pk and ts
-//	var wantedIdxes []int
-//	if isDelete {
-//		wantedIdxes = []int{0, 1}
-//	} else {
-//		wantedIdxes = append(pkIdxes, len(bat.Vecs)-1)
-//	}
-//	readRow := make([]any, len(wantedIdxes))
-//	dataRow := make([]any, len(pkAndTsTypes))
-//
-//	pks = make([]string, bat.Vecs[0].Length())
-//	for i := 0; i < len(pks); i++ {
-//		if pks[i], err = getPkAndTsFromRow(ctx, bat, isDelete, i, pkAndTsTypes, wantedIdxes, readRow, dataRow); err != nil {
-//			return
-//		}
-//	}
-//	return
-//}
-//
-//func getRowPkAndTsFromBat(
-//	ctx context.Context,
-//	bat *batch.Batch,
-//	tableDef *plan.TableDef,
-//	isDelete bool,
-//	offset int,
-//) (s string, err error) {
-//	if bat == nil || len(bat.Vecs) == 0 || offset < 0 || offset >= bat.Vecs[0].Length() {
-//		return
-//	}
-//
-//	pkIdxes, pkAndTsTypes, err := getPkIdxesAndTypes(ctx, tableDef)
-//	if err != nil {
-//		return
-//	}
-//
-//	// pk and ts
-//	var wantedIdxes []int
-//	if isDelete {
-//		wantedIdxes = []int{0, 1}
-//	} else {
-//		wantedIdxes = append(pkIdxes, len(bat.Vecs)-1)
-//	}
-//	readRow := make([]any, len(wantedIdxes))
-//	dataRow := make([]any, len(pkAndTsTypes))
-//
-//	return getPkAndTsFromRow(ctx, bat, isDelete, offset, pkAndTsTypes, wantedIdxes, readRow, dataRow)
-//}
-//
-//func getPkAndTsFromRow(
-//	ctx context.Context,
-//	bat *batch.Batch,
-//	isDelete bool,
-//	offset int,
-//	pkAndTsTypes []*types.Type,
-//	wantedIdxes []int,
-//	readRow []any,
-//	dataRow []any,
-//) (s string, err error) {
-//	if err = extractRowFromWantedVecs(ctx, bat, offset, wantedIdxes, readRow); err != nil {
-//		return
-//	}
-//
-//	row := &readRow
-//	if isDelete && len(pkAndTsTypes) > 2 {
-//		// composite pk
-//		var pkTuple types.Tuple
-//		if pkTuple, _, err = unpackWithSchema(readRow[0].([]byte)); err != nil {
-//			return
-//		}
-//
-//		for j := range pkTuple {
-//			dataRow[j] = pkTuple[j]
-//		}
-//		dataRow[len(pkTuple)] = readRow[1]
-//
-//		row = &dataRow
-//	}
-//
-//	pkBytes := make([]byte, 0, 64)
-//	for j := range pkAndTsTypes {
-//		if j != 0 {
-//			pkBytes = appendByte(pkBytes, ',')
-//		}
-//		if pkBytes, err = convertColIntoSql(ctx, (*row)[j], pkAndTsTypes[j], pkBytes); err != nil {
-//			return
-//		}
-//	}
-//	s = string(pkBytes)
-//	return
-//}
 
 const openDbConnAttemptTimeout = 10 * time.Second
 
@@ -922,19 +764,16 @@ func GetInitDataKeySql(kek string) (_ string, err error) {
 	return fmt.Sprintf(InsertDataKeyFormat, catalog.System_Account, InitKeyId, encryptedKey), nil
 }
 
-func batchRowCount(bat *batch.Batch) int {
-	if bat == nil || len(bat.Vecs) == 0 {
-		return 0
-	}
-	return bat.Vecs[0].Length()
-}
-
 // AddSingleQuotesJoin [a, b, c] -> 'a','b','c'
 func AddSingleQuotesJoin(s []string) string {
 	if len(s) == 0 {
 		return ""
 	}
-	return "'" + strings.Join(s, "','") + "'"
+	escaped := make([]string, len(s))
+	for i, value := range s {
+		escaped[i] = escapeSQLString(value)
+	}
+	return "'" + strings.Join(escaped, "','") + "'"
 }
 
 func GenDbTblKey(dbName, tblName string) string {

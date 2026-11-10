@@ -244,5 +244,44 @@ SELECT * FROM t ORDER BY id;
 SELECT * FROM div_zero_traditional.t ORDER BY id;
 -- @session}
 
+-- Successful SELECT diagnostics use division mode independently of strict mode.
+SET SESSION sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 1/0 AS v;
+SHOW WARNINGS;
+SELECT 1 DIV 0 AS v;
+SHOW WARNINGS;
+SELECT MOD(1,0) AS v;
+SHOW WARNINGS;
+SELECT id,n/d AS v FROM src ORDER BY id;
+SHOW WARNINGS;
+SELECT NULL/0 IS NULL AS null_input, IF(FALSE,1/0,7) AS inactive_branch;
+SHOW WARNINGS;
+
+-- Diagnostic retention bounds records without losing the warning count.
+SET SESSION max_error_count = 1;
+SELECT n/d AS a,n DIV d AS b,MOD(n,d) AS c FROM src WHERE id=2;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = 0;
+SELECT 1 % 0 AS v;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = DEFAULT;
+
+-- A disabled-mode prepare must retain diagnostic-bearing nested expressions.
+SET SESSION sql_mode = '';
+PREPARE div_warning FROM 'SELECT COALESCE(1/(2-2),7) AS a,COALESCE(1 DIV ?,7) AS b';
+SET @d=0;
+EXECUTE div_warning USING @d;
+SHOW WARNINGS;
+SET SESSION sql_mode = 'TRADITIONAL';
+EXECUTE div_warning USING @d;
+SHOW WARNINGS;
+SET SESSION sql_mode = '';
+EXECUTE div_warning USING @d;
+SHOW WARNINGS;
+DEALLOCATE PREPARE div_warning;
+
 DROP DATABASE div_zero_traditional;
+SELECT COUNT(*) AS leftover_tables FROM information_schema.tables WHERE table_schema='div_zero_traditional';
 SET SESSION sql_mode = DEFAULT;

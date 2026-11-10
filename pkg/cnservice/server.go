@@ -18,11 +18,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -32,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
@@ -87,7 +85,6 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
-	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -119,10 +116,14 @@ func NewService(
 	ctx context.Context,
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
+	publish func(Service),
 	options ...Option,
 ) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if publish == nil {
+		return nil, moerr.NewInvalidStateNoCtx("CN service requires an owner")
 	}
 
 	//set frontend parameters
@@ -135,11 +136,9 @@ func NewService(
 	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 
-	configKVMap, _ := dumpCnConfig(*cfg)
-	options = append(options, WithConfigData(configKVMap))
-
 	options = append(options, WithBootstrapOptions(
 		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
+		bootstrap.WithUpgradeCatalogObjectLimit(cfg.UpgradeCatalogObjectLimit),
 		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
 	))
 
@@ -155,6 +154,7 @@ func NewService(
 	}
 
 	srv := &service{
+		rt: runtime.ServiceRuntime(cfg.UUID),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
@@ -168,7 +168,21 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
-	srv.colexecServer = colexec.NewServer(cfg.UUID)
+	colexec.NewServer(cfg.UUID)
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if closeErr := srv.Close(); closeErr != nil {
+			result = srv
+			if err != nil {
+				err = errors.Join(err, closeErr)
+			}
+			srv.logger.Error("failed to retire CN construction", zap.Error(closeErr))
+		}
+	}()
+	publish(srv)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -189,6 +203,10 @@ func NewService(
 	for _, opt := range options {
 		opt(srv)
 	}
+	// Publish the effective configuration after constructor overrides, retaining
+	// the computed CN map's precedence over caller/common config data.
+	configKVMap, _ := dumpCnConfig(*cfg)
+	WithConfigData(configKVMap)(srv)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	srv.registerServices()
@@ -210,11 +228,6 @@ func NewService(
 	if err = srv.initViewMetadataAdmission(ctx); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			srv.closeViewMetadataAdmission()
-		}
-	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -246,13 +259,13 @@ func NewService(
 		var pc *pythonservice.Client
 		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		udfServices = append(udfServices, pc)
 	}
 	srv.udfService, err = udf.NewService(udfServices...)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
@@ -287,6 +300,9 @@ func NewService(
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
 		),
 		morpc.WithServerLogger(srv.logger),
+		morpc.WithServerMessageReleaseFunc(func(message morpc.Message) {
+			srv.releaseMessage(message.(*pipeline.Message))
+		}),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -310,7 +326,7 @@ func NewService(
 		&cnclient.PipelineConfig{RPC: cfg.RPC},
 	)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	srv.pipelines.client = c
 
@@ -331,6 +347,7 @@ func NewService(
 	if err := srv.startCNStoreHeartbeat(); err != nil {
 		return nil, err
 	}
+	constructed = true
 	return srv, nil
 }
 
@@ -414,10 +431,16 @@ func (s *service) checkViewMetadataGenerationRevoked() error {
 }
 
 func (s *service) startUnlessViewMetadataGenerationRevoked(start func() error) error {
+	if err := s.startContext().Err(); err != nil {
+		return err
+	}
 	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
 	if err := start(); err != nil {
+		return err
+	}
+	if err := s.startContext().Err(); err != nil {
 		return err
 	}
 	return s.checkViewMetadataGenerationRevoked()
@@ -429,14 +452,38 @@ func (s *service) startFrontendUnlessViewMetadataGenerationRevoked() error {
 	return s.startUnlessViewMetadataGenerationRevoked(s.runMoServer)
 }
 
-func (s *service) Start() (err error) {
+func (s *service) Start() error {
+	return s.StartContext(context.Background())
+}
+
+// StartContext lets the lifecycle owner cancel startup before waiting for it.
+func (s *service) StartContext(parent context.Context) (err error) {
+	s.startMu.Lock()
+	if s.startClosing || s.startCancel != nil {
+		s.startMu.Unlock()
+		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
+	}
+	s.startCtx, s.startCancel = context.WithCancelCause(parent)
+	s.startInProgress = true
+	s.startMu.Unlock()
+
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.lifecycle != serviceInitialized {
+		s.startMu.Lock()
+		s.startInProgress = false
+		s.startCancel(nil)
+		s.startMu.Unlock()
 		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
 	}
 	s.lifecycle = serviceStarting
 	defer func() {
+		s.startMu.Lock()
+		s.startInProgress = false
+		if cause := context.Cause(s.startCtx); cause != nil {
+			err = errors.Join(err, cause)
+		}
+		s.startMu.Unlock()
 		if err != nil {
 			s.lifecycle = serviceClosing
 			err = errors.Join(err, s.closeService())
@@ -446,7 +493,7 @@ func (s *service) Start() (err error) {
 		s.lifecycle = serviceStarted
 	}()
 
-	if err = s.waitForClusterSelfReady(); err != nil {
+	if err = s.waitForClusterSelfReady(false); err != nil {
 		return err
 	}
 	if err = s.bootstrap(); err != nil {
@@ -463,8 +510,11 @@ func (s *service) Start() (err error) {
 	if err = s.waitForViewMetadataAdmission(); err != nil {
 		return err
 	}
+	if err = s.waitForBootstrapUpgrade(); err != nil {
+		return err
+	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseBootstrap)
+		ctx, cancel := context.WithTimeoutCause(s.startContext(), 5*time.Minute, moerr.CauseBootstrap)
 		defer cancel()
 		if s.pu != nil {
 			ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -473,7 +523,9 @@ func (s *service) Start() (err error) {
 		if err != nil || complete {
 			return err
 		}
-		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)); err != nil {
+		// Fresh derived schema publishes TABLES and VIEWS only after their
+		// persisted-expression authoring requirements are admitted.
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion126)); err != nil {
 			return err
 		}
 		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
@@ -481,33 +533,40 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
-		return s.startSiriusRuntime(context.Background())
+		return s.startSiriusRuntime(s.startContext())
 	}); err != nil {
 		return err
 	}
 
 	s.initSqlWriterFactory()
 
-	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
-		return err
-	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
 
 	// Admission authorizes local initialization; it does not make this CN
-	// routable. Revalidate after every remote entry point is listening, then
+	// routable. SQL sockets are bound but do not yet accept connections.
+	// Revalidate after the internal remote entry points are listening, then
 	// linearize authoritative snapshot validation and ingress publication with
 	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
 	// this final handoff closes.
 	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-	s.completeBootstrapUpgradeStartupWait()
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
 	s.notifyHeartbeat()
+	// Ingress advertisement needs a heartbeat and a local inventory refresh
+	// before query scheduling can use this CN. Keep SQL acceptance closed until
+	// the authoritative admission-aware snapshot contains this incarnation.
+	if err = s.waitForClusterSelfReady(true); err != nil {
+		return err
+	}
+	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	s.completeBootstrapUpgradeStartupWait()
 
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
@@ -519,6 +578,14 @@ func (s *service) Start() (err error) {
 }
 
 func (s *service) Close() error {
+	// Startup holds lifecycleMu while waiting on catalog and admission. Cancel
+	// it before acquiring that lock so shutdown can join the startup owner.
+	s.startMu.Lock()
+	s.startClosing = true
+	if s.startCancel != nil {
+		s.startCancel(nil)
+	}
+	s.startMu.Unlock()
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.lifecycle != serviceClosed {
@@ -529,6 +596,16 @@ func (s *service) Close() error {
 	return err
 }
 
+func (s *service) startContext() context.Context {
+	s.startMu.Lock()
+	ctx := s.startCtx
+	s.startMu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
@@ -537,7 +614,9 @@ func (s *service) closeService() error {
 		// Stop waits for any in-flight periodic heartbeat before teardown. Keep
 		// ingress published until all local entry points and work have drained;
 		// withdrawal below is the ownership handoff linearization point.
-		s.stopper.Stop()
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
 
 		// A failed producer drain must not tear down its dependencies. Unknown
 		// local errors remain fail-stop; only remote withdrawal is diagnostic.
@@ -549,12 +628,20 @@ func (s *service) closeService() error {
 			s.stopFrontendSerialized,
 			s.closeBootstrapService,
 			// Stop scheduled statements as well as interactive frontend work.
+			s.stopTableDetector,
 			s.stopTask,
+			s.closeTableDetector,
+			s.closeCDCWatermarkUpdater,
 			s.closePipelineAdmission,
-			s.server.Close,
+			func() error {
+				if s.server == nil {
+					return nil
+				}
+				return s.server.Close()
+			},
 			// Pipeline handlers and the auto-increment cleanup worker can issue
 			// transactions. Drain both before closing their transaction and RPC
-			// dependencies, while keeping the trace consumer alive for final events.
+			// dependencies.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
 			// Cancel and join pipeline users before retiring execution runtimes;
@@ -566,12 +653,20 @@ func (s *service) closeService() error {
 			return
 		}
 		withdrawErr := s.withdrawViewMetadataAdmission()
+		// Engine-owned statistics and cleanup transactions still use txn/RPC/
+		// lock services. An incomplete engine drain cannot certify that those
+		// dependencies are unused, even when remote ingress is withdrawn.
+		if err := s.closeStoreEngine(); err != nil {
+			s.closeErr = errors.Join(withdrawErr, err)
+			return
+		}
 		localErr := closeCNServiceSteps(
 			s.stopRPCs,
-			s.closeTxnTraceService,
 			func() error {
 				// stop I/O pipeline
-				ioutil.Stop(s.cfg.UUID)
+				if runtime.ServiceRuntime(s.cfg.UUID) != nil {
+					ioutil.Stop(s.cfg.UUID)
+				}
 				return nil
 			},
 			func() error {
@@ -580,7 +675,6 @@ func (s *service) closeService() error {
 				}
 				return nil
 			},
-			s.lockService.Close,
 			func() error {
 				if s.shardService != nil {
 					return s.shardService.Close()
@@ -598,6 +692,16 @@ func (s *service) closeService() error {
 		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+func (s *service) closeStoreEngine() error {
+	if s.storeEngine == nil {
+		return nil
+	}
+	if closer, ok := s.storeEngine.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // CloseComplete certifies local teardown, not a successful remote generation
@@ -677,17 +781,6 @@ func (s *service) closeBootstrapService() error {
 	service := s.bootstrapService
 	s.bootstrapService = nil
 	return service.Close()
-}
-
-func (s *service) closeTxnTraceService() error {
-	if s.txnTraceService == nil {
-		return nil
-	}
-	service := s.txnTraceService
-	s.txnTraceService = nil
-	service.Close()
-	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.TxnTraceService, service)
-	return nil
 }
 
 func (s *service) closeIncrService() error {
@@ -770,7 +863,10 @@ func (s *service) GetFinalVersion() string {
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 
-	err := s.serverShutdown(true)
+	var err error
+	if s.mo != nil {
+		err = s.serverShutdown(true)
+	}
 	if s.cancelMoServerFunc != nil {
 		s.cancelMoServerFunc()
 	}
@@ -789,7 +885,9 @@ func (s *service) stopRPCs() error {
 		err = errors.Join(err, s._txnClient.Close())
 	}
 	if s._hakeeperClient != nil {
-		s.moCluster.Close()
+		if s.moCluster != nil {
+			s.moCluster.Close()
+		}
 		err = errors.Join(err, s._hakeeperClient.Close())
 	}
 	if s._txnSender != nil {
@@ -909,31 +1007,33 @@ func (s *service) handleRequest(
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
-	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
-	s.cancelMoServerFunc = cancelMoServerFunc
+	frontendCtx, cancelFrontend := context.WithCancel(ctx)
+	s.cancelMoServerFunc = cancelFrontend
 
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
-	err = s.initEngine(ctx, cancelMoServerCtx, pu)
+	// Background transactions may still be finishing after frontend shutdown.
+	// Engine.Close owns their logtail dependency; frontend cancellation must
+	// not stop it before task and pipeline producers have drained.
+	err = s.initEngine(ctx, pu)
 	if err != nil {
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm)
+	s.createMOServer(frontendCtx, pu, aicm)
 	return nil
 }
 
 func (s *service) initEngine(
 	ctx context.Context,
-	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
 ) error {
 	switch s.cfg.Engine.Type {
 
 	case EngineDistributedTAE:
-		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
+		if err := s.initDistributedTAE(ctx, pu); err != nil {
 			return err
 		}
 
@@ -1096,15 +1196,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.PkDedupCount > 0 {
 			opts = append(opts, client.WithCheckDup())
 		}
-		traceService := trace.GetService(s.cfg.UUID)
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
-			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
-				func(op client.TxnOperator) {
-					traceService.TxnCreated(op)
-				},
-			}),
 		)
 		c = client.NewTxnClient(
 			s.cfg.UUID,
@@ -1168,6 +1262,7 @@ func (s *service) initShardService() {
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		func(owner shardservice.ShardService) { s.shardService = owner },
 		shardservice.WithWaitCNReported(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
@@ -1279,7 +1374,9 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.udfService,
 		s.pu.GetTaskService(),
 	)
-	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	s.rt.SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	cdc.InitTableDetector(s.rt, s.sqlExecutor)
+	cdc.InitCDCWatermarkUpdater(s.rt, frontend.NewInternalExecutor(s.cfg.UUID))
 	s.initMongoDBRuntime()
 }
 
@@ -1328,6 +1425,9 @@ func (s *service) initMongoDBRuntime() {
 
 func (s *service) closeMongoDBRuntime() error {
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	if rt == nil {
+		return nil
+	}
 	value, ok := rt.GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
 	if !ok {
 		return nil
@@ -1376,23 +1476,23 @@ func acquireIncrLogtailReadBarrier(ctx context.Context, eng any) (timestamp.Time
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
-	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
+		bootstrapOptions := append([]bootstrap.Option{bootstrap.WithUpgradeDecisionFileService(s.fileService)}, s.options.bootstrapOptions...)
 		s.bootstrapService = bootstrap.NewService(
 			s.cfg.UUID,
 			&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
 			rt.Clock(),
 			s._txnClient,
 			s.sqlExecutor,
-			s.options.bootstrapOptions...,
+			bootstrapOptions...,
 		)
 	}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
+	ctx, cancel := context.WithTimeoutCause(s.startContext(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
@@ -1402,18 +1502,26 @@ func (s *service) bootstrap() error {
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
-
-	trace.GetService(s.cfg.UUID).EnableFlush()
+	if !s.cfg.AutomaticUpgrade {
+		if err := s.bootstrapService.CheckManualUpgradeReadiness(ctx); err != nil {
+			return handleBootstrapErr(ctx, err)
+		}
+	}
 
 	if s.cfg.AutomaticUpgrade {
+		s.startMu.Lock()
+		s.startUpgradeActive = true
+		s.startMu.Unlock()
 		s.bootstrapUpgradeResult = make(chan error, 1)
 		s.bootstrapUpgradeStartupReady = make(chan struct{})
 		started := make(chan struct{})
 		if err := s.stopper.RunTask(func(taskCtx context.Context) {
-			ctx, cancel := context.WithTimeoutCause(taskCtx, time.Minute*120, moerr.CauseBootstrap2)
+			ctx, cancel := context.WithCancel(s.startContext())
+			stopTaskCancel := context.AfterFunc(taskCtx, cancel)
 			s.bootstrapUpgradeContext = ctx
 			close(started)
 			defer cancel()
+			defer stopTaskCancel()
 
 			s.bootstrapMu.RLock()
 			defer s.bootstrapMu.RUnlock()
@@ -1467,48 +1575,6 @@ func (s *service) completeBootstrapUpgradeStartupWait() {
 // service before it returns the error.
 func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
-}
-
-func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
-	if err := validateCNServiceUUID(serviceID); err != nil {
-		return "", err
-	}
-	if rootDir == "" {
-		return "", nil
-	}
-	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
-}
-
-func txnTraceDirectoryKey(serviceID string) string {
-	// A fixed-length lowercase hash keeps the directory component below common
-	// filesystem limits while remaining stable for the same CN service ID.
-	digest := sha256.Sum256([]byte(serviceID))
-	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
-}
-
-func (s *service) initTxnTraceService() {
-	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
-	if err != nil {
-		panic(err)
-	}
-	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	ts, err := trace.NewService(
-		traceDataPath,
-		s.cfg.UUID,
-		s._txnClient,
-		rt.Clock(),
-		s.sqlExecutor,
-		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
-		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
-		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
-		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration),
-		trace.WithLoadToS3(!s.cfg.Txn.Trace.LoadToMO, s.etlFS),
-	)
-	if err != nil {
-		panic(err)
-	}
-	s.txnTraceService = ts
-	rt.SetGlobalVariables(runtime.TxnTraceService, s.txnTraceService)
 }
 
 // SaveProfile saves profile into etl fs
@@ -1613,4 +1679,32 @@ func (s *service) initProcessCodecService() {
 
 func (s *service) GetTxnClient() client.TxnClient {
 	return s._txnClient
+}
+
+func (s *service) stopTableDetector() error {
+	if d := cdc.TableDetectorFromRuntime(s.rt); d != nil {
+		d.Stop()
+	}
+	return nil
+}
+
+func (s *service) closeTableDetector() error {
+	if d := cdc.TableDetectorFromRuntime(s.rt); d != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return d.CloseAndWait(ctx)
+	}
+	return nil
+}
+
+func (s *service) closeCDCWatermarkUpdater() error {
+	if u := cdc.CDCWatermarkUpdaterFromRuntime(s.rt); u != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := u.CloseAndWait(ctx); err != nil {
+			return err
+		}
+		s.rt.CompareAndDeleteGlobalVariables(runtime.CDCWatermarkUpdater, u)
+	}
+	return nil
 }

@@ -1,0 +1,53 @@
+drop snapshot if exists restore_cluster_priv_s;
+drop account if exists restore_cluster_reader;
+drop publication if exists restore_cluster_pub;
+drop database if exists restore_cluster_db;
+create account restore_cluster_reader admin_name 'admin' identified by '111';
+create database restore_cluster_db;
+create table restore_cluster_db.t (id int);
+insert into restore_cluster_db.t values (1);
+create publication restore_cluster_pub database restore_cluster_db account all;
+create database subscribed from sys publication restore_cluster_pub;
+create database app;
+create table app.checkpoint (id int);
+insert into app.checkpoint values (2);
+create role reader;
+create user u1 identified by '111' default role reader;
+grant reader to u1;
+grant connect on account * to reader;
+grant select on table subscribed.* to reader;
+grant select on table app.checkpoint to reader;
+select * from subscribed.t;
+➤ id[4,32,0]  𝄀
+1
+select * from app.checkpoint;
+➤ id[4,32,0]  𝄀
+2
+create snapshot restore_cluster_priv_s for cluster;
+restore account restore_cluster_reader {snapshot = 'restore_cluster_priv_s'};
+select * from subscribed.t;
+➤ id[4,32,0]  𝄀
+1
+select * from app.checkpoint;
+➤ id[4,32,0]  𝄀
+2
+drop account restore_cluster_reader;
+restore cluster {snapshot = 'restore_cluster_priv_s'};
+select * from subscribed.t;
+➤ id[4,32,0]  𝄀
+1
+select * from app.checkpoint;
+➤ id[4,32,0]  𝄀
+2
+delete from app.checkpoint;
+internal error: do not have privilege to execute the statement
+select count(*) as bound_subscription_grants from mo_catalog.mo_role_privs p
+join mo_catalog.mo_database d on p.obj_id = d.dat_id
+where p.role_name = 'reader' and p.obj_type = 'table'
+and p.privilege_level = 'd.*' and d.datname = 'subscribed';
+➤ bound_subscription_grants[-5,64,0]  𝄀
+1
+drop snapshot restore_cluster_priv_s;
+drop account restore_cluster_reader;
+drop publication restore_cluster_pub;
+drop database restore_cluster_db;

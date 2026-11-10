@@ -16,11 +16,13 @@ package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/exp/constraints"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -86,6 +88,13 @@ const (
 	T_text     T = 71
 	T_datalink T = 72
 
+	// scalar low-precision floats (#20567). Stored as fixed-width uint16/uint8;
+	// arithmetic runs on the float32 bridge (see float16.go/float8.go/float4.go).
+	T_bf16    T = 73 // SQL bf16    (bfloat16, 2 bytes)
+	T_float16 T = 74 // SQL float16 (IEEE binary16, 2 bytes)
+	T_float8  T = 75 // SQL float8  (FP8 e4m3, 1 byte)
+	T_float4  T = 76 // SQL float4  (FP4 e2m1, 1 byte)
+
 	// Transaction TS
 	T_TS       T = 100
 	T_Rowid    T = 101
@@ -102,6 +111,8 @@ const (
 	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
 	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
 	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
+	T_array_float8  T = 230 // In SQL , it is vecf8 (MXFP8 block-scaled, see vecblock.go)
+	T_array_float4  T = 231 // In SQL , it is vecf4 (NVFP4 block-scaled, see vecblock.go)
 
 	//note: max value of uint8 is 255
 )
@@ -117,7 +128,33 @@ const (
 	ArrayFloat16SQLName = "vecf16"
 	ArrayInt8SQLName    = "vecint8"
 	ArrayUint8SQLName   = "vecuint8"
+	ArrayFloat8SQLName  = "vecf8"
+	ArrayFloat4SQLName  = "vecf4"
 )
+
+// ArrayTypeBySQLName returns the T_array_* type for a lowercase SQL type name
+// (e.g. "vecf8" -> T_array_float8).
+func ArrayTypeBySQLName(name string) (T, bool) {
+	switch name {
+	case ArrayFloat32SQLName:
+		return T_array_float32, true
+	case ArrayFloat64SQLName:
+		return T_array_float64, true
+	case ArrayBF16SQLName:
+		return T_array_bf16, true
+	case ArrayFloat16SQLName:
+		return T_array_float16, true
+	case ArrayInt8SQLName:
+		return T_array_int8, true
+	case ArrayUint8SQLName:
+		return T_array_uint8, true
+	case ArrayFloat8SQLName:
+		return T_array_float8, true
+	case ArrayFloat4SQLName:
+		return T_array_float4, true
+	}
+	return 0, false
+}
 
 // ArraySQLName returns the lowercase SQL type name for an array element type
 // (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
@@ -135,6 +172,10 @@ func (t T) ArraySQLName() string {
 		return ArrayInt8SQLName
 	case T_array_uint8:
 		return ArrayUint8SQLName
+	case T_array_float8:
+		return ArrayFloat8SQLName
+	case T_array_float4:
+		return ArrayFloat4SQLName
 	}
 	return ""
 }
@@ -150,12 +191,13 @@ const (
 type Type struct {
 	Oid T
 
-	// Charset originally existed only to keep T four-byte aligned and was always
-	// zero-filled. It now carries text collation identity; the two following
-	// bytes remain explicit padding so the serialized layout stays unchanged.
-	Charset uint8
-	notNull uint8
-	dummy2  uint8
+	// Keep this four-byte header and Size's offset unchanged: object, vector and
+	// catalog codecs also persist Type's native 16-byte layout. Charset is the
+	// compact collation identity, not a MySQL protocol ID. Revision zero keeps
+	// the historical semantics of identities 0..3.
+	Charset          uint8
+	notNull          uint8
+	CollationVersion uint8
 
 	Size int32
 	// Width means max Display width for float and double, char and varchar
@@ -166,6 +208,9 @@ type Type struct {
 }
 
 const (
+	CollationVersionLegacy = collation.RevisionLegacy
+	CollationVersionV1     = collation.RevisionV1
+
 	// CharsetLegacy is the zero value written before text collation metadata
 	// became meaningful. Text values with this identity keep the historical
 	// bytewise ordering so an upgrade cannot change results for existing data.
@@ -180,7 +225,34 @@ const (
 	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
 	// use zero: old catalog rows have zero in this formerly dummy field.
 	CharsetUTF8 uint8 = 3
+	// CharsetUTF8MB4UnicodeCI and CharsetUTF8MB3UnicodeCI carry the native
+	// MySQL UCA 4.0.0 identities. They are intentionally distinct from the
+	// legacy general-ci identity: utf8mb4_unicode_ci accepts supplementary
+	// characters while utf8_unicode_ci retains the utf8mb3 repertoire limit.
+	CharsetUTF8MB4UnicodeCI uint8 = uint8(collation.UTF8MB4UnicodeCIIdentity)
+	CharsetUTF8MB3UnicodeCI uint8 = uint8(collation.UTF8UnicodeCIIdentity)
 )
+
+// IsCaseInsensitiveCollation reports the text identities whose comparison
+// domain folds case. The UCA identities are not aliases of general_ci; this
+// helper only describes the case-insensitive property used by string helpers.
+func IsCaseInsensitiveCollation(charset uint8) bool {
+	return charset == CharsetUTF8 || charset == CharsetUTF8MB4UnicodeCI ||
+		charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsUnicodeCollation reports the collations backed by the pinned UCA 4.0.0
+// comparison-key implementation.
+func IsUnicodeCollation(charset uint8) bool {
+	return charset == CharsetUTF8MB4UnicodeCI || charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsTextCollation is the inverse of the opaque binary identity for MySQL text
+// values. CharsetLegacy remains a valid historical text identity.
+func IsTextCollation(charset uint8) bool {
+	return charset == CharsetLegacy || charset == CharsetUTF8MB4Bin ||
+		charset == CharsetUTF8 || IsUnicodeCollation(charset)
+}
 
 // MergeStringCharset derives one collation identity for a value composed from
 // multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
@@ -199,11 +271,41 @@ func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 			if result != CharsetBinary {
 				result = CharsetUTF8MB4Bin
 			}
+		case CharsetUTF8MB4UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin {
+				result = CharsetUTF8MB4UnicodeCI
+			}
+		case CharsetUTF8MB3UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin &&
+				result != CharsetUTF8MB4UnicodeCI {
+				result = CharsetUTF8MB3UnicodeCI
+			}
 		case CharsetLegacy:
 			if result == CharsetUTF8 {
 				result = CharsetLegacy
 			}
 		}
+	}
+	return result
+}
+
+// MergeStringCollationMetadata derives a common string type's collation
+// identity and revision together. Native Unicode identities are versioned;
+// rebuilding a type with only Charset would silently create a revision-zero
+// plan type that the executor cannot resolve.
+func MergeStringCollationMetadata(result Type, parameters []Type) Type {
+	result.Charset = MergeStringCharset(parameters, result.Charset)
+	result.CollationVersion = CollationVersionLegacy
+	for _, parameter := range parameters {
+		if parameter.Charset == result.Charset && parameter.CollationVersion != CollationVersionLegacy {
+			result.CollationVersion = parameter.CollationVersion
+			break
+		}
+	}
+	// Native identities currently use V1. A native source decoded from a
+	// legacy zero-valued plan still implies the current executable revision.
+	if result.CollationVersion == CollationVersionLegacy && IsUnicodeCollation(result.Charset) {
+		result.CollationVersion = CollationVersionV1
 	}
 	return result
 }
@@ -216,12 +318,15 @@ func (t *Type) ProtoSize() int {
 // MarshalToSizedBuffer is used by gogoproto.
 func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
-		panic("invalid byte slice")
+		return 0, moerr.NewInvalidInputNoCtx("short type encoding buffer")
+	}
+	if err := t.ValidateCollation(); err != nil {
+		return 0, err
 	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
-	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	binary.BigEndian.PutUint16(data[2:], uint16(t.CollationVersion)<<8|uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
-	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint16(data[6:], 0)
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
@@ -230,8 +335,7 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 
 // MarshalTo is used by gogoproto.
 func (t *Type) MarshalTo(data []byte) (int, error) {
-	size := t.ProtoSize()
-	return t.MarshalToSizedBuffer(data[:size])
+	return t.MarshalToSizedBuffer(data)
 }
 
 // Marshal is used by gogoproto.
@@ -247,16 +351,38 @@ func (t *Type) Marshal() ([]byte, error) {
 // Unmarshal is used by gogoproto.
 func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
-		panic("invalid byte slice")
+		return moerr.NewInvalidInputNoCtx("short type encoding")
 	}
-	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
-	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
-	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
-	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
-	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
-	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
-	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+	oid := binary.BigEndian.Uint16(data[0:])
+	if oid > 255 || binary.BigEndian.Uint16(data[4:]) > 1 || binary.BigEndian.Uint16(data[6:]) != 0 {
+		return moerr.NewInvalidInputNoCtx("invalid type encoding header")
+	}
+	decoded := Type{
+		Oid: T(oid), Charset: data[3], CollationVersion: data[2], notNull: data[5],
+		Size:  Uint32ToInt32(binary.BigEndian.Uint32(data[8:])),
+		Width: Uint32ToInt32(binary.BigEndian.Uint32(data[12:])),
+		Scale: Uint32ToInt32(binary.BigEndian.Uint32(data[16:])),
+	}
+	if err := decoded.ValidateCollation(); err != nil {
+		return err
+	}
+	*t = decoded
 	return nil
+}
+
+// ValidateCollation validates a type without admitting new SQL semantics.
+// Numeric CAST's private Charset=255 marker is not a string identity.
+func (t Type) ValidateCollation() error {
+	if t.Oid.IsMySQLString() {
+		return collation.ValidateMetadata(uint32(t.Charset), uint32(t.CollationVersion))
+	}
+	if t.CollationVersion != 0 {
+		return moerr.NewInvalidInputNoCtx("collation revision on a non-string type")
+	}
+	if t.Charset == 255 {
+		return nil
+	} // Existing numeric CAST marker.
+	return collation.ValidateMetadata(uint32(t.Charset), 0)
 }
 
 func (t *Type) MarshalBinary() ([]byte, error) {
@@ -392,12 +518,6 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Decimal64/128 and Varlena are not included because they
-// has special meanings.  In general you cannot compare them as bytes.
-type FixedBytes interface {
-	TS | Rowid
-}
-
 type Ints interface {
 	int8 | int16 | int32 | int64
 }
@@ -419,7 +539,7 @@ type Times interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered
+	cmp.Ordered
 }
 
 type Decimal interface {
@@ -457,6 +577,28 @@ type ArrayElement interface {
 
 type FixedSizeTExceptStrType interface {
 	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
+}
+
+// LowPrecFloat is the set of scalar low-precision float types (bf16/float16/float8/
+// float4): fixed-size values that widen losslessly to float32. It combines the
+// fixed-size storage bound (so DecodeFixed / column accessors work) with the
+// ToFloat32 method (so ordering / compare / sum / min-max / cast helpers compute by
+// float VALUE, not raw bits). The union + method together admit exactly the four
+// types. It is the single constraint for the generic helpers these types share
+// instead of an inline `interface{ ToFloat32() float32 }` repeated per site.
+type LowPrecFloat interface {
+	FixedSizeTExceptStrType
+	ToFloat32() float32
+}
+
+// CanonicalLowPrecFloat stores a zero of either sign as +0 (code 0 in every format), so
+// equal bf16/float16/float8/float4 values have equal bits for hashing and equality.
+func CanonicalLowPrecFloat[T LowPrecFloat](v T) T {
+	if v.ToFloat32() == 0 {
+		var zero T
+		return zero
+	}
+	return v
 }
 
 type Number interface {
@@ -508,6 +650,10 @@ var Types = map[string]T{
 	"text":       T_text,
 	"datalink":   T_datalink,
 	"blob":       T_blob,
+	"bf16":       T_bf16,
+	"float16":    T_float16,
+	"float8":     T_float8,
+	"float4":     T_float4,
 	"uuid":       T_uuid,
 
 	"transaction timestamp": T_TS,
@@ -520,6 +666,8 @@ var Types = map[string]T{
 	"array float16": T_array_float16,
 	"array int8":    T_array_int8,
 	"array uint8":   T_array_uint8,
+	"array float8":  T_array_float8,
+	"array float4":  T_array_float4,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -539,6 +687,9 @@ func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
 	typ := New(oid, width, scale)
 	if charset != CharsetLegacy || oid == T_char || oid == T_varchar || oid == T_text {
 		typ.Charset = charset
+	}
+	if IsUnicodeCollation(typ.Charset) {
+		typ.CollationVersion = CollationVersionV1
 	}
 	return typ
 }
@@ -618,9 +769,27 @@ func (t Type) IsIntOrUint() bool {
 	return t.IsInt() || t.IsUInt()
 }
 
+// IsMediumInt reports whether this integer is a MySQL MEDIUMINT. The engine
+// stores MEDIUMINT in its existing 32-bit vectors; Width=24 carries the
+// narrower logical domain through plans and catalog metadata.
+func (t Type) IsMediumInt() bool {
+	return t.Width == 24 && (t.Oid == T_int32 || t.Oid == T_uint32)
+}
+
+// MediumIntBounds returns the inclusive assignment bounds for MEDIUMINT.
+func (t Type) MediumIntBounds() (min, max int64, ok bool) {
+	if !t.IsMediumInt() {
+		return 0, 0, false
+	}
+	if t.Oid == T_uint32 {
+		return 0, 1<<24 - 1, true
+	}
+	return -(1 << 23), 1<<23 - 1, true
+}
+
 func (t Type) IsFloat() bool {
 	switch t.Oid {
-	case T_float32, T_float64:
+	case T_float32, T_float64, T_bf16, T_float16, T_float8, T_float4:
 		return true
 	default:
 		return false
@@ -686,10 +855,24 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("VECINT8(%d)", t.Width)
 	case T_array_uint8:
 		return fmt.Sprintf("VECUINT8(%d)", t.Width)
+	case T_array_float8:
+		return fmt.Sprintf("VECF8(%d)", t.Width)
+	case T_array_float4:
+		return fmt.Sprintf("VECF4(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
 
+// ArrayCellBytes returns the cell byte length of a T_array_* type of dimension Width.
+func (t Type) ArrayCellBytes() int {
+	if f, ok := t.Oid.BlockScaledFormat(); ok {
+		return BlockScaledCellSize(f, int(t.Width))
+	}
+	return int(t.Width) * t.GetArrayElementSize()
+}
+
+// GetArrayElementSize returns the element byte size of an IsArrayRelate type; it
+// panics for any other type, including vecf8/vecf4.
 func (t Type) GetArrayElementSize() int {
 	switch t.Oid {
 	case T_array_float32:
@@ -709,6 +892,9 @@ func (t Type) GetArrayElementSize() int {
 }
 
 func (t Type) Eq(b Type) bool {
+	if t.CollationVersion != b.CollationVersion {
+		return false
+	}
 	switch t.Oid {
 	// XXX need to find out why these types have different size/width
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
@@ -755,6 +941,10 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
+	case T_bf16, T_float16:
+		typ.Size = 2
+	case T_float8, T_float4:
+		typ.Size = 1
 	case T_decimal64:
 		typ.Size = 8
 		typ.Width = 18
@@ -780,7 +970,8 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8,
+		T_array_float8, T_array_float4:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -835,6 +1026,14 @@ func (t T) String() string {
 		return "FLOAT"
 	case T_float64:
 		return "DOUBLE"
+	case T_bf16:
+		return "BF16"
+	case T_float16:
+		return "FLOAT16"
+	case T_float8:
+		return "FLOAT8"
+	case T_float4:
+		return "FLOAT4"
 	case T_date:
 		return "DATE"
 	case T_datetime:
@@ -897,6 +1096,10 @@ func (t T) String() string {
 		return "VECINT8"
 	case T_array_uint8:
 		return "VECUINT8"
+	case T_array_float8:
+		return "VECF8"
+	case T_array_float4:
+		return "VECF4"
 	case T_enum:
 		return "ENUM"
 	}
@@ -930,6 +1133,14 @@ func (t T) OidString() string {
 		return "T_float64"
 	case T_float32:
 		return "T_float32"
+	case T_bf16:
+		return "T_bf16"
+	case T_float16:
+		return "T_float16"
+	case T_float8:
+		return "T_float8"
+	case T_float4:
+		return "T_float4"
 	case T_uint8:
 		return "T_uint8"
 	case T_uint16:
@@ -990,6 +1201,10 @@ func (t T) OidString() string {
 		return "T_array_int8"
 	case T_array_uint8:
 		return "T_array_uint8"
+	case T_array_float8:
+		return "T_array_float8"
+	case T_array_float4:
+		return "T_array_float4"
 	}
 	return "unknown_type"
 }
@@ -1001,9 +1216,9 @@ func (t T) TypeLen() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_bool:
+	case T_int8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16:
+	case T_int16, T_bf16, T_float16:
 		return 2
 	case T_int32, T_date:
 		return 4
@@ -1023,7 +1238,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -1054,9 +1269,9 @@ func (t T) FixedLength() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_uint8, T_bool:
+	case T_int8, T_uint8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16, T_uint16:
+	case T_int16, T_uint16, T_bf16, T_float16:
 		return 2
 	case T_year:
 		return 2
@@ -1078,7 +1293,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -1129,10 +1344,15 @@ func (t T) IsInteger() bool {
 
 // IsFloat return true if the types.T is floating Point Types
 func (t T) IsFloat() bool {
-	if t == T_float32 || t == T_float64 {
+	if t == T_float32 || t == T_float64 || t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4 {
 		return true
 	}
 	return false
+}
+
+// IsLowPrecisionFloat reports the scalar bf16, float16, float8 and float4 types.
+func (t T) IsLowPrecisionFloat() bool {
+	return t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4
 }
 
 // IsEnum return true if the types.T is Enum type
@@ -1158,12 +1378,35 @@ func (t T) IsDateRelate() bool {
 	return false
 }
 
+// IsArrayRelate reports the fixed-element vector types, whose cell is Width
+// elements of GetArrayElementSize bytes. It excludes vecf8/vecf4.
 func (t T) IsArrayRelate() bool {
 	if t == T_array_float32 || t == T_array_float64 ||
 		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false
+}
+
+// IsBlockScaledArray reports vecf8/vecf4, whose cell is a vecblock.go cell.
+func (t T) IsBlockScaledArray() bool {
+	return t == T_array_float8 || t == T_array_float4
+}
+
+// IsArray reports every T_array_* type: IsArrayRelate or IsBlockScaledArray.
+func (t T) IsArray() bool {
+	return t.IsArrayRelate() || t.IsBlockScaledArray()
+}
+
+// BlockScaledFormat returns the cell format of vecf8/vecf4.
+func (t T) BlockScaledFormat() (BlockScaledFormat, bool) {
+	switch t {
+	case T_array_float8:
+		return BlockScaledMXFP8, true
+	case T_array_float4:
+		return BlockScaledNVFP4, true
+	}
+	return 0, false
 }
 
 func (t T) IsDatalink() bool {
@@ -1176,4 +1419,28 @@ func (t T) IsDecimal() bool {
 		return true
 	}
 	return false
+}
+
+// Numeric type attribute bits shared by the plan-side attribute channel
+// (plan.Type numeric_attributes), the durable catalog mask
+// (mo_columns.att_is_unsigned for DECIMAL rows), and the in-memory engine
+// mirror (engine.Attribute.NumericAttributes).
+const (
+	// NumericAttributeUnsigned marks the MySQL UNSIGNED domain bit.
+	NumericAttributeUnsigned uint32 = 0x1
+	// NumericAttributeZerofill marks the MySQL ZEROFILL presentation bit.
+	// Declared ZEROFILL implies UNSIGNED, so authoring normalizes a zerofill
+	// declaration to NumericAttributeZerofillMask (both bits set).
+	NumericAttributeZerofill uint32 = 0x2
+	// NumericAttributeMask is the union of the legal attribute bits.
+	NumericAttributeMask = NumericAttributeUnsigned | NumericAttributeZerofill
+	// NumericAttributeZerofillMask is the normalized stored form of a ZEROFILL
+	// declaration (unsigned bit set, since ZEROFILL implies UNSIGNED).
+	NumericAttributeZerofillMask = NumericAttributeUnsigned | NumericAttributeZerofill
+)
+
+// IsAttributedDecimalOid reports whether oid is a decimal family OID that can
+// legally carry a nonzero numeric attribute mask.
+func (t T) IsAttributedDecimalOid() bool {
+	return t.IsDecimal()
 }

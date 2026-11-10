@@ -26,7 +26,7 @@ import (
 )
 
 func TestBuildCheckConstraintsProtocolGate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
 	ctx := NewBindContext(builder, nil)
 	proc := builder.compCtx.GetProcess()
@@ -51,7 +51,7 @@ func TestBuildCheckConstraintsProtocolGate(t *testing.T) {
 }
 
 func TestPushdownLimitToCheckConstraintsFunctionScan(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	limit := MakePlan2Uint64ConstExprWithType(1)
 	functionScan := &planpb.Node{
 		NodeType: planpb.Node_FUNCTION_SCAN,
@@ -87,7 +87,7 @@ func TestPushdownLimitToCheckConstraintsFunctionScan(t *testing.T) {
 }
 
 func TestGuardConstraintByEligibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().GetContext()
 	constraintOK := makePlan2BoolConstExprWithType(false)
 

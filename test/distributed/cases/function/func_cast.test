@@ -39,6 +39,103 @@ select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed),
 select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
 select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 
+# Explicit CAST range diagnostics (#30265, #30271).
+set @cast_range_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+select cast(999.995 as decimal(5,2)) as d;
+show warnings;
+select @@warning_count;
+select cast(999.994 as decimal(5,2)) as d;
+show warnings;
+select @@warning_count;
+select cast('9223372036854775808' as signed) as s, cast('-9223372036854775809' as signed) as n,
+       cast('-1' as unsigned) as u, cast('18446744073709551616' as unsigned) as o;
+show warnings;
+select @@warning_count;
+select cast('-9223372036854775809' as unsigned) as u;
+show warnings;
+select @@warning_count;
+select cast('9223372036854775807' as signed) as s, cast('18446744073709551615' as unsigned) as u;
+show warnings;
+select @@warning_count;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast(999.995 as decimal(5,2)) as d, cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+show warnings;
+select @@warning_count;
+
+# Retaining fewer records must not reduce the count of range events.
+set @cast_range_saved_max_error_count = @@session.max_error_count;
+set session max_error_count = 1;
+select cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+show warnings;
+select @@warning_count;
+set session max_error_count = @cast_range_saved_max_error_count;
+
+# Runtime column conversion and NULL use the same diagnostic owner.
+drop table if exists cast_range_warning_rows;
+create table cast_range_warning_rows(id int primary key, s varchar(32), d decimal(6,3));
+insert into cast_range_warning_rows values
+    (1, '9223372036854775808', 999.995), (2, '9223372036854775807', 999.994), (3, null, null);
+select cast(s as signed) as s from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id = 1;
+show warnings;
+select @@warning_count;
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id > 1 order by id;
+show warnings;
+select @@warning_count;
+# Runtime lexical integer casts warn; filtered invalid rows stay silent.
+delete from cast_range_warning_rows;
+insert into cast_range_warning_rows(id, s) values (1, 'abc'), (2, '42'), (3, null);
+select cast(s as signed) as lexical_signed from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(s as signed) as lexical_signed, cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows where id > 1 order by id;
+show warnings;
+select @@warning_count;
+drop table cast_range_warning_rows;
+
+# Every EXECUTE owns fresh diagnostics, including reuse after a silent boundary.
+prepare cast_range_signed from 'select cast(? as signed) as s';
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '9223372036854775807';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+deallocate prepare cast_range_signed;
+prepare cast_range_decimal from 'select cast(? as decimal(5,2)) as d';
+set @cast_range_value = '999.995';
+execute cast_range_decimal using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '999.994';
+execute cast_range_decimal using @cast_range_value;
+show warnings;
+select @@warning_count;
+deallocate prepare cast_range_decimal;
+# Lexically invalid explicit integer casts return zero and own one warning.
+select cast('abc' as signed) as lexical_signed;
+show warnings;
+select @@warning_count;
+select cast('abc' as unsigned) as lexical_unsigned;
+show warnings;
+select @@warning_count;
+select cast(NULL as signed) as lexical_null;
+show warnings;
+select @@warning_count;
+set session sql_mode = @cast_range_saved_sql_mode;
+
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
 # Leading zero without a radix prefix is still decimal.
@@ -124,6 +221,7 @@ select cast(timestamp '2020-08-23 11:52:21' as char(4)), length(cast(timestamp '
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
+-- @metacmp(true)
 select cast(5 as unsigned) -6.0;
 select cast(NULL as signed);
 select cast(1/2 as signed);
@@ -158,6 +256,7 @@ select (_binary X'31' | X'31');
 select _binary '1' + 0;
 select (_binary X'31' | X'31') + 0;
 select 1.0 * (_binary X'312E35' | X'312E35');
+-- @metacmp(true)
 select 1.0 * (X'312E35' | X'312E35');
 select (_binary X'31' | NULL) + 0;
 SELECT CAST(X'' AS SIGNED);
@@ -169,6 +268,7 @@ select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
 select 10.0+cast('a' as decimal(38,0));
+show warnings;
 select 10E+0+'a';
 
 # out-of-range cases
@@ -826,3 +926,49 @@ drop database test;
 select hex(_binary X'FF' & _binary X'0F'),
        hex(_binary X'F0' | _binary X'0F'),
        hex(_binary X'FF' ^ _binary X'0F');
+
+# Issue #30417: explicit CAST of lexically invalid text to DECIMAL converts the
+# numeric prefix (0.00 when none) and records warning 1292, also under strict
+# sql_mode. NULL is untouched and the MO hex-radix extension stays quiet.
+select cast('' as decimal(10,2));
+show warnings;
+select cast('   ' as decimal(10,2));
+show warnings;
+select cast('  -123x' as decimal(10,2));
+show warnings;
+select cast('756e' as decimal(10,2));
+show warnings;
+select cast('abc' as decimal(10,2));
+show warnings;
+select cast(cast('abc' as binary) as decimal(10,2));
+show warnings;
+select cast('0x2e' as decimal(10,2));
+show warnings;
+select cast(null as decimal(10,2));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast('abc' as decimal(10,2));
+show warnings;
+set session sql_mode = @@global.sql_mode;
+
+# Issue #30417 strict-DML guard: under STRICT_TRANS_TABLES, an explicit CAST of
+# lexically invalid text is a hard error in non-IGNORE data-modifying
+# statements (no zero row is written, UPDATE keeps the old value); INSERT
+# IGNORE and loose sql_mode keep the lenient 0.00+1292 conversion; strict
+# SELECT keeps the lenient conversion too.
+drop database if exists dml_cast_guard;
+create database dml_cast_guard;
+use dml_cast_guard;
+create table own(id int primary key, v decimal(10,2));
+insert into own values (1, 42.42);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into own values (2, cast('abc' as decimal(10,2)));
+insert into own select 3, cast('abc' as decimal(10,2));
+update own set v = cast('abc' as decimal(10,2)) where id = 1;
+select id, v from own order by id;
+insert ignore into own values (4, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = '';
+insert into own values (5, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = @@global.sql_mode;
+drop database dml_cast_guard;

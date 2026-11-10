@@ -260,7 +260,7 @@ func nilEngineValue(e engine.Engine) bool {
 	}
 	value := reflect.ValueOf(e)
 	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
 	default:
 		return false
@@ -402,7 +402,7 @@ func (c *Compile) evaluateQueryPlacement(
 		if c.pn != nil {
 			qry = c.pn.GetQuery()
 		}
-		if queryHasVectorIndexScan(qry) {
+		if queryHasPartitionedIndexSearchScan(qry) {
 			// The local partition is the only one that can see the coordinator's
 			// appendable IVF ranges. This is an execution invariant, not a
 			// user-selectable current-CN preference, so give it the same identity
@@ -700,12 +700,14 @@ func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
 	return counts
 }
 
-func queryHasVectorIndexScan(qry *plan.Query) bool {
+// queryHasPartitionedIndexSearchScan reports whether qry has an index search scan that is
+// partitioned across CNs.
+func queryHasPartitionedIndexSearchScan(qry *plan.Query) bool {
 	if qry == nil {
 		return false
 	}
 	for _, node := range qry.GetNodes() {
-		if node.GetNodeType() == plan.Node_VECTOR_INDEX_SCAN {
+		if node.GetNodeType() == plan.Node_INDEX_SEARCH_SCAN && plan2.IndexSearchScanPartitioned(node.GetIndexSearchScan()) {
 			return true
 		}
 	}

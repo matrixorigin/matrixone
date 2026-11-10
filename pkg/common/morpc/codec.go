@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"context"
 	"encoding/hex"
 	"io"
 	"sync"
@@ -30,6 +31,14 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
+
+// withCodecDecodeParent links method-server requests to their owner's lifetime.
+// Raw RPC servers and clients keep their independent decoding contexts.
+func withCodecDecodeParent(parent func() context.Context) CodecOption {
+	return func(c *messageCodec) {
+		c.bc.decodeParent = parent
+	}
+}
 
 const (
 	flagHashPayload byte = 1 << iota
@@ -117,7 +126,6 @@ func NewMessageCodec(
 	options ...CodecOption,
 ) Codec {
 	bc := &baseCodec{
-		sid:            sid,
 		logger:         getLogger(sid).Named("morpc"),
 		messageFactory: messageFactory,
 		maxBodySize:    defaultMaxBodyMessageSize,
@@ -158,7 +166,7 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 }
 
 type baseCodec struct {
-	sid             string
+	decodeParent    func() context.Context
 	logger          *log.MOLogger
 	allocator       malloc.Allocator
 	checksumEnabled bool
@@ -171,6 +179,9 @@ type baseCodec struct {
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	msg := RPCMessage{}
+	if c.decodeParent != nil {
+		msg.Ctx = c.decodeParent()
+	}
 	decoded := false
 	defer func() {
 		if !decoded && msg.Cancel != nil {
@@ -183,6 +194,11 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	// 2.1
 	if err := requireDecodeBytes(data, offset, 1, "flag"); err != nil {
 		return nil, false, err
+	}
+	if c.decodeParent != nil && data[0]&flagHasCustomHeader == 0 {
+		// Method dispatch requires the deadline header's CancelFunc. Reject
+		// malformed frames before acquiring a pooled request.
+		return nil, false, moerr.NewInvalidInputNoCtx("method request has no context headers")
 	}
 	flag, n := c.readFlag(&msg, data, offset)
 	offset += n

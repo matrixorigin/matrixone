@@ -18,11 +18,90 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func (t *combinedTxnTable) relationsForPKCheck(
+	ctx context.Context,
+	bat *batch.Batch,
+	pkIndex, partitionIndex int32,
+) ([]engine.Relation, error) {
+	def := t.primary.GetTableDef(ctx)
+	if partitionIndex >= 0 && def.Partition != nil {
+		if _, ok := partitionSingleColumn(def); !ok {
+			return t.tablesFunc()
+		}
+	}
+	if partitionIndex < 0 {
+		if def.Partition != nil {
+			// A lock input is a projection, not necessarily a base-table row.
+			// In particular, ODKU can resolve an incoming PK to a different
+			// existing row through a UNIQUE key. Never prune by the incoming row.
+			if !partitionUsesOnlyPrimaryKey(def) {
+				return t.tablesFunc()
+			}
+			partitionIndex = pkIndex
+			if bat.Vecs[0].GetType().Oid == types.T_Rowid {
+				// Prune's explicit index excludes a leading physical RowID.
+				partitionIndex--
+			}
+		}
+	}
+	return t.prunePKFunc(bat, partitionIndex)
+}
+
+func partitionUsesOnlyPrimaryKey(def *plan.TableDef) bool {
+	if def.Pkey == nil || len(def.Pkey.Names) != 1 || def.Pkey.PkeyColName != def.Pkey.Names[0] {
+		return false
+	}
+	pos, ok := def.Name2ColIndex[def.Pkey.PkeyColName]
+	source, single := partitionSingleColumn(def)
+	return ok && single && source == pos
+}
+
+// A lock projection supplies one partition value, so every definition must
+// depend on the same schema column before that value can select relations.
+func partitionSingleColumn(def *plan.TableDef) (int32, bool) {
+	if def.Partition == nil || len(def.Partition.PartitionDefs) == 0 {
+		return -1, false
+	}
+	source := int32(-1)
+	var visit func(*plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if source == -1 {
+				source = e.Col.ColPos
+			}
+			return e.Col.ColPos >= 0 && e.Col.ColPos == source
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				if !visit(arg) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+			return true
+		default:
+			return false
+		}
+	}
+	for _, partition := range def.Partition.PartitionDefs {
+		if !visit(partition.Def) {
+			return -1, false
+		}
+	}
+	return source, source >= 0
+}
 
 func getPartitionPrunePKFunc(
 	proc *process.Process,

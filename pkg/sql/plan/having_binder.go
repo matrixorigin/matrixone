@@ -43,7 +43,10 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
-			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			}
+			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}
 		previous := b.bindingProjectedAlias
 		b.bindingProjectedAlias = true
@@ -53,7 +56,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
-		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
+		if colPos, ok := b.lookupGroupByExpr(astExpr, astStr); ok {
 			return &plan.Expr{
 				Typ: b.ctx.groupOutputType(colPos),
 				Expr: &plan.Expr_Col{
@@ -133,14 +136,58 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
+func (b *HavingBinder) resolvesAggregateAliases() bool {
+	return b.ctx.aggregateQueryForFullGroupBy() &&
+		(b.builder.mysqlFullGroupByCompat || b.builder.mysqlCompatible)
+}
+
+// Alias deferral leaves bare names intact until HAVING can choose between a
+// group and a projected alias. A FULL JOIN USING name represents COALESCE of
+// both inputs, including when it is part of a larger grouping expression.
+func (b *HavingBinder) lookupGroupByExpr(astExpr tree.Expr, astStr string) (int32, bool) {
+	if len(b.ctx.outerUsingCols) == 0 || len(b.ctx.groupByAst) == 0 || !b.resolvesAggregateAliases() {
+		return lookupGroupByAst(b.ctx, astExpr, astStr)
+	}
+	mergedAlias := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		if mergedAlias {
+			return false
+		}
+		switch node := expr.(type) {
+		case *tree.Subquery:
+			return false // A child query owns its own name resolution.
+		case *tree.FuncExpr:
+			name, _ := node.Func.FunctionReference.(*tree.UnresolvedName)
+			if node.WindowSpec != nil || name != nil && function.GetFunctionIsAggregateByName(strings.ToLower(name.ColName())) {
+				return false // Aggregate/window arguments already use source scope.
+			}
+		case *tree.UnresolvedName:
+			if !node.Star && node.NumParts == 1 && len(b.ctx.outerUsingCols[node.ColName()]) >= 2 {
+				_, mergedAlias = b.ctx.aliasMap[node.ColName()]
+			}
+		}
+		return true
+	})
+	if mergedAlias {
+		qualified, err := b.ctx.qualifyColumnNames(cloneTreeExpr(astExpr), NoAlias)
+		if err != nil {
+			return 0, false // Let ordinary alias/source binding report the error.
+		}
+		// Do not fall back to the bare key: it can identify just one join arm.
+		return lookupGroupByAst(b.ctx, qualified, windowExprAstKey(qualified))
+	}
+	return lookupGroupByAst(b.ctx, astExpr, astStr)
+}
+
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
-		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+	aggregateQuery := b.ctx.aggregateQueryForFullGroupBy()
+	if !b.insideAgg && !b.bindingProjectedAlias && b.ctx != nil && !astExpr.Star &&
+		(depth == 0 && b.resolvesAggregateAliases() || b.builder.mysqlFullGroupByCompat && !aggregateQuery) {
 		var projected tree.Expr
 		var found, ambiguous bool
 		if astExpr.NumParts == 1 {
 			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
-			if !found && !ambiguous {
+			if !found && !ambiguous && !aggregateQuery {
 				// MySQL also keeps the unqualified source spelling visible when
 				// the source column is directly projected under a different alias
 				// (for example SELECT a AS x ... HAVING a). Resolve this only after
@@ -148,7 +195,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 				// output names remain ambiguous.
 				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 			}
-		} else {
+		} else if !aggregateQuery {
 			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 		}
 		if ambiguous {
@@ -176,15 +223,35 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568). Without reading it here, a
+			// correlated outer key reaches an ordinary aggregate's arguments
+			// intact and group argument evaluation cannot construct its
+			// expression executor, so run the same admission checks on the
+			// wrapped reference as on a bare correlated column.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
+			if depth > 0 && b.subqueryInAggregateInput {
+				// This lookup comes from the subquery used as an aggregate
+				// argument. Its ancestor reference belongs to that subquery,
+				// not to a direct outer-column aggregate in this query block.
+				return expr, nil
+			}
+			// A rebound SELECT alias already passed projection validation. Its
+			// scalar child may capture this query's input without turning that
+			// capture into a new correlated aggregate argument.
+			if (b.builder.mysqlFullGroupByCompat || b.bindingProjectedAlias && !b.insideAgg) &&
+				b.corrColRefTargetsCurrentQueryInput(corrRef) {
 				return expr, nil
 			}
 			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
-				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-					b.corrColRefTargetsGroup(corr.Corr) ||
-					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				(b.corrColRefTargetsCurrentGroup(corrRef) ||
+					b.corrColRefAllowedByCurrentQuery(corrRef) ||
+					b.corrColRefTargetsGroup(corrRef) ||
+					b.corrColRefAllowedByTargetQuery(corrRef)) {
 				return expr, nil
 			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
@@ -198,6 +265,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
+		}
+		if displayWrappedCorrColRef(expr) != nil {
+			// ENUM/SET keys bind to a display wrapper whose final argument is
+			// the only column link (#31568). Wrapping such a reference in
+			// any_value would leak a correlated expression into the aggregate
+			// list and break plan remapping downstream, so reject it here with
+			// the same error a bare correlated column gets in this mode.
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
@@ -218,12 +293,20 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
-				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-				b.corrColRefTargetsGroup(corr.Corr) ||
-				b.corrColRefAllowedByTargetQuery(corr.Corr) {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568): a correlated outer key stays
+			// nested there, so it must pass the same target-scope checks as a
+			// bare correlated reference in HAVING.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
+			if b.corrColRefTargetsCurrentGroup(corrRef) ||
+				b.corrColRefTargetsAggregateInputParent(corrRef) ||
+				b.corrColRefAllowedByCurrentQuery(corrRef) ||
+				b.corrColRefTargetsGroup(corrRef) ||
+				b.corrColRefAllowedByTargetQuery(corrRef) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
@@ -344,6 +427,15 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, err
 	}
 
+	// Exact weighted percentiles are rejected in time-window contexts, the
+	// same contract the ordered-set percentile aggregates keep (decision D9
+	// of the exact weighted percentile design).
+	if b.ctx != nil && b.ctx.timeTag > 0 &&
+		strings.EqualFold(funcName, NameQuantileExactWeighted) {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"exact weighted percentile aggregates in time windows")
+	}
+
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error
@@ -392,7 +484,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
 				len(expr.GetF().Args) == 1 &&
 				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
-		if !canRewriteDistinctArgument {
+		if uint64(f.Func.Obj)&function.Distinct != 0 && !canRewriteDistinctArgument {
 			for i := range expr.GetF().Args {
 				expr.GetF().Args[i], err = appendPadSpaceComparisonCastIfNeeded(
 					b.GetContext(), expr.GetF().Args[i])

@@ -8,15 +8,27 @@ suites; this does not shard or select individual test cases.
 
 | Changed files | Scope | Work performed |
 | --- | --- | --- |
-| Root README/README_CN/CONTRIBUTING/CHANGELOG Markdown, or Markdown/images under `docs/` | docs | Documentation whitespace check and PR metadata checks |
+| Ordinary `.md`/`.rst` files anywhere (case-insensitive), or images under `docs/` | docs | Documentation whitespace check and PR metadata/size-label checks |
 | Only `pkg/**/*_test.go`, optionally with the documentation above | ut | Existing race UT and static analysis |
 | Only `.test`/`.sql`/`.result` under `test/distributed/cases/`, optionally with documentation | bvt | Shared build and both complementary BVT jobs |
-| Everything else, including mixed UT+BVT changes | full | Existing complete CI pipeline, including merged coverage |
+| Only `clients/python/**`, optionally with the documentation above | sdk | Installed-package SDK offline/compatibility, fatal-code lint and distribution checks; no kernel jobs, including utils |
+| Everything else, including mixed UT+BVT changes | full | Existing complete CI pipeline, including merged coverage; SDK checks when affected |
 
-Go helpers, test fixtures, build scripts, dependencies, runtime configuration and
-workflow changes deliberately retain full CI. Deleted paths are classified too;
-renames consider both names. Missing/incomplete/capped file lists fall back to
-full CI. A PR head or base that moves during classification fails that old run.
+Go helpers, kernel test fixtures, shared build scripts/dependencies, runtime
+configuration and workflow changes deliberately retain full kernel CI. Python
+SDK dependencies, packaging, tests and documentation belong to the SDK scope;
+packaging consumes its README.
+Files under `testdata/` or `fixtures/` directory segments retain their owning
+suite (SDK inside `clients/python/`, full kernel elsewhere), even with a documentation
+extension. Executable `.mdx`, text inputs, scripts and configuration are not
+documentation exemptions; images are exempt only under `docs/`.
+Deleted paths are classified too; renames consider both names.
+Missing/incomplete/capped file lists fall back to
+full kernel and SDK CI. `CI_FORCE_FULL` also requires both suites. SDK impact
+follows both rename paths: moving kernel code into the SDK still requires full
+kernel CI, and moving SDK code out does not lose its SDK checks. The classifier,
+entrypoint and SDK workflow itself are full-scope SDK-impacting changes.
+A PR head or base that moves during classification fails that old run.
 Set the repository Actions variable `CI_FORCE_FULL=true` and rerun CI to disable
 all scope exemptions.
 
@@ -33,7 +45,8 @@ under the reusable workflow calls named `... execution`. This replaces six
 identical summary jobs with one runner allocation and gives the aggregate result
 a distinct name rather than labeling it as an individual test's result.
 
-Preflight publishes the original `pr_valid` and `scope` outputs plus both BVT
+Preflight publishes `pr_valid`, `scope` and the strict Boolean string
+`sdk_required`, plus both BVT
 groups and their run/attempt generation. All BVT and coverage consumers take the
 same generation from preflight. The required verifier rejects missing or
 non-complementary groups. Invalid metadata and classification failures prevent
@@ -57,6 +70,30 @@ branch. Verify a new run emits `CI Required`, then switch protection; until the
 switch, the old required names can remain pending. Old workflow runs do not emit
 the new name and need a new PR event after rollout. No CI-repository change is
 required. Test selection and prerequisite validation are unchanged.
+
+## Python SDK execution
+
+The trusted entrypoint is the only automatic SDK PR owner. It calls the local
+reusable `.github/workflows/python-sdk.yml` when `sdk_required` is true, including
+mixed full-scope changes. `CI Required` waits for that call and rejects missing,
+failed, skipped or cancelled required SDK results. SDK-only runs intentionally
+omit kernel coverage; they do not claim server or online SDK qualification.
+
+The SDK matrix executes immutable PR-head code from its head repository on
+secret-free hosted runners with only `contents: read` and no persisted checkout
+credentials. The checkout action's unsafe fork-head opt-in is restricted to
+`pull_request_target` in this isolated job. Workflow/base/head provenance is
+recorded before SDK code runs. The caller passes no secrets; the credentialed
+online job remains an explicit manual dispatch against its configured isolated
+runner and is never admitted by an automatic PR call.
+
+SDK concurrency uses its own fork-aware group, distinct from the parent, and
+artifacts identify the source SHA, run, attempt and matrix cell. Push checks on
+main/develop and manual offline/online dispatch remain available. Automatic SDK
+PR execution applies only to the entrypoint's supported target branches, after
+this workflow is deployed to their trusted revision. A stack against a different
+dependency branch requires local validation; its check history does not qualify
+the post-merge SDK-only routing.
 
 ## Cancellation and superseded runs
 

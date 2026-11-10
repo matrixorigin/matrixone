@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -462,6 +463,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	jsonType := types.T_json.ToType()
 	vecType := types.T_array_float32.ToType()
 	charType := types.New(types.T_char, 4, 0)
+	unicodeType := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
 	jsonOne := mustEncodeJSON(t, "1")
 	jsonOnePointZero := mustEncodeJSON(t, "1.0")
 	negativeZero := float32(math.Copysign(0, -1))
@@ -471,6 +473,11 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	jsonFlat := vector.NewVec(jsonType)
 	vecFlat := vector.NewVec(vecType)
 	charFlat := vector.NewVec(charType)
+	// Build the payload with the physical varchar type first.  Re-tagging it
+	// after append models a legacy/spilled vector whose semantic Unicode
+	// metadata is restored by the consumer; AppendBytes must still reject
+	// malformed values for a genuinely Unicode-typed vector.
+	unicodeFlat := vector.NewVec(types.T_varchar.ToType())
 	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
 	require.NoError(t, err)
 	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
@@ -480,6 +487,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 		jsonFlat.Free(mp)
 		vecFlat.Free(mp)
 		charFlat.Free(mp)
+		unicodeFlat.Free(mp)
 		jsonConst.Free(mp)
 		vecConst.Free(mp)
 		jsonConstNull.Free(mp)
@@ -495,6 +503,10 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("a "), false, mp))
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("b"), true, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("Straße"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("STRASSE"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte{0xff}, false, mp))
+	unicodeFlat.SetType(unicodeType)
 
 	jsonHashes := make([]uint64, 3)
 	ComputeXXHash([]*vector.Vector{jsonFlat}, jsonHashes, 17)
@@ -529,6 +541,10 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	ComputeXXHash([]*vector.Vector{charFlat}, charHashes, 17)
 	require.Equal(t, charHashes[0], charHashes[1])
 	require.Equal(t, HashCombine(17, 0), charHashes[2])
+
+	unicodeHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{unicodeFlat}, unicodeHashes, 17)
+	require.Equal(t, unicodeHashes[0], unicodeHashes[1])
 }
 
 func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
@@ -539,11 +555,13 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	doubles := vector.NewVec(types.T_float64.ToType())
 	chars := vector.NewVec(types.New(types.T_char, 4, 0))
 	jsonValues := vector.NewVec(types.T_json.ToType())
+	unicodeValues := vector.NewVec(types.T_varchar.ToType())
 	defer func() {
 		floats.Free(mp)
 		doubles.Free(mp)
 		chars.Free(mp)
 		jsonValues.Free(mp)
+		unicodeValues.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 
@@ -555,12 +573,22 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(chars, []byte("a "), false, mp))
 	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1"), false, mp))
 	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1.0"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("Straße"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("STRASSE"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte{0xff}, false, mp))
+	unicodeValues.SetType(types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI))
 
 	for _, vec := range []*vector.Vector{floats, doubles, chars, jsonValues} {
 		left, _ := CanonicalBytesAt(vec, 0, nil)
 		right, _ := CanonicalBytesAt(vec, 1, nil)
 		require.Equal(t, left, right)
 	}
+	left, reusable := CanonicalBytesAt(unicodeValues, 0, nil)
+	leftCopy := append([]byte(nil), left...)
+	right, _ := CanonicalBytesAt(unicodeValues, 1, reusable[:0])
+	require.Equal(t, leftCopy, right)
+	invalid, _ := CanonicalBytesAt(unicodeValues, 2, nil)
+	require.Equal(t, []byte{1, 0xff}, invalid)
 }
 
 func TestAppendCanonicalValueSizeMatchesEncoding(t *testing.T) {
@@ -680,6 +708,15 @@ func TestCanonicalValuesEqualDoesNotMaterializeCanonicalPayload(t *testing.T) {
 	}
 }
 
+func TestUnicodeCollationUsesUCAEqualityKey(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	left, right := []byte("Straße"), []byte("STRASSE")
+	canonical := AppendCanonicalValue(nil, typ, left)
+	require.Equal(t, len(canonical), CanonicalValueSize(typ, left))
+	require.True(t, CanonicalValuesEqual(typ, left, right))
+	require.NotEqual(t, left, canonical)
+}
+
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	negativeZero := float32(math.Copysign(0, -1))
@@ -786,6 +823,7 @@ func TestFloat32CodecContract(t *testing.T) {
 		math.Float64frombits(0x7ff8000000000000)))
 	require.Equal(t, CanonicalFloat64Bits(math.Float64frombits(0x7ff8000000000000)),
 		CanonicalFloat64Bits(math.Float64frombits(0xfff0000000000001)))
+	require.Equal(t, uint64(0), CanonicalFloat64Bits(math.Copysign(0, -1)))
 }
 
 func TestSupportsExactRawRuntimeFilter(t *testing.T) {
@@ -1006,4 +1044,62 @@ func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
 	left.Free(mp)
 	right.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestCanonicalVecBlockKeyMatchesEquality checks that vecf8/vecf4 equality keys agree with
+// SQL equality (the decoded values compared element-wise): cells that encode the same
+// values with other block or global scales share a key, and unequal cells do not.
+func TestCanonicalVecBlockKeyMatchesEquality(t *testing.T) {
+	cell := func(f types.BlockScaledFormat, v ...float32) []byte {
+		c, err := types.AppendBlockScaled(nil, f, v)
+		require.NoError(t, err)
+		return c
+	}
+	check := func(typ types.Type, a, b []byte) bool {
+		equal := types.CompareBlockScaledFromBytes(a, b, false) == 0
+		ka, kb := AppendCanonicalValue(nil, typ, a), AppendCanonicalValue(nil, typ, b)
+		require.Equal(t, equal, bytes.Equal(ka, kb), "%s %x %x", typ.Oid, a, b)
+		require.Equal(t, equal, CanonicalValuesEqual(typ, a, b))
+		require.Equal(t, len(ka), CanonicalValueSize(typ, a))
+		return equal
+	}
+	f8, f4 := types.T_array_float8.ToType(), types.T_array_float4.ToType()
+	// MXFP8: 447 is code 448 at scale 1, 449 is code 224 at scale 2; both decode to 448
+	a, b := cell(types.BlockScaledMXFP8, 447), cell(types.BlockScaledMXFP8, 449)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f8, a, b))
+	// NVFP4: the globals differ by one ulp and the decoded values are equal
+	a, b = cell(types.BlockScaledNVFP4, 1.2031566), cell(types.BlockScaledNVFP4, 1.2031565)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f4, a, b))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 3)))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 2, 0)))
+
+	// near-identical inputs often quantize to equal values under other scales
+	r := rand.New(rand.NewSource(20567))
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		typ := f8
+		if f == types.BlockScaledNVFP4 {
+			typ = f4
+		}
+		equal := 0
+		for i := 0; i < 2000; i++ {
+			dim := 1 + r.Intn(40)
+			x := make([]float32, dim)
+			for k := range x {
+				x[k] = float32(r.NormFloat64() * math.Pow(10, float64(r.Intn(5)-2)))
+			}
+			y := append([]float32(nil), x...)
+			k := r.Intn(dim)
+			y[k] = math.Nextafter32(y[k], float32(math.Inf(1+r.Intn(2)*-2)))
+			if check(typ, cell(f, x...), cell(f, y...)) {
+				equal++
+			}
+		}
+		require.Positive(t, equal, "%s: the property is exercised with equal pairs", f)
+	}
+
+	// a malformed cell keeps its bytes
+	require.Equal(t, []byte{1, 2, 3}, AppendCanonicalValue(nil, f8, []byte{1, 2, 3}))
+	require.Equal(t, 3, CanonicalValueSize(f8, []byte{1, 2, 3}))
 }

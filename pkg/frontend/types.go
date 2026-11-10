@@ -269,32 +269,13 @@ type ComputationWrapper interface {
 	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
-type ColumnInfo interface {
-	GetName() string
-
-	GetType() types.T
-}
-
-var _ ColumnInfo = &engineColumnInfo{}
-
-type TableInfo interface {
-	GetColumns()
-}
-
-type engineColumnInfo struct {
-	name string
-	typ  types.Type
-}
-
-func (ec *engineColumnInfo) GetName() string {
-	return ec.name
-}
-
-func (ec *engineColumnInfo) GetType() types.T {
-	return ec.typ.Oid
-}
-
 type PrepareStmt struct {
+	temporalTypes             *plan2.PreparedTemporalTypes
+	temporalTypesResetPending bool
+	fieldTypes                *plan2.PreparedFieldTypes
+	// A committed type-generation rebuild can fail before execution metadata
+	// publishes its replacement snapshot. Retry must not restore the old facts.
+	fieldTypesResetPending bool
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
@@ -313,13 +294,14 @@ type PrepareStmt struct {
 	sqlModeFlagsSet bool
 	// divPrecisionIncrementSet distinguishes a captured default value from
 	// legacy and minimal in-memory prepared-statement fixtures.
-	divPrecisionIncrementSet bool
-	ParamTypes               []byte
-	ColDefData               [][]byte
-	IsCloudNonuser           bool
-	proc                     *process.Process
-	remapDb                  map[string]string
-	defaultDatabase          string
+	divPrecisionIncrementSet  bool
+	ParamTypes                []byte
+	integerArithmeticBindings []plan2.PreparedSourceBinding
+	ColDefData                [][]byte
+	IsCloudNonuser            bool
+	proc                      *process.Process
+	remapDb                   map[string]string
+	defaultDatabase           string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -351,9 +333,20 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
-	// needsRebuild is set when execution-time retry discovers that the cached
-	// prepared plan generation is stale before frontend metadata catches up.
+	// needsRebuild marks a stale prepared plan after execution-time retry or
+	// a session planning setting changes. EXECUTE owns the actual rebuild.
 	needsRebuild bool
+	// rewritePolicyInvalidated is monotonic for the lifetime of this prepared
+	// handle. Role-rule policy is materialized into PrepareStmt and its plan;
+	// once that policy snapshot is invalid, rebuilding the retained AST would
+	// otherwise execute the old row predicate again. A new PREPARE creates a
+	// new handle with a fresh policy snapshot.
+	rewritePolicyInvalidated atomic.Bool
+	// rewritePolicyGeneration identifies the session policy snapshot used to
+	// build this handle. It is checked while the handle is published.
+	rewritePolicyGeneration uint64
+	rewritePolicyCaptured   bool
+	rewritePolicyEnabled    bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool
@@ -361,15 +354,18 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
-	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
-	// are immutable within one generation; replacing the plan invalidates this
-	// cached capability and refreshes it once before execution.
-	numericPrefixConsumerPlan     *plan.Plan
-	numericPrefixConsumer         bool
-	joinDiagnosticCandidatePlan   *plan.Plan
-	joinDiagnosticCandidate       bool
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
+	// Percentile configuration is fixed by a value during compilation. Cache
+	// this static trait with the conservative generation rather than walking
+	// the plan on every EXECUTE.
+	percentileParamPlan *plan.Plan
+	hasPercentileParams bool
+	// Ewm decay/policy positions carry the same per-EXECUTE configuration
+	// contract as the percentile parameters (constructEwmConfig at compile):
+	// markers, user variables and per-execution real-time expressions all
+	// flag the statement so the configuration is rebuilt on every EXECUTE.
+	ewmParamPlan               *plan.Plan
+	hasEwmParams               bool
+	directResultParamPositions []int32
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
 	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
 	// with each prepared-plan generation so binary EXECUTE never walks the plan
@@ -386,12 +382,6 @@ type PrepareStmt struct {
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
-	// geometrySRID*ParamPositions are computed once per prepared-plan
-	// generation. EXECUTE only encodes the values at these positions; it must
-	// not rediscover geometry dependencies by walking the whole plan.
-	geometrySRIDParamPositions       []int32
-	geometrySRIDSourceParamPositions []int32
-	geometrySRIDPositionsPlan        *plan.Plan
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
@@ -401,9 +391,6 @@ type PrepareStmt struct {
 	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
 	// COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
-	// A parameterized GENERATE_SERIES can derive DATETIME scale from text
-	// values or an interval step, even when protocol parameter types are stable.
-	parameterizedGenerateSeries bool
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
 	// actual numeric value reparses the statement, later text/BLOB values keep
@@ -426,25 +413,17 @@ type PrepareStmt struct {
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
 	// preceding execution's literal.
-	runtimeSpecializationKey string
-	runtimePlan              *plan.Plan
-	runtimeCompile           *compile.Compile
+	runtimeSpecializationKey    string
+	runtimePlan                 *plan.Plan
+	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeDecimalFloatProofs   []plan2.PreparedDecimalFloatProof
+	runtimeColDefData           [][]byte
+	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
-
-	// runtimeSpecializationPlan records the plan for which the static
-	// execute-time specialization decision was made. Most prepared DML only
-	// needs parameter values and can reuse the prepare-time compile; keeping the
-	// decision with the plan avoids copying and walking the whole plan on every
-	// EXECUTE.
-	runtimeSpecializationPlan   *plan.Plan
-	runtimeSpecializationNeeded bool
-	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
-	// markers alone do not force specialization for ordinary integer packets.
-	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -473,6 +452,28 @@ func (cursor *preparedStmtCursor) close() {
 	cursor.offset = 0
 	cursor.bytes = 0
 	cursor.owner = nil
+}
+
+// resetAttempt discards the row set one failed statement generation
+// retained while preserving the statement-lifetime cursor state: the frozen
+// result metadata installed exactly once per EXECUTE before the pipeline
+// started (setPreparedCursorColumns) plus the retention limits and owner.
+// The compiler retries a cursor execute internally without repeating that
+// installation, so Columns must survive the retry transition; the retried
+// generation decodes and appends against them. The session byte reservation
+// of the discarded generation returns to the shared budget (#30359 review).
+func (cursor *preparedStmtCursor) resetAttempt() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	if cursor.result != nil {
+		cursor.result.Data = nil
+	}
+	cursor.offset = 0
+	cursor.bytes = 0
 }
 
 func (prepareStmt *PrepareStmt) closeCursor() {
@@ -783,6 +784,14 @@ type BackgroundExecOption struct {
 	// cancelTxnCreateWithRequest is reserved for short-lived background
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
+	authorizationSnapshot      *client.SnapshotAdmission
+	// internalExecution marks the produced executor as running trusted
+	// implementation SQL (e.g. the catalog writes generated for SET GLOBAL)
+	// rather than caller-authored statements. It flows to the back session's
+	// isInternal so internal-execution exemptions apply — including the
+	// client-facing READ ONLY transaction gate, which must never observe
+	// generated catalog maintenance as user writes.
+	internalExecution bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -821,12 +830,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 	}
 }
 
-// TableInfoCache tableInfos of a database
-//type TableInfoCache struct {
-//	db         string
-//	tableInfos map[string][]ColumnInfo
-//}
-
 func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return
@@ -849,6 +852,9 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
+	diagnosticCandidates []*plan.Expr,
+	decimalFloatProofs []plan2.PreparedDecimalFloatProof,
+	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -861,6 +867,9 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeDecimalFloatProofs = decimalFloatProofs
+	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -875,11 +884,18 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeDecimalFloatProofs = nil
+	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.temporalTypes = nil
+	prepareStmt.temporalTypesResetPending = false
+	prepareStmt.fieldTypes = nil
+	prepareStmt.fieldTypesResetPending = false
 	prepareStmt.closeCursor()
 	prepareStmt.releaseLongDataBuffers()
 	prepareStmt.longDataErr = nil
@@ -903,6 +919,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
+	prepareStmt.integerArithmeticBindings = nil
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}
@@ -910,9 +927,23 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.directResultParamPositions = nil
-	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.percentileParamPlan = nil
+	prepareStmt.ewmParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
+}
+
+func (prepareStmt *PrepareStmt) invalidateRewritePolicy() {
+	if prepareStmt != nil {
+		prepareStmt.rewritePolicyInvalidated.Store(true)
+	}
+}
+
+func (prepareStmt *PrepareStmt) checkRewritePolicy(ctx context.Context) error {
+	if prepareStmt != nil && prepareStmt.rewritePolicyInvalidated.Load() {
+		return moerr.NewNeedReprepare(ctx)
+	}
+	return nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -1102,7 +1133,6 @@ type FeSession interface {
 	SendRows() int64
 	SetTStmt(stmt *motrace.StatementInfo)
 	GetUUIDString() string
-	DisableTrace() bool
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
@@ -1161,6 +1191,13 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
+	// deferred an unqualified multi-source UPDATE verdict because no catalog
+	// transaction existed yet for owner resolution. executeStmtWithWorkspace
+	// re-runs the gate right after Create with the transaction attached.
+	// Only that call site consumes the flag; every other admission site
+	// already runs with an active transaction and never produces it.
+	deferReadOnlyOwnership bool
 	// implicitCommitBefore is the generation-level policy for a top-level
 	// implicit-commit statement. It is copied into txnOpt after admission.
 	implicitCommitBefore bool
@@ -1202,6 +1239,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	cursorResultSaver StagedBinaryWriter
+	resultMetadata    *deferredResultMetadata
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -1219,6 +1257,7 @@ type ExecCtx struct {
 }
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.resultMetadata = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil
 	execCtx.implicitCommitBefore = false
@@ -1305,6 +1344,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.resultMetadata = nil
 	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
@@ -1366,8 +1406,8 @@ type feSessionImpl struct {
 	sqlCount     uint64
 	uuid         uuid.UUID
 	debugStr     string
-	disableTrace bool
 	respr        Responser
+	resprMu      sync.RWMutex
 	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
@@ -1445,8 +1485,10 @@ func (ses *feSessionImpl) currentRunSQLToken() uint64 {
 // Close releases all reference.
 // close txn handler also
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil && !ses.reserveConn {
-		ses.respr.Close()
+	if !ses.reserveConn {
+		if r := ses.GetResponser(); r != nil {
+			r.Close()
+		}
 	}
 	ses.Reset()
 }
@@ -1500,20 +1542,16 @@ func (ses *feSessionImpl) Clear() {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.respr.SetStr(DBNAME, db)
+	ses.GetResponser().SetStr(DBNAME, db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.respr.GetStr(DBNAME)
+	return ses.GetResponser().GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetStr(USERNAME)
-}
-
-func (ses *feSessionImpl) DisableTrace() bool {
-	return ses.disableTrace
+	return ses.GetResponser().GetStr(USERNAME)
 }
 
 func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
@@ -1779,6 +1817,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if err = validateCharsetSystemVariable(name, val); err != nil {
+		return err
+	}
 	if isTransactionIsolationSystemVariable(name) {
 		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
 			return err
@@ -1824,6 +1865,9 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 
 func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
+	if value, handled, err := databaseDefaultSystemVariable(ses, name); handled {
+		return value, err
+	}
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
@@ -1871,28 +1915,37 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
-func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
+func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, false)
+}
+
+// restoreSessionSysVar preserves an already-decoded historical session snapshot.
+// A stored charset spelling is not a new charset request or permission to enable
+// a native collation. All normal variable validation and runtime hooks still run.
+func (ses *Session) restoreSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, true)
+}
+
+func (ses *Session) setSessionSysVar(ctx context.Context, name string, val interface{}, restoring bool) (err error) {
 	name = strings.ToLower(name)
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
-	oldMatrixOneNative := false
-	oldOnlyFullGroupBy := false
-	oldBoolSumAvg := false
-	oldHighNotPrecedence := false
-	oldNoUnsignedSubtraction := false
-	oldParserFlags := mysql.SQLModeFlags(0)
-	oldIgnoreSpace := false
 	oldDivPrecisionIncrement := int64(function.DefaultDivPrecisionIncrement)
-	if name == "sql_mode" {
-		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
-		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
-		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
-		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
-		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
-		oldParserFlags = ses.sqlModeParserFlags()
-		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
-	} else if name == "div_precision_increment" {
+	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
+	}
+	oldRollupAlgorithm := ""
+	if name == "rollup_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldRollupAlgorithm, _ = old.(string)
+		}
+	}
+
+	oldWindowPartitionAlgorithm := ""
+	if name == "window_partition_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldWindowPartitionAlgorithm, _ = old.(string)
+		}
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1913,6 +1966,43 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return
+	}
+	if !restoring {
+		if err = validateCharsetSystemVariable(name, val); err != nil {
+			return err
+		}
+	}
+	// These values shape bound defaults, constant-folded expressions, LOAD validation, planned index scan options,
+	// or the join/aggregate/sort spill thresholds baked into Node.SpillMem at plan-build time.
+	// Compare converted values so equivalent SET spellings retain warm plans.
+	planDependencyVariable := name == "sql_mode" || name == "optimizer_hints" || name == "lc_time_names" || name == "time_zone" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
+		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown" ||
+		name == "join_spill_mem" || name == "agg_spill_mem" || name == "sort_spill_mem"
+	var oldPlanDependency interface{}
+	if planDependencyVariable {
+		oldValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		oldValue, getErr = def.GetType().Convert(oldValue)
+		if getErr != nil {
+			return getErr
+		}
+		oldPlanDependency = oldValue
+	}
+
+	// Both defaults affect the physical vector plan. Compare normalized values
+	// so equivalent SET spellings preserve warm plans.
+	vectorModeVariable := name == "enable_vector_auto_mode_by_default" || name == "enable_vector_prefilter_by_default"
+	oldVectorMode := false
+	if vectorModeVariable {
+		var oldValue interface{}
+		if oldValue, err = ses.GetSessionSysVar(name); err != nil {
+			return err
+		}
+		if oldVectorMode, err = valueIsBoolTrue(oldValue); err != nil {
+			return err
+		}
 	}
 
 	var txnIsolation pbtxn.TxnIsolation
@@ -1954,14 +2044,49 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	} else {
 		ses.sesSysVars.Set(canonicalName, val)
 	}
+	if err == nil && name == "mo_sirius_campaign_evidence" {
+		ses.campaignEvidenceEnabled.Store(val.(int8) != 0)
+	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
+	if err == nil && planDependencyVariable {
+		newValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		newValue, getErr = def.GetType().Convert(newValue)
+		if getErr != nil {
+			return getErr
+		}
+		if oldPlanDependency != newValue {
+			ses.invalidateCachedPlans(true)
+		}
 	}
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
 		}
 	}
+	if err == nil && name == "rollup_algorithm" {
+		if newValue, ok := val.(string); ok && oldRollupAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForRollupAlgorithmChange()
+		}
+	}
+	if err == nil && vectorModeVariable {
+		// val has already passed the BOOL variable conversion.
+		if (val.(int8) != 0) != oldVectorMode {
+			ses.invalidateCachedPlans(true)
+		}
+	}
+	if err == nil && name == "window_partition_algorithm" {
+		if newValue, ok := val.(string); ok && oldWindowPartitionAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForWindowPartitionAlgorithmChange()
+		}
+	}
+
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
@@ -1980,6 +2105,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// state must invalidate the cached prepared statements, otherwise a later
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.bumpRewritePolicyGeneration()
 		ses.RemoveAllPrepareStmts()
 	}
 	if err == nil {
@@ -2066,12 +2192,24 @@ func (ses *feSessionImpl) GetUUIDString() string {
 }
 
 func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
+	ses.resprMu.Lock()
+	defer ses.resprMu.Unlock()
 	old := ses.respr
 	ses.respr = resper
 	return old
 }
 
+// setResponser is the single locked writer for the embedded Responser, used
+// by teardown/copy paths that previously wrote ses.respr directly.
+func (ses *feSessionImpl) setResponser(resper Responser) {
+	ses.resprMu.Lock()
+	defer ses.resprMu.Unlock()
+	ses.respr = resper
+}
+
 func (ses *feSessionImpl) GetResponser() Responser {
+	ses.resprMu.RLock()
+	defer ses.resprMu.RUnlock()
 	return ses.respr
 }
 
@@ -2222,15 +2360,6 @@ type MysqlRrWr interface {
 	MysqlHelper
 }
 
-// MysqlPayloadWriter make final payload for the packet
-type MysqlPayloadWriter interface {
-	OpenRow() error
-	CloseRow() error
-	OpenPayload() error
-	FillPayload() error
-	ClosePayload(bool) error
-}
-
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
@@ -2248,11 +2377,6 @@ type StagedBinaryWriter interface {
 
 // CsvWriter write batch into csv file
 type CsvWriter interface {
-	MediaWriter
-}
-
-// MemWriter write batch into memory pool
-type MemWriter interface {
 	MediaWriter
 }
 

@@ -52,6 +52,7 @@ Read a reference when its trigger applies:
 | Need | Read |
 |---|---|
 | Change/risk map, efficient validation order, CI/local evidence reuse | [references/validation-evidence.md](references/validation-evidence.md) |
+| Create/update a GitHub PR or issue, or diagnose a PR-description/commit-message check | [references/github-delivery.md](references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [references/race-validation.md](references/race-validation.md) |
 | Large/complex feature or major refactor; design document review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
 | UT/BVT purpose, orthogonality, fixture reuse, cost/flakiness, result and execution evidence | [references/testing-contract.md](references/testing-contract.md) |
@@ -59,6 +60,7 @@ Read a reference when its trigger applies:
 | `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Planner/explain/rewrite correctness, public reachability, independent black-/white-box oracles | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
+| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
 
 ## Enforcement gates
 
@@ -71,6 +73,7 @@ Read a reference when its trigger applies:
 | **G-OPERATOR** | Editing/reviewing `colexec`, process signals, pipeline spool/protocol, or a distributed pipeline hang | Read the operator/pipeline reference before editing or concluding. Trace sender and receiver plus reset/cleanup terminal paths. |
 | **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or scenario-overfit risk | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. |
 | **G-INDEXPLUGIN** | Index algorithm dispatch/plugin/registry/ISCP paths change | Read the index-plugin reference and its review section. New SQL/catalog per-algorithm dispatch is forbidden. |
+| **G-TYPESWITCH** | Adding a `types.T` constant, writing or editing a `switch` over `types.T`, or a `TestTypeSwitchFamilies` failure | Read `pkg/container/types/testdata/README.md`. Handle every member of the family (or of one subfamily) in the switch, or tag it `// typeswitch:partial <reason>`; never add a switch to `typeswitch_baseline.txt`. Regenerate the baseline only to remove fixed/tagged entries, and check its diff only removes lines. |
 | **G-STATIC-INCREMENTAL** | Any Go source/test edit or SCA failure | Derive the changed package closure from the merge base (including local staged/unstaged files), run gofmt/vet/lint only for that closure first, and escalate to the full repository scan only under the rules below. |
 | **G-CI-TRIAGE** | A CI job fails, hangs, is cancelled, or is unexpectedly skipped | Capture the exact job step, SHA, platform/toolchain, and terminal result; classify code/static/test failure separately from network/cache/quota/disk/runner failure before changing code or deciding to rerun. |
 | **G-EVIDENCE** | Before claiming pass/done or attributing a failure | Apply semantic evidence validity. Pending/empty selection/partial output is not a pass; a “pre-existing” claim requires the same failure at the verified clean baseline. |
@@ -239,6 +242,7 @@ Before delivery, the record must show:
 □ UT/BVT and specialized-domain decisions recorded
 □ every required proof is validly reused or passed; gaps/pending work are explicit
 □ generated/delivery artifacts, diff stat, and unintended files checked
+□ PR/issue delivery in scope: current-template and LF-body preflight passed; verify remote body after publication
 □ `mo-self-review` has zero unresolved blockers
 ```
 

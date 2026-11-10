@@ -16,6 +16,9 @@ package taskservice
 
 import (
 	"context"
+	"errors"
+	goruntime "runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -446,6 +449,485 @@ func TestRefreshTaskStoragePreviousCloseErrorDoesNotRollBackReplacement(t *testi
 	require.Zero(t, replacement.closeCount.Load())
 }
 
+func TestRefreshTaskStorageSkipStaleRefreshKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	current := newClosureSensitiveTaskStorage()
+	var addressCalls, createCalls atomic.Int64
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) {
+			addressCalls.Add(1)
+			return address, nil
+		},
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			createCalls.Add(1)
+			return current, nil
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	// The initial creation resolved and created the s1 store once.
+	require.Equal(t, int64(1), addressCalls.Load())
+	require.Equal(t, int64(1), createCalls.Load())
+
+	// Stale request: the holder serves s1 while the request carries s2.
+	s.refresh(ctx, "s2")
+
+	require.Zero(t, current.closeCount.Load(),
+		"a stale refresh must not close the current store")
+	require.Equal(t, int64(1), addressCalls.Load(),
+		"a stale refresh must not resolve a new address")
+	require.Equal(t, int64(1), createCalls.Load(),
+		"a stale refresh must not create a replacement store")
+	store, lastAddress := s.holderState()
+	require.Same(t, current, store)
+	require.Equal(t, "s1", lastAddress)
+
+	// The kept store must still serve public SQL-task operations. A store that
+	// refresh closed while installed fails the ping preceding every forwarded
+	// operation, so success here proves the store was not retired.
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("stale-kept-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+	tasks, err := s.QuerySQLTask(ctx)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, "stale-kept-task", tasks[0].TaskName)
+}
+
+func TestRefreshTaskStorageCreateFailureKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		addressErr error
+		createErr  error
+		createNil  bool
+	}{
+		{name: "create error", createErr: assert.AnError},
+		{name: "nil store", createNil: true},
+		{name: "address error", addressErr: assert.AnError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := newClosureSensitiveTaskStorage()
+			address := "s1"
+			s := newRefreshableTaskStorage(
+				runtime.DefaultRuntime(),
+				func(context.Context, bool) (string, error) {
+					if address == "s2" && test.addressErr != nil {
+						return "", test.addressErr
+					}
+					return address, nil
+				},
+				taskStorageFactoryFunc(func(addr string) (TaskStorage, error) {
+					if addr == "s2" {
+						if test.createNil {
+							return nil, nil
+						}
+						return nil, test.createErr
+					}
+					return current, nil
+				}),
+			).(*refreshableTaskStorage)
+			t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+			// A refresh attempt towards s2 fails while the holder serves s1.
+			address = "s2"
+			s.refresh(ctx, "s1")
+
+			require.Zero(t, current.closeCount.Load(),
+				"a failed refresh must not close the current store")
+			store, lastAddress := s.holderState()
+			require.Same(t, current, store)
+			require.Equal(t, "s1", lastAddress,
+				"lastAddress must not advance before a replacement is published")
+
+			// The preserved store must still serve public SQL-task operations.
+			affected, err := s.AddSQLTask(ctx, newTestSQLTask("failed-refresh-kept-task", 1))
+			require.NoError(t, err)
+			require.Equal(t, 1, affected)
+		})
+	}
+}
+
+func TestRefreshTaskStorageStaleRequestAfterReplacementKeepsNewStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	current := newTrackedTaskStorage()
+	replacement := newClosureSensitiveTaskStorage()
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{stores: map[string]TaskStorage{
+			"s1": current,
+			"s2": replacement,
+		}},
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	// A successful replacement retires the distinct previous store exactly once.
+	address = "s2"
+	s.refresh(ctx, "s1")
+	require.Equal(t, int64(1), current.closeCount.Load())
+	store, lastAddress := s.holderState()
+	require.Same(t, replacement, store)
+	require.Equal(t, "s2", lastAddress)
+
+	// A later serialized request still carrying the old address s1 is stale
+	// and must be skipped without closing the new store.
+	s.refresh(ctx, "s1")
+	require.Equal(t, int64(1), current.closeCount.Load())
+	require.Zero(t, replacement.closeCount.Load(),
+		"a stale request must not close the replacement store")
+
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("replacement-kept-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+}
+
+func TestRefreshTaskStorageFixedFactoryReuseKeepsStoreOpen(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	// A fixed factory hands back the active instance for every address; the
+	// holder must keep serving it instead of retiring its own live store.
+	current := newClosureSensitiveTaskStorage()
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		NewFixedTaskStorageFactory(current),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	address = "s2"
+	s.refresh(ctx, "s1")
+
+	require.Zero(t, current.closeCount.Load(),
+		"reusing the active instance must not retire it")
+	store, lastAddress := s.holderState()
+	require.Same(t, current, store)
+	require.Equal(t, "s2", lastAddress)
+
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("fixed-factory-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+}
+
+func TestRefreshTaskStorageSameAddressReplacementPublishesNewInstance(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	current := newTrackedTaskStorage()
+	replacement := newClosureSensitiveTaskStorage()
+	var createCalls atomic.Int64
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			if createCalls.Add(1) == 1 {
+				return current, nil
+			}
+			return replacement, nil
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	// A fresh instance for the same address is a distinct replacement.
+	s.refresh(ctx, "s1")
+
+	require.Equal(t, int64(1), current.closeCount.Load())
+	store, lastAddress := s.holderState()
+	require.Same(t, replacement, store)
+	require.Equal(t, "s1", lastAddress)
+
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("same-address-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+}
+
+func TestRefreshTaskStorageRecoversAfterInitialFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	// The failure flag is read by the asynchronous refresh worker: factory
+	// calls run outside mu, so transitions must be synchronized and the queued
+	// refresh must be observed before the recovery flip.
+	var failing atomic.Bool
+	failing.Store(true)
+	current := newClosureSensitiveTaskStorage()
+	createDone := make(chan struct{}, 8)
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			defer func() { createDone <- struct{}{} }()
+			if failing.Load() {
+				return nil, assert.AnError
+			}
+			return current, nil
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+	waitCreate := func(what string) {
+		select {
+		case <-createDone:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("timed out waiting for factory attempt: %s", what)
+		}
+	}
+
+	// The failed initial creation leaves the holder not ready.
+	waitCreate("initial creation")
+	store, lastAddress := s.holderState()
+	require.Nil(t, store)
+	require.Equal(t, "", lastAddress)
+
+	// A public operation reports not-ready and queues an asynchronous refresh.
+	// Wait for that queued refresh to run while creation still fails: it must
+	// leave the holder not ready rather than half-refreshed.
+	_, err := s.AddSQLTask(ctx, newTestSQLTask("not-ready-task", 1))
+	require.ErrorIs(t, err, ErrNotReady)
+	waitCreate("queued not-ready refresh")
+	store, lastAddress = s.holderState()
+	require.Nil(t, store, "a failed queued refresh must leave the holder not ready")
+	require.Equal(t, "", lastAddress)
+
+	// Only after the queued refresh has been observed does recovery start; a
+	// later refresh publishes a working store.
+	failing.Store(false)
+	s.refresh(ctx, "")
+	waitCreate("recovery refresh")
+	store, lastAddress = s.holderState()
+	require.Same(t, current, store)
+	require.Equal(t, "s1", lastAddress)
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("recovered-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+	require.Zero(t, current.closeCount.Load())
+}
+
+func TestRefreshTaskStorageClosedStateIsTerminal(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	current := newTrackedTaskStorage()
+	var createCalls atomic.Int64
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			createCalls.Add(1)
+			return current, nil
+		}),
+	).(*refreshableTaskStorage)
+
+	require.NoError(t, s.Close())
+	require.Equal(t, int64(1), current.closeCount.Load())
+
+	// After closure no refresh can create a new store or close the retired one
+	// a second time, and no refresh can be queued anymore.
+	require.False(t, s.maybeRefresh("s1"))
+	s.refresh(ctx, "s1")
+	require.Equal(t, int64(1), createCalls.Load())
+	require.Equal(t, int64(1), current.closeCount.Load())
+
+	// Close is idempotent.
+	require.NoError(t, s.Close())
+	require.Equal(t, int64(1), current.closeCount.Load())
+}
+
+func TestRefreshTaskStorageStoreErrorReachesCaller(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	// A genuine unavailable-store error must reach the caller; preserving
+	// ownership must not fabricate success.
+	current := newTrackedTaskStorage()
+	current.pingErr = assert.AnError
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			return current, nil
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	_, err := s.AddSQLTask(ctx, newTestSQLTask("error-task", 1))
+	require.ErrorIs(t, err, assert.AnError)
+	require.Zero(t, current.closeCount.Load())
+}
+
+func TestRefreshTaskStorageOperationCompletesBeforeRetirement(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	gated := newGatedTaskStorage()
+	replacement := newTrackedTaskStorage()
+	address := "s1"
+	// The factory announces that the replacement candidate is being built,
+	// then parks. In the current design creation happens before the
+	// publication lock is acquired, so this is the observable refresh phase.
+	createEntered := make(chan struct{}, 1)
+	releaseCreate := make(chan struct{})
+	doReleaseCreate := sync.OnceFunc(func() { close(releaseCreate) })
+	doReleaseOp := sync.OnceFunc(func() { close(gated.release) })
+
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		taskStorageFactoryFunc(func(addr string) (TaskStorage, error) {
+			if addr != "s2" {
+				return gated, nil
+			}
+			createEntered <- struct{}{}
+			<-releaseCreate
+			return replacement, nil
+		}),
+	).(*refreshableTaskStorage)
+
+	// Failure safety: defers run LIFO, so barriers are always released first
+	// and all launched workers are joined, then the holder is closed, and
+	// leaktest checks only drained workers. Each worker is registered
+	// immediately before it is launched so a phase failure before a launch
+	// never waits for a worker that does not exist.
+	var workers sync.WaitGroup
+	defer func() { require.NoError(t, s.Close()) }()
+	defer func() { doReleaseCreate(); doReleaseOp(); workers.Wait() }()
+
+	opValue := make(chan int, 1)
+	opErr := make(chan error, 1)
+	refreshDone := make(chan struct{})
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		defer close(refreshDone)
+		address = "s2"
+		s.refresh(ctx, "s1")
+	}()
+
+	// Deterministic phase 1: the refresh passes its entry pre-check, resolves
+	// s2, and parks inside the factory. At this point it holds no lock. An
+	// early return without constructing a replacement fails immediately.
+	select {
+	case <-createEntered:
+	case <-refreshDone:
+		t.Fatal("refresh returned without constructing the replacement")
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the refresh to construct the replacement; " +
+			"the refresh path likely holds mu across factory work")
+	}
+
+	// Deterministic phase 2: only now does the public operation start. It
+	// acquires mu.RLock and parks inside the store.
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		var (
+			v   int
+			err error
+		)
+		v, err = s.AddSQLTask(ctx, newTestSQLTask("in-flight-task", 1))
+		opValue <- v
+		opErr <- err
+	}()
+	select {
+	case <-gated.entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the in-flight operation to enter the store")
+	}
+
+	// Resume the refresh, then wait for the positive observation that it has
+	// reached the publication lock while the operation is still parked. This
+	// closes the scheduling hole where an early-retiring refresh might only
+	// run after the operation completes: the operation is not released until
+	// the refresh goroutine is observed parked on the write lock, and any
+	// retirement attempt before that point (or completion of the refresh
+	// while the reader is parked) fails the test immediately.
+	doReleaseCreate()
+	retireWhileInFlight := func() bool {
+		select {
+		case <-gated.closing:
+			return true
+		default:
+			return false
+		}
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		require.False(t, retireWhileInFlight(),
+			"retirement was attempted before the in-flight operation completed")
+		select {
+		case <-refreshDone:
+			t.Fatal("refresh finished while a public operation was still in flight")
+		default:
+		}
+		if refreshParkedAtHolderLock() {
+			// Re-check after the observation: an early-retiring refresh
+			// announces closing before it parks, so a buffered announcement
+			// must be visible by now.
+			require.False(t, retireWhileInFlight(),
+				"retirement was attempted before the in-flight operation completed")
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the refresh to reach the publication lock")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	doReleaseOp()
+	select {
+	case v := <-opValue:
+		require.Equal(t, 1, v)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the in-flight operation to complete")
+	}
+	select {
+	case err := <-opErr:
+		require.NoError(t, err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the in-flight operation result")
+	}
+	select {
+	case <-refreshDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the refresh to complete")
+	}
+
+	// The in-flight operation completed strictly before the retirement close.
+	// The wait is bounded so a regression that skips retirement fails promptly
+	// instead of hanging until the package timeout, and the exact-sequence
+	// assertion detects duplicated retirements as well.
+	eventsDeadline := time.Now().Add(15 * time.Second)
+	for len(gated.recordedEvents()) < 2 && time.Now().Before(eventsDeadline) {
+		select {
+		case <-gated.eventReady:
+		case <-time.After(time.Until(eventsDeadline)):
+		}
+	}
+	require.Len(t, gated.recordedEvents(), 2,
+		"expected exactly the in-flight completion and one retirement")
+	require.Equal(t, []string{"add-completed", "retired"}, gated.recordedEvents())
+
+	// Cleanup happened exactly once and later operations use the replacement.
+	require.Equal(t, int64(1), gated.closeCount.Load())
+	require.Zero(t, replacement.closeCount.Load())
+	store, _ := s.holderState()
+	require.Same(t, replacement, store)
+	affected, err := s.AddSQLTask(ctx, newTestSQLTask("after-refresh-task", 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+}
+
 func TestRefreshTaskStorageCanClose(t *testing.T) {
 	stores := map[string]TaskStorage{
 		"s1": NewMemTaskStorage(),
@@ -652,6 +1134,7 @@ type trackedTaskStorage struct {
 	pingCount     atomic.Int64
 	validateCount atomic.Int64
 	closeErr      error
+	pingErr       error
 }
 
 func newTrackedTaskStorage() *trackedTaskStorage {
@@ -666,6 +1149,9 @@ func (s *trackedTaskStorage) Close() error {
 
 func (s *trackedTaskStorage) PingContext(ctx context.Context) error {
 	s.pingCount.Add(1)
+	if s.pingErr != nil {
+		return s.pingErr
+	}
 	return s.TaskStorage.PingContext(ctx)
 }
 
@@ -674,6 +1160,122 @@ func (s *trackedTaskStorage) ValidateDaemonTask(
 ) (bool, error) {
 	s.validateCount.Add(1)
 	return s.TaskStorage.ValidateDaemonTask(ctx, claim)
+}
+
+// errStorageClosed mirrors the "sql: database is closed" failure that a real
+// mysql task store surfaces from every forwarded operation once it is retired.
+var errStorageClosed = errors.New("sql: database is closed")
+
+// closureSensitiveTaskStorage makes retirement observable. memTaskStorage
+// keeps serving no-op successes after Close, so pointer assertions alone cannot
+// detect a store that refresh closed while still installed. Once this wrapper
+// is closed, the ping that precedes every forwarded operation fails, exactly
+// like a retired mysql task store.
+type closureSensitiveTaskStorage struct {
+	*trackedTaskStorage
+}
+
+func newClosureSensitiveTaskStorage() *closureSensitiveTaskStorage {
+	return &closureSensitiveTaskStorage{trackedTaskStorage: newTrackedTaskStorage()}
+}
+
+func (s *closureSensitiveTaskStorage) PingContext(ctx context.Context) error {
+	if s.closeCount.Load() > 0 {
+		return errStorageClosed
+	}
+	return s.trackedTaskStorage.PingContext(ctx)
+}
+
+// gatedTaskStorage parks one in-flight AddSQLTask call and records whether the
+// operation completed before the store was retired. Entry notification is
+// buffered so the worker never blocks on a receiver the test may have
+// abandoned; closing is announced before it happens so the test can detect a
+// retirement attempted while an operation is still in flight; event recording
+// never blocks on receiver progress so failure paths always drain.
+type gatedTaskStorage struct {
+	*trackedTaskStorage
+	entered    chan struct{}
+	release    chan struct{}
+	closing    chan struct{}
+	eventMu    sync.Mutex
+	events     []string
+	eventReady chan struct{}
+}
+
+func newGatedTaskStorage() *gatedTaskStorage {
+	return &gatedTaskStorage{
+		trackedTaskStorage: newTrackedTaskStorage(),
+		entered:            make(chan struct{}, 1),
+		release:            make(chan struct{}),
+		closing:            make(chan struct{}, 1),
+		eventReady:         make(chan struct{}, 1),
+	}
+}
+
+// recordEvent appends an event under the mutex and signals readers with a
+// nonblocking notification; a recording worker can never block here even if
+// nothing ever reads the events back (regression failure paths).
+func (g *gatedTaskStorage) recordEvent(event string) {
+	g.eventMu.Lock()
+	g.events = append(g.events, event)
+	g.eventMu.Unlock()
+	select {
+	case g.eventReady <- struct{}{}:
+	default:
+	}
+}
+
+func (g *gatedTaskStorage) recordedEvents() []string {
+	g.eventMu.Lock()
+	defer g.eventMu.Unlock()
+	return append([]string(nil), g.events...)
+}
+
+func (g *gatedTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error) {
+	g.entered <- struct{}{}
+	<-g.release
+	n, err := g.trackedTaskStorage.AddSQLTask(ctx, tasks...)
+	g.recordEvent("add-completed")
+	return n, err
+}
+
+func (g *gatedTaskStorage) Close() error {
+	select {
+	case g.closing <- struct{}{}:
+	default:
+	}
+	err := g.trackedTaskStorage.Close()
+	g.recordEvent("retired")
+	return err
+}
+
+// refreshParkedAtHolderLock reports whether some goroutine is currently
+// blocked inside refresh's publication lock acquisition. Stack inspection is
+// the only way to observe a goroutine parked on a mutex; the caller polls for
+// this positive observation, so scheduling delays only affect how long the
+// poll runs, never whether the observation is made.
+func refreshParkedAtHolderLock() bool {
+	buf := make([]byte, 1<<20)
+	n := goruntime.Stack(buf, true)
+	for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+		if !strings.Contains(stack, "taskservice.(*refreshableTaskStorage).refresh(") {
+			continue
+		}
+		if strings.Contains(stack, "sync.(*RWMutex).Lock(") ||
+			strings.Contains(stack, "sync.runtime_SemacquireRWMutex(") {
+			return true
+		}
+	}
+	return false
+}
+
+// holderState snapshots the installed store and address. Assertions must run
+// outside mu.RLock: a failed require exits the goroutine via runtime.Goexit,
+// which would leave the read lock held and deadlock the deferred Close.
+func (s *refreshableTaskStorage) holderState() (TaskStorage, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.store, s.mu.lastAddress
 }
 
 func TestRefreshTaskStorageValidationDoesNotDoubleRoundTrip(t *testing.T) {

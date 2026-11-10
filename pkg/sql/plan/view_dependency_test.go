@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -44,7 +45,7 @@ type physicalOwnerViewContext struct {
 }
 
 func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -75,7 +76,7 @@ func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// A CN that can execute the current mainline v83 contract but has not
@@ -165,7 +166,7 @@ func (c *namedSnapshotViewContext) ResolveSnapshotWithSnapshotName(
 func TestAuthoritativeViewGenerationCapturesDirectDependency(t *testing.T) {
 	const rootSQL = "create view v as select n_nationkey from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -178,7 +179,7 @@ func TestAuthoritativeViewGenerationCapturesDirectDependency(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	var data ViewData
 	require.NoError(t, json.Unmarshal(
@@ -202,7 +203,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 	const rootSQL = "create view v as select n_nationkey from nation"
 	ctx := &physicalOwnerViewContext{
 		rootSQLCompilerContext: &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		},
 		accountID: 0,
@@ -212,7 +213,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	persisted := p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 
@@ -230,7 +231,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 func TestAuthoritativeViewGenerationCapturesViewNotItsSources(t *testing.T) {
 	const rootSQL = "create view v2 as select n_nationkey from v1"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -254,7 +255,7 @@ func TestAuthoritativeViewGenerationCapturesViewNotItsSources(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -271,7 +272,7 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}}
 	ctx := &namedSnapshotViewContext{
 		rootSQLCompilerContext: &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false), rootSQL: rootSQL,
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: rootSQL,
 		},
 		snapshot: snapshot,
 	}
@@ -280,7 +281,7 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -292,13 +293,13 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 }
 
 func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	ctx.tables["nation"].DbId = 7
 	ctx.tables["nation"].TblId = 11
 	ctx.tables["nation"].LogicalId = 13
 	ctx.tables["nation"].Cols[1].Typ.Width = 60
-	persisted := `{"Stmt":"create view v as select n_name from nation",` +
+	persisted := `{"Stmt":"create view v as select n_name from nation with cascaded check option",` +
 		`"DefaultDatabase":"tpch","security_type":"DEFINER",` +
 		`"required_protocol_version":72,` +
 		`"future_field":{"keep":true}}`
@@ -312,14 +313,16 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &fields))
 	require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
-	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
+	require.JSONEq(t, `"create view v as select n_name from nation with cascaded check option"`, string(fields["Stmt"]))
+	require.JSONEq(t, "\"select `nation`.`n_name` from `nation`\"", string(fields["definition"]))
+	require.JSONEq(t, `"CASCADED"`, string(fields["check_option"]))
 	require.JSONEq(t, `72`, string(fields["required_protocol_version"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
 }
 
 func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -362,12 +365,12 @@ func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.
 		"create view v as select inet_ntoa(1)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "protocol version 72")
 }
 
 func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -405,7 +408,7 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
 		stmt := parse(sql)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// CREATE and ALTER both pass through the authoring gate. A CN that has
@@ -462,7 +465,7 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	table := ctx.tables["nation"]
 	name2col := make(map[string]int32, len(table.Cols)+1)
 	for pos, col := range table.Cols {
@@ -516,7 +519,7 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -553,7 +556,7 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -587,7 +590,7 @@ func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
@@ -625,7 +628,7 @@ func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedIPFunctionRequirementSurvivesViewFilterFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -658,7 +661,7 @@ where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 
 	// The filter is constant-foldable, but its INET_NTOA overload is a v86
@@ -681,7 +684,7 @@ where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
 }
 
 func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["decimal_view_source"] = &planpb.TableDef{
 		Name:      "decimal_view_source",
 		DbName:    "tpch",
@@ -771,7 +774,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
+		return BuildPlan(root, stmt, false, nil)
 	}
 	build := func() (*Plan, error) { return buildSQL(createSQL) }
 
@@ -853,7 +856,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["decimal_zero_tail_source"] = &planpb.TableDef{
 		Name:      "decimal_zero_tail_source",
 		DbName:    "tpch",
@@ -931,7 +934,7 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				return BuildPlan(root, stmt, false)
+				return BuildPlan(root, stmt, false, nil)
 			}
 
 			for _, floor := range []int64{defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion88, defines.MORPCVersion89} {
@@ -982,13 +985,109 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 	}
 }
 
+func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
+	// Legacy catalog rows have only Stmt. Recovery must parse that statement and
+	// persist the SELECT AST rendering rather than attempting to tokenize the
+	// SQL in information_schema.
+	tests := []struct {
+		name        string
+		stmt        string
+		contains    string
+		checkOption string
+		replay      bool
+	}{
+		{
+			name:     "dollar quoted definer cannot supply view boundary",
+			stmt:     "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment keeps quoted terminator text",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT 'x*/y' AS s */;",
+			contains: "x*/y",
+		},
+		{
+			name:     "double quoted executable comment keeps escaped terminator text",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "arithmetic double dash is not a line comment",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT 1--2 AS s */;",
+			contains: "- -2",
+		},
+		{
+			name:        "check option is outside select definition",
+			stmt:        "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:     "explicit view columns are retained by regeneration",
+			stmt:     "CREATE VIEW v (view_name) AS SELECT 1",
+			contains: "select `__mo_view_definition`.`view_name` as `view_name` from (select 1) as `__mo_view_definition`(`view_name`)",
+			replay:   true,
+		},
+		{
+			name:     "explicit view columns preserve an inner having alias",
+			stmt:     "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1",
+			contains: "having `source_name` = 1",
+			replay:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			persisted, err := json.Marshal(ViewData{Stmt: test.stmt, DefaultDatabase: "tpch"})
+			require.NoError(t, err)
+
+			regenerated, err := RegenerateViewDefinition(NewMockCompilerContext(false, newPlanTestProcess(t)), string(persisted))
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &data))
+			require.NotEmpty(t, data.Definition)
+			require.Contains(t, strings.ToLower(data.Definition), test.contains)
+			require.NotContains(t, strings.ToLower(data.Definition), "create view")
+			require.NotContains(t, strings.ToLower(data.Definition), "check option")
+			if test.checkOption == "" {
+				require.Equal(t, "NONE", data.CheckOption)
+			} else {
+				require.Equal(t, test.checkOption, data.CheckOption)
+			}
+
+			statements, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			_, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			statements[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false, nil)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, 1)
+				require.Equal(t, "view_name", replayCols[0].Name)
+			}
+		})
+	}
+}
+
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 	for _, rootSQL := range []string{
 		"create view v as select * from nation",
 		"create view v (k, name, rkey, comment) as select * from nation",
 	} {
 		t.Run(rootSQL, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 			persisted, err := json.Marshal(map[string]any{
 				"Stmt": rootSQL, "DefaultDatabase": "tpch", "future_field": map[string]bool{"keep": true},
@@ -1001,6 +1100,7 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 			var firstData ViewData
 			require.NoError(t, json.Unmarshal([]byte(first.TableDef.ViewSql.View), &firstData))
 			require.NotContains(t, firstData.Stmt, "*")
+			require.NotContains(t, firstData.Definition, "*")
 
 			ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &planpb.ColDef{
 				Name:       "n_extra",
@@ -1014,6 +1114,9 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 			var fields map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal([]byte(second.TableDef.ViewSql.View), &fields))
 			require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
+			var secondData ViewData
+			require.NoError(t, json.Unmarshal([]byte(second.TableDef.ViewSql.View), &secondData))
+			require.Equal(t, firstData.Definition, secondData.Definition)
 		})
 	}
 }
@@ -1021,7 +1124,7 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 func TestAuthoritativeViewGenerationCapturesLimitZeroStarDependency(t *testing.T) {
 	const rootSQL = "create view v as select * from nation limit 0"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -1029,7 +1132,7 @@ func TestAuthoritativeViewGenerationCapturesLimitZeroStarDependency(t *testing.T
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var data ViewData
@@ -1088,12 +1191,12 @@ func TestViewDependencyIdentityKeepsDistinctBindingEnvironments(t *testing.T) {
 }
 
 func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
 	capture := newViewDependencyCaptureContext(ctx)
 
 	require.NoError(t, capture.enterNestedView())
-	_, _, err := capture.Resolve("tpch", "nation", nil)
+	_, _, err := capture.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, capture.dependencies())
 	capture.leaveNestedView()
@@ -1129,21 +1232,21 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 }
 
 func TestViewMetadataNestedExpansionBudget(t *testing.T) {
-	capture := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	capture := newViewDependencyCaptureContext(NewMockCompilerContext(false, newPlanTestProcess(t)))
 	for i := 0; i < MaxViewMetadataColumns; i++ {
 		require.NoError(t, capture.enterNestedView())
 		capture.leaveNestedView()
 	}
 	require.ErrorContains(t, capture.enterNestedView(), "binding budget")
 	require.Zero(t, capture.depth, "rejected expansions must not enter the binding scope")
-	columns := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	columns := newViewDependencyCaptureContext(NewMockCompilerContext(false, newPlanTestProcess(t)))
 	require.NoError(t, columns.chargeViewColumns(MaxViewMetadataColumns-1))
 	require.NoError(t, columns.chargeViewColumns(1))
 	require.ErrorContains(t, columns.chargeViewColumns(1), "column budget")
 }
 
 func TestViewDependencyCaptureResolveByID(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
 	capture := newViewDependencyCaptureContext(ctx)
 	tableID := ctx.tables["nation"].TblId
@@ -1155,7 +1258,7 @@ func TestViewDependencyCaptureResolveByID(t *testing.T) {
 }
 
 func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 
 	_, err := RegenerateViewDefinition(ctx, `{`)
 	require.Error(t, err)
@@ -1186,7 +1289,7 @@ func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T
 }
 
 func TestRegenerateAlterViewUsesPersistedParserEnvironment(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	mode := ""
 	lowerCaseTableNames := int64(0)

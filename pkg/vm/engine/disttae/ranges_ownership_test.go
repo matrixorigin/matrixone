@@ -20,6 +20,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,9 +35,14 @@ import (
 
 func TestRangesOnePartSlowUncommittedOwnership(t *testing.T) {
 	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("ranges-ownership-test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
 	makeObject := func(id byte) objectio.ObjectStats {
-		objID := types.Objectid{id}
+		location := writeOrderedScanObject(t, fs, int64(id))
+		objID := location.ObjectId()
 		obj := objectio.NewObjectStatsWithObjectID(&objID, false, true, true)
+		require.NoError(t, objectio.SetObjectStatsLocation(obj, location))
 		require.NoError(t, objectio.SetObjectStatsBlkCnt(obj, 1))
 		require.NoError(t, objectio.SetObjectStatsRowCnt(obj, 1))
 		require.NoError(t, objectio.SetObjectStatsSize(obj, 1))
@@ -51,15 +57,16 @@ func TestRangesOnePartSlowUncommittedOwnership(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	snapshot := timestamp.Timestamp{PhysicalTime: 2}
 	txnOp.EXPECT().SnapshotTS().Return(snapshot).AnyTimes()
-	txnOp.EXPECT().GetWorkspace().Return(&Transaction{engine: &Engine{}}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Transaction{engine: &Engine{fs: fs}}).AnyTimes()
 	tbl := &txnTable{db: &txnDatabase{op: txnOp}, tableDef: &plan.TableDef{Name: "test"}}
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 	node := &plan.Node{Stats: plan2.DefaultStats()}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 	owner := int32(plan2.SimpleCharHashToRange(uncommitted.ObjectName().ObjectId()[:], 2))
 	localCN := 1 - owner
 	// An unevaluated fold must retain candidate blocks for residual evaluation,
-	// and deliberately uses rangesOnePart's slow path without loading metadata.
+	// and deliberately uses rangesOnePart's metadata fallback.
 	filters := []*plan.Expr{{Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Id: 0}}}}
 	seen := make(map[types.Blockid]int)
 	for cn := int32(0); cn < 2; cn++ {

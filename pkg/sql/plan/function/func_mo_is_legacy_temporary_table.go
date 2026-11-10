@@ -131,6 +131,14 @@ func isLegacyTemporaryTable(ctx context.Context, relKind, relName, database, cre
 	return temporaryStatementMatches
 }
 
+// IsLegacyTemporaryTable exposes the durable compatibility classifier to
+// relation-resolution code. Callers must pass the catalog relkind, physical
+// name, database, original CREATE SQL, and serialized SchemaExtra unchanged;
+// malformed rename metadata intentionally fails open as a permanent object.
+func IsLegacyTemporaryTable(ctx context.Context, relKind, relName, database, createSQL, extraInfo string) bool {
+	return isLegacyTemporaryTable(ctx, relKind, relName, database, createSQL, extraInfo)
+}
+
 func createTableNamesRelation(createTable *tree.CreateTable, name, database string) bool {
 	if !strings.EqualFold(string(createTable.Table.ObjectName), name) {
 		return false

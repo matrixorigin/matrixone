@@ -79,7 +79,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		loopJoin.OpAnalyzer.Reset()
 	}
 
-	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
+	if loopJoin.PairCondition == nil && loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
 		var execs []colexec.ExpressionExecutor
 		execs, err = hashbuild.NewExpressionExecutors(
 			proc,
@@ -103,6 +103,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			ctr.clearProbeResume()
+			return vm.CancelResult, err
+		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
@@ -124,6 +128,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
+				}
+				if input.Status == vm.ExecYield {
+					return input, nil
 				}
 				if input.Batch == nil {
 					if loopJoin.JoinType == plan.Node_OUTER && ctr.rightRowsMatched != nil {
@@ -151,8 +158,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.batRowIdx = 0
 			}
 
-			if err = loopJoin.resetResultBat(); err != nil {
-				return result, err
+			if !ctr.conditionPending {
+				if err = loopJoin.resetResultBat(); err != nil {
+					return result, err
+				}
 			}
 			for i, rp := range loopJoin.ResultCols {
 				if rp.Rel == 0 {

@@ -1,0 +1,37 @@
+-- @suite
+-- @case
+-- @desc: DECIMAL DIV result precision and unsigned result domain
+-- @label:bvt
+
+drop database if exists issue_30158_decimal_div_domain;
+create database issue_30158_decimal_div_domain;
+use issue_30158_decimal_div_domain;
+create table src(id int primary key,d decimal(10,3),w decimal(18,3),i int,u bigint unsigned);
+insert into src values(1,5.678,5.678,2,2),(2,-5.678,-5.678,-2,2);
+select id,d div i as q from src order by id;
+create table narrow_q as select d div i as q from src;
+create view narrow_v as select d div i as q from src;
+create table wide_q as select w div i as q from src;
+create table unsigned_q as select d div u as q from src where id=1;
+create table folded_q as select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q;
+select table_name,column_type from information_schema.columns where table_schema=database() and column_name='q' order by table_name;
+select q from narrow_q order by q;
+select cast(-1 as decimal(10,3)) div cast(2 as unsigned) as q;
+select cast('18446744073709551615' as decimal(20,0)) div cast(1 as unsigned) as q;
+-- @regex("out of range",true)
+select d div u from src where id=2;
+prepare div_domain from 'select d div cast(? as unsigned) as q from src where id=?';
+set @divisor=2;
+set @id=1;
+execute div_domain using @divisor,@id;
+set @id=2;
+-- @regex("out of range",true)
+execute div_domain using @divisor,@id;
+deallocate prepare div_domain;
+create table dst(id int primary key,q bigint);
+insert into dst values(2,99);
+-- @regex("out of range",true)
+insert into dst select id,d div u from src where id=2 on duplicate key update q=values(q);
+select id,q from dst;
+use mo_catalog;
+drop database issue_30158_decimal_div_domain;

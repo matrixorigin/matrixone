@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -28,21 +29,46 @@ type FileServiceWriter struct {
 	Group       *errgroup.Group
 	Filepath    string
 	FileService FileService
+	ctx         context.Context
+	owned       bool
+	closeOnce   sync.Once
 }
 
 func NewFileServiceWriter(moPath string, ctx context.Context) (*FileServiceWriter, error) {
+	return NewFileServiceWriterWithFileService(nil, moPath, ctx)
+}
+
+// NewFileServiceWriterWithFileService is the Datalink entry point when a
+// configured service registry is available. Argumented and service-less paths
+// create a per-writer ETL service; named paths borrow the configured service.
+// The writer closes only services it created itself.
+func NewFileServiceWriterWithFileService(fileService FileService, moPath string, ctx context.Context) (*FileServiceWriter, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	var readPath string
 	var err error
 
-	w := &FileServiceWriter{}
+	path, err := ParsePath(moPath)
+	if err != nil {
+		return nil, err
+	}
+	w := &FileServiceWriter{
+		ctx: ctx,
+		// GetForETL creates a local service for an empty service component and
+		// a dynamic service for argumented paths. A named service is borrowed
+		// from the caller's registry and must remain open after this writer.
+		owned: path.Service == "" || len(path.ServiceArguments) > 0,
+	}
 
 	w.Filepath = moPath
 
 	w.Reader, w.Writer = io.Pipe()
 
-	w.FileService, readPath, err = GetForETL(ctx, nil, w.Filepath)
+	w.FileService, readPath, err = GetForETLWithParsedPath(ctx, fileService, w.Filepath, path)
 	if err != nil {
+		w.closeOwnedFileService()
 		return nil, err
 	}
 
@@ -72,6 +98,15 @@ func NewFileServiceWriter(moPath string, ctx context.Context) (*FileServiceWrite
 	return w, nil
 }
 
+func (w *FileServiceWriter) closeOwnedFileService() {
+	w.closeOnce.Do(func() {
+		if w.owned && w.FileService != nil {
+			w.FileService.Close(w.ctx)
+		}
+		w.FileService = nil
+	})
+}
+
 func (w *FileServiceWriter) Write(b []byte) (int, error) {
 	n, err := w.Writer.Write(b)
 	if err != nil {
@@ -92,6 +127,7 @@ func (w *FileServiceWriter) Close() error {
 	w.Reader = nil
 	w.Writer = nil
 	w.Group = nil
+	w.closeOwnedFileService()
 	return err
 }
 
@@ -114,4 +150,5 @@ func (w *FileServiceWriter) Abort(cause error) {
 	w.Reader = nil
 	w.Writer = nil
 	w.Group = nil
+	w.closeOwnedFileService()
 }

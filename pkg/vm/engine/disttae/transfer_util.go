@@ -36,27 +36,40 @@ type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
+// WithTransferSinkerOption carries SinkerOptions the flow's default
+// tombstone sinker is constructed with — the binding point the RC
+// tombstone-object transfer uses to join the owning workspace's
+// per-object admission before its replacements persist (issue #25590
+// round-59 review: the transfer's sinker consumed no capacity hook, so
+// transfers persisted replacement objects behind the admission bound and
+// the refused record handed every physically persisted name to the
+// fail-open orphan retain).
+func WithTransferSinkerOption(opts ...ioutil.SinkerOption) TransferOption {
+	return func(flow *TransferFlow) {
+		flow.sinkerOpts = append(flow.sinkerOpts, opts...)
+	}
+}
+
 const (
 	// RowID transfer has a material fixed cost: every batch constructs an IN
 	// filter, prunes replacement objects, and builds a reader.  One object block
 	// (8192 rows) made large updates pay that setup cost thousands of times.
 	// Aggregate up to eight blocks, with an 8 MiB soft limit that flushes wide
-	// primary keys at the next source-batch boundary.
+	// primary keys per row in memory or at persisted source-batch boundaries.
 	transferBatchRowLimit  = objectio.BlockMaxRows * 8
 	transferBatchSizeLimit = mpool.MB * 8
 )
 
-func transferBatchLimitReached(rowCount, byteSize int, sourceBatchDone bool) bool {
+func transferBatchLimitReached(rowCount, byteSize int, checkSize bool) bool {
 	if rowCount == 0 {
 		return false
 	}
 	if rowCount >= transferBatchRowLimit {
 		return true
 	}
-	// Computing Batch.Size for every row would add work to the hot path.  The
-	// source reader already bounds its batches, so enforce the byte limit once
-	// per source batch and bound any overshoot by that source batch.
-	return sourceBatchDone && byteSize >= transferBatchSizeLimit
+	// Persisted readers bound source batches and check their byte size once per
+	// batch. In-memory staging checks after each appended row.
+	return checkSize && byteSize >= transferBatchSizeLimit
 }
 
 func newDeletedObjectFilter(
@@ -159,6 +172,20 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		objectio.HiddenColumnSelection_None,
 		r, isObjectDeletedFn, newDataObjects,
 		mp, fs,
+		// The RC transfer's replacement tombstone objects are unpublished
+		// workspace obligations exactly like a dump's spills, so the
+		// sinker joins the owning transaction's per-object admission
+		// before anything goes durable: each replacement reserves one
+		// in-flight unit under the engine's bound, a saturated ledger
+		// refuses the transfer with nothing half-persisted, the record
+		// below converts the reservation into recorded ownership, and a
+		// transfer interrupted between spill and record settles through
+		// the same statement-rollback and terminal drains as every other
+		// reservation producer (issue #25590 round-59 review: the
+		// unhooked sinker persisted replacements first and the refused
+		// record fail-open-retained them, growing the retained backlog
+		// behind the configured bound).
+		WithTransferSinkerOption(txn.SinkerCapacityOption()),
 	)
 
 	return flow, logs, nil
@@ -199,8 +226,13 @@ type TransferFlow struct {
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
 	sinker            *ioutil.Sinker
-	mp                *mpool.MPool
-	fs                fileservice.FileService
+	// sinkerOpts ride through WithTransferSinkerOption: fillDefaults
+	// constructs the default tombstone sinker with them appended, so a
+	// bound producer joins its admission owner exactly as the RC
+	// tombstone-object transfer now does (issue #25590 round-59 review).
+	sinkerOpts []ioutil.SinkerOption
+	mp         *mpool.MPool
+	fs         fileservice.FileService
 
 	transferred struct {
 		rowCnt     int
@@ -222,15 +254,20 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
+		opts := make([]ioutil.SinkerOption, 0, len(flow.sinkerOpts)+3)
+		opts = append(opts,
+			ioutil.WithBuffer(flow.buffer, false),
+			ioutil.WithMemorySizeThreshold(mpool.MB*16),
+			ioutil.WithTailSizeCap(0),
+			//readutil.WithAllMergeSorted(),
+		)
+		opts = append(opts, flow.sinkerOpts...)
 		flow.sinker = ioutil.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			ioutil.WithBuffer(flow.buffer, false),
-			ioutil.WithMemorySizeThreshold(mpool.MB*16),
-			ioutil.WithTailSizeCap(0),
-			//readutil.WithAllMergeSorted(),
+			opts...,
 		)
 	}
 

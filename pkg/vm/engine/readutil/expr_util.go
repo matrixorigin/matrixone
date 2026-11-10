@@ -21,19 +21,92 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func candidateColumnDefinition(expr *plan.Expr, table *plan.TableDef) *plan.ColDef {
+	if expr == nil || expr.GetCol() == nil || table == nil {
+		return nil
+	}
+	name := expr.GetCol().Name
+	name = name[strings.LastIndexByte(name, '.')+1:]
+	position, ok := table.Name2ColIndex[name]
+	if !ok || position < 0 || int(position) >= len(table.Cols) {
+		return nil
+	}
+	return table.Cols[position]
+}
+
+// candidateScalarFilterSafe checks the physical domain of an independently
+// proved pruning hint. The reader and the raw sort-key filter have different
+// comparison contracts; neither follows from the candidate bit alone.
+func candidateScalarFilterSafe(expr *plan.Expr, table *plan.TableDef, rawKey bool) bool {
+	if expr == nil || table == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	name := fn.Func.ObjName
+	var arity int
+	switch name {
+	case "=", "<", "<=", ">", ">=", "prefix_eq":
+		arity = 2
+	case "between", "prefix_between":
+		arity = 3
+	default:
+		return false
+	}
+	if len(fn.Args) != arity || fn.Args[0] == nil || fn.Args[0].GetCol() == nil {
+		return false
+	}
+	colDef := candidateColumnDefinition(fn.Args[0], table)
+	if colDef == nil {
+		return false
+	}
+	column := colDef.Typ
+	kind := types.T(column.Id)
+	bytesDomain := kind == types.T_varchar || kind == types.T_varbinary
+	switch kind {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_datetime, types.T_timestamp, types.T_decimal64, types.T_decimal128,
+		types.T_varchar, types.T_varbinary:
+	default:
+		return false
+	}
+	if types.IsUnicodeCollation(uint8(column.Charset)) || column.PadSpace ||
+		!bytesDomain && (name == "prefix_eq" || name == "prefix_between") {
+		return false
+	}
+	columnType := types.New(kind, column.Width, column.Scale)
+	columnType.Charset = uint8(column.Charset)
+	for _, bound := range fn.Args[1:] {
+		if bound == nil || bound.GetFold() == nil || bound.GetFold().Data == nil ||
+			(len(bound.GetFold().Data) != 0 && !bound.GetFold().IsConst) || bound.Typ.PadSpace ||
+			types.IsUnicodeCollation(uint8(bound.Typ.Charset)) || types.T(bound.Typ.Id) != kind {
+			return false
+		}
+		value := bound.GetFold().Data
+		if size := kind.FixedLength(); size > 0 && len(value) != size {
+			return false
+		}
+		if rawKey {
+			valueType := types.New(types.T(bound.Typ.Id), bound.Typ.Width, bound.Typ.Scale)
+			valueType.Charset = uint8(bound.Typ.Charset)
+			if !keycodec.SupportsExactRawRuntimeFilterPair(columnType, valueType) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
@@ -96,24 +169,26 @@ func ConstructInExpr(
 // vectors they use positionally elsewhere, and reordering one in place would
 // mis-associate rows against its parallel arrays.
 //
-// A payload carrying NULLs is returned unchanged. InplaceSortAndCompact permutes
-// only the value column, so the null bitmap would be left indexing the wrong rows,
-// and compaction rebuilds the vector with a nil bitmap, dropping the NULLs
-// outright; planner constant folding and normalizePKInVector both sidestep it the
-// same way. Publishing that payload unsorted and unflagged costs nothing beyond
-// pruning, because zone-map filtering refuses to binary-search an unflagged
-// payload and keeps the block. Today's callers all pass PK-derived vectors, which
-// cannot be NULL -- the guard is here so a future one cannot silently publish a
-// corrupted filter.
+// A payload carrying NULLs is returned unchanged so optional zone-map pruning
+// remains conservative and the original SQL NULL semantics are retained.
 func normalizeInPayload(data []byte) ([]byte, int, error) {
-	owned := vector.NewVec(types.T_any.ToType())
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return normalizeInPayloadWithPool(data, mp)
+}
+
+func normalizeInPayloadWithPool(data []byte, mp *mpool.MPool) ([]byte, int, error) {
+	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	defer owned.Free(mp)
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, 0, err
 	}
 	if owned.GetNulls().Any() {
 		return data, owned.Length(), nil
 	}
-	owned.InplaceSortAndCompact() // also sets the sorted flag
+	if err := owned.InplaceSortAndCompact(mp); err != nil {
+		return nil, 0, err
+	}
 	// Returned directly rather than branched on: there is nothing to unwind here,
 	// and the caller discards the length whenever the error is non-nil.
 	sorted, err := owned.MarshalBinary()
@@ -130,12 +205,15 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 		pos = tableDef.Name2ColIndex[name]
 	}
 	common.DoIfDebugEnabled(func() {
-		if name != tableDef.Cols[colPos].Name {
+		// ColPos is local to the scan (and can be a metadata-only slot),
+		// while tableDef is the full relation schema. Validate the name used
+		// for resolution instead of indexing this schema with ColPos.
+		if int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos].Name != name[strings.LastIndexByte(name, '.')+1:] {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", name),
-				zap.Int32("col-actual-pos", colPos),
-				zap.Int32("col-expected-pos", pos),
+				zap.Int32("scan-col-pos", colPos),
+				zap.Int32("relation-col-pos", pos),
 				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
@@ -317,21 +395,6 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 	return vals, true
 }
 
-func getConstValueByExpr(
-	expr *plan.Expr, proc *process.Process,
-) *plan.Literal {
-	exec, err := colexec.NewExpressionExecutor(proc, expr)
-	if err != nil {
-		return nil
-	}
-	defer exec.Free()
-	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-	if err != nil {
-		return nil
-	}
-	return rule.GetConstantValue(vec, true, 0)
-}
-
 func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
@@ -365,440 +428,6 @@ func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byt
 	return colExpr, exprImpl.Vec.Data, ok
 }
 
-func getPkExpr(
-	expr *plan.Expr, pkName string, proc *process.Process,
-) *plan.Expr {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
-		case "or":
-			leftPK := getPkExpr(exprImpl.F.Args[0], pkName, proc)
-			if leftPK == nil {
-				return nil
-			}
-			rightPK := getPkExpr(exprImpl.F.Args[1], pkName, proc)
-			if rightPK == nil {
-				return nil
-			}
-			if litExpr, ok := leftPK.Expr.(*plan.Expr_Lit); ok {
-				if litExpr.Lit.Isnull {
-					return rightPK
-				}
-			}
-			if litExpr, ok := rightPK.Expr.(*plan.Expr_Lit); ok {
-				if litExpr.Lit.Isnull {
-					return leftPK
-				}
-			}
-			return &plan.Expr{
-				Expr: &plan.Expr_List{
-					List: &plan.ExprList{
-						List: []*plan.Expr{leftPK, rightPK},
-					},
-				},
-				Typ: leftPK.Typ,
-			}
-
-		case "and":
-			pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, proc)
-			if pkBytes != nil {
-				return pkBytes
-			}
-			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
-
-		case "=":
-			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
-					return nil
-				}
-				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
-				if constVal == nil {
-					return nil
-				}
-				return &plan.Expr{
-					Typ: exprImpl.F.Args[1].Typ,
-					Expr: &plan.Expr_Lit{
-						Lit: constVal,
-					},
-				}
-			}
-			if col := exprImpl.F.Args[1].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
-					return nil
-				}
-				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
-				if constVal == nil {
-					return nil
-				}
-				return &plan.Expr{
-					Typ: exprImpl.F.Args[0].Typ,
-					Expr: &plan.Expr_Lit{
-						Lit: constVal,
-					},
-				}
-			}
-			return nil
-
-		case "in":
-			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
-					return nil
-				}
-				return exprImpl.F.Args[1]
-			}
-
-		case "prefix_eq", "prefix_between", "prefix_in", "prefix_in_range", "between":
-			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
-					return nil
-				}
-				return expr
-			}
-		}
-	}
-
-	return nil
-}
-
-// return canEval, isNull, isVec, evaledVal
-func getPkValueByExpr(
-	expr *plan.Expr,
-	pkName string,
-	oid types.T,
-	mustOne bool,
-	proc *process.Process,
-) (bool, bool, bool, any) {
-	valExpr := getPkExpr(expr, pkName, proc)
-	if valExpr == nil {
-		return false, false, false, nil
-	}
-
-	switch exprImpl := valExpr.Expr.(type) {
-	case *plan.Expr_Lit:
-		if exprImpl.Lit.Isnull {
-			return false, true, false, nil
-		}
-		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
-		if canEval {
-			return true, false, false, val
-		} else {
-			return false, false, false, nil
-		}
-
-	case *plan.Expr_Vec:
-		if mustOne {
-			vec := vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(exprImpl.Vec.Data)
-			if vec.Length() != 1 {
-				return false, false, false, nil
-			}
-			exprLit := rule.GetConstantValue(vec, true, 0)
-			if exprLit == nil {
-				return false, false, false, nil
-			}
-			if exprLit.Isnull {
-				return false, true, false, nil
-			}
-			canEval, val := evalLiteralExpr(exprLit, oid)
-			if canEval {
-				return true, false, false, val
-			}
-			return false, false, false, nil
-		}
-		return true, false, true, exprImpl.Vec.Data
-
-	case *plan.Expr_List:
-		if mustOne {
-			return false, false, false, nil
-		}
-		canEval, vec, put := evalExprListToVec(oid, exprImpl, proc)
-		if !canEval || vec == nil || vec.Length() == 0 {
-			return false, false, false, nil
-		}
-		data, _ := vec.MarshalBinary()
-		put()
-		return true, false, true, data
-	}
-
-	return false, false, false, nil
-}
-
-func evalExprListToVec(
-	oid types.T, expr *plan.Expr_List, proc *process.Process,
-) (canEval bool, vec *vector.Vector, put func()) {
-	if expr == nil {
-		return false, nil, nil
-	}
-	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
-	if !canEval {
-		if vec != nil {
-			vec.Free(proc.GetMPool())
-		}
-		return false, nil, nil
-	}
-	put = func() {
-		vec.Free(proc.GetMPool())
-	}
-	vec.InplaceSort()
-	return
-}
-
-func recurEvalExprList(
-	oid types.T, inputExpr *plan.Expr_List, inputVec *vector.Vector, proc *process.Process,
-) (canEval bool, outputVec *vector.Vector) {
-	outputVec = inputVec
-	for _, expr := range inputExpr.List.List {
-		switch expr2 := expr.Expr.(type) {
-		case *plan.Expr_Lit:
-			canEval, val := evalLiteralExpr(expr2.Lit, oid)
-			if !canEval {
-				return false, outputVec
-			}
-			if outputVec == nil {
-				outputVec = vector.NewVec(oid.ToType())
-			}
-			// TODO: not use appendAny
-			if err := vector.AppendAny(outputVec, val, false, proc.Mp()); err != nil {
-				return false, outputVec
-			}
-		case *plan.Expr_Vec:
-			vec := vector.NewVec(oid.ToType())
-			if err := vec.UnmarshalBinary(expr2.Vec.Data); err != nil {
-				return false, outputVec
-			}
-			if outputVec == nil {
-				outputVec = vector.NewVec(oid.ToType())
-			}
-			sels := make([]int32, vec.Length())
-			for i := 0; i < vec.Length(); i++ {
-				sels[i] = int32(i)
-			}
-			if err := outputVec.UnionBatch(
-				vec, 0, vec.Length(), nil, proc.Mp(),
-			); err != nil {
-				return false, outputVec
-			}
-		case *plan.Expr_List:
-			if canEval, outputVec = recurEvalExprList(oid, expr2, outputVec, proc); !canEval {
-				return false, outputVec
-			}
-		default:
-			return false, outputVec
-		}
-	}
-	return true, outputVec
-}
-
-func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
-	switch val := expr.Value.(type) {
-	case *plan.Literal_I8Val:
-		return transferIval(val.I8Val, oid)
-	case *plan.Literal_I16Val:
-		return transferIval(val.I16Val, oid)
-	case *plan.Literal_I32Val:
-		return transferIval(val.I32Val, oid)
-	case *plan.Literal_I64Val:
-		return transferIval(val.I64Val, oid)
-	case *plan.Literal_Dval:
-		return transferDval(val.Dval, oid)
-	case *plan.Literal_Sval:
-		return transferSval(val.Sval, oid)
-	case *plan.Literal_Bval:
-		return transferBval(val.Bval, oid)
-	case *plan.Literal_U8Val:
-		return transferUval(val.U8Val, oid)
-	case *plan.Literal_U16Val:
-		return transferUval(val.U16Val, oid)
-	case *plan.Literal_U32Val:
-		return transferUval(val.U32Val, oid)
-	case *plan.Literal_U64Val:
-		return transferUval(val.U64Val, oid)
-	case *plan.Literal_Fval:
-		return transferFval(val.Fval, oid)
-	case *plan.Literal_Dateval:
-		return transferDateval(val.Dateval, oid)
-	case *plan.Literal_Timeval:
-		return transferTimeval(val.Timeval, oid)
-	case *plan.Literal_Datetimeval:
-		return transferDatetimeval(val.Datetimeval, oid)
-	case *plan.Literal_Decimal64Val:
-		return transferDecimal64val(val.Decimal64Val.A, oid)
-	case *plan.Literal_Decimal128Val:
-		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
-	case *plan.Literal_Timestampval:
-		return transferTimestampval(val.Timestampval, oid)
-	case *plan.Literal_Jsonval:
-		return transferSval(val.Jsonval, oid)
-	case *plan.Literal_EnumVal:
-		return transferUval(val.EnumVal, oid)
-	}
-	return
-}
-
-func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_bit:
-		return true, uint64(v)
-	case types.T_int8:
-		return true, int8(v)
-	case types.T_int16:
-		return true, int16(v)
-	case types.T_int32:
-		return true, int32(v)
-	case types.T_int64:
-		return true, int64(v)
-	case types.T_uint8:
-		return true, uint8(v)
-	case types.T_uint16:
-		return true, uint16(v)
-	case types.T_uint32:
-		return true, uint32(v)
-	case types.T_uint64:
-		return true, uint64(v)
-	case types.T_float32:
-		return true, float32(v)
-	case types.T_float64:
-		return true, float64(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_bit:
-		return true, uint64(v)
-	case types.T_int8:
-		return true, int8(v)
-	case types.T_int16:
-		return true, int16(v)
-	case types.T_int32:
-		return true, int32(v)
-	case types.T_int64:
-		return true, int64(v)
-	case types.T_uint8:
-		return true, uint8(v)
-	case types.T_uint16:
-		return true, uint16(v)
-	case types.T_uint32:
-		return true, uint32(v)
-	case types.T_uint64:
-		return true, uint64(v)
-	case types.T_float32:
-		return true, float32(v)
-	case types.T_float64:
-		return true, float64(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferFval(v float32, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_float32:
-		return true, float32(v)
-	case types.T_float64:
-		return true, float64(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferDval(v float64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_float32:
-		return true, float32(v)
-	case types.T_float64:
-		return true, float64(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferSval(v string, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_json:
-		return true, []byte(v)
-	case types.T_char, types.T_varchar:
-		return true, []byte(v)
-	case types.T_text, types.T_blob, types.T_datalink:
-		return true, []byte(v)
-	case types.T_binary, types.T_varbinary:
-		return true, []byte(v)
-	case types.T_uuid:
-		var uv types.Uuid
-		copy(uv[:], []byte(v)[:])
-		return true, uv
-		//TODO: should we add T_array for this code?
-	default:
-		return false, nil
-	}
-}
-
-func transferBval(v bool, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_bool:
-		return true, v
-	default:
-		return false, nil
-	}
-}
-
-func transferDateval(v int32, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_date:
-		return true, types.Date(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferTimeval(v int64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_time:
-		return true, types.Time(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferDatetimeval(v int64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_datetime:
-		return true, types.Datetime(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferTimestampval(v int64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_timestamp:
-		return true, types.Timestamp(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferDecimal64val(v int64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_decimal64:
-		return true, types.Decimal64(v)
-	default:
-		return false, nil
-	}
-}
-
-func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
-	switch oid {
-	case types.T_decimal128:
-		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
-	default:
-		return false, nil
-	}
-}
-
-// for test
 func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
 	schema := []string{"a", "b", "c", "d"}
 	var name = schema[idx]

@@ -258,7 +258,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	defer func() {
 		// remove txnCtx, commit can only execute once.
 		s.removeTxn(txnID)
-		s.releaseTxnContext(txnCtx)
+		s.releaseTxnContextLocked(txnCtx)
 	}()
 
 	response.Txn = &newTxn
@@ -340,10 +340,6 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	txnCtx.mu.Lock()
 	defer txnCtx.mu.Unlock()
-	defer func() {
-		s.removeTxn(txnID)
-		s.releaseTxnContext(txnCtx)
-	}()
 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
@@ -351,6 +347,11 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(ctx), 0)
 		return nil
 	}
+
+	defer func() {
+		s.removeTxn(txnID)
+		s.releaseTxnContextLocked(txnCtx)
+	}()
 
 	response.Txn = &newTxn
 	newTxn.TNShards = request.Txn.TNShards
@@ -381,7 +382,7 @@ func (s *service) cleanupUnsupportedTxn(ctx context.Context, txnMeta txn.TxnMeta
 			util.TxnIDFieldWithID(txnMeta.ID))
 	}
 	s.removeTxn(txnMeta.ID)
-	s.releaseTxnContext(txnCtx)
+	s.releaseTxnContextLocked(txnCtx)
 }
 
 func (s *service) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,12 +28,23 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type testMethodBasedClientSession struct {
 	write func(context.Context, Message) error
+}
+
+type testMethodBasedRPCServer struct {
+	RPCServer
+	closeStarted chan struct{}
+}
+
+func (s *testMethodBasedRPCServer) Close() error {
+	close(s.closeStarted)
+	return s.RPCServer.Close()
 }
 
 func (s *testMethodBasedClientSession) Close() error {
@@ -117,6 +130,296 @@ func TestMethodBasedServerCancelsRejectedRequest(t *testing.T) {
 			}
 			require.Equal(t, 1, writeCalls)
 			require.Equal(t, 1, cancelCalls)
+		})
+	}
+}
+
+// newTestMethodServer owns binding/teardown; each test owns any admitted work.
+func newTestMethodServer(t testing.TB, cfg Config) (*methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage], string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "method-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	pool := NewMessagePool(func() *testMethodBasedMessage { return &testMethodBasedMessage{} }, func() *testMethodBasedMessage { return &testMethodBasedMessage{} })
+	addr := "unix://" + dir + "/s.sock"
+	owner, err := NewMessageHandler("", "method-test", addr, cfg, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, owner.Close()) })
+	return owner.(*methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]), addr
+}
+
+func TestMethodBasedServerCloseJoinsHandlers(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		async, inline, mixed bool
+	}{
+		{name: "async", async: true}, {name: "mixed async", async: true, mixed: true},
+		{name: "inline", async: true, inline: true}, {name: "mixed inline", async: true, inline: true, mixed: true}, {name: "sync"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, addr := newTestMethodServer(t, Config{})
+			pool := s.pool
+			rpc := &testMethodBasedRPCServer{RPCServer: s.rpc, closeStarted: make(chan struct{})}
+			s.rpc = rpc
+			started, atExit, allowExit := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			closed, secondClosed := make(chan struct{}), make(chan struct{})
+			var handlerErr, closeErr, secondErr error
+			var observedCtx context.Context
+			var calls atomic.Int32
+			finish := sync.OnceFunc(func() { close(allowExit) })
+			closeServer := sync.OnceFunc(func() { go func() { closeErr = s.Close(); close(closed) }() })
+			wait := func(event <-chan struct{}) {
+				t.Helper()
+				select {
+				case <-event:
+				case <-time.After(time.Second):
+					t.Fatal("method server phase notification missing")
+				}
+			}
+			t.Cleanup(func() {
+				// Independent release also works if codec parenting or cancellation regresses.
+				finish()
+				closeServer()
+				select {
+				case <-closed:
+				case <-time.After(time.Second):
+					t.Error("method server failed to close")
+				}
+				joined := make(chan struct{})
+				go func() { s.asyncWG.Wait(); close(joined) }()
+				select {
+				case <-joined:
+				case <-time.After(time.Second):
+					t.Error("test-owned async handler failed to finish")
+				}
+			})
+			s.RegisterMethod(1, func(ctx context.Context, _ *testMethodBasedMessage, _ *testMethodBasedMessage, _ *Buffer) error {
+				calls.Add(1)
+				observedCtx = ctx
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) < 30*time.Minute {
+					return fmt.Errorf("decoded hour deadline missing")
+				}
+				close(started)
+				select {
+				case <-ctx.Done():
+					handlerErr = ctx.Err()
+				case <-allowExit:
+					return nil
+				}
+				close(atExit)
+				<-allowExit
+				return handlerErr
+			}, tc.async)
+			if tc.mixed {
+				s.RegisterMethod(2, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error { return nil }, false)
+			}
+			if tc.inline {
+				// Reject submission without closing or rebooting the shared pool.
+				closedPool, err := ants.NewPool(1, ants.WithDisablePurge(true))
+				require.NoError(t, err)
+				t.Cleanup(closedPool.Release)
+				require.NoError(t, closedPool.ReleaseTimeout(time.Second))
+				require.ErrorIs(t, closedPool.Submit(func() {}), ants.ErrPoolClosed)
+				s.rpc.RegisterRequestHandler(func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
+					return s.onMessageWithSubmit(ctx, request, sequence, cs, closedPool.Submit)
+				})
+			}
+			require.NoError(t, s.Start())
+			client, err := (Config{ClientOptions: []ClientOption{WithClientEnableAutoCreateBackend()}}).NewClient("", "close-test", func() Message { return &testMethodBasedMessage{} })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, client.Close()) })
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			t.Cleanup(cancel)
+			future, err := client.Send(ctx, addr, &testMethodBasedMessage{method: 1})
+			require.NoError(t, err)
+			t.Cleanup(future.Close)
+			wait(started)
+			closeServer()
+			wait(rpc.closeStarted)
+			if tc.async {
+				wait(atExit)
+				require.ErrorIs(t, handlerErr, context.Canceled)
+			} else {
+				require.NoError(t, observedCtx.Err(), "synchronous request remains independent of server cancellation")
+			}
+			go func() { secondErr = s.Close(); close(secondClosed) }()
+			select {
+			case <-closed:
+				t.Fatal("Close returned before handler finished")
+			case <-time.After(10 * time.Millisecond):
+			}
+			select {
+			case <-secondClosed:
+				t.Fatal("concurrent Close bypassed drain")
+			default:
+			}
+			if tc.async {
+				// Exercise the sealed admission gate separately from transport rejection.
+				lateCtx, lateCancel := context.WithCancel(context.Background())
+				defer lateCancel()
+				late := &testMethodBasedMessage{method: 1}
+				cs := &testMethodBasedClientSession{write: func(_ context.Context, resp Message) error {
+					pool.ReleaseResponse(resp.(*testMethodBasedMessage))
+					return nil
+				}}
+				require.NoError(t, s.onMessage(lateCtx, RPCMessage{Ctx: lateCtx, Message: late, Cancel: lateCancel}, 0, cs))
+				require.ErrorIs(t, lateCtx.Err(), context.Canceled)
+				require.Zero(t, late.method)
+			}
+			finish()
+			wait(closed)
+			wait(secondClosed)
+			require.NoError(t, closeErr)
+			require.NoError(t, secondErr)
+			require.NoError(t, s.Close())
+			require.Equal(t, int32(1), calls.Load())
+			_, err = future.Get()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestMethodBasedServerLifecycleIsolation(t *testing.T) {
+	backing := make([]CodecOption, 2)
+	marker := false
+	backing[1] = func(*messageCodec) { marker = true }
+	cfg := Config{CodecOptions: backing[:1]}
+	cfg.CodecOptions[0] = WithCodecMaxBodySize(1024)
+	first, _ := newTestMethodServer(t, cfg)
+	second, _ := newTestMethodServer(t, cfg)
+	pool := first.pool
+	backing[1](newTestCodec().(*messageCodec))
+	require.True(t, marker, "constructor overwrote caller's spare codec option")
+	caller, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first.RegisterMethod(1, func(ctx context.Context, _ *testMethodBasedMessage, _ *testMethodBasedMessage, _ *Buffer) error {
+		return ctx.Err()
+	}, false)
+	require.NoError(t, first.Close())
+	require.NoError(t, second.requestCtx.Err())
+	response := first.Handle(caller, &testMethodBasedMessage{method: 1}, nil)
+	require.NoError(t, response.UnwrapError())
+	pool.ReleaseResponse(response)
+	require.NoError(t, caller.Err(), "direct Handle context belongs to its caller")
+	// The root must also retire when codec construction unwinds without a return.
+	var partial *methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]
+	cfg.CodecOptions = []CodecOption{func(*messageCodec) { panic("codec construction failed") }}
+	require.PanicsWithValue(t, "codec construction failed", func() {
+		_, _ = NewMessageHandler("", "failure", "unix:///tmp/unused-method-failure.sock", cfg, pool,
+			func(s *methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) { partial = s })
+	})
+	require.ErrorIs(t, partial.requestCtx.Err(), context.Canceled)
+}
+
+func TestMethodBasedServerAsyncContextProvenance(t *testing.T) {
+	for _, name := range []string{"native", "mixed", "unmarked", "detached", "cross owner", "cutover"} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := newTestMethodServer(t, Config{})
+			pool := s.pool
+			var foreign *methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]
+			decode := func(source *methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) RPCMessage {
+				t.Helper()
+				codec := source.rpc.(*server).codec
+				ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+				defer cancel()
+				out := buf.NewByteBuf(128)
+				defer out.Close()
+				require.NoError(t, codec.Encode(RPCMessage{Ctx: ctx, Message: &testMethodBasedMessage{method: 1}}, out, nil))
+				v, ok, err := codec.Decode(out)
+				require.NoError(t, err)
+				require.True(t, ok)
+				return v.(RPCMessage)
+			}
+			started, done, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var closeErr error
+			closeServer := sync.OnceFunc(func() { go func() { closeErr = s.Close(); close(closed) }() })
+			var request RPCMessage
+			t.Cleanup(func() {
+				if request.Cancel != nil {
+					request.Cancel()
+				}
+				closeServer()
+				select {
+				case <-closed:
+				case <-time.After(time.Second):
+					t.Error("provenance cleanup failed")
+				}
+			})
+			s.RegisterMethod(1, func(ctx context.Context, _ *testMethodBasedMessage, _ *testMethodBasedMessage, _ *Buffer) error {
+				close(started)
+				<-ctx.Done()
+				close(done)
+				return ctx.Err()
+			}, true)
+			if name == "mixed" {
+				s.RegisterMethod(2, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error { return nil }, false)
+			}
+			source := s
+			if name == "cross owner" {
+				foreign, _ = newTestMethodServer(t, Config{})
+				source = foreign
+			}
+			request = decode(source)
+			if foreign != nil {
+				received := request.Message.(*testMethodBasedMessage)
+				target := pool.AcquireRequest()
+				*target = *received
+				foreign.pool.ReleaseRequest(received)
+				request.Message = target
+			}
+			if name == "mixed" {
+				require.Nil(t, request.nativeContextDone)
+			} else {
+				require.Equal(t, request.Ctx.Done(), request.nativeContextDone)
+			}
+			if name == "detached" || name == "unmarked" {
+				original := request.Ctx
+				request.Cancel() // retire the old native timeout before replacing it
+				parent := context.Background()
+				if name == "detached" {
+					parent = context.WithoutCancel(original)
+				}
+				request.Ctx, request.Cancel = context.WithTimeout(parent, time.Hour)
+			}
+			if name == "cutover" {
+				s.RegisterMethod(2, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error { return nil }, false)
+				later := decode(s)
+				require.Nil(t, later.nativeContextDone)
+				later.Cancel()
+				pool.ReleaseRequest(later.Message.(*testMethodBasedMessage))
+				s.RegisterMethod(2, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error { return nil }, true)
+				later = decode(s)
+				require.Nil(t, later.nativeContextDone, "capability must not reset on replacement")
+				later.Cancel()
+				pool.ReleaseRequest(later.Message.(*testMethodBasedMessage))
+			}
+			cs := &testMethodBasedClientSession{write: func(_ context.Context, resp Message) error {
+				pool.ReleaseResponse(resp.(*testMethodBasedMessage))
+				return nil
+			}}
+			require.NoError(t, s.onMessage(request.Ctx, request, 0, cs))
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("handler did not start")
+			}
+			closeServer()
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				t.Fatal("Close did not cancel the effective request context")
+			}
+			require.NoError(t, closeErr)
+			select {
+			case <-done:
+			default:
+				t.Fatal("Close did not join the borrower")
+			}
+			require.ErrorIs(t, request.Ctx.Err(), context.Canceled)
+			if foreign != nil {
+				require.NoError(t, foreign.requestCtx.Err(), "other owner's root must remain live")
+			}
 		})
 	}
 }

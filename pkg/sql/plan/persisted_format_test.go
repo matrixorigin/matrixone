@@ -34,7 +34,7 @@ import (
 )
 
 func TestPersistedFormatCatalogCompatibility(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -53,7 +53,7 @@ func TestPersistedFormatCatalogCompatibility(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					built, err := BuildPlan(ctx, stmt, false)
+					built, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
 					require.NoError(t, err)
@@ -81,6 +81,29 @@ func TestPersistedFormatCatalogCompatibility(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPersistedMediumIntCatalogType(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"CREATE TABLE mediumint_catalog (m MEDIUMINT, mu MEDIUMINT UNSIGNED, display_int INT(24))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false, nil)
+	require.NoError(t, err)
+
+	data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
+	require.NoError(t, err)
+	var loaded planpb.TableDef
+	require.NoError(t, proto.Unmarshal(data, &loaded))
+	require.Len(t, loaded.Cols, 4, "the optimizer adds its hidden row identifier")
+	require.Equal(t, int32(types.T_int32), loaded.Cols[0].Typ.Id)
+	require.Equal(t, int32(24), loaded.Cols[0].Typ.Width)
+	require.Equal(t, int32(types.T_uint32), loaded.Cols[1].Typ.Id)
+	require.Equal(t, int32(24), loaded.Cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_int32), loaded.Cols[2].Typ.Id)
+	require.Equal(t, int32(32), loaded.Cols[2].Typ.Width,
+		"INT(24) display width must remain distinct from MEDIUMINT domain metadata")
 }
 
 func TestPersistedFormatRoundingAndProjection(t *testing.T) {
@@ -127,7 +150,7 @@ func TestPersistedFormatRoundingAndProjection(t *testing.T) {
 }
 
 func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	for _, precision := range []string{
 		"cast('2024-01-01' as date)",
@@ -140,7 +163,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 				"create table t(a varchar(64) default ("+call+"), g varchar(64) generated always as ("+call+") stored, check ("+call+" is not null))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
 			require.NoError(t, err)
@@ -152,7 +175,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 			require.False(t, features.IntegerParameterCoercion)
 			require.False(t, features.FormatNumericArguments)
 			def := loaded.Cols[0].Default
-			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString)
+			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString, "col")
 			require.NoError(t, err)
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
@@ -224,7 +247,7 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	update, err := buildOnUpdate(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
-	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false), typ, true, "format(2.5, 0)")
+	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)", "col")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name string

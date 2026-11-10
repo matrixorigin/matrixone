@@ -137,9 +137,9 @@ id
 select * from table01 limit 0;
 id
 select * from table02 limit 0;
-no such table db01.table02
+SQL parser error: table "table02" does not exist
 select * from system.table03 limit 0;
-no such table system.table03
+SQL parser error: table "table03" does not exist
 create snapshot snapshot01 for account sys;
 select * from table01 {snapshot = 'snapshot01'} limit 0;
 id

@@ -22,18 +22,311 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
+
+type cdcCandidateRow struct {
+	database, table string
+	constraint      []byte
+	hasPK           bool
+}
+
+func cdcCandidateTestResult(t *testing.T, mp *mpool.MPool, rows ...cdcCandidateRow) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(len(rows))
+	ids, dbIDs, accounts := make([]uint64, len(rows)), make([]uint64, len(rows)), make([]uint32, len(rows))
+	tables, databases, ddl := make([]string, len(rows)), make([]string, len(rows)), make([]string, len(rows))
+	constraints, keys := make([][]byte, len(rows)), make([]bool, len(rows))
+	for i, row := range rows {
+		ids[i], dbIDs[i], accounts[i] = uint64(i+1), 1, 7
+		tables[i], databases[i], constraints[i], keys[i] = row.table, row.database, row.constraint, row.hasPK
+	}
+	require.NoError(t, executor.AppendFixedRows(result, 0, ids))
+	require.NoError(t, executor.AppendStringRows(result, 1, tables))
+	require.NoError(t, executor.AppendFixedRows(result, 2, dbIDs))
+	require.NoError(t, executor.AppendStringRows(result, 3, databases))
+	require.NoError(t, executor.AppendStringRows(result, 4, ddl))
+	require.NoError(t, executor.AppendFixedRows(result, 5, accounts))
+	require.NoError(t, executor.AppendBytesRows(result, 6, constraints))
+	require.NoError(t, executor.AppendFixedRows(result, 7, keys))
+	return result.GetResult()
+}
+
+func cdcPitrTestResult(t *testing.T, mp *mpool.MPool) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+	require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+	return result.GetResult()
+}
+
+func setCDCOptionTestExecutor(t *testing.T, service string, exec *recordingInternalSQLExecutor) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime(service)
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
+
+func TestValidateCDCTargetIdentityCatalog(t *testing.T) {
+	const query = "SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0"
+	for _, tc := range []struct {
+		name      string
+		setup     func(sqlmock.Sqlmock)
+		wantError string
+	}{
+		{
+			name: "supported catalog",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
+			},
+		},
+		{
+			name: "missing columns",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnError(fmt.Errorf("unknown column"))
+			},
+			wantError: "target identity catalog columns are not available",
+		},
+		{
+			name: "unexpected row",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}).AddRow(uint64(1), "id"))
+			},
+			wantError: "probe unexpectedly returned a row",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			defer db.Close()
+			tc.setup(mock)
+			err = validateCDCTargetIdentityCatalog(context.Background(), db)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestCheckPitrGranularityWildcardRejectsNoPrimaryKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", "without_pk", nil, false}), nil
+		}
+		return cdcPitrTestResult(t, proc.Mp()), nil
+	}}
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
+
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{
+		Database: "db", Table: cdc.CDCPitrGranularity_All,
+	}}}}
+	err := c.checkPitrGranularity(ctx, pts, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "db.without_pk")
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "mo_tables")
+	require.Contains(t, exec.sqls[0], "mo_columns")
+}
+
+func TestCheckPitrGranularityMalformedUTF8FiltersCatalogSupersetLocally(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	malformed := string([]byte{'1', 0xe9, 'A'})
+
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"unrelated", "orders", nil, false}, cdcCandidateRow{string([]byte{'1', 0xe9, 'a'}), "orders", nil, true}), nil
+		}
+		return cdcPitrTestResult(t, proc.Mp()), nil
+	}}
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
+
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{SourceCaseMode: 2, Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{
+		Database: malformed, Table: "orders",
+	}}}}
+	require.NoError(t, c.checkPitrGranularity(ctx, pts, ""))
+	require.NotEmpty(t, exec.sqls)
+	require.NotContains(t, exec.sqls[0], "lower(tbl.reldatabase)")
+	require.Contains(t, exec.sqls[0], "lower(tbl.relname) IN ('orders')")
+}
+
+func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	candidateResult := func(table string) executor.Result {
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", table, nil, table == "with_pk"})
+	}
+	validPitrResult := func() executor.Result {
+		return cdcPitrTestResult(t, proc.Mp())
+	}
+
+	for _, tc := range []struct{ name, table, exclude string }{
+		{name: "excluded no primary key", table: "without_pk", exclude: `^db\.without_pk$`},
+		{name: "visible primary key", table: "with_pk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, catalog.MO_TABLES) {
+					return candidateResult(tc.table), nil
+				}
+				return validPitrResult(), nil
+			}}
+			setCDCOptionTestExecutor(t, proc.GetService(), exec)
+			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}}}}
+			require.NoError(t, c.checkPitrGranularity(ctx, pts, tc.exclude))
+			require.Len(t, exec.sqls, 2)
+			require.Contains(t, exec.sqls[0], "mo_columns")
+			require.NotContains(t, exec.sqls[1], "mo_columns")
+		})
+	}
+}
+
+func TestCheckPitrGranularityConcreteForeignKeyIsSkipped(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{&engine.ForeignKeyDef{
+		Fkeys: []*plan.ForeignKeyDef{{Name: "fk", Cols: []uint64{1}, ForeignTbl: 2, ForeignCols: []uint64{1}}},
+	}}}).MarshalBinary()
+	require.NoError(t, err)
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if !strings.Contains(sql, catalog.MO_TABLES) {
+			return cdcPitrTestResult(t, proc.Mp()), nil
+		}
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", "child", constraint, false}), nil
+	}}
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "child"}}}}
+	require.NoError(t, c.checkPitrGranularity(ctx, pts, ""))
+	require.Contains(t, exec.sqls[0], "mo_tables")
+}
+
+func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	candidateResult := func(dbName, tableName string, hasPK bool) executor.Result {
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{dbName, tableName, nil, hasPK})
+	}
+	validPitrResult := func() executor.Result {
+		return cdcPitrTestResult(t, proc.Mp())
+	}
+
+	for _, tc := range []struct {
+		name, exclude  string
+		hasPK, wantErr bool
+	}{
+		{name: "visible primary key", hasPK: true},
+		{name: "missing primary key", wantErr: true},
+		{name: "excluded missing primary key", exclude: `^db\.table$`, wantErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, catalog.MO_TABLES) {
+					return candidateResult("db", "table", tc.hasPK), nil
+				}
+				return validPitrResult(), nil
+			}}
+			setCDCOptionTestExecutor(t, proc.GetService(), exec)
+			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
+			err := c.checkPitrGranularity(ctx, pts, tc.exclude)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	t.Run("mode two uses case insensitive candidate query", func(t *testing.T) {
+		exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, catalog.MO_TABLES) {
+				require.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+				require.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+				return candidateResult("MixedDB", "Orders", true), nil
+			}
+			return validPitrResult(), nil
+		}}
+		setCDCOptionTestExecutor(t, proc.GetService(), exec)
+		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+		defer c.Release()
+		pts := &cdc.PatternTuples{
+			SourceCaseMode: 2,
+			Pts:            []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "mixeddb", Table: "orders"}}},
+		}
+		require.NoError(t, c.checkPitrGranularity(ctx, pts, ""))
+	})
+
+	t.Run("invalid concrete exclude is returned", func(t *testing.T) {
+		exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, catalog.MO_TABLES) {
+				return candidateResult("db", "table", true), nil
+			}
+			return validPitrResult(), nil
+		}}
+		setCDCOptionTestExecutor(t, proc.GetService(), exec)
+		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+		defer c.Release()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
+		require.Error(t, c.checkPitrGranularity(ctx, pts, "["))
+	})
+}
 
 type cdcRecordingSQLExecutor struct {
 	queries []string
@@ -77,30 +370,123 @@ func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	require.NotContains(t, err.Error(), "invalid level")
 }
 
+// setupCDCTimestampCompileTest stubs the sink/source connection probe and the
+// catalog executor so option validation reaches the StartTs/EndTs handling,
+// and returns a CreateCDC plan builder that always carries a valid table level.
+func setupCDCTimestampCompileTest(t *testing.T) (c *Compile, newPlan func(option ...string) *plan.CreateCDC) {
+	proc := testutil.NewProcess(t)
+
+	// Level validation runs before the timestamp options and queries the
+	// catalog for the source pattern; admit db1.t1 with a visible primary key
+	// and a valid PITR so the assertions reach the StartTs/EndTs handling.
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db1", "t1", nil, true}), nil
+		}
+		return cdcPitrTestResult(t, proc.Mp()), nil
+	}}
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
+	c = NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	t.Cleanup(c.Release)
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
+	})
+	t.Cleanup(stubOpenDbConn.Reset)
+
+	levelOpt := []string{cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table}
+	return c, func(option ...string) *plan.CreateCDC {
+		return &plan.CreateCDC{
+			TaskName:  "task1",
+			SourceUri: "mysql://root:111@127.0.0.1:6001",
+			SinkType:  cdc.CDCSinkType_MySQL,
+			SinkUri:   "mysql://root:111@127.0.0.1:3306",
+			Tables:    "db1.t1:db1.t1",
+			Option:    append(levelOpt, option...),
+		}
+	}
+}
+
+// TestCDCCreateTaskOptionsStartTsEndTsFractionalPrecision locks the documented
+// persistence contract in the compile option-validation path: fractional
+// RFC3339 boundaries persist at full precision for both options.
+func TestCDCCreateTaskOptionsStartTsEndTsFractionalPrecision(t *testing.T) {
+	c, newPlan := setupCDCTimestampCompileTest(t)
+
+	var opts CDCCreateTaskOptions
+	require.NoError(t, opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_StartTs, "2026-11-06T03:02:35.123Z",
+		cdc.CDCRequestOptions_EndTs, "2026-11-07T03:02:35.123456789Z",
+	)))
+	require.Equal(t, "2026-11-06T03:02:35.123Z", opts.StartTs)
+	require.Equal(t, "2026-11-07T03:02:35.123456789Z", opts.EndTs)
+}
+
+// TestCDCCreateTaskOptionsStartTsEndTsZoneDisclosureError locks the documented
+// diagnostic contract in the compile option-validation path: an invalid
+// StartTs or EndTs value fails with an error that discloses the
+// session-time-zone interpretation of the unzoned format.
+func TestCDCCreateTaskOptionsStartTsEndTsZoneDisclosureError(t *testing.T) {
+	c, newPlan := setupCDCTimestampCompileTest(t)
+
+	var opts CDCCreateTaskOptions
+	err := opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_StartTs, "123456",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+
+	err = opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_EndTs, "not-a-time",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+}
+
+func TestCDCCreateTaskDetailsPreserveIdentity(t *testing.T) {
+	opts := &CDCCreateTaskOptions{
+		TaskId: "task-id", TaskName: "task-name",
+		UserInfo: &CDCUserInfo{AccountId: 42, AccountName: "tenant", UserName: "user"},
+	}
+	details, err := opts.BuildTaskDetails()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), details.AccountID)
+	require.Equal(t, "tenant", details.Account)
+	require.Equal(t, "user", details.Username)
+	require.Equal(t, "task-id", details.GetCreateCdc().TaskId)
+	require.Equal(t, "task-name", details.GetCreateCdc().TaskName)
+	require.Equal(t, []*task.Account{{Id: 42, Name: "tenant"}}, details.GetCreateCdc().Accounts)
+}
+
 func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
 
 	stableOpts := fmt.Sprintf(
-		`{"%s":"%s"}`,
+		`{"%s":"%s","%s":"%s"}`,
 		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
 		cdc.CDCInitialSnapshotProtocolStableEpoch,
+		cdc.CDCTaskExtraOptions_GenerationProtocol,
+		cdc.CDCGenerationAwareProtocolV2,
 	)
 	stable := (&CDCCreateTaskOptions{
 		TaskId:    "stable",
 		ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, stable.Executor)
 
 	noFull := (&CDCCreateTaskOptions{
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFull.Executor)
 	lossless := (&CDCCreateTaskOptions{
 		TaskId: "no-full-hlc", NoFull: true,
-		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s","%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC, cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2),
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, lossless.Executor)
 }
 
 func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
@@ -127,6 +513,25 @@ func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
 	require.Empty(t, noSnapshot.StartTs)
 }
 
+func TestCDCCreateTaskOptionsSourcePatternCode(t *testing.T) {
+
+	patternOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_SourcePatternProtocol,
+		cdc.CDCSourcePatternProtocolV1,
+	)
+	noFullPattern := (&CDCCreateTaskOptions{
+		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFullPattern.Executor)
+	combined := fmt.Sprintf(`{"%s":"%s","%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_SourcePatternProtocol, cdc.CDCSourcePatternProtocolV1,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, (&CDCCreateTaskOptions{
+		TaskId: "no-full-pattern-lossless", NoFull: true, ExtraOpts: combined,
+	}).BuildTaskMetadata().Executor)
+}
+
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := &Compile{proc: proc}
@@ -140,13 +545,17 @@ func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 		}
 	}()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
 	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
-		context.Background(), c, true), "protocol version 48")
+		context.Background(), c, true), "protocol version 58")
 	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
 		context.Background(), c, false))
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true), "protocol version 58")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
 	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
 		context.Background(), c, true))
 

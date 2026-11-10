@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMemoryFS(t *testing.T) {
@@ -42,6 +43,38 @@ func TestMemoryFS(t *testing.T) {
 		})
 	})
 
+}
+
+func TestMemoryFSListAllowsMutation(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	write := func(name string) {
+		t.Helper()
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: "dir/" + name, Entries: []IOEntry{{Size: 1, Data: []byte("x")}}}))
+	}
+	write("a")
+	write("b")
+	var names []string
+	for entry, err := range fs.List(ctx, "dir") {
+		require.NoError(t, err)
+		names = append(names, entry.Name)
+		if len(names) == 1 {
+			require.NoError(t, fs.Delete(ctx, "dir/a", "dir/b"))
+			write("c")
+		}
+	}
+	require.Equal(t, []string{"a", "b"}, names)
+	entries, err := SortedList(fs.List(ctx, "dir"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "c", entries[0].Name)
+	for _, err := range fs.List(ctx, "dir") {
+		require.NoError(t, err)
+		break
+	}
+	require.NoError(t, fs.Delete(ctx, "dir/c"), "breaking iteration must release its snapshot")
 }
 
 func BenchmarkMemoryFS(b *testing.B) {

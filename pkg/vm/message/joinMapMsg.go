@@ -267,33 +267,78 @@ func (p *SpillBuildPayload) Close() error {
 	return firstErr
 }
 
-// SpillFile binds one anonymous spill descriptor to the accounting ownership
-// that made the file admissible.  Ownership is transferred by moving the
-// SpillFile pointer; Close is the only terminal operation and is idempotent.
-// Keeping the release callback SQL-agnostic avoids a message -> process import
-// cycle while still ensuring disk/FD tokens follow the physical file.
+// SpillFile binds one spill payload to the accounting ownership that made the
+// file admissible. Ownership is transferred by moving the SpillFile pointer;
+// Close is the only terminal operation and is idempotent.
+//
+// Queued partitions retain a local path and disk ownership but no descriptor.
+// Open acquires the descriptor only when the
+// partition becomes the active reader. Keeping callbacks SQL-agnostic avoids a
+// message -> process import cycle while still keeping physical cleanup with the
+// move-only payload.
 type SpillFile struct {
 	mu          sync.Mutex
 	fd          *os.File
+	open        func(context.Context) (*os.File, error)
+	remove      func() error
 	rows        int64
 	bytes       uint64
 	release     func()
+	removeOnce  sync.Once
+	removeErr   error
 	releaseOnce sync.Once
 }
 
-func NewSpillFile(fd *os.File, rows int64, bytes uint64, release func()) *SpillFile {
-	return &SpillFile{fd: fd, rows: rows, bytes: bytes, release: release}
+// NewReopenableSpillFile creates a dormant spill payload. open must return the
+// complete file from offset zero. remove owns the stable name and must be safe
+// to invoke after a failed open or an already-removed path.
+func NewReopenableSpillFile(
+	open func(context.Context) (*os.File, error),
+	remove func() error,
+	rows int64,
+	bytes uint64,
+	release func(),
+) *SpillFile {
+	return &SpillFile{
+		open: open, remove: remove, rows: rows, bytes: bytes, release: release,
+	}
 }
 
-// File returns the descriptor to its current single owner.  Callers must not
-// retain it after transferring or closing the SpillFile.
-func (f *SpillFile) File() *os.File {
+// NeedsOpen reports whether this payload is dormant. The caller uses this to
+// admit one FD before Open performs the physical open side effect.
+func (f *SpillFile) NeedsOpen() bool {
 	if f == nil {
-		return nil
+		return false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.fd
+	return f.fd == nil && f.open != nil
+}
+
+// Open makes a dormant spill payload readable. A payload has one move-only
+// owner, so a successful descriptor remains attached until Close.
+func (f *SpillFile) Open(ctx context.Context) (*os.File, error) {
+	if f == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil spill file")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fd != nil {
+		return f.fd, nil
+	}
+	if f.open == nil {
+		return nil, moerr.NewInternalErrorNoCtx("closed spill file")
+	}
+	fd, err := f.open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateSpillFileDescriptor(fd, f.rows, f.bytes); err != nil {
+		_ = fd.Close()
+		return nil, err
+	}
+	f.fd = fd
+	return fd, nil
 }
 
 func (f *SpillFile) Rows() int64 {
@@ -320,24 +365,40 @@ func (f *SpillFile) Validate() error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fd == nil && f.open != nil {
+		if f.rows <= 0 {
+			return moerr.NewInternalErrorNoCtx("corrupted spill file row count metadata")
+		}
+		if f.bytes == 0 {
+			return moerr.NewInternalErrorNoCtx("corrupted spill file size metadata")
+		}
+		return nil
+	}
 	if f.fd == nil {
 		return moerr.NewInternalErrorNoCtx("invalid spill file metadata")
 	}
-	if f.rows <= 0 {
+	return validateSpillFileDescriptor(f.fd, f.rows, f.bytes)
+}
+
+func validateSpillFileDescriptor(fd *os.File, rows int64, bytes uint64) error {
+	if fd == nil {
+		return moerr.NewInternalErrorNoCtx("invalid spill file metadata")
+	}
+	if rows <= 0 {
 		return moerr.NewInternalErrorNoCtx("corrupted spill file row count metadata")
 	}
-	if f.bytes == 0 {
+	if bytes == 0 {
 		return moerr.NewInternalErrorNoCtx("corrupted spill file size metadata")
 	}
-	info, err := f.fd.Stat()
+	info, err := fd.Stat()
 	if err != nil {
 		return err
 	}
-	if info.Size() < 0 || uint64(info.Size()) != f.bytes {
+	if info.Size() < 0 || uint64(info.Size()) != bytes {
 		return moerr.NewInternalErrorf(
 			context.Background(),
 			"corrupted spill file size: expected=%d actual=%d",
-			f.bytes,
+			bytes,
 			info.Size(),
 		)
 	}
@@ -351,18 +412,25 @@ func (f *SpillFile) Close() error {
 	f.mu.Lock()
 	fd := f.fd
 	f.fd = nil
+	f.open = nil
 	f.mu.Unlock()
 	var err error
 	if fd != nil {
 		err = fd.Close()
 	}
+	f.removeOnce.Do(func() {
+		if f.remove != nil {
+			f.removeErr = f.remove()
+			f.remove = nil
+		}
+	})
 	f.releaseOnce.Do(func() {
 		if f.release != nil {
 			f.release()
 			f.release = nil
 		}
 	})
-	return err
+	return errors.Join(err, f.removeErr)
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {

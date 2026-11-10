@@ -41,21 +41,7 @@ func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntr
 	if viewName == "TABLES" || viewName == "COLUMNS" {
 		requiredProtocol = defines.MORPCVersion46
 	}
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               viewName,
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  viewDDL,
-		RequiredProtocolVersion: requiredProtocol,
-		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
-			if err != nil {
-				return false, err
-			}
-			return exists && viewDef == viewDDL, nil
-		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-	}
+	return versions.InformationSchemaViewUpgradeEntry(viewName, viewDDL, requiredProtocol)
 }
 
 // upgradeInformationSchemaViewFromLegacyTable converges an information_schema
@@ -63,21 +49,9 @@ func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntr
 // all SQL fully qualified because tenant upgrade transactions use mo_catalog as
 // their default database.
 func upgradeInformationSchemaViewFromLegacyTable(viewName, viewDDL string) versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: viewName,
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
-			if err != nil {
-				return false, err
-			}
-			return exists && viewDef == viewDDL, nil
-		},
-		PreSql:  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		PostSql: viewDDL,
-	}
+	entry := upgradeInformationSchemaView(viewName, viewDDL)
+	entry.UpgType = versions.RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
+	return entry
 }
 
 func upgradeIcebergCatalogIDAllocator() versions.UpgradeEntry {

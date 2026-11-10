@@ -236,7 +236,7 @@ func TestInsertRejectsDuplicateTargetColumns(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, tc.query)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.query)
 			require.Error(t, err)
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -258,7 +258,7 @@ func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
 	}
 	for _, query := range queries {
 		t.Run(query, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := runOneStmt(mock, t, query)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
@@ -276,7 +276,7 @@ func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
 }
 
 func TestInsertSelectMarksCrossTableTargetPKDedupInputUnique(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// The mock catalog omits Type.Table by default. Populate its two real table
 	// entries so Resolve returns the same distinct provenance as production.
 	for _, tableName := range []string{"emp", "employees"} {
@@ -315,7 +315,7 @@ func TestInsertSelectMarksCrossTableTargetPKDedupInputUnique(t *testing.T) {
 }
 
 func TestInsertSelectInputUniqueProofRequiresProtocolVersion21(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)

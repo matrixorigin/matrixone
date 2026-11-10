@@ -52,7 +52,7 @@ func TestDecimal128IntDivCorrectness(t *testing.T) {
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.expected}, []bool{false}),
 			integerDivFn,
 		)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

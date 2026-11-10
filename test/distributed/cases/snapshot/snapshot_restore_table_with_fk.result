@@ -30,25 +30,25 @@ t5    BASE TABLE
 t6    BASE TABLE
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
+a    int    NO    PRI    null        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null        
+a    int    YES    MUL    null        
 desc t6;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null        
+a    int    YES    MUL    null        
 select * from t1;
 a
 1
@@ -92,25 +92,25 @@ t5    BASE TABLE
 t6    BASE TABLE
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
+a    int    NO    PRI    null        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES    MUL    null        
+a    int    NO    PRI    null        
+b    int    YES    MUL    null        
 desc t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null        
+a    int    YES    MUL    null        
 desc t6;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null        
+a    int    YES    MUL    null        
 select * from t1;
 a
 1

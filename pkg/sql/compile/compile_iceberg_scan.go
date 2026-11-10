@@ -133,7 +133,7 @@ func (c *Compile) compileIcebergScanWithAccessForPlanNode(planNodeID int32, node
 			Parallel:   true,
 		},
 	}
-	scopes, err := c.compileExternScanIcebergFileFanout(node, param, runtime, strictSqlMode)
+	scopes, err := c.compileExternScanIcebergCoordinator(node, param, runtime, strictSqlMode)
 	if err != nil {
 		return nil, err
 	}

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -35,7 +35,7 @@ import (
 // queries. The go-elasticsearch client is safe for concurrent use and pools
 // HTTP connections in its private transport.
 type EsqlConn struct {
-	es *elasticsearch.Client
+	es esapi.Transport
 	// transport is the client's private http.Transport, kept so Close can
 	// release its idle keep-alive sockets (the client itself has no Close).
 	transport *http.Transport
@@ -131,16 +131,6 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
 	}
-	cfg := elasticsearch.Config{
-		Addresses:              c.Addresses,
-		Username:               c.Username,
-		Password:               c.Password,
-		CloudID:                c.CloudID,
-		APIKey:                 c.APIKey,
-		ServiceToken:           c.ServiceToken,
-		CertificateFingerprint: c.CertificateFingerprint,
-		Transport:              transport,
-	}
 	// Until ownership transfers to the returned EsqlConn, every failure path
 	// must close the private transport's keep-alive sockets itself — a failed
 	// connect is never admitted to the session cache, so nothing else would
@@ -153,17 +143,22 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 			transport.CloseIdleConnections()
 		}
 	}()
-	es, err := elasticsearch.NewClient(cfg)
+	es, err := c.newClient(transport)
 	if err != nil {
 		return nil, moerr.NewInvalidInputf(ctx, "esql_tvf: cannot create elasticsearch client: %v", err)
 	}
-	res, err := es.Info(es.Info.WithContext(ctx))
+	res, err := (esapi.InfoRequest{}).Do(ctx, es)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: cannot reach elasticsearch: %v", err)
 	}
 	defer res.Body.Close()
-	if res.IsError() {
+	if res.StatusCode < http.StatusOK || res.IsError() {
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: elasticsearch returned %s", res.Status())
+	}
+	// Admission requires a normal, genuine Elasticsearch Info response. Once
+	// admitted, the SDK would memoize this check for every subsequent query.
+	if res.Header.Get("X-Elastic-Product") != "Elasticsearch" {
+		return nil, moerr.NewInternalError(ctx, "esql_tvf: cannot reach elasticsearch: the client noticed that the server is not Elasticsearch and we do not support this unknown product")
 	}
 	owned = true
 	return &EsqlConn{es: es, transport: transport}, nil
@@ -189,11 +184,10 @@ func (c *EsqlConn) Query(ctx context.Context, esql string) (io.ReadCloser, error
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.es.EsqlQuery(
-		bytes.NewReader(body),
-		c.es.EsqlQuery.WithContext(ctx),
-		c.es.EsqlQuery.WithFormat("csv"),
-	)
+	res, err := (esapi.EsqlQueryRequest{
+		Body:   bytes.NewReader(body),
+		Format: "csv",
+	}).Do(ctx, c.es)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: query failed: %v", err)
 	}

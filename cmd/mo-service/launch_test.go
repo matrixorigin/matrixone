@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -227,7 +228,7 @@ func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
 		t.Run(fmt.Sprintf("child-%d", failAt), func(t *testing.T) {
 			setLaunchTestHooks(t)
 			baseDir := t.TempDir()
-			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
 			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
 			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 			cfg := &LaunchConfig{
@@ -287,7 +288,7 @@ func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
 func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
 	setLaunchTestHooks(t)
 	baseDir := t.TempDir()
-	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
 	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
 	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 	cfg := &LaunchConfig{
@@ -682,8 +683,8 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 		validConfig string
 	}{
 		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"LOG\"\n"},
-		{"tn", func(files []string) error { _, err := startTNServiceCluster(ctx, files, nil, nil); return err }, false, "service-type=\"TN\"\n"},
-		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil, false) }, false, "service-type=\"CN\"\n"},
+		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"TN\"\n"},
+		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"CN\"\n"},
 		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"PROXY\"\n"},
 		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true, "service-type=\"PYTHON_UDF\"\n"},
 	}
@@ -721,14 +722,14 @@ func TestLaunchRejectsMisclassifiedServiceConfigs(t *testing.T) {
 	}
 
 	cnInTNServices := writeLaunchTestFile(t, "cn-in-tnservices.toml", "service-type=\"CN\"\n[tn.GCCfg]\ndisable-gc=true\n")
-	_, err := startTNServiceCluster(context.Background(), []string{cnInTNServices}, nil, nil)
+	err := startTNServiceCluster(context.Background(), []string{cnInTNServices}, nil, nil)
 	require.ErrorContains(t, err, "expected TN")
 	require.Empty(t, started)
 
 	tnInCNServices := writeLaunchTestFile(t, "tn-in-cnservices.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
-	benchmarkCN := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	validCN := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
 	started = started[:0]
-	err = startCNServiceCluster(context.Background(), []string{tnInCNServices, benchmarkCN}, nil, nil, true)
+	err = startCNServiceCluster(context.Background(), []string{tnInCNServices, validCN}, nil, nil)
 	require.ErrorContains(t, err, "expected CN")
 	require.Empty(t, started)
 }
@@ -749,7 +750,7 @@ func TestStartClusterRejectsMisclassifiedManifestBeforeAnyService(t *testing.T) 
 			wrongTN := writeLaunchTestFile(t, "wrong-tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
 			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
 			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=true\n")
-			cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+			cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
 			proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n")
 			pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
 			entries := map[string]string{
@@ -775,68 +776,6 @@ func TestStartClusterRejectsMisclassifiedManifestBeforeAnyService(t *testing.T) 
 	}
 }
 
-func TestLaunchTNGCDisabledProof(t *testing.T) {
-	setLaunchTestHooks(t)
-	tn := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-1\"\n[tn.GCCfg]\ndisable-gc=true\n")
-	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
-		return nil
-	}
-	proof, err := startTNServiceCluster(context.Background(), []string{tn}, nil, nil)
-	require.NoError(t, err)
-	require.True(t, proof)
-
-	tnWithoutGC := writeLaunchTestFile(t, "tn-with-gc.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-2\"\n")
-	proof, err = startTNServiceCluster(context.Background(), []string{tnWithoutGC}, nil, nil)
-	require.NoError(t, err)
-	require.False(t, proof)
-
-	proof, err = startTNServiceCluster(context.Background(), []string{tn, tnWithoutGC}, nil, nil)
-	require.NoError(t, err)
-	require.False(t, proof)
-
-	cn := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
-	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
-		require.True(t, cfg.benchmarkTNNoGC)
-		require.NoError(t, cfg.verifySiriusBenchmarkNoGC())
-		return nil
-	}
-	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, true))
-}
-
-func TestStandaloneCNConfigCannotAssertTNGCDisabled(t *testing.T) {
-	cn := writeLaunchTestFile(t, "standalone-cn.toml", `service-type = "CN"
-[cn.sirius]
-enabled = true
-benchmark-no-gc = true
-[tn.GCCfg]
-disable-gc = true
-`)
-	cfg := NewConfig()
-	require.NoError(t, parseConfigFromFile(cn, cfg))
-	require.True(t, cfg.getTNServiceConfig().GCCfg.DisableGC)
-	require.False(t, cfg.benchmarkTNNoGC)
-	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "launcher-verified")
-}
-
-func TestOrdinaryCNClusterDoesNotReadLaunchTNProof(t *testing.T) {
-	setLaunchTestHooks(t)
-	*launchFile = filepath.Join(t.TempDir(), "missing-launch.toml")
-	cn := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
-	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
-		return nil
-	}
-	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, false))
-}
-
-func TestStartCNServiceRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
-	cfg := NewConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	cfg.CN.Sirius.Enabled = true
-	cfg.CN.Sirius.BenchmarkNoGC = true
-	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "disable-gc=true")
-	require.ErrorContains(t, startCNService(cfg, nil, nil, nil), "disable-gc=true")
-}
-
 func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	setLaunchTestHooks(t)
 	valid := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
@@ -844,7 +783,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 		return nil
 	}
 	*withProxy = false
-	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil, false); err != nil {
+	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -852,7 +791,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	launchNewProxy = func(string, *zap.Logger) goetty.Proxy {
 		return &testProxy{startErr: startError}
 	}
-	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil, false); !errors.Is(err, startError) {
+	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil); !errors.Is(err, startError) {
 		t.Fatalf("startCNServiceCluster() = %v, want %v", err, startError)
 	}
 }
@@ -1120,5 +1059,24 @@ func TestWaitClusterCondition(t *testing.T) {
 	}
 	if client.closed {
 		t.Fatal("client unexpectedly closed after wait error")
+	}
+}
+
+func TestDynamicCNTemplatesPreserveAddressBindings(t *testing.T) {
+	for _, name := range []string{"launch-dynamic-cn", "launch-dynamic-with-proxy", "v1/launch-dynamic-cn", "v1/launch-dynamic-with-proxy"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, genDynamicCNConfigs(dir, Dynamic{ServiceCount: 2, CNTemplate: filepath.Join("../../etc", name, "cn.toml.base")}))
+			for i := 0; i < 2; i++ {
+				var cfg Config
+				_, err := toml.DecodeFile(filepath.Join(dir, fmt.Sprintf("cn-%d.toml", i)), &cfg)
+				require.NoError(t, err)
+				require.Equal(t, fmt.Sprintf("dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf", baseUUID+i), cfg.CN.UUID)
+				require.Equal(t, basePort+i*100, cfg.CN.PortBase)
+				require.Equal(t, fmt.Sprintf("cn%d", i), cfg.CN.ServiceHost)
+				require.EqualValues(t, baseFrontendPort+i, cfg.CN.Frontend.Port)
+				require.Empty(t, cfg.CN.Txn.Trace.Dir)
+			}
+		})
 	}
 }

@@ -1132,11 +1132,13 @@ func readProxyTestPacket(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	packet := make([]byte, 0, mysqlHeadLen+length)
+	packet = append(packet, header...)
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err
 	}
-	return append(header, payload...), nil
+	return append(packet, payload...), nil
 }
 
 func newPipeServerConnForCacheTest(t *testing.T) (*serverConn, net.Conn, func()) {

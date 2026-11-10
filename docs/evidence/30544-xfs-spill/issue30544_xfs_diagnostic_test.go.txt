@@ -1,0 +1,209 @@
+//go:build issue30544diag && linux
+
+package isolated
+
+import (
+	"bufio"
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+// Explicit diagnostic: requires a private mounted XFS filesystem. All disk
+// sampling/refresh is production code, triggered by real concurrent SQL.
+func TestIssue30544RealXFSSQL(t *testing.T) {
+	root := os.Getenv("ISSUE30544_XFS_ROOT")
+	require.NotEmpty(t, root)
+	var fs syscall.Statfs_t
+	require.NoError(t, syscall.Statfs(root, &fs))
+	require.Equal(t, int64(0x58465342), fs.Type)
+	const rows = 400000
+	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
+		if s.ServiceType() == metadata.ServiceType_CN {
+			s.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ProcessLimitationSpillSize = 0
+				for i := range cfg.FileServices {
+					if strings.EqualFold(cfg.FileServices[i].Name, "LOCAL") {
+						cfg.FileServices[i].DataDir = filepath.Join(root, "local")
+					}
+				}
+			})
+		}
+	}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	service := cn.GetServiceConfig().CN.UUID
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	defer db.Close()
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	monitor, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer monitor.Close()
+	exec := func(q string) { t.Helper(); _, e := conn.ExecContext(ctx, q); require.NoError(t, e, q) }
+	exec("create database xfs_repro")
+	exec("use xfs_repro")
+	defer func() {
+		cc, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stop()
+		_, e := conn.ExecContext(cc, "drop database xfs_repro")
+		require.NoError(t, e)
+	}()
+	exec("set session optimizer_hints='forceOneCN=1'")
+	exec("set session max_dop=4")
+	exec("set session join_spill_mem=1048576")
+	exec("create table wide(a int,b int,p varchar(384),primary key(a,b))")
+	input := filepath.Join(t.TempDir(), "rows.csv")
+	f, err := os.Create(input)
+	require.NoError(t, err)
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	pad := strings.Repeat("x", 384)
+	for i := 0; i < rows; i++ {
+		_, err = fmt.Fprintf(w, "%d,%d,%s\n", i/1000, i%1000, pad)
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Flush())
+	require.NoError(t, f.Close())
+	load := fmt.Sprintf("load data infile '%s' into table wide fields terminated by ',' parallel 'false'", input)
+	r, err := conn.QueryContext(ctx, "explain "+load)
+	require.NoError(t, err)
+	defer r.Close()
+	var lines []string
+	for r.Next() {
+		var line string
+		require.NoError(t, r.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, r.Err())
+	require.NoError(t, r.Close())
+	plan := strings.Join(lines, "\n")
+	t.Logf("PLAN\n%s", plan)
+	require.Contains(t, plan, "shuffle: hash(")
+	var warm int64
+	require.NoError(t, monitor.QueryRowContext(ctx, "select sum(result) from generate_series(1,100) g").Scan(&warm))
+	t.Logf("INITIAL root=%s budget=%+v", root, process.Issue30544BudgetSnapshots()[service])
+	type observation struct {
+		samples, clamps                      int
+		peakLogical, peakAllocated, peakSize uint64
+		err                                  error
+	}
+	stop, done := make(chan struct{}), make(chan observation, 1)
+	go func() {
+		var out observation
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				done <- out
+				return
+			case <-ctx.Done():
+				out.err = ctx.Err()
+				done <- out
+				return
+			case <-ticker.C:
+				// Real public query creates a fresh BaseProcess and refreshes the CN budget.
+				var n int64
+				if e := monitor.QueryRowContext(ctx, "select sum(result) from generate_series(1,100) g").Scan(&n); e != nil {
+					out.err = e
+					done <- out
+					return
+				}
+				s := process.Issue30544BudgetSnapshots()[service]
+				var size, allocated uint64
+				_ = filepath.Walk(filepath.Join(root, "local", "__spill"), func(_ string, info os.FileInfo, e error) error {
+					if e == nil && !info.IsDir() {
+						size += uint64(info.Size())
+						allocated += uint64(info.Sys().(*syscall.Stat_t).Blocks) * 512
+					}
+					return nil
+				})
+				if s.SpillDiskUsed > out.peakLogical {
+					out.peakLogical = s.SpillDiskUsed
+				}
+				if allocated > out.peakAllocated {
+					out.peakAllocated = allocated
+				}
+				if size > out.peakSize {
+					out.peakSize = size
+				}
+				if s.SpillDiskUsed > 0 && s.SpillDiskUsed == s.SpillDiskCap {
+					out.clamps++
+				}
+				_ = syscall.Statfs(root, &fs)
+				if out.samples%10 == 0 || s.SpillDiskUsed > 0 && s.SpillDiskUsed == s.SpillDiskCap {
+					t.Logf("XFS logical=%d file_size=%d allocated=%d available=%d cap=%d", s.SpillDiskUsed, size, allocated, fs.Bavail*uint64(fs.Bsize), s.SpillDiskCap)
+				}
+				out.samples++
+			}
+		}
+	}()
+	joined := false
+	defer func() {
+		if !joined {
+			close(stop)
+			<-done
+		}
+	}()
+	started := time.Now()
+	_, loadErr := conn.ExecContext(ctx, load)
+	close(stop)
+	obs := <-done
+	joined = true
+	t.Logf("RESULT expected=%s elapsed=%s error=%v obs=%+v", os.Getenv("ISSUE30544_EXPECT"), time.Since(started), loadErr, obs)
+	require.NoError(t, obs.err)
+	require.Positive(t, obs.peakLogical)
+	var n, sa, sb int64
+	require.NoError(t, conn.QueryRowContext(ctx, "select count(*),coalesce(sum(a),0),coalesce(sum(b),0) from wide").Scan(&n, &sa, &sb))
+	if os.Getenv("ISSUE30544_EXPECT") == "fail" {
+		require.ErrorContains(t, loadErr, "hash build spill disk budget exceeded")
+		require.Zero(t, n)
+		// Failure unwinds files faster than an external sampler can observe the
+		// clamp. The terminal admission error is its deterministic witness.
+		match := regexp.MustCompile(`used=([0-9]+), limit=([0-9]+)`).FindStringSubmatch(loadErr.Error())
+		require.Len(t, match, 3)
+		require.Equal(t, match[1], match[2])
+		require.Greater(t, obs.peakAllocated, obs.peakLogical)
+	} else {
+		require.NoError(t, loadErr)
+		require.Equal(t, int64(rows), n)
+		require.Equal(t, int64(79800000), sa)
+		require.Equal(t, int64(199800000), sb)
+	}
+	s := process.Issue30544BudgetSnapshots()[service]
+	require.Zero(t, s.SpillDiskUsed)
+	require.Zero(t, s.SpillFDUsed)
+	files := 0
+	_ = filepath.Walk(filepath.Join(root, "local", "__spill"), func(_ string, info os.FileInfo, e error) error {
+		if e == nil && !info.IsDir() {
+			files++
+		}
+		return nil
+	})
+	require.Zero(t, files)
+	// Both success and failure leave SQL execution usable.
+	require.NoError(t, conn.QueryRowContext(ctx, "select 42").Scan(&n))
+	require.Equal(t, int64(42), n)
+}

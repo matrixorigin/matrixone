@@ -42,6 +42,67 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
+func TestRegisteredArgumentType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		input  types.T
+		want   types.T
+		legacy bool
+	}{
+		{"varchar", types.T_varchar, types.T_varchar, false},
+		{"canonical_char", types.T_char, types.T_varchar, false},
+		{"legacy_char", types.T_char, types.T_char, true},
+		{"text", types.T_text, types.T_text, false},
+		{"blob", types.T_blob, types.T_blob, false},
+		{"decimal", types.T_decimal64, types.T_decimal64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(t.Context(), "coalesce", []types.Type{test.input.ToType(), test.input.ToType()})
+			require.NoError(t, err)
+			identity := resolved.GetEncodedOverloadID()
+			if test.legacy {
+				// This retained registered CHAR identity predates canonical binding.
+				identity = encodeOverloadID(COALESCE, 1)
+			}
+			registered, ok := GetFunctionByIdWithoutError(identity)
+			require.True(t, ok)
+			argument, ok := registered.GetArgumentType(0)
+			require.True(t, ok)
+			require.Equal(t, test.want, argument)
+			for _, index := range []int{-1, 1} {
+				argument, ok = registered.GetArgumentType(index)
+				require.False(t, ok)
+				require.Equal(t, types.T_any, argument)
+			}
+		})
+	}
+}
+
+func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
+	decimal := types.New(types.T_decimal64, 10, 2)
+	double := types.T_float64.ToType()
+	doubleScale2 := types.T_float64.ToTypeWithScale(2)
+	for _, test := range []struct {
+		name string
+		in   [2]types.Type
+		want [2]types.Type
+	}{
+		{"double control", [2]types.Type{decimal, double}, [2]types.Type{doubleScale2, double}},
+		{"float32 promotes", [2]types.Type{decimal, types.T_float32.ToType()}, [2]types.Type{doubleScale2, double}},
+		{"float32 first", [2]types.Type{types.T_float32.ToType(), decimal}, [2]types.Type{double, doubleScale2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "+", test.in[:])
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, test.want[:], targets)
+			require.Equal(t, test.want[0], resolved.GetReturnType())
+			require.Equal(t, int32(0), resolved.overloadId)
+		})
+	}
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -289,6 +350,19 @@ func TestComparisonTypeCastRuleNormalizesCharToVarchar(t *testing.T) {
 	require.Equal(t, types.CharsetLegacy, rightOut.Charset)
 }
 
+func TestComparisonTypeCastRulePreservesNativeUnicodeRevision(t *testing.T) {
+	native := types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetUTF8MB4UnicodeCI)
+	defaultText := types.T_varchar.ToType()
+
+	hasCast, left, right := comparisonTypeCastRule(native, defaultText)
+
+	require.True(t, hasCast)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, left.Charset)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, right.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), left.CollationVersion)
+	require.Equal(t, uint8(types.CollationVersionV1), right.CollationVersion)
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -396,8 +470,8 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "+", args: []types.Type{types.T_int8.ToType(), types.T_int16.ToType()},
 			shouldErr:  false,
 			requireFid: PLUS, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.T_int16.ToType(), types.T_int16.ToType()},
-			requireRet: types.T_int16.ToType(),
+			shouldCast: true, requireTyp: []types.Type{types.New(types.T_int64, 64, -1), types.New(types.T_int64, 64, -1)},
+			requireRet: types.New(types.T_int64, 64, -1),
 		},
 
 		{
@@ -447,8 +521,20 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 
 		{
+			// This change adds the two-argument label-aware overload of
+			// internal_numeric_scale: the exact probe that the one-argument
+			// era rejected as an unknown arity now resolves to label-aware
+			// metadata. A scalar INT64 label argument casts through the
+			// base formatted-scalar text width (varchar(20)) rather than the
+			// default maximum VARCHAR width.
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
-			shouldErr: true,
+			shouldErr:  false,
+			requireFid: INTERNAL_NUMERIC_SCALE, requireOid: 1,
+			shouldCast: true, requireTyp: []types.Type{
+				types.T_varchar.ToType(),
+				formattedScalarStringType(types.T_int64.ToType()),
+			},
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_binary.ToType()},
@@ -581,6 +667,16 @@ func TestGetFunctionByNameWithoutError(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPointAliasUsesSTPointFunction(t *testing.T) {
+	args := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+	point, err := GetFunctionByName(context.Background(), "point", args)
+	require.NoError(t, err)
+	stPoint, err := GetFunctionByName(context.Background(), "st_point", args)
+	require.NoError(t, err)
+	require.Equal(t, stPoint.GetEncodedOverloadID(), point.GetEncodedOverloadID())
+	require.Equal(t, stPoint.GetReturnType(), point.GetReturnType())
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -622,7 +718,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, name := range []string{"addtime", "subtime"} {
-		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
 				types.T_time.ToType(), floatType.ToType(),
 			})
@@ -631,6 +728,43 @@ func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 			require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
 			require.Equal(t, int32(6), result.targetTypes[1].Scale)
 			require.Equal(t, int32(6), result.retType.Scale)
+		}
+	}
+}
+
+func TestTimeArithmeticTypedDurationKeepsFractionalPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, tc := range []struct {
+			name       string
+			first      types.Type
+			duration   int32
+			result     types.T
+			scale      int32
+			overloadID int32
+		}{
+			{"date integer", types.T_date.ToType(), 0, types.T_datetime, 0, 2},
+			{"date milliseconds", types.T_date.ToType(), 3, types.T_datetime, 3, 2},
+			{"date microseconds", types.T_date.ToType(), 6, types.T_datetime, 6, 2},
+			{"datetime duration precision", types.T_datetime.ToType(), 6, types.T_datetime, 6, 2},
+			{"datetime first precision", types.T_datetime.ToTypeWithScale(6), 3, types.T_datetime, 6, 2},
+			{"time duration precision", types.T_time.ToType(), 6, types.T_time, 6, 0},
+			{"time first precision", types.T_time.ToTypeWithScale(6), 3, types.T_time, 6, 0},
+			{"timestamp duration precision", types.T_timestamp.ToType(), 6, types.T_datetime, 6, 4},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
+					tc.first, types.T_time.ToTypeWithScale(tc.duration),
+				})
+				require.NoError(t, err)
+				require.True(t, result.needCast)
+				require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
+				require.Equal(t, int32(17), result.targetTypes[1].Width)
+				require.Equal(t, tc.duration, result.targetTypes[1].Scale)
+				require.Equal(t, tc.result, result.retType.Oid)
+				require.Equal(t, tc.scale, result.retType.Scale)
+				require.Equal(t, tc.overloadID, result.overloadId)
+			})
 		}
 	}
 }
@@ -695,9 +829,31 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 		types.T_datetime.ToTypeWithScale(6),
 	})
 	require.NoError(t, err)
-	require.True(t, fractionalDatetimeResult.needCast)
-	require.Equal(t, []types.Type{types.T_timestamp.ToTypeWithScale(6)}, fractionalDatetimeResult.targetTypes)
+	require.False(t, fractionalDatetimeResult.needCast)
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
+}
+
+func TestUnixTimestampDatetimeOverloadDoesNotAdmitTime(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "unix_timestamp", []types.Type{types.T_time.ToType()})
+	require.ErrorContains(t, err, "invalid argument function unix_timestamp")
+
+	current, err := GetFunctionByName(ctx, "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})
+	require.NoError(t, err)
+	require.Equal(t, int32(4), current.overloadId)
+	require.False(t, current.needCast)
+
+	legacy, err := GetFunctionByName(WithLegacyUnixTimestampDatetime(ctx), "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), legacy.overloadId)
+	require.True(t, legacy.needCast)
+	require.Equal(t, types.T_timestamp, legacy.targetTypes[0].Oid)
+
+	// The verifier's legacy context must not alter ordinary overload families.
+	for _, input := range []types.T{types.T_timestamp, types.T_varchar} {
+		_, err := GetFunctionByName(WithLegacyUnixTimestampDatetime(ctx), "unix_timestamp", []types.Type{input.ToType()})
+		require.NoError(t, err)
+	}
 }
 
 func requireLegacyMakeTimeSignature(t *testing.T, args []types.T) {
@@ -1297,6 +1453,7 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("bit_count"))
 	for _, name := range []string{
 		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
 		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
@@ -1304,6 +1461,61 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
 	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestGetFunctionValueUnstableByID(t *testing.T) {
+	// This is an independent semantic inventory, including every overload of
+	// the audited families. Production reads each registration's own metadata.
+	stable := map[int32]bool{
+		CONVERT: true, DATEDIFF: true, UNIX_TIMESTAMP: true,
+		EXTRACTVALUE: true, UPDATEXML: true, UNCOMPRESS: true, UNCOMPRESSED_LENGTH: true,
+		AES_ENCRYPT: true, AES_DECRYPT: true, CAST_ASSIGN: true, CAST_IGNORE: true,
+		CAST:                true, // TemporalCastIntegerOverload reads a statement-stable session mode.
+		CAST_INDEX_TO_VALUE: true, CAST_VALUE_TO_INDEX: true, CAST_INDEX_VALUE_TO_INDEX: true,
+		CAST_INDEX_TO_SET_VALUE: true, CAST_SET_VALUE_TO_INDEX: true, CAST_SET_INDEX_VALUE_TO_INDEX: true,
+		CAST_GEOMETRY_TO_SUBTYPE: true, CAST_JSON_TO_ARRAY: true, CAST_NANO_TO_TIMESTAMP: true,
+		INTERNAL_CHAR_LENGTH: true, INTERNAL_CHAR_SIZE: true, INTERNAL_TABLE_COLLATION: true,
+		INTERNAL_COLUMN_CHARACTER_SET: true, INTERNAL_DATETIME_SCALE: true,
+		INTERNAL_NUMERIC_PRECISION: true, INTERNAL_NUMERIC_SCALE: true,
+		MO_INDEX_SUB_PART:   true,
+		MO_SHOW_VISIBLE_BIN: true, MO_SHOW_VISIBLE_BIN_ENUM: true, MO_SHOW_COL_UNIQUE: true,
+		MO_LOG_DATE: true, MO_WIN_TRUNCATE: true, MO_WIN_DIVISOR: true, MO_EXPLAIN_PHY: true,
+		DATABASE: true, USER: true, FOUND_ROWS: true, ROW_COUNT: true, LAST_INSERT_ID: true, LAST_QUERY_ID: true,
+		CHECK_CONSTRAINT_ASSERT: true, LOAD_FK_IGNORE_CHECK: true,
+		// Admission entries mirror cast_assign/cast_ignore: volatile so
+		// sql_mode resolves at execution, execution-stable within one
+		// statement.
+		UNSIGNED_DECIMAL_ADMISSION: true, UNSIGNED_DECIMAL_ADMISSION_STRICT: true,
+		UNSIGNED_DECIMAL_ADMISSION_IGNORE: true,
+	}
+	annotated := 0
+	for _, fn := range allSupportedFunctions {
+		// Actual slice positions, not legacy overloadId labels, form wire IDs.
+		for index, ov := range fn.Overloads {
+			id := EncodeOverloadID(int32(fn.functionId), int32(index))
+			// Temporal bound helpers are statement-stable real-time scalars, not
+			// legacy volatile/no-fold functions. Their own scalar policy is tested
+			// independently in TestZoneMapTemporalHelperScalarPolicy.
+			temporalScalar := fn.functionId == TEMPORAL_DATETIME_BOUND || fn.functionId == TEMPORAL_TIMESTAMP_BOUND
+			wantStable := temporalScalar || stable[int32(fn.functionId)] && ov.IsVolatile()
+			require.Equal(t, wantStable, ov.executionStable, "function %d overload %d", fn.functionId, index)
+			unstable, known := GetFunctionValueUnstableByID(id)
+			require.True(t, known)
+			require.Equal(t, ov.IsVolatile() && !wantStable, unstable, "function %d overload %d", fn.functionId, index)
+			if wantStable && ov.IsVolatile() {
+				annotated++
+				require.True(t, ov.CannotFold(), "legacy execution restrictions must remain intact")
+				require.False(t, IsConstant(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: id}}}}, true))
+			}
+		}
+	}
+	// Includes all generated AES overloads, not just the first resolved form.
+	require.Greater(t, annotated, len(stable))
+	t.Logf("checked %d legacy no-fold, execution-stable overloads", annotated)
+	for _, id := range []int64{-1, EncodeOverloadID(int32(len(allSupportedFunctions)), 0), EncodeOverloadID(CAST_ASSIGN, 99)} {
+		_, known := GetFunctionValueUnstableByID(id)
+		require.False(t, known)
+	}
 }
 
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {
@@ -1352,12 +1564,15 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		fid      int32
 		argCount int
 	}{
+		{name: "no default database", fid: DATABASE, argCount: 0},
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
 		{name: "power domain or overflow", fid: POW, argCount: 2},
 		{name: "exponential overflow", fid: EXP, argCount: 1},
 		{name: "cotangent zero", fid: COT, argCount: 1},
+		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},
+		{name: "inverse hyperbolic tangent domain", fid: ATANH, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
@@ -1386,6 +1601,34 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
 	}
+	for _, source := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run("datetime cast/"+source.String(), func(t *testing.T) {
+			args := []*plan.Expr{
+				{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+				{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+			}
+			for _, overload := range []int32{0, 1} {
+				require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+			for _, overload := range []int32{2, 3} {
+				require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+		})
+	}
+	for _, overload := range []int32{3, 4} {
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, overload), []*plan.Expr{notNull}))
+	}
+	// Typed and numeric conversion guarantees are unchanged.
+	for _, source := range []types.T{types.T_datetime, types.T_date, types.T_int64} {
+		args := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+			{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+		}
+		for _, overload := range []int32{0, 1} {
+			require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+		}
+	}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(DATE, 1), []*plan.Expr{notNull}))
 }
 
 func TestTypedDateConversionNullability(t *testing.T) {
@@ -1406,6 +1649,55 @@ func TestTypedDateConversionNullability(t *testing.T) {
 	require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
 	dateSource.Typ.NotNullable = false
 	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+}
+
+// TIME() string overloads synthesize NULL with a truncation warning for
+// invalid input even when the argument column is NOT NULL, so binding must
+// not promise a NOT NULL result for them. Typed and numeric overloads fail
+// the statement instead and keep their NOT NULL inference.
+func TestTimeStringConversionNullability(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"varchar", types.T_varchar, 5},
+		{"char", types.T_char, 6},
+		{"text", types.T_text, 7},
+		{"blob", types.T_blob, 8},
+	} {
+		t.Run("string/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args), "overload %d must stay nullable", tt.oid)
+		})
+	}
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"time", types.T_time, 0},
+		{"date", types.T_date, 1},
+		{"datetime", types.T_datetime, 2},
+		{"int64", types.T_int64, 3},
+		{"decimal128", types.T_decimal128, 4},
+	} {
+		t.Run("typed/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args))
+		})
+	}
+	// A nullable argument keeps the result nullable through the default rule.
+	nullable := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, 5), []*plan.Expr{nullable}))
 }
 
 func TestTemporalArithmeticOverflowNullability(t *testing.T) {
@@ -1461,7 +1753,7 @@ func TestTemporalExtractionNullability(t *testing.T) {
 	// cannot silently inherit a stronger guarantee than their executor.
 	for _, fid := range []int32{EXTRACT, YEAR, MONTH, QUARTER, DAY, DAYOFMONTH,
 		HOUR, MINUTE, SECOND, MICROSECOND, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK,
-		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS} {
+		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS, TO_DAYS, TO_SECONDS, DATEDIFF} {
 		for _, op := range allSupportedFunctions[fid].Overloads {
 			args := make([]*plan.Expr, len(op.args))
 			for i, typ := range op.args {
@@ -1471,6 +1763,8 @@ func TestTemporalExtractionNullability(t *testing.T) {
 			switch fid {
 			case EXTRACT:
 				want = op.overloadId < 5 // persisted legacy executors
+			case TO_DAYS, TO_SECONDS, DATEDIFF:
+				want = op.overloadId == 0 // legacy typed executors
 			case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
 				want = !op.args[0].IsMySQLString()
 			}
@@ -1514,6 +1808,9 @@ func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	}{
 		{name: "equality", fid: EQUAL, argCount: 2},
 		{name: "addition", fid: PLUS, argCount: 2},
+		{name: "hyperbolic tangent", fid: TANH, argCount: 1},
+		{name: "hyperbolic cosine", fid: COSH, argCount: 1},
+		{name: "inverse hyperbolic sine", fid: ASINH, argCount: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := make([]*plan.Expr, tt.argCount)
@@ -1728,7 +2025,7 @@ func TestCastNanoToTimestamp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
 
@@ -1756,4 +2053,262 @@ func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp 
 func convertStringToTimeUtcNano(str string) int64 {
 	ts, _ := time.Parse("2006-01-02 15:04:05.999999999", str)
 	return ts.UTC().UnixNano()
+}
+
+func TestZoneMapComparisonDomain(t *testing.T) {
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		args := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}
+		id := EncodeOverloadID(fid, 0)
+		require.True(t, CanUseZoneMapComparison(id, args))
+		args[0].Typ.Id = int32(types.T_char)
+		require.False(t, CanUseZoneMapComparison(id, args), "CHAR comparison domain %d", fid)
+		args[0].Typ.Id = int32(types.T_varchar)
+		args[1].Typ.Id = int32(types.T_char)
+		require.True(t, CanUseZoneMapComparison(id, args), "VARCHAR domain with CHAR-declared rhs %d", fid)
+		args[0] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_char)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}}
+		require.True(t, CanUseZoneMapComparison(id, args), "literal uses canonical VARCHAR domain %d", fid)
+		args[0].GetLit().Isnull = true
+		require.False(t, CanUseZoneMapComparison(id, args), "unknown NULL domain %d", fid)
+	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		require.False(t, CanUseZoneMapComparison(
+			EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: unicode}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}),
+			"Unicode comparison must not use raw persisted metadata: %d", fid)
+	}
+	char := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_char)}}}
+	for _, fid := range []int32{PREFIX_EQ, PREFIX_BETWEEN, AND, OR} {
+		require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), char), "separate operator domain %d", fid)
+	}
+}
+
+func TestZoneMapMembershipDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := plan.Type{Id: int32(oid), Width: 8}
+			v := vector.NewVec(types.New(oid, 8, 0))
+			t.Cleanup(func() { v.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(v, []byte("MO "), false, proc.Mp()))
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			// The SQL tuple declaration is preserved by constant folding. Its actual
+			// item or encoded vector type determines PAD SPACE membership semantics.
+			list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{{Typ: typ}}}}}
+			vec := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: data}}}
+			fold := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Data: data}}}
+			for _, fid := range []int32{IN, NOT_IN} {
+				require.Equal(t, oid != types.T_char, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, list}))
+				for _, rhs := range []*plan.Expr{vec, fold} {
+					require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, rhs}), "encoded domain is validated at the actual decoder")
+				}
+				malformed := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{1, 2, 3}}}}
+				require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, malformed}), "admission does not duplicate checked decoding")
+			}
+		})
+	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	unicodeItem := &plan.Expr{Typ: unicode}
+	unicodeList := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{unicodeItem}}}}
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: unicode}, unicodeList}),
+		"Unicode membership must not use raw persisted metadata")
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, unicodeList}),
+		"Unicode list items must not use raw persisted metadata")
+}
+
+func TestIntegerComparisonDomainsAreSymmetricAndExact(t *testing.T) {
+	signed := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64}
+	unsigned := []types.T{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64}
+	expected := [][]types.T{
+		{types.T_int16, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int16, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int32, types.T_int32, types.T_int64, types.T_decimal128},
+		{types.T_int64, types.T_int64, types.T_int64, types.T_decimal128},
+	}
+	for i, signedOID := range signed {
+		for j, unsignedOID := range unsigned {
+			for _, pair := range [][2]types.T{{signedOID, unsignedOID}, {unsignedOID, signedOID}} {
+				cast, left, right := comparisonTypeCastRule(pair[0].ToType(), pair[1].ToType())
+				require.True(t, cast)
+				require.Equal(t, expected[i][j], left.Oid)
+				require.Equal(t, left, right)
+				if left.Oid.IsDecimal() {
+					require.Equal(t, int32(38), left.Width)
+					require.Zero(t, left.Scale)
+				}
+				for _, op := range []string{"=", "!=", "<", ">", "<=", ">=", "<=>"} {
+					_, err := GetFunctionByName(context.Background(), op, []types.Type{pair[0].ToType(), pair[1].ToType()})
+					require.NoError(t, err)
+				}
+			}
+		}
+	}
+	for _, family := range [][]types.T{signed, unsigned} {
+		for i, l := range family {
+			for j, r := range family {
+				_, left, right := comparisonTypeCastRule(l.ToType(), r.ToType())
+				require.Equal(t, family[max(i, j)], left.Oid)
+				require.Equal(t, left, right)
+			}
+		}
+	}
+	// Arithmetic must keep the historical rule rather than borrow comparison widening.
+	_, l, r := arithmeticTypeCastRule1(types.T_int16.ToType(), types.T_uint32.ToType())
+	require.Equal(t, types.T_int32, l.Oid)
+	require.Equal(t, l, r)
+	for _, in := range [][]types.Type{{types.T_int16.ToType(), types.T_uint8.ToType(), types.T_uint16.ToType()}, {types.T_int8.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()}} {
+		_, err := GetFunctionByName(context.Background(), "between", in)
+		require.NoError(t, err)
+	}
+}
+
+func TestTemporalComparisonWidensSynthesizedDecimalDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		left  types.Type
+		right types.Type
+		want  types.Type
+	}{
+		{
+			name:  "bigint then time",
+			left:  types.T_int64.ToType(),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 19, 0),
+		},
+		{
+			name:  "time then bigint",
+			left:  types.New(types.T_time, 0, 0),
+			right: types.T_int64.ToType(),
+			want:  types.New(types.T_decimal128, 19, 0),
+		},
+		{
+			name:  "bigint then fractional time",
+			left:  types.T_int64.ToType(),
+			right: types.New(types.T_time, 0, 6),
+			want:  types.New(types.T_decimal128, 25, 6),
+		},
+		{
+			name:  "uint64 then time",
+			left:  types.T_uint64.ToType(),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
+		{
+			name:  "bit then datetime",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_datetime, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional timestamp",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_timestamp, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, operands := range [][2]types.Type{{tc.left, tc.right}, {tc.right, tc.left}} {
+				hasCast, left, right := comparisonTypeCastRule(operands[0], operands[1])
+				require.True(t, hasCast)
+				require.Equal(t, tc.want, left)
+				require.Equal(t, tc.want, right)
+			}
+		})
+	}
+}
+
+func TestCalendarNumericResultTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+		want types.T
+	}{
+		{"week", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_date.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"dayofyear", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"weekofyear", []types.Type{types.T_date.ToType()}, types.T_int64},
+	} {
+		t.Run(fmt.Sprint(tc.name, tc.args), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.want.ToType(), resolved.retType)
+		})
+	}
+}
+
+func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	historical := WithLegacyTemporalNullability(context.Background())
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+		{CAST, 0, []*plan.Expr{source, target}}, {CAST, 1, []*plan.Expr{source, target}},
+		// Pre-8dd releases also published NOT NULL TIME() string bindings;
+		// historical dump re-binding must reproduce them exactly.
+		{TIME, 5, []*plan.Expr{source}}, {TIME, 6, []*plan.Expr{source}},
+		{TIME, 7, []*plan.Expr{source}}, {TIME, 8, []*plan.Expr{source}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullable(id, tc.args))
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = true
+	}
+	for _, ctx := range []context.Context{context.Background(), historical} {
+		require.True(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+		require.False(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(DATE, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}}))
+	}
+}
+
+func TestLegacyTimeNullabilityEraBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	intermediate := WithLegacyTimeNullability(context.Background())
+	pre8dd := WithLegacyTemporalNullability(context.Background())
+	// The intermediate post-8dd era reconstructed the published TIME()
+	// string binding metadata independently: TIME restores NOT NULL while
+	// DATE conversions keep their current nullable inference.
+	for _, oid := range []int32{5, 6, 7, 8} {
+		id := EncodeOverloadID(TIME, oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(intermediate, id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, []*plan.Expr{source}))
+	}
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		source.Typ.NotNullable = true
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, tc.args))
+	}
 }

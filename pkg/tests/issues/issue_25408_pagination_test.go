@@ -707,7 +707,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			temporalDB.SetMaxIdleConns(1)
 			defer temporalDB.Close()
 
-			stmt, prepareErr := temporalDB.PrepareContext(ctx, "select cast(? as char)")
+			stmt, prepareErr := temporalDB.PrepareContext(ctx, "select cast(? as char)") //nolint:sqlclosecheck // closed via defer/helper; not tracked intraprocedurally
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			for _, test := range []struct {

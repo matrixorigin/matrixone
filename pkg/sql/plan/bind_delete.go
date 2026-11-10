@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -47,6 +48,7 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		if enabled && len(tableDef.RefChildTbls) > 0 ||
+			tableDef.IsTemporary ||
 			tableDef.ViewSql != nil ||
 			(dmlCtx.isClusterTable[i] && accountId != catalog.System_Account) ||
 			dmlCtx.objRefs[i].PubInfo != nil ||
@@ -199,13 +201,14 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(builder.compCtx, tbl, "", aliasMap)
+	aliasMap, err := resolveDeleteTargetAliases(builder.compCtx, stmt)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
+	// Target CTE/writability checks precede catalog lookup; SELECT keeps WITH.
+	err = dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, nil, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
@@ -240,6 +243,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	var selectList []tree.SelectExpr
+	physicalGeneratedRefs := make(map[*tree.UnresolvedName]struct{})
 	colName2Idx := make([]map[string]int32, len(stmt.Tables))
 
 	getResolveExpr := func(alias string) {
@@ -248,6 +252,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		for _, col := range dmlCtx.tableDefs[defIdx].Cols {
 			colName2Idx[defIdx][col.Name] = int32(len(selectList))
 			selectExpr := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if col.GeneratedCol != nil {
+				physicalGeneratedRefs[selectExpr] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: selectExpr,
 			})
@@ -288,6 +295,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectCtx := NewBindContext(builder, bindCtx)
+	selectCtx.physicalGeneratedRefs = physicalGeneratedRefs
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, err
@@ -327,7 +335,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		if len(returningIrregularIndexes) > 0 {
 			pkPos, ok := colPos[strings.ToLower(tableDef.Pkey.PkeyColName)]
@@ -372,7 +380,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
-			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -393,6 +401,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				ScanSnapshot: bindCtx.snapshot,
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+				if builder.deleteIndexScanTables == nil {
+					builder.deleteIndexScanTables = make(map[int32]deleteIndexScan)
+				}
+				builder.deleteIndexScanTables[idxTag] = deleteIndexScan{tableID: idxTableDef.TblId}
+			}
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
@@ -436,6 +450,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				if err != nil {
 					return 0, err
 				}
+				if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+					leftExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{leftExpr})
+					if err != nil {
+						return 0, err
+					}
+				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
 				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
@@ -456,11 +476,21 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					}
 				}
 
-				fnName := "serial"
-				if !idxDef.Unique {
-					fnName = "serial_full"
+				if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+					leftExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+					if err != nil {
+						return 0, err
+					}
+				} else {
+					fnName := "serial"
+					if !idxDef.Unique {
+						fnName = "serial_full"
+					}
+					leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+					if err != nil {
+						return 0, err
+					}
 				}
-				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
 			}
 
 			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{

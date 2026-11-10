@@ -22,8 +22,8 @@ import (
 )
 
 func TestMockCompilerContextTableIDs(t *testing.T) {
-	first := NewMockCompilerContext(true)
-	second := NewMockCompilerContext(true)
+	first := NewMockCompilerContext(true, nil)
+	second := NewMockCompilerContext(true, nil)
 	require.Equal(t, len(first.tablesByQualifiedName), len(second.tablesByQualifiedName))
 	require.Equal(t, len(first.tablesByQualifiedName), len(first.id2name),
 		"every schema-qualified table must have exactly one reverse ID mapping")
@@ -52,16 +52,16 @@ func TestMockCompilerContextTableIDs(t *testing.T) {
 }
 
 func TestMockCompilerContextResolvesSchemaQualifiedTables(t *testing.T) {
-	mock := NewMockCompilerContext(true)
+	mock := NewMockCompilerContext(true, nil)
 
-	bvtObj, bvtT1, err := mock.Resolve("bvt_test1", "t1", nil)
+	bvtObj, bvtT1, err := mock.Resolve("bvt_test1", "t1", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, bvtObj)
 	require.NotNil(t, bvtT1)
 	require.Equal(t, "bvt_test1", bvtObj.SchemaName)
 	require.Equal(t, []string{"a", "b", "c", catalog.Row_ID}, tableColumnNames(bvtT1))
 
-	cteObj, cteT1, err := mock.Resolve("cte_test", "t1", nil)
+	cteObj, cteT1, err := mock.Resolve("cte_test", "t1", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cteObj)
 	require.NotNil(t, cteT1)
@@ -82,7 +82,7 @@ func TestMockCompilerContextResolvesSchemaQualifiedTables(t *testing.T) {
 
 func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
 	t.Run("add", func(t *testing.T) {
-		mock := NewMockCompilerContext(true)
+		mock := NewMockCompilerContext(true, nil)
 		const tableID = uint64(990001)
 		mock.tables["runtime_table"] = &TableDef{Name: "runtime_table", TblId: tableID}
 		mock.objects["runtime_table"] = &ObjectRef{
@@ -90,7 +90,7 @@ func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
 		}
 		mock.id2name[tableID] = "runtime_table"
 
-		objRef, tableDef, err := mock.Resolve("tpch", "runtime_table", nil)
+		objRef, tableDef, err := mock.Resolve("tpch", "runtime_table", nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, tableID, tableDef.TblId)
 		require.Equal(t, tableID, uint64(objRef.Obj))
@@ -101,13 +101,13 @@ func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
 	})
 
 	t.Run("replace", func(t *testing.T) {
-		mock := NewMockCompilerContext(true)
+		mock := NewMockCompilerContext(true, nil)
 		original := mock.tables["nation"]
 		replacement := DeepCopyTableDef(original, true)
 		replacement.Cols[0].Typ.Width = 1234
 		mock.tables["nation"] = replacement
 
-		_, tableDef, err := mock.Resolve("tpch", "nation", nil)
+		_, tableDef, err := mock.Resolve("tpch", "nation", nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(1234), tableDef.Cols[0].Typ.Width)
 		_, tableDef, err = mock.ResolveById(original.TblId, nil)
@@ -116,12 +116,12 @@ func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		mock := NewMockCompilerContext(true)
+		mock := NewMockCompilerContext(true, nil)
 		tableID := mock.tables["nation"].TblId
 		delete(mock.tables, "nation")
 		delete(mock.objects, "nation")
 
-		objRef, tableDef, err := mock.Resolve("tpch", "nation", nil)
+		objRef, tableDef, err := mock.Resolve("tpch", "nation", nil, nil)
 		require.NoError(t, err)
 		require.Nil(t, objRef)
 		require.Nil(t, tableDef)
@@ -150,7 +150,7 @@ func TestMockCompilerContextAmbiguousLegacyOverlayUsesOwner(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, nil)
 			ownerKey := mock.legacyTableOwners["t1"]
 			require.Equal(t, mockQualifiedTableName("cte_test", "t1"), ownerKey)
 			ownerID := mock.tablesByQualifiedName[ownerKey].TblId
@@ -190,7 +190,7 @@ func TestMockCompilerContextAmbiguousLegacyOverlayUsesOwner(t *testing.T) {
 					}
 				}
 			}
-			objRef, tableDef, err := mock.Resolve("cte_test", "t1", nil)
+			objRef, tableDef, err := mock.Resolve("cte_test", "t1", nil, nil)
 			require.NoError(t, err)
 			assertOwner(objRef, tableDef)
 			objRef, tableDef, err = mock.ResolveById(ownerID, nil)
@@ -198,7 +198,7 @@ func TestMockCompilerContextAmbiguousLegacyOverlayUsesOwner(t *testing.T) {
 			assertOwner(objRef, tableDef)
 
 			for _, dbName := range []string{"bvt_test1", "constraint_test"} {
-				objRef, tableDef, err = mock.Resolve(dbName, "t1", nil)
+				objRef, tableDef, err = mock.Resolve(dbName, "t1", nil, nil)
 				require.NoError(t, err)
 				require.NotNil(t, objRef)
 				require.NotNil(t, tableDef)
@@ -218,4 +218,23 @@ func tableColumnNames(tableDef *TableDef) []string {
 		names[i] = col.Name
 	}
 	return names
+}
+
+func TestMockCompilerContextPrimaryKeyMetadata(t *testing.T) {
+	ctx := NewMockCompilerContext(true, nil)
+	for _, tc := range []struct {
+		table string
+		names []string
+	}{
+		{"nation", []string{"n_nationkey"}},
+		{"lineitem", []string{"l_orderkey", "l_linenumber"}},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			_, table, err := ctx.Resolve("tpch", tc.table, nil, nil)
+			require.NoError(t, err)
+			require.NotNil(t, table)
+			require.NotNil(t, table.Pkey)
+			require.Equal(t, tc.names, table.Pkey.Names)
+		})
+	}
 }

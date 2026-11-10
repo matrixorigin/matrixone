@@ -1,0 +1,73 @@
+drop database if exists starlark_null_test;
+create database starlark_null_test;
+use starlark_null_test;
+create procedure p_in(in i int, in s varchar, out value varchar) language 'starlark'
+$$
+out_value = "{}:{}:{}:{}".format(type(i), str(i), type(s), str(s))
+$$;
+call p_in(null, null, @slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+NoneType:None:NoneType:None
+call p_in(0, '', @slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+int:0:string:
+call p_in(7, 'text', @slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+int:7:string:text
+set @slk_i = null;
+set @slk_s = null;
+call p_in(@slk_i, @slk_s, @slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+NoneType:None:NoneType:None
+create procedure p_inout(inout i int) language 'starlark'
+$$
+out_i = i
+$$;
+call p_inout(@slk_i);
+select @slk_i is null;
+➤ @slk_i is null[-7,1,0]  𝄀
+1
+set @slk_i = 7;
+call p_inout(@slk_i);
+select @slk_i;
+➤ @slk_i[-5,64,0]  𝄀
+7
+create procedure p_get(out value varchar) language 'starlark'
+$$
+v, err = mo.getvar("slk_s")
+out_value = "{}:{}:{}".format(type(v), str(v), err == None)
+$$;
+call p_get(@slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+NoneType:None:True
+set @slk_s = '';
+call p_get(@slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+string::True
+create procedure p_sql(out value varchar) language 'starlark'
+$$
+rows, err = mo.sql("select a, b, c, d from (select 1 as ord, null as a, '' as b, 0 as c, 'text' as d union all select 2, 'text', 0, '', null) t order by ord")
+out_value = str(rows) if err == None else "ERR:" + err
+$$;
+call p_sql(@slk_value);
+select @slk_value;
+➤ @slk_value[-1,21845,0]  𝄀
+[(None, "", "0", "text"), ("text", "0", "", None)]
+create procedure p_out(out n varchar, out s varchar) language 'starlark'
+$$
+out_n = None
+out_s = ""
+mo.setvar("slk_set_null", None)
+mo.setvar("slk_set_empty", "")
+$$;
+call p_out(@slk_n, @slk_s);
+select @slk_n is null, @slk_s is null, @slk_s = '', @slk_set_null is null, @slk_set_empty is null, @slk_set_empty = '';
+➤ @slk_n is null[-7,1,0]  ¦  @slk_s is null[-7,1,0]  ¦  @slk_s = [-7,1,0]  ¦  @slk_set_null is null[-7,1,0]  ¦  @slk_set_empty is null[-7,1,0]  ¦  @slk_set_empty = [-7,1,0]  𝄀
+1  ¦  0  ¦  1  ¦  1  ¦  0  ¦  1
+drop database starlark_null_test;

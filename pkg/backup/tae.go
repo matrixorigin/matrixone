@@ -15,6 +15,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -117,33 +119,35 @@ func BackupData(
 	}
 
 	// Setup backup protection manager
-	//exec, opts = getSQLExecutor(sid)
 	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
 	defer protectionMgr.cleanup()
 
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil, protectionMgr, globalIndex)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil, protectionMgr, globalIndex, config.copyFiles)
 }
 
 func getParallelCount(count int) int {
 	if count > 0 && count < 512 {
 		return count
 	}
-	cupNum := runtime2.NumCPU()
-	if cupNum < 8 {
+	return defaultBackupParallelCount(runtime2.NumCPU())
+}
+
+func defaultBackupParallelCount(cpuNum int) int {
+	if cpuNum < 8 {
 		return 50
-	} else if cupNum < 16 {
+	} else if cpuNum < 16 {
 		return 80
-	} else if cupNum < 32 {
+	} else if cpuNum < 32 {
 		return 128
-	} else if cupNum < 64 {
+	} else if cpuNum < 64 {
 		return 256
 	}
 	return 512
 }
 
 // parallelCopyData copy data from srcFs to dstFs in parallel
-func parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
+func (c backupFileCopier) parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
 	files map[string]*objectio.BackupObject,
 	parallelCount int,
 	gcFileMap map[string]string,
@@ -209,7 +213,7 @@ func parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
 						Res: nil,
 					}
 				}
-				checksum, err := CopyFileWithRetry(jobCtx, srcFs, dstFs, backupObject.Location.Name().String(), "")
+				checksum, err := c.copyFileWithRetry(jobCtx, srcFs, dstFs, backupObject.Location.Name().String(), "")
 				if err != nil {
 					cancelCopy(err)
 					return &tasks.JobResult{
@@ -302,6 +306,7 @@ func execBackup(
 	filesList *[]*taeFile,
 	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
 	globalIndex *GlobalFileIndex, // Optional: global file index for checking if file already backed up
+	copyFiles backupFileCopier,
 ) error {
 	if len(names) < 2 {
 		return moerr.NewInternalErrorf(
@@ -355,6 +360,9 @@ func execBackup(
 		mergeStart = ckpStr[4]
 		end = types.StringToTS(mergeEnd)
 		start = types.StringToTS(mergeStart)
+		if end.Physical() <= 0 {
+			return moerr.NewInternalError(ctx, "backup checkpoint end must have a positive physical timestamp")
+		}
 		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
 			return err
@@ -439,19 +447,30 @@ func execBackup(
 		protectionMgr.start(protectedTS)
 	}
 
-	// copy data
-	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
+	// Pin the metadata and copy the exact predecessor's history before the
+	// potentially long data copy. These root-level index objects are not part
+	// of LoadCheckpointEntriesFromKey or the ckp directory itself.
+	checkpointMetaFiles, minTs, err := copyFiles.copyCheckpointDir(ctx, srcFs, dstFs, "ckp", start)
+	if err != nil {
+		return err
+	}
+	previousTableIDLocation, historyFiles, err := copyFiles.copyBackupTableIDHistory(
+		ctx, sid, srcFs, dstFs, start,
+	)
 	if err != nil {
 		return err
 	}
 
-	// copy checkpoint and gc meta
-	sizeList, minTs, err := CopyCheckpointDir(ctx, srcFs, dstFs, "ckp", start)
+	// copy data
+	taeFileList, err := copyFiles.parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
 		return err
 	}
-	taeFileList = append(taeFileList, sizeList...)
-	sizeList, err = CopyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
+
+	taeFileList = append(taeFileList, checkpointMetaFiles...)
+	taeFileList = append(taeFileList, historyFiles...)
+	// copy gc meta
+	sizeList, err := copyFiles.copyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
 	if err != nil {
 		return err
 	}
@@ -469,6 +488,9 @@ func execBackup(
 		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
 			cnLocation, lastData, uint32(version), start)
+		if err != nil {
+			return err
+		}
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
@@ -481,10 +503,27 @@ func execBackup(
 				ts:       start,
 			})
 		}
+		var requiredPreviousEnd types.TS
+		if previousTableIDLocation.Len() > 0 {
+			requiredPreviousEnd = start.Prev()
+		}
+		// Preserve the source's retained history, rather than silently applying
+		// the backup client's default retention. This makes minTS zero without
+		// extending the predecessor's actual coverage marker into the past.
+		tableIDLocation, _, _, _, err := logtail.SyncTableIDBatchWithHistory(
+			ctx, start, end, time.Duration(end.Physical()), 0,
+			cnLocation, uint32(version), previousTableIDLocation,
+			requiredPreviousEnd, common.CheckpointAllocator, dstFs,
+		)
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end)
+		newHistoryFiles, err := collectBackupTableIDFiles(ctx, dstFs, tableIDLocation, start)
+		if err != nil {
+			return err
+		}
+		taeFileList = append(taeFileList, newHistoryFiles...)
+		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end, tableIDLocation)
 		if err != nil {
 			return err
 		}
@@ -514,6 +553,150 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+// copyBackupTableIDHistory selects only the durable boundary immediately before
+// the special checkpoint. An older, non-adjacent index must never bridge a gap.
+// A legacy boundary with no index remains a partial history after restore.
+func (c backupFileCopier) copyBackupTableIDHistory(
+	ctx context.Context,
+	sid string,
+	srcFs, dstFs fileservice.FileService,
+	start types.TS,
+) (objectio.LocationSlice, []*taeFile, error) {
+	metaFiles, err := ckputil.ListCKPMetaFiles(ctx, dstFs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(metaFiles) == 0 {
+		return nil, nil, nil
+	}
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
+	})
+	entries, err := checkpoint.ReadEntriesFromMeta(
+		ctx, sid, ioutil.GetCheckpointDir(), metaFiles[len(metaFiles)-1].GetName(),
+		0, nil, common.CheckpointAllocator, dstFs,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	var predecessor *checkpoint.CheckpointEntry
+	previousEnd := start.Prev()
+	for _, entry := range entries {
+		end := entry.GetEnd()
+		if entry.IsGlobal() && end.EQ(&start) {
+			location := entry.GetTableIDLocation()
+			if location.Len() > 0 {
+				predecessor = entry
+				break
+			}
+			if predecessor == nil {
+				predecessor = entry
+			}
+		}
+		// An archived backup tail is inclusive just like an ICKP. This also
+		// permits backing up an archive again without discarding its history.
+		if (entry.IsIncremental() || entry.IsBackup()) && end.EQ(&previousEnd) {
+			predecessor = entry
+		}
+		if entry.IsGlobal() && end.EQ(&previousEnd) && predecessor == nil {
+			// Older backup producers advanced the synthetic global end once
+			// more. Preserve their legacy empty-index/partial-history behavior,
+			// but never carry a non-empty index across that omitted timestamp.
+			location := entry.GetTableIDLocation()
+			if location.Len() == 0 {
+				predecessor = entry
+			}
+		}
+	}
+	if predecessor == nil {
+		return nil, nil, moerr.NewInternalErrorf(
+			ctx, "backup checkpoint %s has no exact predecessor", start.ToString(),
+		)
+	}
+	locations := predecessor.GetTableIDLocation()
+	files := make([]*taeFile, 0, locations.Len())
+	seen := make(map[string]struct{}, locations.Len())
+	for i := 0; i < locations.Len(); i++ {
+		name := locations.Get(i).Name().String()
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		// An incremental backup may already contain this immutable name. Check
+		// its content against the source; an archive/global-index entry alone
+		// does not prove the merge can read the correct object in this dstFs.
+		expected, err := checksumFile(ctx, srcFs, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		var checksum []byte
+		entry, statErr := dstFs.StatFile(ctx, name)
+		if statErr == nil {
+			checksum, err = checksumFile(ctx, dstFs, name)
+		} else if moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+			checksum, err = c.copyFileWithRetry(ctx, srcFs, dstFs, name, "")
+			if err == nil {
+				entry, err = dstFs.StatFile(ctx, name)
+			}
+		} else {
+			err = statErr
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if !bytes.Equal(expected, checksum) {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "backup table-ID object checksum mismatch: %s", name)
+		}
+		files = append(files, &taeFile{
+			path: name, size: entry.Size, checksum: checksum,
+			needCopy: true, ts: start,
+		})
+	}
+	return locations, files, nil
+}
+
+// collectBackupTableIDFiles owns only freshly generated, unpublished index
+// objects. Failure here precedes any metadata publication, so exact cleanup is
+// safe. After success the caller owns publication; a failed metadata WriteEnd
+// may already be durable and must not cause referenced objects to be deleted.
+func collectBackupTableIDFiles(
+	ctx context.Context,
+	fs fileservice.FileService,
+	locations objectio.LocationSlice,
+	ts types.TS,
+) (files []*taeFile, err error) {
+	names := make([]string, 0, locations.Len())
+	seen := make(map[string]struct{}, locations.Len())
+	for i := 0; i < locations.Len(); i++ {
+		name := locations.Get(i).Name().String()
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	defer func() {
+		if err != nil {
+			_, cleanupErr := ioutil.DeleteUnpublishedObjects(ctx, fs, names...)
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	for _, name := range names {
+		var entry *fileservice.DirEntry
+		if entry, err = fs.StatFile(ctx, name); err != nil {
+			return nil, err
+		}
+		var checksum []byte
+		if checksum, err = checksumFile(ctx, fs, name); err != nil {
+			return nil, err
+		}
+		files = append(files, &taeFile{
+			path: name, size: entry.Size, checksum: checksum,
+			needCopy: true, ts: ts,
+		})
+	}
+	return files, nil
 }
 
 func selectBackupObjects(
@@ -550,7 +733,7 @@ func selectBackupObjects(
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
 // return taeFile list
 // doCopy: if doCopy is true,it means not to check the suffix name and doCopy all files.
-func copyFileAndGetMetaFiles(
+func (c backupFileCopier) copyFileAndGetMetaFiles(
 	ctx context.Context,
 	srcFs, dstFs fileservice.FileService,
 	dir string,
@@ -567,7 +750,10 @@ func copyFileAndGetMetaFiles(
 	var checksum []byte
 	for i, file := range mFiles {
 		if file.IsDir {
-			panic("not support dir")
+			// GC now owns durable cleanup intents below gc/unpublished/. A
+			// backup of the GC root must not treat that namespace directory as
+			// a GC metadata file.
+			continue
 		}
 		meta := decoder(file.Name)
 		meta.SetIdx(i)
@@ -587,7 +773,7 @@ func copyFileAndGetMetaFiles(
 			}
 		}
 		if doCopy || meta.IsAcctExt() || meta.IsSnapshotExt() {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
+			checksum, err = c.copyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -627,9 +813,18 @@ func CopyGCDir(
 	dir string,
 	backup, min types.TS,
 ) ([]*taeFile, error) {
+	return (backupFileCopier{}).copyGCDir(ctx, srcFs, dstFs, dir, backup, min)
+}
+
+func (c backupFileCopier) copyGCDir(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	dir string,
+	backup, min types.TS,
+) ([]*taeFile, error) {
 	var checksum []byte
 
-	taeFiles, metaFiles, files, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, files, err := c.copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, ioutil.DecodeGCMetadataName, false,
 	)
 	if err != nil {
@@ -650,7 +845,7 @@ func CopyGCDir(
 		needCopy := true
 		for _, object := range objects {
 			objectName := object.ObjectName().String()
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
+			checksum, err = c.copyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
 			if err != nil {
 				logutil.Warnf("[Backup] copy file %v failed", objectName)
 				needCopy = false
@@ -685,7 +880,7 @@ func CopyGCDir(
 				name = ioutil.InheritGCMetadataName(name, metaFile.GetEnd(), &min)
 			}
 		}
-		checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, metaFile.GetName(), dir, name)
+		checksum, err = c.copyFileWithRetry(ctx, srcFs, dstFs, metaFile.GetName(), dir, name)
 		if err != nil {
 			return nil, err
 		}
@@ -705,12 +900,20 @@ func CopyCheckpointDir(
 	srcFs, dstFs fileservice.FileService,
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
+	return (backupFileCopier{}).copyCheckpointDir(ctx, srcFs, dstFs, dir, backup)
+}
+
+func (c backupFileCopier) copyCheckpointDir(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	dir string, backup types.TS,
+) ([]*taeFile, types.TS, error) {
 	decoder := func(name string) ioutil.TSRangeFile {
 		meta := ioutil.DecodeCKPMetaName(name)
 		meta.SetExt("")
 		return meta
 	}
-	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, _, err := c.copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, decoder, true,
 	)
 	if err != nil {
@@ -742,11 +945,21 @@ func (e *copiedObjectChecksumError) Unwrap() error {
 }
 
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
+	return (backupFileCopier{}).copyFileWithRetry(ctx, srcFs, dstFs, name, dstDir, newName...)
+}
+
+// Only an explicitly configured MinIO backup opts in. The zero value preserves
+// unknown-length streaming for other SDKs and callers such as datasync.
+type backupFileCopier struct {
+	statSource bool
+}
+
+func (c backupFileCopier) copyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
 	return fileservice.DoWithRetryContext(
 		ctx,
 		"CopyFile",
 		func() ([]byte, error) {
-			return CopyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
+			return c.copyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
 		},
 		64,
 		func(err error) bool {
@@ -758,6 +971,10 @@ func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService
 
 // CopyFile copy file from srcFs to dstFs and return checksum of the written file.
 func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newNames ...string) ([]byte, error) {
+	return (backupFileCopier{}).copyFile(ctx, srcFs, dstFs, name, dstDir, newNames...)
+}
+
+func (c backupFileCopier) copyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newNames ...string) ([]byte, error) {
 	newName := name
 	if dstDir != "" {
 		name = path.Join(dstDir, name)
@@ -796,7 +1013,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		}
 	}
 
-	return streamCopyFile(ctx, srcFs, dstFs, name, newName)
+	return c.streamCopyFile(ctx, srcFs, dstFs, name, newName)
 }
 
 func checksumFile(ctx context.Context, fs fileservice.FileService, name string) (checksum []byte, err error) {
@@ -815,6 +1032,15 @@ func checksumFile(ctx context.Context, fs fileservice.FileService, name string) 
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			// An object-storage SDK can turn a legitimate zero-length object
+			// into a read EOF: MinIO's eager not-found probe reads EOF from
+			// an empty response and returns the error without handing over a
+			// reader. Prove emptiness on the same fs/name before hashing
+			// empty content; every other outcome keeps the original
+			// failure.
+			return verifyEmptyObjectChecksum(ctx, fs, name, reader, err)
+		}
 		return nil, err
 	}
 	defer func() {
@@ -830,11 +1056,91 @@ func checksumFile(ctx context.Context, fs fileservice.FileService, name string) 
 	return hasher.Sum(nil), nil
 }
 
-func streamCopyFile(
+// verifyEmptyObjectChecksum converts a read EOF into the empty-content
+// checksum only when the very same fs/name proves to be an existing
+// zero-length object. Object-storage SDKs surface such a target as a read
+// error instead of a success with an empty reader, yet a zero-length backup
+// object is legitimate. Every other outcome keeps checksumFile's original
+// semantics: a missing or non-empty object, an unreadable stat, and any
+// observed cancellation still fail with their own cause, so only the
+// surrounding checksum phase may retry, never the provider copy.
+func verifyEmptyObjectChecksum(
+	ctx context.Context,
+	fs fileservice.FileService,
+	name string,
+	reader io.ReadCloser,
+	readErr error,
+) ([]byte, error) {
+	// A cancellation carried by the read error itself keeps its causality
+	// and must not be erased by a subsequent close failure; the close is
+	// still met exactly once before anything is returned.
+	readCanceled := errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded)
+	var closeErr error
+	if reader != nil {
+		// A failed Read may still have handed over a reader. Meet the close
+		// obligation here exactly once; a close failure must never be
+		// reported as a verified checksum.
+		closeErr = reader.Close()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// A cancellation observed up to and including the close keeps its
+		// causality.
+		return nil, ctxErr
+	}
+	if readCanceled {
+		if closeErr != nil {
+			// Keep both causes: the read cancellation is not replaced by
+			// the close failure, and neither becomes a success.
+			return nil, errors.Join(readErr, closeErr)
+		}
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	entry, statErr := fs.StatFile(ctx, name)
+	if statErr != nil {
+		// A cancellation observed during the stat keeps its causality
+		// instead of being masked by the original EOF. Any other stat
+		// failure is the reason this object could not be proven empty; the
+		// checksum-phase retry policy already decides which ones retry.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, statErr
+	}
+	// A cancellation observed up to and including the stat keeps its
+	// causality before any substitute read failure or empty success.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if entry.Size != 0 {
+		// EOF on a non-empty object is a read failure, not empty content.
+		return nil, readErr
+	}
+	sum := sha256.Sum256(nil)
+	return sum[:], nil
+}
+
+func (c backupFileCopier) streamCopyFile(
 	ctx context.Context,
 	srcFs, dstFs fileservice.FileService,
 	name, newName string,
 ) ([]byte, error) {
+	size := int64(-1)
+	if c.statSource {
+		// Stat before opening the source stream, so HEAD does not wait for a
+		// connection held by that stream. FileService reports logical bytes,
+		// including for local files with CRC framing.
+		entry, err := srcFs.StatFile(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Size < 0 {
+			return nil, moerr.NewInternalErrorf(ctx, "negative backup source size for %s: %d", name, entry.Size)
+		}
+		size = entry.Size
+	}
 	var reader io.ReadCloser
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
@@ -854,15 +1160,26 @@ func streamCopyFile(
 	}
 	defer reader.Close()
 
+	var source io.Reader = reader
+	if c.statSource {
+		sized := &backupSizeReader{reader: reader, remaining: size}
+		// A zero-length destination need not call Read at all.
+		if size == 0 {
+			if err := sized.checkEOF(); err != nil {
+				return nil, err
+			}
+		}
+		source = sized
+	}
 	hasher := sha256.New()
-	hashingReader := io.TeeReader(reader, hasher)
+	hashingReader := io.TeeReader(source, hasher)
 	dstIoVec := fileservice.IOVector{
 		FilePath: newName,
 		Entries: []fileservice.IOEntry{
 			{
 				ReaderForWrite: hashingReader,
 				Offset:         0,
-				Size:           -1,
+				Size:           size,
 			},
 		},
 		Policy: fileservice.SkipAllCache,
@@ -874,16 +1191,6 @@ func streamCopyFile(
 	}
 	return hasher.Sum(nil), nil
 }
-
-// getSQLExecutor tries to get SQL executor from runtime
-// Returns (executor, opts) if available, (nil, empty opts) otherwise
-//func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
-//	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-//	if !ok {
-//		return nil, executor.Options{}
-//	}
-//	return v.(executor.SQLExecutor), executor.Options{}
-//}
 
 // buildBackupProtectionSQL builds the SQL command for backup protection
 func buildBackupProtectionSQL(protectedTS types.TS) string {

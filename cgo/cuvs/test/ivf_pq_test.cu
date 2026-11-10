@@ -18,6 +18,9 @@
 #include "ivf_pq.hpp"
 #include "helper.h"
 #include "test_framework.hpp"
+#include <cmath>
+#include <limits>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -1047,7 +1050,7 @@ TEST(GpuIvfPqTest, FilteredSearchCombinesWithDeleteBitset) {
     sp.n_probes = 4;
     // limit=5 deliberately exceeds the number of valid rows (2: IDs 0 and 2;
     // ID 1 is soft-deleted). Exercises the host-side post-filter in
-    // gpu_ivf_pq_t::apply_pq_post_filter_locked, which was added to defeat
+    // apply_host_post_filter_locked (index_base.hpp), which was added to defeat
     // cuVS IVF-PQ's bitset_filter padding quirk: without it, the 3 extra
     // result slots would be filled with filter-excluded (cat=99) rows rather
     // than the -1 sentinel.
@@ -1231,5 +1234,306 @@ TEST(GpuIvfPqTest, MultiQueryKExceedsIndexSize) {
         }
     }
 
+    index.destroy();
+}
+
+// Slots past the allowed rows are (-1, FLT_MAX); only allowed ids appear.
+static void expect_only_allowed_ivfpq(const std::vector<int64_t>& n, const std::vector<float>& d,
+                                uint32_t limit, const std::vector<int64_t>& allowed) {
+    ASSERT_EQ(n.size(), (size_t)limit);
+    for (uint32_t i = 0; i < limit; ++i) {
+        if (i < allowed.size()) {
+            ASSERT_TRUE(std::find(allowed.begin(), allowed.end(), n[i]) != allowed.end());
+            ASSERT_TRUE(std::isfinite(d[i]));
+        } else {
+            ASSERT_EQ(n[i], (int64_t)-1);
+            ASSERT_EQ(d[i], std::numeric_limits<float>::max());
+        }
+    }
+}
+
+// A filter that admits fewer rows than k returns those rows, then sentinels.
+TEST(GpuIvfPqTest, FilterAdmittingFewerThanKPadsWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[count - 2] = 2;
+    cats[count - 1] = 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    auto r = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                      "[{\"col\":0,\"op\":\"=\",\"val\":2}]");
+    expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
+    index.destroy();
+}
+
+// The filter admits half the rows, none of them in the one probed list: every
+// slot is a sentinel, not a filter-excluded row.
+TEST(GpuIvfPqTest, FilterEmptyInProbedListsPadsWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> cats(count);
+    for (uint64_t i = 0; i < count; ++i) cats[i] = i < count / 2 ? 1 : 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 1;
+    const uint32_t limit = 5;
+    auto r = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                      "[{\"col\":0,\"op\":\"=\",\"val\":2}]");
+    ASSERT_EQ(r.neighbors.size(), (size_t)limit);
+    for (uint32_t i = 0; i < limit; ++i) {
+        if (r.neighbors[i] == -1) {
+            ASSERT_EQ(r.distances[i], std::numeric_limits<float>::max());
+        } else {
+            ASSERT_GE(r.neighbors[i], (int64_t)(count / 2));
+            ASSERT_TRUE(std::isfinite(r.distances[i]));
+        }
+    }
+    index.destroy();
+}
+
+// Deleting all but two rows leaves two results, then sentinels.
+TEST(GpuIvfPqTest, DeletesLeavingFewerThanKPadWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+    for (uint64_t i = 0; i + 2 < count; ++i) index.delete_id((int64_t)i);
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    auto r = index.search(query.data(), 1, dimension, limit, sp);
+    expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
+    index.destroy();
+}
+
+// A membership of external ids (cbitmap and sorted64) is ANDed with the predicates
+// and the delete bitset in the search mask; with fewer members than k the rest of
+// the page is sentinels, not excluded rows.
+TEST(GpuIvfPqTest, FilteredSearchAppliesMembership) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 9000 + 2 * (int64_t)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[150] = 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                     DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+
+    // cbitmap: members far from the query are the only rows returned
+    std::vector<int64_t> keys = {ids[150], ids[170], ids[199]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t), keys.size(),
+                                     nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    const mo_membership_t cbitmap{bm, MO_MEMBERSHIP_CBITMAP};
+    auto r = index.search_with_filter(query.data(), 1, dimension, limit, sp, "", cbitmap);
+    expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, keys);
+
+    // membership AND cat = 1 drops row 150; deleting row 170 leaves row 199
+    index.delete_id(ids[170]);
+    auto r2 = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                       "[{\"col\":0,\"op\":\"=\",\"val\":1}]", cbitmap);
+    expect_only_allowed_ivfpq(r2.neighbors, r2.distances, limit, {ids[199]});
+    ASSERT_EQ(r2.neighbors[0], ids[199]);
+    mo_cbitmap_free(bm);
+
+    // sorted64 through the quantize async entry
+    std::vector<uint64_t> payload = {2, (uint64_t)ids[3], (uint64_t)ids[4]};
+    const mo_membership_t sorted64{payload.data(), MO_MEMBERSHIP_SORTED64};
+    auto job = index.search_quantize_with_filter_async(query.data(), 1, dimension, limit, sp, "", sorted64);
+    auto r3 = index.search_wait(job);
+    expect_only_allowed_ivfpq(r3.neighbors, r3.distances, limit, {ids[3], ids[4]});
+
+    // a CRoaring membership AND cat = 1: row 150 (cat 2) and row 170 (deleted) drop out
+    std::vector<int64_t> roaring_keys = {ids[10], ids[150], ids[170], ids[180]};
+    void* roaring = mo_croaring_create();
+    ASSERT_TRUE(mo_croaring_add_fixed(roaring, roaring_keys.data(), roaring_keys.size() * 8, 8,
+                                      roaring_keys.size(), nullptr, 0));
+    const mo_membership_t croaring{roaring, MO_MEMBERSHIP_CROARING};
+    auto r4 = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                       "[{\"col\":0,\"op\":\"=\",\"val\":1}]", croaring);
+    expect_only_allowed_ivfpq(r4.neighbors, r4.distances, limit, {ids[10], ids[180]});
+    ASSERT_EQ(r4.neighbors[0], ids[10]);
+    mo_croaring_free(roaring);
+    index.destroy();
+}
+
+// A SHARDED index prepares one mask per shard; each shard searches with its own.
+TEST(GpuIvfPqTest, PreparedBitsetSearchSharded) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 9000 + 2 * (int64_t)i;
+
+    std::vector<int> sim2 = {0, 0};  // 2 logical GPUs on physical device 0
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, sim2, 1,
+                                     DistributionMode_SHARDED, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    // members on both shards
+    std::vector<int64_t> keys = {ids[10], ids[150], ids[199]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t), keys.size(),
+                                     nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    const mo_membership_t cbitmap{bm, MO_MEMBERSHIP_CBITMAP};
+
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, "", cbitmap);
+    auto bitset = index.prepare_bitset("", cbitmap);
+    mo_cbitmap_free(bm);
+    ASSERT_EQ(bitset->masks.size(), (size_t)2);
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, keys);
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+    ASSERT_EQ(want.neighbors[0], ids[10]);
+
+    // a bitset with another shard count is refused
+    bitset->masks.pop_back();
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get()),
+                 std::invalid_argument);
+    index.destroy();
+}
+
+// prepare_bitset builds the mask of membership AND predicates once;
+// search_quantize_with_bitset reuses it.
+TEST(GpuIvfPqTest, PreparedBitsetSearch) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) ids[i] = 9000 + 2 * (int64_t)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[150] = 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                     DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    const uint32_t limit = 5;
+    const std::string cat1 = "[{\"col\":0,\"op\":\"=\",\"val\":1}]";
+
+    std::vector<int64_t> keys = {ids[150], ids[170], ids[199]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t), keys.size(),
+                                     nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    const mo_membership_t cbitmap{bm, MO_MEMBERSHIP_CBITMAP};
+
+    // membership AND cat = 1 drops row 150: rows 170, 199, as search_quantize_with_filter
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, cat1, cbitmap);
+    auto bitset = index.prepare_bitset(cat1, cbitmap);
+    mo_cbitmap_free(bm);  // the bitset does not read the membership
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_ivfpq(r.neighbors, r.distances, limit, {ids[170], ids[199]});
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+
+    // a running search holds its mask after the bitset is freed
+    auto job = index.search_quantize_with_bitset_async(query.data(), 1, dimension, limit, sp, bitset.get());
+    bitset.reset();
+    auto r2 = index.search_wait(job);
+    ASSERT_TRUE(r2.neighbors == want.neighbors);
+
+    // a null bitset and one of another index are refused
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, nullptr), std::invalid_argument);
+    gpu_ivf_pq_t<float, float> other(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1,
+                                     DistributionMode_SINGLE_GPU, ids.data());
+    other.start();
+    other.build();
+    auto foreign = other.prepare_bitset("", mo_membership_t{});
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, foreign.get()),
+                 std::invalid_argument);
+    other.destroy();
     index.destroy();
 }

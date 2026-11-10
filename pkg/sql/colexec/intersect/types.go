@@ -16,6 +16,7 @@ package intersect
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +34,7 @@ const (
 )
 
 type Intersect struct {
+	colexec.SetOperationAllocation
 	ctr      container
 	KeyExprs []*plan.Expr
 
@@ -81,6 +83,7 @@ type container struct {
 
 	// Hash table for checking duplicate data
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	// Result batch of intersec column execute operator
 	buf *batch.Batch
@@ -91,8 +94,16 @@ type container struct {
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.state = build
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if intersect.ExpressionAllocation() != nil {
+		intersect.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Reset()
+	if cap(ctr.unmatched) > 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.unmatched)
+	}
 	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
@@ -103,18 +114,20 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 	ctr := &intersect.ctr
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Free()
+	if cap(ctr.unmatched) > 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.unmatched)
+	}
 	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
 	}
-}
-
-func (intersect *Intersect) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
+	intersect.FreeMetadata()
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

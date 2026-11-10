@@ -25,14 +25,7 @@ func ParseDecimal64CastString(s string, width, scale int32) (types.Decimal64, er
 // ParseExplicitDecimal64CastString applies the explicit DECIMAL64 CAST
 // conversion, including its range-clamping behavior.
 func ParseExplicitDecimal64CastString(s string, width, scale int32) (types.Decimal64, error) {
-	result, err := parseExplicitDecimal64CastString(s, width, scale)
-	if err == nil {
-		return result, nil
-	}
-	if clamped, clampErr := clampDecimal64CastString(s, width, scale); clampErr == nil {
-		return clamped, nil
-	}
-	return result, err
+	return parseDecimal64CastStringMode(s, width, scale, true)
 }
 
 // ParseDecimal128CastString applies the normal string-to-DECIMAL128 CAST
@@ -44,14 +37,7 @@ func ParseDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 // ParseExplicitDecimal128CastString applies the explicit DECIMAL128 CAST
 // conversion, including its range-clamping behavior.
 func ParseExplicitDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
-	result, err := parseExplicitDecimal128CastString(s, width, scale)
-	if err == nil {
-		return result, nil
-	}
-	if clamped, clampErr := clampDecimal128CastString(s, width, scale); clampErr == nil {
-		return clamped, nil
-	}
-	return result, err
+	return parseDecimal128CastStringMode(s, width, scale, true)
 }
 
 // ParseDecimal256CastString applies the normal string-to-DECIMAL256 CAST
@@ -63,12 +49,5 @@ func ParseDecimal256CastString(s string, width, scale int32) (types.Decimal256, 
 // ParseExplicitDecimal256CastString applies the explicit DECIMAL256 CAST
 // conversion, including its range-clamping behavior.
 func ParseExplicitDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
-	result, err := parseExplicitDecimal256CastString(s, width, scale)
-	if err == nil {
-		return result, nil
-	}
-	if clamped, clampErr := clampDecimal256CastString(s, width, scale); clampErr == nil {
-		return clamped, nil
-	}
-	return result, err
+	return parseDecimal256CastStringMode(s, width, scale, true)
 }

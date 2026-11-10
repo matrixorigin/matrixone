@@ -23,19 +23,26 @@ package table_function
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,8 +53,10 @@ var fulltext2_runSql = sqlexec.RunSql
 // fulltext2CreateState builds a positional fulltext2 index from the source rows.
 // argVecs: [0]=cfg(JSON const), [1]=pk, [2..]=indexed text columns.
 type fulltext2CreateState struct {
-	inited bool
-	tblcfg fulltext2.TableConfig
+	inited         bool
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	tblcfg         fulltext2.TableConfig
 	// Streaming base build: only ONE open segment is held in memory. It is sealed +
 	// persisted (and its postings freed) the moment it reaches `capacity` docs, so
 	// peak build memory is one capacity-bounded segment rather than the whole corpus.
@@ -55,17 +64,33 @@ type fulltext2CreateState struct {
 	capacity     int64              // docs per sealed segment (floored to DefaultBuildCapacity)
 	postingCap   int64              // postings per sealed segment (floored to DefaultPostingCapacity)
 	pkType       int32
+	filters      []tokenfilter.TokenFilter // token_filter chain (stop), applied at tokenize
 	bopts        []fulltext2.BuildOpt
 	uid          string // per-build-unique sub-index id prefix (IndexTable:ts)
 	ts           int64
 	segIdx       int  // next sub-index id == count of segments sealed so far
 	basesCleared bool // DeleteAllBases run once, before the first sealed segment
 	batch        *batch.Batch
+	// threads is the resolved fulltext2_threads_build; above 1 the rows go through pipe,
+	// which tokenizes in parallel and finishes sealed segments in the background.
+	threads int
+	pipe    *fulltext2.BuildPipeline
+	// ignored leaves out the rows whose text the index cannot read; nil without an ignored table.
+	ignored *ignoredBuild
 }
 
 func (u *fulltext2CreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.abortPipeline()
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
+	}
+}
+
+func (u *fulltext2CreateState) abortPipeline() {
+	if u.pipe != nil {
+		u.pipe.Abort()
+		u.pipe = nil
 	}
 }
 
@@ -78,9 +103,12 @@ func (u *fulltext2CreateState) call(tf *TableFunction, proc *process.Process) (v
 }
 
 func (u *fulltext2CreateState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	u.abortPipeline()
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
+	u.ignored.close()
+	u.ignored = nil
 }
 
 func fulltext2CreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -93,7 +121,12 @@ func fulltext2CreatePrepare(proc *process.Process, arg *TableFunction) (tvfState
 
 // start tokenizes source row nthRow and Add's its ordered terms to the builder.
 func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-	if !u.inited {
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	if u.policy == nil {
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
 			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_create: first argument (config) must be a string")
@@ -105,7 +138,21 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "fulltext2_create: config is empty")
 		}
-		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+		if u.inited && cfgstr != u.admittedConfig {
+			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_create: config changed during operator reuse")
+		}
+		var cfg fulltext2.TableConfig
+		if err = sonic.Unmarshal([]byte(cfgstr), &cfg); err != nil {
+			return err
+		}
+		policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_create", cfg.DbName, "", fulltext2.MaintenanceOperands(cfg)...)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+	}
+	if !u.inited {
+		if u.filters, err = tokenfilter.Build(u.tblcfg.TokenFilters); err != nil {
 			return err
 		}
 		pkVec := tf.ctr.argVecs[1]
@@ -130,9 +177,19 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		// A per-build-unique id prefix (index table + build ts) keeps concurrent /
 		// repeated builds from colliding on sub-index ids (mirrors bm25 / HNSW).
 		u.ts = time.Now().UnixMicro()
-		u.uid = fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.ts)
+		indexIdentity := u.tblcfg.IndexTable
+		// Session generations can make a hidden relation name much longer than
+		// a user identifier. Segment IDs are opaque varchar(128) keys; bound
+		// their prefix while retaining the complete physical identity. Reserve
+		// room for the timestamp and segment ordinal (up to 20 digits each).
+		if len(indexIdentity) > 64 {
+			indexIdentity = fmt.Sprintf("%x", sha256.Sum256([]byte(indexIdentity)))
+		}
+		u.uid = fmt.Sprintf("%s:%d", indexIdentity, u.ts)
 		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
 		u.batch = tf.createResultBatch()
+		u.threads = int(vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild))
+		u.ignored = newIgnoredBuild(u.ignoredConfig(), vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
 		u.inited = true
 	}
 
@@ -142,9 +199,12 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 	if pkVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
+	if u.threads > 1 {
+		return u.addToPipeline(tf, proc, nthRow)
+	}
 	terms, err := u.rowTerms(tf, proc, nthRow)
 	if err != nil {
-		return err
+		return u.leaveOut(tf, proc, nthRow, err)
 	}
 	if len(terms) == 0 {
 		return nil
@@ -191,31 +251,91 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 		return err
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
-	if !u.basesCleared {
-		for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
-			res, e := fulltext2_runSql(sqlproc, s)
-			if e != nil {
-				return e
-			}
-			res.Close()
-		}
-		u.basesCleared = true
+	sqlproc.IndexRelationPolicy = u.policy
+	if err = u.clearBasesOnce(sqlproc); err != nil {
+		return err
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
-	if err != nil {
-		return err
+	return seg.Persist(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
+}
+
+// clearBasesOnce deletes the prior tag=0 bases before the first segment is written.
+func (u *fulltext2CreateState) clearBasesOnce(sqlproc *sqlexec.SqlProcess) error {
+	if u.basesCleared {
+		return nil
 	}
-	defer cleanup() // remove the spill file once its INSERTs have run — bounds temp disk too
-	for _, s := range sqls {
+	for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
 		res, e := fulltext2_runSql(sqlproc, s)
 		if e != nil {
 			return e
 		}
 		res.Close()
 	}
+	u.basesCleared = true
 	return nil
+}
+
+// fulltext2BuildMaxFinishing bounds the segments finished in the background at once.
+func fulltext2BuildMaxFinishing(threads int) int {
+	if threads >= 4 {
+		return 2
+	}
+	return 1
+}
+
+func (u *fulltext2CreateState) newBuildPipeline(proc *process.Process) *fulltext2.BuildPipeline {
+	// Segment ids continue from the segments already written by this state, like the serial path.
+	base := u.segIdx
+	return fulltext2.NewBuildPipeline(fulltext2.BuildPipelineConfig{
+		Threads:      u.threads,
+		MaxFinishing: fulltext2BuildMaxFinishing(u.threads),
+		Capacity:     u.capacity,
+		PostingCap:   u.postingCap,
+		NewBuilder: func() *fulltext2.Builder {
+			return fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
+		},
+		SegmentID: func(i int) string { return fulltext2.SubIndexId(u.uid, base+i) },
+		Tokenize:  u.tokenizeContent,
+		SpillDir:  fulltext2.LocalSpillDir(proc.Ctx, proc.Base.FileService),
+		Write: func(spilled *fulltext2.SpilledSegment) error {
+			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.IndexRelationPolicy = u.policy
+			if err := u.clearBasesOnce(sqlproc); err != nil {
+				return err
+			}
+			if err := spilled.Write(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS()); err != nil {
+				return err
+			}
+			u.segIdx++
+			return nil
+		},
+	})
+}
+
+// addToPipeline queues row nthRow with owned copies of its text, pk and INCLUDE values.
+func (u *fulltext2CreateState) addToPipeline(tf *TableFunction, proc *process.Process, nthRow int) error {
+	if u.pipe == nil {
+		u.cur = nil
+		u.pipe = u.newBuildPipeline(proc)
+	}
+	content, terms, direct, err := u.rowContent(tf, proc, nthRow)
+	if err != nil {
+		return u.leaveOut(tf, proc, nthRow, err)
+	}
+	if (direct && len(terms) == 0) || (!direct && len(content) == 0) {
+		return nil
+	}
+	pk := vector.GetAny(tf.ctr.argVecs[1], nthRow, false)
+	if b, ok := pk.([]byte); ok {
+		pk = append([]byte(nil), b...)
+	}
+	doc := fulltext2.BuildDoc{PK: pk, Content: content, Terms: terms}
+	if len(u.tblcfg.IncludeTypes) > 0 {
+		doc.Include = u.rowInclude(tf, nthRow)
+		doc.HasInclude = true
+	}
+	return u.pipe.Add(doc)
 }
 
 // rowInclude reads row nthRow's INCLUDE column values (the trailing argVecs after the text
@@ -244,11 +364,43 @@ func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
 	return out
 }
 
+// fulltext2SourceColumnBytes keeps source admission before every parser, and
+// shares the resolved Datalink between classification and actual acquisition.
+func fulltext2SourceColumnBytes(vec *vector.Vector, proc *process.Process, row int) ([]byte, bool, error) {
+	if vec.GetType().Oid == types.T_datalink {
+		url := vec.GetStringAt(row)
+		dl, err := datalink.NewAsyncDatalink(url, proc)
+		if err != nil {
+			return nil, false, fulltext2.DatalinkError(url, err)
+		}
+		text, err := dl.GetPlainText(proc)
+		return text, false, fulltext2.DatalinkError(url, err)
+	}
+	if vec.GetType().Oid == types.T_json {
+		return vec.GetRawBytesAt(row), true, nil
+	}
+	return []byte(vec.GetStringAt(row)), false, nil
+}
+
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
 // json columns to their flattened values; a SQL NULL column yields no tokens
 // while other columns in the row continue to contribute terms.
 func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
+	content, terms, direct, err := u.rowContent(tf, proc, nthRow)
+	if err != nil || direct {
+		return terms, err
+	}
+	if len(content) == 0 {
+		return nil, nil
+	}
+	return u.tokenizeContent(content)
+}
+
+// rowContent returns source row nthRow's text to tokenize, or with direct set the terms the
+// parser produces without a tokenizer (json tuple terms, json_value values). It reads the
+// argument vectors, so it runs on the operator goroutine; the returned slices are owned.
+func (u *fulltext2CreateState) rowContent(tf *TableFunction, proc *process.Process, nthRow int) (content []byte, terms []fulltext2.WordPos, direct bool, err error) {
 	argVecs := tf.ctr.argVecs
 	// Text columns are argVecs[2 : textEnd); the trailing len(IncludeTypes) args are INCLUDE
 	// columns (their values are stored verbatim, NOT tokenized). A SQL NULL text column
@@ -261,21 +413,18 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	// calls the same per-column encoder (see Fulltext2SqlWriter.rowText).
 	if u.tblcfg.UsesJSONTupleTerms() {
 		opt := u.tblcfg.JSONTermOptions()
-		var terms []fulltext2.WordPos
 		for i := 2; i < textEnd; i++ {
 			if argVecs[i].IsNull(uint64(nthRow)) {
 				continue
 			}
-			binary := argVecs[i].GetType().Oid == types.T_json
-			var raw []byte
-			if binary {
-				raw = argVecs[i].GetRawBytesAt(nthRow)
-			} else {
-				raw = []byte(argVecs[i].GetStringAt(nthRow))
+
+			raw, binary, err := fulltext2SourceColumnBytes(argVecs[i], proc, nthRow)
+			if err != nil {
+				return nil, nil, false, err
 			}
 			ts, err := fulltext2.JSONTupleColumnTerms(raw, binary, opt)
 			if err != nil {
-				return nil, err
+				return nil, nil, false, fulltext2.JSONError(err)
 			}
 			for _, t := range ts {
 				// ordinal position: a tuple term has no meaningful byte offset,
@@ -283,73 +432,104 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 				terms = append(terms, fulltext2.WordPos{Word: t, Pos: int32(len(terms))})
 			}
 		}
-		return terms, nil
+		return nil, terms, true, nil
 	}
 
 	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
-	var content bytes.Buffer
+	var buf bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
 		for i := 2; i < textEnd; i++ {
 			if argVecs[i].IsNull(uint64(nthRow)) {
 				continue
 			}
-			binary := argVecs[i].GetType().Oid == types.T_json
-			var raw []byte
-			if binary {
-				raw = argVecs[i].GetRawBytesAt(nthRow)
-			} else {
-				raw = []byte(argVecs[i].GetStringAt(nthRow))
+
+			raw, binary, err := fulltext2SourceColumnBytes(argVecs[i], proc, nthRow)
+			if err != nil {
+				return nil, nil, false, err
 			}
 			// json: ngram over space-joined values; json_value: each value is one whole
 			// atomic token, so keep them '\n'-separated for jsonValueTokenize below.
 			var ft []byte
-			var err error
 			if jsonValue {
 				ft, err = fulltext2.FlattenJSONLines(raw, binary)
 			} else {
 				ft, err = fulltext2.FlattenJSON(raw, binary)
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, false, fulltext2.JSONError(err)
 			}
-			if content.Len() > 0 {
-				content.WriteByte('\n')
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
 			}
-			content.Write(ft)
+			buf.Write(ft)
 		}
 	} else {
 		for i := 2; i < textEnd; i++ {
 			if argVecs[i].IsNull(uint64(nthRow)) {
 				continue
 			}
-			if content.Len() > 0 {
-				content.WriteByte('\n')
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
 			}
 			data := argVecs[i].GetStringAt(nthRow)
 			if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
-				dl, err := datalink.NewDatalink(data, proc)
+				b, _, err := fulltext2SourceColumnBytes(argVecs[i], proc, nthRow)
 				if err != nil {
-					return nil, err
+					return nil, nil, false, err
 				}
-				b, err := dl.GetPlainText(proc)
-				if err != nil {
-					return nil, err
-				}
-				content.Write(b)
+				buf.Write(b)
 			} else {
-				content.WriteString(data)
+				buf.WriteString(data)
 			}
 		}
 	}
-	if content.Len() == 0 {
-		return nil, nil
+	if buf.Len() == 0 {
+		return nil, nil, false, nil
 	}
 
 	// json_value indexes each whole '\n'-separated value as one atomic token (no ngram).
 	if jsonValue {
-		return fulltext2.JSONValueTokenize(content.Bytes()), nil
+		return nil, fulltext2.JSONValueTokenize(buf.Bytes()), true, nil
 	}
+	return buf.Bytes(), nil, false, nil
+}
 
+// ignoredConfig returns the table config by which the build records the rows it leaves out.
+func (u *fulltext2CreateState) ignoredConfig() vectorindex.IndexTableConfig {
+	return vectorindex.IndexTableConfig{
+		DbName:        u.tblcfg.DbName,
+		SrcTable:      u.tblcfg.SrcTable,
+		IgnoredTable:  u.tblcfg.IgnoredTable,
+		MaxBadRecords: u.tblcfg.MaxBadRecords,
+	}
+}
+
+// leaveOut leaves source row nthRow out of the index because of err, its reason the index
+// cannot read the row's text; err is returned when it is no such reason or the index has no
+// ignored table, or one row more than the limit.
+func (u *fulltext2CreateState) leaveOut(tf *TableFunction, proc *process.Process, nthRow int, err error) error {
+	if u.ignored == nil {
+		return err
+	}
+	if _, ok := vectorindex.UnstorableCode(err); !ok {
+		return err
+	}
+	pkVec := tf.ctr.argVecs[1]
+	var pk string
+	if u.tblcfg.PKey == catalog.CPrimaryKeyColName {
+		pk = vectorindex.SerialPkString(pkVec.GetBytesAt(nthRow))
+	} else {
+		var lerr error
+		if pk, lerr = iscp.SqlLiteral(proc.Ctx, pkVec, nthRow); lerr != nil {
+			return lerr
+		}
+	}
+	return u.ignored.leaveOut(pk, err)
+}
+
+// tokenizeContent tokenizes a row's text with the index parser and token_filter chain. It
+// reads only state fixed at init, so the pipelined build calls it from worker goroutines.
+func (u *fulltext2CreateState) tokenizeContent(content []byte) ([]fulltext2.WordPos, error) {
 	// json is indexed as ngram over its flattened values (SimpleTokenizer).
 	var tok tokenizer.Tokenizer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
@@ -361,10 +541,13 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 		tok = t
 	}
+	// Apply the token_filter chain (stop) so build drops the same tokens the query
+	// drops. Empty filters ⇒ tok unchanged.
+	tok = tokenfilter.Apply(tok, u.filters)
 
 	// token count is unknown up front; estimate from input length to avoid regrowth.
-	terms := make([]fulltext2.WordPos, 0, content.Len()/4)
-	for t, terr := range tok.Tokenize(content.Bytes()) {
+	terms := make([]fulltext2.WordPos, 0, len(content)/4)
+	for t, terr := range tok.Tokenize(content) {
 		if terr != nil {
 			return nil, terr
 		}
@@ -378,11 +561,31 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 // clearing and per-segment persistence already happened incrementally as segments
 // filled during the feed, so peak memory never exceeded one open segment.
 func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) error {
-	if !u.inited {
+	if !u.inited || u.policy == nil {
 		return nil
 	}
-	if err := u.sealSegment(proc); err != nil {
+	if u.pipe != nil {
+		if _, err := u.pipe.Close(); err != nil {
+			u.abortPipeline()
+			return err
+		}
+		u.pipe = nil
+	} else if err := u.sealSegment(proc); err != nil {
 		return err
+	}
+	if u.ignored != nil {
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		if err := u.ignored.sqls(u.ignoredConfig(), sqlproc.BuildSnapshotTS(), func(sql string) error {
+			res, err := fulltext2_runSql(sqlproc, sql)
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	// Nothing was persisted (empty corpus): leave existing tag=0 bases untouched,
 	// mirroring the prior zero-doc no-op.

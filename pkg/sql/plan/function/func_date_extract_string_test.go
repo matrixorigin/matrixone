@@ -86,7 +86,7 @@ func TestDateExtractFunctionsAcceptVarchar(t *testing.T) {
 	boundaryInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2005-01-01"}, nil)
 	boundaryExpect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{53}, nil)
 	boundary := NewFunctionTestCase(proc, []FunctionTestInput{boundaryInput}, boundaryExpect, DateStringToWeekOfYear)
-	success, info := boundary.Run()
+	success, info := boundary.RunAndFree()
 	require.True(t, success, info)
 }
 
@@ -97,7 +97,7 @@ func TestDateExtractFunctionsAcceptRelaxedDateDelimiters(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 		expect FunctionTestResult
 	}{
 		{
@@ -133,7 +133,7 @@ func TestDateExtractFunctionsAcceptRelaxedDateDelimiters(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-			success, info := ftc.Run()
+			success, info := ftc.RunAndFree()
 			require.True(t, success, info)
 		})
 	}
@@ -206,7 +206,7 @@ func TestTimestampToWeekOfYearValidValue(t *testing.T) {
 	input := NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, nil)
 	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil)
 	ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, TimestampToWeekOfYear)
-	success, info := ftc.Run()
+	success, info := ftc.RunAndFree()
 	require.True(t, success, info)
 }
 
@@ -218,7 +218,7 @@ func TestDateExtractStringFunctionsNullAndInvalidInputs(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 		expect FunctionTestResult
 	}{
 		{
@@ -254,7 +254,7 @@ func TestDateExtractStringFunctionsNullAndInvalidInputs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-			success, info := ftc.Run()
+			success, info := ftc.RunAndFree()
 			require.True(t, success, info)
 		})
 	}
@@ -267,7 +267,7 @@ func TestDateExtractStringFunctionsIncompleteDates(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 		expect FunctionTestResult
 	}{
 		{
@@ -303,7 +303,7 @@ func TestDateExtractStringFunctionsIncompleteDates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-			success, info := ftc.Run()
+			success, info := ftc.RunAndFree()
 			require.True(t, success, info)
 		})
 	}
@@ -319,7 +319,7 @@ func TestDateStringToStringCallbackInvalid(t *testing.T) {
 	}
 	ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn)
-	success, info := ftc.Run()
+	success, info := ftc.RunAndFree()
 	require.True(t, success, info)
 }
 
@@ -331,7 +331,7 @@ func TestDateExtractStringFunctionsIgnoreAllRows(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}{
 		{
 			name:       "dayofmonth",
@@ -347,6 +347,7 @@ func TestDateExtractStringFunctionsIgnoreAllRows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			defer ftc.Free()
 			require.NoError(t, ftc.result.PreExtendAndReset(ftc.fnLength))
 			require.NoError(t, tc.fn(ftc.parameters, ftc.result, ftc.proc, ftc.fnLength,
 				&FunctionSelectList{AllNull: true}))
@@ -368,7 +369,7 @@ func TestDateExtractStringFunctionsSelectList(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}{
 		{name: "dayofmonth", resultType: types.T_uint8.ToType(), fn: DateStringToDay},
 		{name: "dayname", resultType: types.T_varchar.ToType(), fn: DateStringToDayName},
@@ -376,6 +377,7 @@ func TestDateExtractStringFunctionsSelectList(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			defer ftc.Free()
 			require.NoError(t, ftc.result.PreExtendAndReset(ftc.fnLength))
 			require.NoError(t, tc.fn(ftc.parameters, ftc.result, ftc.proc, ftc.fnLength,
 				&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))

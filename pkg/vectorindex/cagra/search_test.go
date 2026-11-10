@@ -17,7 +17,6 @@
 package cagra
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -41,7 +40,7 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32, float32] {
 	t.Cleanup(func() { os.Remove(tarPath) })
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// LoadIndex always fires the tag=1 CDC event-log SELECT in parallel
@@ -69,7 +68,7 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32, float32] {
 // TestCagraSearchEmpty verifies that Search on an empty Indexes slice is a no-op.
 func TestCagraSearchEmpty(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
@@ -92,7 +91,7 @@ func TestCagraSearchEmpty(t *testing.T) {
 // TestCagraSearchTypeMismatch verifies that passing the wrong query type returns an error.
 func TestCagraSearchTypeMismatch(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx := loadedModel(t, "type-mismatch")
@@ -116,7 +115,7 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 // TestCagraSearchAndSearchFloat32 tests Search and SearchFloat32 with a single loaded index.
 func TestCagraSearchAndSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx := loadedModel(t, "search-single")
@@ -155,7 +154,7 @@ func TestCagraSearchAndSearchFloat32(t *testing.T) {
 // TestCagraSearchMultipleIndexes verifies result merging across two sub-indexes.
 func TestCagraSearchMultipleIndexes(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx0 := loadedModel(t, "multi-0")
@@ -185,7 +184,7 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 // TestCagraSearchLoad tests the full Load path (LoadMetadata + LoadIndex) with mock SQL.
 func TestCagraSearchLoad(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	// Preload sizes the CDC tail through sqlexec.RunSql, not the runSql stubbed below, and
 	// refuses a tail it cannot size. This model has no tail; say so readably.
@@ -211,14 +210,7 @@ func TestCagraSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	// Mock runSql_streaming for LoadIndex (serves the tar as one chunk).
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "search-load", tarPath)
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)

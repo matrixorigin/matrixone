@@ -17,8 +17,8 @@ package function
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"regexp/syntax"
 	"slices"
 	"strconv"
@@ -27,7 +27,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -49,24 +51,38 @@ type opBuiltInRegexp struct {
 }
 
 func newOpBuiltInRegexp() *opBuiltInRegexp {
-	return &opBuiltInRegexp{
-		regMap: regexpSet{
-			mp:  make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp),
-			icu: make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp),
-		},
-	}
+	return &opBuiltInRegexp{}
 }
 
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// LIKE compares with the character equivalence of its resolved text
+	// collation: utf8mb4_general_ci per-character weights, UCA 4.0.0 weight
+	// streams for the unicode_ci family, and the byte matcher for binary
+	// string domains (issue #31175).
+	fold := likeFoldModeFor(parameters[0].GetType().Charset)
 	if len(parameters) == 3 {
-		return op.likeFnWithEscape(parameters, result, proc, length, selectList, false)
+		return op.likeFnWithEscape(parameters, result, proc, length, selectList, fold, false)
 	}
 
+	// MySQL compares byte-wise when either LIKE operand is a binary
+	// string, so the pattern domain participates in the routing exactly
+	// as the subject domain does (issue #31175).
 	uniformBinary, perRow := stringDomainMode(parameters[0])
-	if uniformBinary || perRow {
+	patternBinary, patternPerRow := stringDomainMode(parameters[1])
+	if uniformBinary || perRow || patternBinary || patternPerRow {
 		return op.likeByStringDomain(
 			parameters, result, proc, length, selectList, uniformBinary, perRow,
-			[]byte{byte(DefaultEscapeChar)}, true)
+			patternBinary, patternPerRow,
+			[]byte{byte(DefaultEscapeChar)}, true, fold)
+	}
+
+	// UCA weights are multi-element streams per character (U+00DF weighs as
+	// "ss"), which the 1:1 rune fold of the byte fast paths cannot
+	// represent, so unicode_ci patterns use the per-character matcher.
+	if fold == likeFoldUnicodeCI {
+		return op.likeByStringDomain(
+			parameters, result, proc, length, selectList, false, false, false, false,
+			[]byte{byte(DefaultEscapeChar)}, true, fold)
 	}
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -74,23 +90,29 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
+	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
+		specialFnForV := func(i []byte) []byte {
 			return i
-		})
+		}
+		if fold == likeFoldGeneralCI {
+			// general_ci weights are single canonical runes, so the byte
+			// fast paths see exactly the collation's weight stream.
+			specialFnForV = generalCILikeFold
+		}
+		canOptimize, err := optimizeRuleForLike(proc.Ctx, p1, p2, rs, length, specialFnForV)
 		if canOptimize {
 			return err
 		}
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(v2, v1)
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, fold), selectList)
 }
 
 func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 3 {
-		return op.likeFnWithEscape(parameters, result, proc, length, selectList, true)
+		// ILIKE keeps its historical fold-on-every-domain behavior.
+		return op.likeFnWithEscape(parameters, result, proc, length, selectList, likeFoldILike, true)
 	}
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -98,18 +120,15 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
-			return bytes.ToLower(i)
-		})
+	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
+		canOptimize, err := optimizeRuleForLike(proc.Ctx, p1, p2, rs, length, ilikeFold)
 		if canOptimize {
 			return err
 		}
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, likeFoldILike), selectList)
 }
 
 func (op *opBuiltInRegexp) likeFnWithEscape(
@@ -118,7 +137,8 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
-	caseInsensitive bool,
+	fold likeFoldMode,
+	foldBinaryDomain bool,
 ) error {
 	if !parameters[2].IsConst() {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
@@ -139,21 +159,28 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	}
 
 	uniformBinary, perRow := stringDomainMode(parameters[0])
-	if !caseInsensitive && (uniformBinary || perRow) {
+	patternBinary, patternPerRow := stringDomainMode(parameters[1])
+	if !foldBinaryDomain && (uniformBinary || perRow || patternBinary || patternPerRow) {
 		return op.likeByStringDomain(
 			parameters[:2], result, proc, length, selectList, uniformBinary, perRow,
-			escapeBytes, escapeEnabled)
+			patternBinary, patternPerRow,
+			escapeBytes, escapeEnabled, fold)
 	}
 	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+	}
+	if fold == likeFoldUnicodeCI {
+		// The weight-stream matcher owns unicode_ci escapes as well.
+		return op.likeByStringDomain(
+			parameters[:2], result, proc, length, selectList, false, false, false, false,
+			escapeBytes, escapeEnabled, fold)
 	}
 	var escape rune
 	if escapeEnabled {
 		escape, _ = utf8.DecodeRune(escapeBytes)
 	}
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length,
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), escape, escapeEnabled, fold), selectList)
 }
 
 func (op *opBuiltInRegexp) likeByStringDomain(
@@ -163,13 +190,25 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	length int,
 	selectList *FunctionSelectList,
 	uniformBinary, perRow bool,
+	patternBinary, patternPerRow bool,
 	escapeBytes []byte,
 	escapeEnabled bool,
+	fold likeFoldMode,
 ) error {
 	values := vector.GenerateFunctionStrParameter(parameters[0])
 	patterns := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
 	constantPattern := parameters[1].IsConst()
+	var escapeRune rune
+	if escapeEnabled {
+		escapeRune, _ = utf8.DecodeRune(escapeBytes)
+	}
+	var matchText func([]byte, []byte) (bool, error)
+	if fold == likeFoldUnicodeCI {
+		matchText = unicodeLikeMatchFn(proc.Ctx, constantPattern, escapeRune, escapeEnabled)
+	} else {
+		matchText = op.regMap.likeMatchFn(proc.Ctx, constantPattern, escapeRune, escapeEnabled, fold)
+	}
 	compiledPattern := &compiledByteLikePattern{mp: proc.Mp(), ctx: proc.Ctx}
 	compiledPatternReady := false
 	defer compiledPattern.free()
@@ -190,7 +229,8 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 		}
 		var matched bool
 		var err error
-		if binaryStringAt(parameters[0], int(row), uniformBinary, perRow) {
+		if binaryStringAt(parameters[0], int(row), uniformBinary, perRow) ||
+			binaryStringAt(parameters[1], int(row), patternBinary, patternPerRow) {
 			if escapeEnabled && len(escapeBytes) != 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 			}
@@ -205,12 +245,7 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 			if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 			}
-			var escapeRune rune
-			if escapeEnabled {
-				escapeRune, _ = utf8.DecodeRune(escapeBytes)
-			}
-			matched, err = op.regMap.regularMatchForLikeOpWithEscape(
-				pattern, value, escapeRune, escapeEnabled, false)
+			matched, err = matchText(value, pattern)
 		}
 		if err != nil {
 			return err
@@ -227,6 +262,143 @@ const (
 	byteLikeOne
 	byteLikeAny
 )
+
+// likeFoldMode selects the character equivalence LIKE applies beyond exact
+// bytes (issue #31175).
+type likeFoldMode uint8
+
+const (
+	// likeFoldNone keeps the byte matcher.
+	likeFoldNone likeFoldMode = iota
+	// likeFoldGeneralCI compares utf8mb4_general_ci per-character weights;
+	// each weight is one canonical rune (á=A, ı=I, ß=S, Σ/σ/ς=Σ).
+	likeFoldGeneralCI
+	// likeFoldUnicodeCI compares UCA 4.0.0 primary weight streams one
+	// character at a time (my_wildcmp_uca): á equals a, the dotless ı
+	// stays distinct from I, and a multi-weight character such as ß
+	// matches only itself, never s or ss.
+	likeFoldUnicodeCI
+	// likeFoldILike is ILIKE's complete Unicode simple-fold equivalence on
+	// every string domain: U+212A folds with k and U+212B with å.
+	likeFoldILike
+)
+
+// likeFoldModeFor selects the character equivalence a resolved collation
+// gives LIKE (issue #31175).
+func likeFoldModeFor(charset uint8) likeFoldMode {
+	switch {
+	case types.IsUnicodeCollation(charset):
+		return likeFoldUnicodeCI
+	case charset == types.CharsetUTF8:
+		return likeFoldGeneralCI
+	default:
+		return likeFoldNone
+	}
+}
+
+func likeAllASCII(value []byte) bool {
+	for _, b := range value {
+		if b >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// generalCILikeFold maps a value to its utf8mb4_general_ci weight stream.
+// Every weight is one canonical rune, so the byte-oriented LIKE paths keep
+// working on the folded form; the ASCII path matches bytes.ToUpper exactly.
+func generalCILikeFold(value []byte) []byte {
+	if likeAllASCII(value) {
+		return bytes.ToUpper(value)
+	}
+	return collation.AppendGeneralCIFold(nil, value)
+}
+
+// ilikeFoldRune folds r to the smallest lowercase rune in its Unicode
+// simple-fold orbit. The orbit keeps every equivalence ILIKE already had
+// (U+212A with k, U+212B with å) and the sigma correction (U+03A3, U+03C3
+// and U+03C2 share one form), while U+0131 stays distinct from i and U+00DF
+// from s (issue #31175).
+func ilikeFoldRune(r rune) rune {
+	folded := unicode.ToLower(r)
+	for s := unicode.SimpleFold(r); s != r; s = unicode.SimpleFold(s) {
+		if f := unicode.ToLower(s); f < folded {
+			folded = f
+		}
+	}
+	return folded
+}
+
+// ilikeFold folds a value rune-wise with ilikeFoldRune, preserving invalid
+// bytes so they can only match themselves.
+func ilikeFold(value []byte) []byte {
+	if likeAllASCII(value) {
+		return bytes.ToLower(value)
+	}
+	folded := make([]byte, 0, len(value))
+	for len(value) > 0 {
+		r, size := utf8.DecodeRune(value)
+		if r == utf8.RuneError && size == 1 {
+			folded = append(folded, value[0])
+			value = value[1:]
+			continue
+		}
+		folded = utf8.AppendRune(folded, ilikeFoldRune(r))
+		value = value[size:]
+	}
+	return folded
+}
+
+// likeFoldValue applies a fold mode to a LIKE subject. likeFoldNone and
+// likeFoldUnicodeCI never reach the regexp translation: the former needs no
+// fold and the latter is owned by the weight-stream matcher.
+func likeFoldValue(fold likeFoldMode, value []byte) []byte {
+	switch fold {
+	case likeFoldGeneralCI:
+		return generalCILikeFold(value)
+	case likeFoldILike:
+		return ilikeFold(value)
+	default:
+		return value
+	}
+}
+
+// unicodeLikeMatchFn builds the per-character weight matcher for the
+// unicode_ci family. A constant pattern is tokenized once per batch,
+// mirroring the lazy regexp preparation in likeMatchFn.
+func unicodeLikeMatchFn(ctx context.Context, constantPattern bool, escape rune, escapeEnabled bool) func([]byte, []byte) (bool, error) {
+	var tokens []collation.LikeToken
+	ready := false
+	return func(value, pattern []byte) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+		if !constantPattern || !ready {
+			var err error
+			tokens, err = collation.TokenizeLikePattern(ctx, pattern, escape, escapeEnabled, collation.UCA400CharWeight)
+			if err != nil {
+				return false, err
+			}
+			ready = true
+		}
+		matched, err := collation.MatchLikePattern(ctx, tokens, value, collation.UCA400CharWeight)
+		if err != nil {
+			// pkg/common/collation is stdlib-only and cannot raise moerr, so
+			// the typed resource-limit error is converted here at the function
+			// layer. The message keeps the stable SQL-visible prefix
+			// "LIKE pattern resource limit exceeded: " (issue #31175 review).
+			var limitErr *collation.LikeResourceLimitError
+			if errors.As(err, &limitErr) {
+				return false, moerr.NewInternalErrorNoCtx(err.Error())
+			}
+			return false, err
+		}
+		return matched, nil
+	}
+}
 
 type compiledByteLikePattern struct {
 	storage                []byte
@@ -745,7 +917,20 @@ func likeNoBackslashEscapes(proc *process.Process) bool {
 	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
-func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
+// Probe only once per 256 fast-path rows; leave error retrieval on the cold path.
+func likeBatchCanceled(ctx context.Context, row uint64) bool {
+	if row&255 != 0 {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+func optimizeRuleForLike(ctx context.Context, p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
 	specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
@@ -758,6 +943,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #1: if expr is empty string, only empty string like empty string.
 	if n == 0 {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			if err := rs.Append(len(v1) == 0, null1); err != nil {
@@ -769,6 +957,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #2.1: anything matches %
 	if n == 1 && pat[0] == '%' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			_, null1 := p1.GetStrValue(i)
 			if err := rs.Append(true, null1); err != nil {
 				return true, err
@@ -779,6 +970,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #2.2: single char matches _
 	if n == 1 && pat[0] == '_' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			_, runeSize := utf8.DecodeRune(v1)
@@ -791,6 +985,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #2.3: single char, no wild card, so it is a simple compare eq.
 	if n == 1 && pat[0] != '_' && pat[0] != '%' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			if err := rs.Append(len(v1) == 1 && v1[0] == pat[0], null1); err != nil {
@@ -804,14 +1001,24 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	if n > 1 {
 		c0, c1 := pat[0], pat[n-1]
 		if !bytes.ContainsAny(pat[1:len(pat)-1], "_%") {
-			if n > 2 && pat[n-2] == DefaultEscapeChar {
-				c1 = DefaultEscapeChar
+			if c1 == '%' || c1 == '_' {
+				escapeCount := 0
+				for i := n - 2; i >= 0 && pat[i] == DefaultEscapeChar; i-- {
+					escapeCount++
+				}
+				// Only an odd-length escape run makes the trailing wildcard literal.
+				if escapeCount%2 != 0 {
+					c1 = DefaultEscapeChar
+				}
 			}
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 				// Rule 4.1: no wild card, so it is a simple compare eq.
 				literal := functionUtil.RemoveEscapeChar(pat, DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) == len(literal) && bytes.Equal(literal, v1), null1); err != nil {
@@ -824,6 +1031,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.2: _foobarzoo,
 				literal := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					_, runeSize := utf8.DecodeRune(v1)
@@ -837,6 +1047,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.3, %foobarzoo, it turns into a suffix match.
 				suffix := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.HasSuffix(v1, suffix), null1); err != nil {
@@ -849,6 +1062,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.4, foobarzoo_, it turns into eq ignoring the last character.
 				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					_, runeSize := utf8.DecodeLastRune(v1)
@@ -862,6 +1078,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.5 foobarzoo%, prefix match
 				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.HasPrefix(v1, prefix), null1); err != nil {
@@ -874,6 +1093,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.6 %foobarzoo%, now it is contains
 				substr := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.Contains(v1, substr), null1); err != nil {
@@ -886,6 +1108,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.7 %foobarzoo_,
 				suffix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					_, runeSize := utf8.DecodeLastRune(v1)
@@ -899,6 +1124,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.8 _foobarzoo%
 				prefix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					_, runeSize := utf8.DecodeRune(v1)
@@ -922,7 +1150,11 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 		outer:
 			for i := uint64(0); i < uint64(length); i++ {
+				if likeBatchCanceled(ctx, i) {
+					return true, ctx.Err()
+				}
 				v1, null1 := p1.GetStrValue(i)
+				v1 = specialFnForV(v1)
 				if null1 {
 					rs.AppendMustNull()
 				} else {
@@ -939,6 +1171,54 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			}
 			return true, nil
 		}
+	}
+	return optimizeAnchoredLikeSegments(ctx, p1, rs, pat, length, specialFnForV)
+}
+
+func optimizeAnchoredLikeSegments(ctx context.Context, p1 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], pat []byte, length int, specialFnForV func([]byte) []byte) (bool, error) {
+	n := len(pat)
+	// Extend the existing percent-segment optimization to anchored patterns.
+	// Keep escapes, Unicode literals and '_' on the regexp path. Limiting each
+	// literal bounds candidate verification work during substring searches.
+	const maxLikeLiteralSegment = 64
+	if n > 1 && (pat[0] != '%' || pat[n-1] != '%') && bytes.Contains(pat, []byte{'%'}) {
+		for _, b := range pat {
+			if b >= utf8.RuneSelf || b == '_' || b == DefaultEscapeChar {
+				return false, nil
+			}
+		}
+		segments := bytes.Split(pat, []byte{'%'})
+		for _, segment := range segments {
+			if len(segment) > maxLikeLiteralSegment {
+				return false, nil
+			}
+		}
+		prefix, suffix := segments[0], segments[len(segments)-1]
+		for row := uint64(0); row < uint64(length); row++ {
+			if likeBatchCanceled(ctx, row) {
+				return true, ctx.Err()
+			}
+			value, isNull := p1.GetStrValue(row)
+			value = specialFnForV(value)
+			matched := false
+			if !isNull && len(value) >= len(prefix)+len(suffix) &&
+				bytes.HasPrefix(value, prefix) && bytes.HasSuffix(value, suffix) {
+				remaining := value[len(prefix) : len(value)-len(suffix)]
+				matched = true
+				for _, segment := range segments[1 : len(segments)-1] {
+					at := bytes.Index(remaining, segment)
+					if at < 0 {
+						matched = false
+						break
+					}
+					remaining = remaining[at+len(segment):]
+				}
+			}
+			if err := rs.Append(matched, isNull); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
 	}
 	return false, nil
 }
@@ -965,17 +1245,28 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	if len(parameters) < 2 || len(parameters) > 3 || (!like && len(parameters) != 2) {
 		return moerr.NewInvalidInputNoCtx("invalid regexp predicate arity")
 	}
+	// REGEXP/RLIKE and REGEXP_LIKE take their default case sensitivity from
+	// the subject's resolved text collation, exactly as MySQL and the
+	// LOCATE/INSTR helpers do. An explicit match_type c/i flag and a binary
+	// match domain still override this default (issue #31175).
+	collationCaseInsensitive := types.IsCaseInsensitiveCollation(parameters[0].GetType().Charset)
 	if len(parameters) == 2 && !parameters[0].HasNull() {
 		if binary, uniform := regexpMatchDomainUniform(parameters); uniform {
+			defaultMatchType := "c"
+			pureDefaultMatchType := ""
+			if collationCaseInsensitive && !binary {
+				defaultMatchType = "i"
+				pureDefaultMatchType = "i"
+			}
 			return opBinaryStrStrToFixedWithErrorCheck[bool](
 				parameters, result, nil, length,
 				func(subject, pattern string) (bool, error) {
 					var match bool
 					var err error
 					if like {
-						match, err = op.regMap.regularLikeWithMode(pattern, subject, "c", binary)
+						match, err = op.regMap.regularLikeWithMode(pattern, subject, defaultMatchType, binary)
 					} else {
-						match, err = op.regMap.regularMatchWithMode(pattern, subject, binary)
+						match, err = op.regMap.regularMatchWithPureMatchType(pattern, subject, binary, pureDefaultMatchType)
 					}
 					if negate {
 						match = !match
@@ -1031,7 +1322,20 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 
 		patternString := functionUtil.QuickBytesToStr(pattern)
 		binary := regexpMatchUsesBinary(parameters, int(i))
-		if requiresRegexp2Pattern(patternString) {
+		// Without an explicit match_type case flag, a case-insensitive text
+		// collation supplies the default; a binary match domain stays
+		// case-sensitive unless the caller asked for i (issue #31175).
+		userCaseFlag := like && len(parameters) == 3 &&
+			(strings.ContainsRune(matchTypeString, 'c') || strings.ContainsRune(matchTypeString, 'i'))
+		// Non-case match_type flags (m/n/u) do not block the collation
+		// default: MySQL applies the argument collation whenever neither
+		// c nor i is present, so an explicit m mode still folds on a ci
+		// collation (issue #31175).
+		if collationCaseInsensitive && !binary && !userCaseFlag &&
+			!strings.ContainsRune(pureMatchType, 'i') {
+			pureMatchType += "i"
+		}
+		if op.regMap.requiresRegexp2(patternString, pureMatchType, binary) {
 			matcher, err := op.regMap.getRegexp2MatcherWithMatchType(
 				patternString, pureMatchType, binary)
 			if err != nil {
@@ -1062,7 +1366,7 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 			reg, err = op.regMap.getRegularLikeMatcherForPureMatchTypeWithMode(
 				patternString, pureMatchType, binary)
 		} else {
-			reg, err = op.regMap.getRegularMatcherForMatchWithMode(patternString, binary)
+			reg, err = op.regMap.getCompiledRegexpWithMatchType(patternString, pureMatchType, binary, "")
 		}
 		if err != nil {
 			return err
@@ -1927,11 +2231,23 @@ type regexpSet struct {
 	icuBytes      int
 }
 
+func (rs *regexpSet) requiresRegexp2(pat, matchType string, binary bool) bool {
+	key := regexpCacheKey{pattern: pat, matchType: matchType, binary: binary, binaryCaseFold: binary && strings.ContainsRune(matchType, 'i')}
+	if _, ok := rs.mp[key]; ok {
+		return false
+	}
+	if _, ok := rs.icu[key]; ok {
+		return true
+	}
+	return requiresRegexp2Pattern(pat)
+}
+
 func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 	return rs.getRegularMatcherWithMode(pat, false)
 }
 
 type regexpCacheKey struct {
+	matchType      string
 	pattern        string
 	binary         bool
 	binaryCaseFold bool
@@ -1949,9 +2265,10 @@ func (rs *regexpSet) getRegularMatcherInfoWithMode(pat string, binary bool) (*re
 func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 	pat string, binary bool, binaryCaseFold bool,
 ) (*regexp.Regexp, bool, error) {
-	var err error
+	return rs.getRegularMatcherInfoForKey(regexpCacheKey{pattern: pat, binary: binary, binaryCaseFold: binaryCaseFold})
+}
 
-	key := regexpCacheKey{pattern: pat, binary: binary, binaryCaseFold: binaryCaseFold}
+func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Regexp, bool, error) {
 	reg, ok := rs.mp[key]
 	if !ok {
 		if len(rs.mp)+len(rs.icu) >= mapSizeForRegexp {
@@ -1960,22 +2277,45 @@ func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 
 		// pat can be a zero-copy string backed by a reusable input vector. Both
 		// map keys and regexp expressions must outlive the current data block.
-		pat = strings.Clone(pat)
-		key.pattern = pat
-		expression := pat
-		if binary {
-			expression, err = encodeBinaryRegexpPattern(pat, binaryCaseFold)
-			if err != nil {
-				return nil, false, err
+		key.pattern = strings.Clone(key.pattern)
+		key.matchType = strings.Clone(key.matchType)
+		// The case-fold expansion (issue #31175) can push a pattern the
+		// unexpanded admission accepted over RE2's parse-tree height bound
+		// (for example deeply nested capture groups around a foldable
+		// literal run), or exhaust a rewrite budget. The source pattern's
+		// own verdict stands when it has one (malformed stays malformed);
+		// a well-formed, source-admitted pattern raises the bounded
+		// resource-limit error, because its faithful full-fold expansion
+		// cannot be evaluated within bounds and falling back to the
+		// engine's per-character caseless orbit would silently narrow the
+		// promised match set (issue #31175 design, ownership item 4).
+		var (
+			parsed   *syntax.Regexp
+			expanded bool
+			err      error
+		)
+		reg, parsed, expanded, err = buildRE2MatcherForKey(key, true)
+		if err != nil && expanded {
+			foldErr := err
+			reg, parsed, _, err = buildRE2MatcherForKey(key, false)
+			if err == nil {
+				// The source pattern is admissible: only its faithful
+				// expansion exceeds a bound. Keep the rewrite's own
+				// resource-limit error when it has one; otherwise name
+				// the engine admission bound the expanded form crossed.
+				if moerr.IsMoErrCode(foldErr, moerr.ErrInternal) {
+					err = foldErr
+				} else {
+					err = regexpCaseFoldResourceLimitf("expanded-pattern admission: %v", foldErr)
+				}
+				reg, parsed = nil, nil
 			}
 		}
-		reg, err = regexp.Compile(expression)
 		if err != nil {
 			return nil, false, err
 		}
-		parsed, parseErr := syntax.Parse(expression, syntax.Perl)
-		if parseErr != nil {
-			return nil, false, parseErr
+		if rs.mp == nil {
+			rs.mp = make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp)
 		}
 		if rs.mayMatchEmpty == nil {
 			rs.mayMatchEmpty = make(map[regexpCacheKey]bool, mapSizeForRegexp)
@@ -1984,6 +2324,58 @@ func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 		rs.mayMatchEmpty[key] = regexpSyntaxMayMatchEmpty(parsed)
 	}
 	return reg, rs.mayMatchEmpty[key], nil
+}
+
+// buildRE2MatcherForKey runs the RE2 admission chain for one prepared form
+// of key.pattern: with expand set the case-fold literal expansion is applied
+// first, and the returned expanded reports whether that rewrite was applied
+// (changed bytes or a resource-limit failure). The caller checks the source
+// pattern's own admission verdict when the expanded form fails. The returned
+// parsed tree describes the compiled expression and feeds the mayMatchEmpty
+// property.
+func buildRE2MatcherForKey(key regexpCacheKey, expand bool) (*regexp.Regexp, *syntax.Regexp, bool, error) {
+	pattern := key.pattern
+	expanded := false
+	if expand && regexpCaseFoldApplies(pattern, key.matchType, key.binary) {
+		// Case-insensitive literal runs match by full case folding, the
+		// way MySQL's ICU engine evaluates them (issue #31175 review).
+		// Exhaustion of a rewrite budget fails with the bounded
+		// resource-limit error; the caller decides whether the source
+		// pattern has its own verdict that stands instead.
+		rewritten, err := expandRegexpCaseFoldRuns(pattern, strings.ContainsRune(key.matchType, 'i'))
+		if err != nil {
+			return nil, nil, true, err
+		}
+		expanded = rewritten != pattern
+		pattern = rewritten
+	}
+	expression := regexpPatternWithPureMatchTypeRE2(pattern, key.matchType)
+	if key.binary {
+		var err error
+		expression, err = encodeBinaryRegexpPattern(expression, key.binaryCaseFold)
+		if err != nil {
+			return nil, nil, expanded, err
+		}
+	}
+	lineMode := regexp.UnixLines
+	if regexpMatchTypeWideMultiline(key.matchType) {
+		lineMode = regexp.WideTextLines
+		if key.binary {
+			lineMode = regexp.WideBinaryLines
+			if key.binaryCaseFold {
+				lineMode = regexp.WideBinaryFoldLines
+			}
+		}
+	}
+	reg, err := regexp.CompileWithLineMode(expression, lineMode)
+	if err != nil {
+		return nil, nil, expanded, err
+	}
+	parsed, err := syntax.Parse(expression, syntax.Perl)
+	if err != nil {
+		return nil, nil, expanded, err
+	}
+	return reg, parsed, expanded, nil
 }
 
 // regexpSyntaxMayMatchEmpty is a conservative, syntax-level property: true
@@ -2021,10 +2413,6 @@ func regexpSyntaxMayMatchEmpty(expr *syntax.Regexp) bool {
 		}
 	}
 	return false
-}
-
-func (rs *regexpSet) getRegularMatcherForMatchWithMode(pat string, binary bool) (*regexp.Regexp, error) {
-	return rs.getCompiledRegexpWithMode(pat, binary, "")
 }
 
 func validateRegexpPattern(pat string) error {
@@ -2094,7 +2482,7 @@ func (rs *regexpSet) validateRegexpBeforeNullableResultWithMatchType(
 	pureMatchType string,
 ) error {
 	if laterArgumentIsNull {
-		if requiresRegexp2Pattern(pat) {
+		if rs.requiresRegexp2(pat, pureMatchType, binary) {
 			if err := validateRegexpPattern(pat); err != nil {
 				return err
 			}
@@ -2111,28 +2499,29 @@ func (rs *regexpSet) validateRegexpBeforeNullableResultWithMatchType(
 }
 
 func (rs *regexpSet) regularMatchWithMode(pat, str string, binary bool) (bool, error) {
-	if requiresRegexp2Pattern(pat) {
+	return rs.regularMatchWithPureMatchType(pat, str, binary, "")
+}
+
+func (rs *regexpSet) regularMatchWithPureMatchType(pat, str string, binary bool, pureMatchType string) (bool, error) {
+	if rs.requiresRegexp2(pat, pureMatchType, binary) {
 		if err := validateRegexpPattern(pat); err != nil {
 			return false, err
 		}
-		matcher, err := rs.getRegexp2MatcherWithMatchType(pat, "", binary)
+		matcher, err := rs.getRegexp2MatcherWithMatchType(pat, pureMatchType, binary)
 		if err != nil {
 			return false, err
 		}
-		return rs.regexp2MatchWithMatchType(matcher, str, binary, "")
+		return rs.regexp2MatchWithMatchType(matcher, str, binary, pureMatchType)
 	}
-	reg, err := rs.getRegularMatcherForMatchWithMode(pat, binary)
+	reg, err := rs.getCompiledRegexpWithMatchType(pat, pureMatchType, binary, "")
 	if err != nil {
 		return false, err
 	}
-	if binary {
-		str, _ = encodeBinaryRegexpBytes(str, 0)
-	}
-	return reg.MatchString(str), nil
+	return regexpMatchCompiled(reg, str, binary, binary && strings.ContainsRune(pureMatchType, 'i')), nil
 }
 
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
-	return rs.regularMatchForLikeOpWithEscape(pat, str, DefaultEscapeChar, true, false)
+	return rs.regularMatchForLikeOpWithEscape(pat, str, DefaultEscapeChar, true, likeFoldNone)
 }
 
 func (rs *regexpSet) regularMatchForLikeOpWithEscape(
@@ -2140,8 +2529,44 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 	str []byte,
 	escape rune,
 	escapeEnabled bool,
-	caseInsensitive bool,
+	fold likeFoldMode,
 ) (match bool, err error) {
+	reg, err := rs.prepareLikeRegexp(pat, escape, escapeEnabled, fold)
+	if err != nil {
+		return false, nil
+	}
+	str = likeFoldValue(fold, str)
+	return reg.Match(str), nil
+}
+
+// A constant pattern is prepared lazily, once per vector evaluation. The
+// vector wrapper remains responsible for NULLs and selection, so unevaluated
+// rows never prepare a pattern. No state survives into the next batch.
+func (rs *regexpSet) likeMatchFn(ctx context.Context, constantPattern bool, escape rune, escapeEnabled bool, fold likeFoldMode) func([]byte, []byte) (bool, error) {
+	var reg *regexp.Regexp
+	ready := false
+	return func(value, pattern []byte) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+		if !constantPattern {
+			return rs.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, fold)
+		}
+		if !ready {
+			reg, _ = rs.prepareLikeRegexp(pattern, escape, escapeEnabled, fold)
+			ready = true
+		}
+		// Preserve the generic LIKE path's false result on regexp compile failure.
+		if reg == nil {
+			return false, nil
+		}
+		return reg.Match(likeFoldValue(fold, value)), nil
+	}
+}
+
+func (rs *regexpSet) prepareLikeRegexp(pat []byte, escape rune, escapeEnabled bool, fold likeFoldMode) (*regexp.Regexp, error) {
 	replace := func(s string) string {
 		isRegexMeta := func(r rune) bool {
 			switch r {
@@ -2151,9 +2576,21 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 				return false
 			}
 		}
-		appendLiteral := func(buf *bytes.Buffer, r rune) {
-			if caseInsensitive {
-				r = unicode.ToLower(r)
+		appendLiteral := func(buf *bytes.Buffer, r rune, size int) {
+			switch fold {
+			case likeFoldGeneralCI:
+				// Compare the collation's per-character weights; each is a
+				// single canonical rune. A malformed byte folds to the same
+				// shared weight rune the subject fold produces, mirroring
+				// the U+FFFD decoding of the raw regex matcher (issue
+				// #31175).
+				if r == utf8.RuneError && size == 1 {
+					r = rune(collation.LikeMalformedByteWeight)
+				} else {
+					r = rune(collation.GeneralCIWeightRune(r))
+				}
+			case likeFoldILike:
+				r = ilikeFoldRune(r)
 			}
 			if isRegexMeta(r) {
 				buf.WriteByte('\\')
@@ -2168,7 +2605,7 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 			r, size := utf8.DecodeRuneInString(s)
 			s = s[size:]
 			if escaped {
-				appendLiteral(&buf, r)
+				appendLiteral(&buf, r, size)
 				escaped = false
 				continue
 			}
@@ -2180,11 +2617,11 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 			case r == '%':
 				buf.WriteString(".*")
 			default:
-				appendLiteral(&buf, r)
+				appendLiteral(&buf, r, size)
 			}
 		}
 		if escaped {
-			appendLiteral(&buf, escape)
+			appendLiteral(&buf, escape, utf8.RuneLen(escape))
 		}
 		return buf.String()
 	}
@@ -2192,15 +2629,7 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 		return fmt.Sprintf("^(?s:%s)$", replace(util.UnsafeBytesToString(expr)))
 	}
 
-	realPat := convert(pat)
-	reg, err := rs.getRegularMatcher(realPat)
-	if err != nil {
-		return false, nil
-	}
-	if caseInsensitive {
-		str = []byte(strings.ToLower(util.UnsafeBytesToString(str)))
-	}
-	return reg.Match(str), nil
+	return rs.getRegularMatcher(convert(pat))
 }
 
 // if str[pos:] matched pat.
@@ -2220,7 +2649,7 @@ func (rs *regexpSet) regularSubstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (match bool, substr string, err error) {
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2SubstrWithMatchType(
 			pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2268,7 +2697,7 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 	if err = validateRegexpPattern(pat); err != nil {
 		return "", err
 	}
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2ReplaceWithMatchType(
 			pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2370,7 +2799,7 @@ func (rs *regexpSet) regularInstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (index int64, err error) {
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2InstrWithMatchType(
 			pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
 	}
@@ -2549,14 +2978,11 @@ func (rs *regexpSet) regexpVisitAtOrAfterWithMatchType(
 	visited := int64(0)
 	nextStart := startByte
 	for nextStart <= len(str) {
-		start, end, found, err := rs.regexpFindAtOrAfterWithMatchType(
-			reg, pat, str, nextStart, subjectIsBinary, pureMatchType)
-		if err != nil {
-			return err
-		}
-		if !found {
+		indices := reg.FindStringIndexAt(str, nextStart)
+		if indices == nil {
 			break
 		}
+		start, end := indices[0], indices[1]
 		visit(start, end)
 		visited++
 		if limit > 0 && visited >= limit {
@@ -2619,50 +3045,6 @@ func (rs *regexpSet) regexpReplaceAllAtOrAfterWithMatchType(
 		}
 	}
 	return result, nil
-}
-
-// regexpFindAtOrAfterWithMatchType supplies context lost by slicing at
-// startByte. It consumes exactly the preceding text unit, then lazily searches
-// for the original pattern. This keeps ^, multiline ^, and word boundaries
-// relative to the original subject while excluding matches before startByte.
-// The wrapped matcher is cached with the ordinary pattern matchers.
-func (rs *regexpSet) regexpFindAtOrAfterWithMatchType(
-	reg *regexp.Regexp,
-	pat, str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-) (start, end int, found bool, err error) {
-	if startByte <= 0 {
-		indices := reg.FindStringIndex(str)
-		if indices == nil {
-			return 0, 0, false, nil
-		}
-		return indices[0], indices[1], true, nil
-	}
-	if startByte > len(str) {
-		return 0, 0, false, nil
-	}
-
-	_, size := utf8.DecodeLastRuneInString(str[:startByte])
-	contextStart := startByte - size
-	if size < 1 {
-		contextStart = startByte - 1
-	}
-	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
-	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
-		wrappedPattern,
-		subjectIsBinary,
-		subjectIsBinary && strings.ContainsRune(pureMatchType, 'i'),
-	)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	indices := wrapped.FindStringSubmatchIndex(str[contextStart:])
-	if len(indices) < 4 || indices[2] < 0 {
-		return 0, 0, false, nil
-	}
-	return contextStart + indices[2], contextStart + indices[3], true, nil
 }
 
 func regexpAdvancePosition(str string, offset int) int {
@@ -3001,72 +3383,82 @@ func (rs *regexpSet) getRegularLikeMatcherForPureMatchTypeWithMode(
 	return reg, err
 }
 
-func regexpPatternWithPureMatchType(pat, pureMatchType string) string {
-	if pureMatchType == "" {
-		return pat
-	}
-	return "(?" + pureMatchType + ")" + pat
+// regexpMatchTypeUnixLines reports whether the (pure) match_type marker
+// requests MySQL's Unix-only line-ending multiline behavior (u).
+func regexpMatchTypeUnixLines(pureMatchType string) bool {
+	return strings.ContainsRune(pureMatchType, 'u')
 }
 
-// regexpPositionSearchPattern wraps a user pattern so matching can start at a
-// later subject position without changing the original anchor context. A
-// trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
-// quote before adding wrapper syntax so the generated parenthesis stays syntax.
-func regexpPositionSearchPattern(pat, pureMatchType string) string {
-	const prefix = "^(?s:.)(?s:.*?)("
-	var wrapped strings.Builder
-	wrapped.Grow(len(prefix) + len(pat) + len(pureMatchType) + 5)
-	wrapped.WriteString(prefix)
-	if pureMatchType != "" {
-		wrapped.WriteString("(?")
-		wrapped.WriteString(pureMatchType)
-		wrapped.WriteByte(')')
+// regexpMatchTypeWideMultiline reports whether multiline matching must
+// accept MySQL's wider line-terminator set (m without u): CR, VT, FF, NEL,
+// LINE SEPARATOR, PARAGRAPH SEPARATOR, plus LF (issue #30210). Both engines
+// apply this policy natively to assertions through their line modes.
+func regexpMatchTypeWideMultiline(pureMatchType string) bool {
+	return strings.ContainsRune(pureMatchType, 'm') && !regexpMatchTypeUnixLines(pureMatchType)
+}
+
+// regexpPatternWithPureMatchType is the ICU pattern-size admission owner.
+// Bound raw input and every generated append before allocating an expansion.
+func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) (string, error) {
+	rule, _, err := regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType, binary, true)
+	return rule, err
+}
+
+// regexpPatternWithPureMatchTypeExpanded folds match_type into the regexp2
+// flag prefix. With expand set, a pattern the case-fold rewrite applies to
+// first gets its full-fold literal expansion (issue #31175), and the
+// returned expanded reports whether the rewrite was applied (changed bytes
+// or a resource-limit failure); the regexp2 admission checks the source
+// pattern's own verdict when the expanded form fails.
+func regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType string, binary, expand bool) (string, bool, error) {
+	if len(pat) > regexp2MaxPatternBytes {
+		return "", false, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
 	}
-	quoted := false
-	for i := 0; i < len(pat); {
-		if pat[i] != '\\' || i+1 == len(pat) {
-			wrapped.WriteByte(pat[i])
-			i++
-			continue
+	expanded := false
+	if expand && regexpCaseFoldApplies(pat, pureMatchType, binary) {
+		// Same full-fold literal expansion as the RE2 path (issue #31175
+		// review); the prefix-size admission below bounds the result.
+		// Exhaustion of a rewrite budget fails with the bounded
+		// resource-limit error; the caller decides whether the source
+		// pattern has its own verdict that stands instead.
+		rewritten, err := expandRegexpCaseFoldRuns(pat, strings.ContainsRune(pureMatchType, 'i'))
+		if err != nil {
+			return "", true, err
 		}
-		if quoted {
-			if pat[i+1] == 'E' {
-				wrapped.WriteString(pat[i : i+2])
-				quoted = false
-				i += 2
-			} else {
-				// Inside \Q, only the first literal \E ends quoting. Do not
-				// treat a preceding backslash as escaping that terminator.
-				wrapped.WriteByte(pat[i])
-				i++
-			}
-			continue
-		}
-		_, size := utf8.DecodeRuneInString(pat[i+1:])
-		if size < 1 {
-			size = 1
-		}
-		end := i + 1 + size
-		wrapped.WriteString(pat[i:end])
-		if pat[i+1] == 'Q' {
-			quoted = true
-		}
-		i = end
+		expanded = rewritten != pat
+		pat = rewritten
 	}
-	if quoted {
-		wrapped.WriteString("\\E")
+	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
+	prefix := ""
+	if engineFlags != "" {
+		prefix = "(?" + engineFlags + ")"
 	}
-	wrapped.WriteByte(')')
-	return wrapped.String()
+	if len(pat) > regexp2MaxPatternBytes-len(prefix) {
+		return "", expanded, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+	}
+	return prefix + pat, expanded, nil
+}
+
+// regexpPatternWithPureMatchTypeRE2 folds match_type into the RE2 flag
+// prefix without applying the wide-multiline anchor rewrite: the rewrite is
+// regexp2-only syntax (lookarounds). The regular engine applies its immutable
+// line mode directly when evaluating empty-width assertions.
+func regexpPatternWithPureMatchTypeRE2(pat, pureMatchType string) string {
+	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
+	if engineFlags == "" {
+		return pat
+	}
+	return "(?" + engineFlags + ")" + pat
 }
 
 func (rs *regexpSet) getRegularMatcherInfoWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp.Regexp, bool, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
-	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	return rs.getRegularMatcherInfoWithBinaryCaseFold(rule, binary, binaryCaseFold)
+	return rs.getRegularMatcherInfoForKey(regexpCacheKey{
+		pattern: pat, matchType: pureMatchType, binary: binary,
+		binaryCaseFold: binary && strings.ContainsRune(pureMatchType, 'i'),
+	})
 }
 
 func (rs *regexpSet) getRegularMatcherWithMatchType(
@@ -3108,7 +3500,7 @@ func (rs *regexpSet) regularLikeWithMode(pat string, str string, matchType strin
 	if err != nil {
 		return false, err
 	}
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, binary) {
 		if err := validateRegexpPattern(pat); err != nil {
 			return false, err
 		}
@@ -3141,6 +3533,7 @@ func getPureMatchType(input string) (string, error) {
 	caseType := ""
 	foundn := false
 	foundm := false
+	foundu := false
 
 	for _, c := range input {
 		switch c {
@@ -3161,6 +3554,13 @@ func getPureMatchType(input string) (string, error) {
 		case 'u':
 			// Go regexp uses LF as its only line terminator, which is the
 			// Unix-lines behavior requested by MySQL's explicit u option.
+			// Keep the marker: m must widen its line-terminator set to
+			// MySQL's (CR, NEL, U+2028, U+2029) unless u pins it to LF
+			// (issue #30210).
+			if !foundu {
+				retstring += "u"
+				foundu = true
+			}
 		default:
 			return "", moerr.NewInvalidInputNoCtx("regexp_like got invalid match_type input!")
 		}

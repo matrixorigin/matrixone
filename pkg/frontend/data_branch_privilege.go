@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -167,7 +167,27 @@ func authenticateDataBranchCreateDatabaseSourceTables(
 		delta statistic.StatsArray
 		err   error
 	)
+	if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && ses.GetTenantInfo().IsMoAdminRole() {
+		return stats, nil
+	}
 	for _, tblInfo := range source.cloneableTableInfos() {
+		if tblInfo.typ == view && source.srcResolveDBName != source.srcPrivilegeDBName {
+			if ses.GetTenantInfo().IsAdminRole() {
+				continue
+			}
+			delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{{
+				objType:                       objectTypeView,
+				databaseName:                  source.srcPrivilegeDBName,
+				tableName:                     tblInfo.tblName,
+				privilegeTypes:                []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership},
+				writeDatabaseAndTableDirectly: true,
+			}})
+			stats.Add(&delta)
+			if err != nil {
+				return stats, err
+			}
+			continue
+		}
 		srcName := makeBranchTableName(
 			source.srcPrivilegeDBName,
 			tblInfo.tblName,
@@ -484,15 +504,41 @@ func requireBranchReadOnTableName(
 	if err != nil {
 		return stats, err
 	}
-	if normalized.AtTsExpr != nil && normalized.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-		snapshot, err := resolveSnapshot(ses, normalized.AtTsExpr)
-		if err != nil {
+	// Resolve the operand's ts hint first: a pinned operand is classified in
+	// its snapshot namespace, so the visibility verdict and the synthetic
+	// SELECT below describe the same historical binding (a database name
+	// dropped and recreated as a subscription after the pinned timestamp
+	// stays local for that operand).
+	var operandSnapshot *plan.Snapshot
+	if normalized.AtTsExpr != nil {
+		var err error
+		if operandSnapshot, err = resolveSnapshot(ses, normalized.AtTsExpr); err != nil {
 			return stats, err
 		}
+	}
+	// Classify the operand before building the synthetic SELECT (design
+	// §4.1.1): on a subscription database the plan builder resolves the
+	// alias through the physical catalog, so an out-of-scope or revoked
+	// operand must surface its visibility cause here instead of the
+	// masker "table does not exist" the nil resolution would emit.
+	var classificationErr error
+	statsDelta, classificationErr := withBranchPrivilegeBackgroundExec(
+		ctx, ses, func(bh BackgroundExec) error {
+			return requireBranchClassificationVisible(
+				ctx, ses, bh, operandSnapshot,
+				normalized.SchemaName.String(), normalized.ObjectName.String(),
+			)
+		},
+	)
+	stats.Add(&statsDelta)
+	if classificationErr != nil {
+		return stats, classificationErr
+	}
+	if normalized.AtTsExpr != nil && normalized.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 		// Keep the historical relation used by the existing privilege probe, but
 		// avoid applying query scope validation to this synthetic statement. The
 		// DATA BRANCH endpoint validates the named snapshot against its relation.
-		normalized.AtTsExpr = newMoTimestampHint(snapshot.TS.PhysicalTime)
+		normalized.AtTsExpr = newMoTimestampHint(operandSnapshot.TS.PhysicalTime)
 	}
 	stmt := branchSelectForTableName(normalized)
 	p, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
@@ -510,6 +556,35 @@ func requireBranchReadOnTableName(
 	return stats, nil
 }
 
+// requireBranchClassificationVisible runs the design §4.1 classification for
+// one branch operand under its pinned transaction view: when the operand
+// carries a resolved ts hint the classification operator is the statement
+// transaction cloned at that timestamp, so the visibility verdict describes
+// the operand's historical namespace (a database dropped and recreated as a
+// subscription after the pin stays local for that operand). Publication
+// authorization stays a live check inside the classifier.
+func requireBranchClassificationVisible(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	operandSnapshot *plan.Snapshot,
+	dbName string,
+	tblName string,
+) error {
+	classifyTxn := ses.GetTxnHandler().GetTxn()
+	if operandSnapshot != nil && operandSnapshot.TS != nil {
+		classifyTxn = classifyTxn.CloneSnapshotOp(*operandSnapshot.TS)
+	}
+	_, outOfScope, err := classifySubscriptionOperand(ctx, ses, classifyTxn, bh, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if outOfScope {
+		return newBranchOperandOutsidePublicationScopeError(ctx, dbName, tblName)
+	}
+	return nil
+}
+
 func branchSelectForTableName(name tree.TableName) *tree.Select {
 	tableName := name
 	return tree.NewSelect(&tree.SelectClause{
@@ -522,6 +597,18 @@ func branchSelectForTableName(name tree.TableName) *tree.Select {
 	}, nil, nil)
 }
 
+// branchPrivilegeBackExecutor is the executor-provider seam of
+// withBranchPrivilegeBackgroundExec (the acquireAccountLifecycleSharedGates
+// precedent): production binds getBackExecutor so unit tests can drive the
+// branch privilege closure against a mocked executor.
+var branchPrivilegeBackExecutor = func(
+	ctx context.Context,
+	ses *Session,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	return getBackExecutor(ctx, ses, opts...)
+}
+
 func withBranchPrivilegeBackgroundExec(
 	ctx context.Context,
 	ses *Session,
@@ -532,7 +619,7 @@ func withBranchPrivilegeBackgroundExec(
 		bh       BackgroundExec
 		deferred func(error) error
 	)
-	if bh, deferred, err = getBackExecutor(ctx, ses); err != nil {
+	if bh, deferred, err = branchPrivilegeBackExecutor(ctx, ses); err != nil {
 		return stats, err
 	}
 	defer func() {
@@ -704,23 +791,6 @@ func validateDataBranchDeleteDatabaseTarget(
 	}
 	slices.Sort(tableIDs)
 	return tableIDs, nil
-}
-
-// lockDataBranchDeleteDatabaseTarget establishes the authorization point for a
-// database delete. CREATE/ALTER/DROP object DDL takes the same mo_database row
-// lock, so holding it through validation and the nested DROP makes the marker
-// and complete ordinary-table set stable until the owning transaction ends.
-func lockDataBranchDeleteDatabaseTarget(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	dbName string,
-) error {
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName, lock.LockMode_Exclusive)
 }
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {

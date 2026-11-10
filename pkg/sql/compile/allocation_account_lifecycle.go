@@ -63,6 +63,12 @@ type executionAllocationAccountOwner interface {
 	ClearAllocationAccount(*mpool.AllocationAccount) error
 }
 
+// executionAllocationAccountDrainer holds batches transferred from other
+// operators. Its borrowers must be released before any capacity owner is cleared.
+type executionAllocationAccountDrainer interface {
+	DrainAllocationAccount(*mpool.AllocationAccount) error
+}
+
 type executionAllocationAccountActivationPolicy interface {
 	ActivatesAllocationAccountLifecycle() bool
 }
@@ -379,6 +385,20 @@ func (a *statementAllocationAttempt) prepareTerminal(closeBoard bool) error {
 		a.owners = nil
 		a.ownerSet = nil
 		a.ownersMu.Unlock()
+		// Scope traversal order is not allocation ownership order: a pass-through
+		// pipeline can retain a batch from an arbitrarily deep producer. All scopes
+		// are quiescent here, so drain transport borrowers before retiring the
+		// source operators' recovery capacity controllers.
+		for _, owner := range owners {
+			if drainer, ok := owner.(executionAllocationAccountDrainer); ok {
+				a.prepareErr = joinAllocationLifecycleErrors(
+					a.prepareErr,
+					allocationLifecycleCall(func() error {
+						return drainer.DrainAllocationAccount(a.account)
+					}),
+				)
+			}
+		}
 		for i := len(owners) - 1; i >= 0; i-- {
 			a.prepareErr = joinAllocationLifecycleErrors(
 				a.prepareErr,

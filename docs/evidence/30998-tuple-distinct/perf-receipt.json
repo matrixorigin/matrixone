@@ -1,0 +1,23 @@
+{
+  "name": "perf",
+  "command": [
+    "/private/tmp/mo-27683-bench-20261023/venv/bin/python",
+    "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/perf_abba.py"
+  ],
+  "cwd": "/private/tmp/mo-issue30995",
+  "started_epoch": 1792803278.9987211,
+  "finished_epoch": 1792803493.707218,
+  "exit": 0,
+  "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396",
+  "pkg_tree": "e92b301ddfb3ad233451251e6406dea894255a11",
+  "binary_sha256": {
+    "baseline": "bbd27b9a8a693a8ab0543e9473a5d1eaea6cffeddd5307bf3f311a58ed34773a",
+    "candidate": "0e3a90e2cc11f34761fe849e441f72e616065420271e7dd61a0f0cac5942ac6c"
+  },
+  "script_sha256": {
+    "perf_abba.py": "d2b36ea1824db3a87b435afa495a4c28bd2732118e14438ff59bf939c4494e44",
+    "harness.py": "698087a223fd7b72a7b67e5a75d522fdb913192d432cd2fb91d43e1ab3abffbf",
+    "run_experiment.py": "dde74badce3ecbf761344bd9e4d55f46ee7b12d21ae57a33fc19a3c382ed5de4"
+  },
+  "output_sha256": "f07860ead00e6dac857b0d18b5b4ce1d5184f52b6e94cbe019f268a789a2c74d"
+}

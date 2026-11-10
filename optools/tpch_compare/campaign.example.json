@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "root": "/nvme/tpch/comparison",
+  "mode": "full",
+  "datasets": {
+    "1": "/nvme/tpch/sf1",
+    "10": "/nvme/tpch/sf10",
+    "100": "/nvme/tpch/sf100"
+  },
+  "mo_source": "/path/to/matrixone",
+  "mo_binary": "/path/to/matrixone/mo-service",
+  "mo_revision": "REPLACE_WITH_SOURCE_COMMIT",
+  "mo_build": "REPLACE_WITH_EXACT_BUILD_COMMAND_AND_TOOLCHAIN",
+  "application_cpus": [0, 1, 2, 3, 4, 5, 6, 7],
+  "controller_cpus": [8, 9, 10, 11, 12, 13, 14, 15],
+  "memory_bytes": 34359738368,
+  "disk_bytes_per_engine": 137438953472,
+  "disk_reserve_bytes": 34359738368,
+  "profile_quota_bytes": 34359738368,
+  "port_base": 34000,
+  "seed": 1,
+  "exclusive_host": true
+}

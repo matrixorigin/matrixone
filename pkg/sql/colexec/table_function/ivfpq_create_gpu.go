@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +33,8 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
@@ -59,13 +60,13 @@ func f16ToCuvs(s []types.Float16) []cuvs.Float16 {
 	if len(s) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*cuvs.Float16)(unsafe.Pointer(&s[0])), len(s))
+	return util.UnsafeSliceCast[cuvs.Float16](s)
 }
 
 // ivfpqBuilder is the (B, Q)-erased build interface the create state drives.
 // *ivfpqPkg.IvfpqBuild[B, Q] satisfies it for every wired (base, storage)
 // combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
-// end() routes through ToInsertSql instead.
+// end() routes through PreparePersistence instead.
 type ivfpqBuilder interface {
 	// AddRow takes the raw base-type bytes of one vector (4*dim for an f32 base,
 	// 2*dim for an f16 base); the concrete builder reinterprets them to its
@@ -74,21 +75,24 @@ type ivfpqBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PersistFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
-	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
+	// PreparePersistence. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
 	DeviceDemand() map[int]int64
 	Destroy() error
 }
 
 type ivfpqCreateState struct {
-	inited  bool
-	builder ivfpqBuilder
-	param   vectorindex.IvfpqParam
-	tblcfg  vectorindex.IndexTableConfig
-	idxcfg  vectorindex.IndexConfig
-	offset  int
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	inited         bool
+	builder        ivfpqBuilder
+	param          vectorindex.IvfpqParam
+	tblcfg         vectorindex.IndexTableConfig
+	idxcfg         vectorindex.IndexConfig
+	offset         int
 
 	// devices resolved at build setup; kept so end() can admit the finished
 	// aggregate against the same device set the search will use.
@@ -120,13 +124,26 @@ type ivfpqCreateState struct {
 	// at init time returned zero — nothing to build, nothing to CDC.
 	srcEmpty bool
 
+	// ignoredRows leaves out the rows the index cannot store; nil without an ignored table.
+	ignoredRows *cuvsIgnoredRows
+
 	// holding one call batch, ivfpqCreateState owns it.
 	batch *batch.Batch
 }
 
 func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
-	if u.srcEmpty {
+	if u.policy == nil {
 		return nil
+	}
+	// A parallel instance that received no rows never created a builder.
+	if u.srcEmpty || u.builder == nil {
+		return nil
+	}
+	if u.ignoredRows != nil {
+		if err := u.ignoredRows.allBad(); err != nil {
+			return err
+		}
+		u.cdcTail = append(u.cdcTail, u.ignoredRows.tail()...)
 	}
 
 	var (
@@ -135,12 +152,8 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	)
 
 	ts := time.Now().UnixMicro()
-	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts, buildSnapshotTS(proc),
-			metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
-	}
-	// No builder selected → init didn't set one. Nothing to do for the cuvs
-	// side; the CDC tail (if any) below still emits.
+	sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
+		metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable, u.policy))
 	if err != nil {
 		return err
 	}
@@ -158,7 +171,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// escape: every query reads all sub-indexes at once, and distribution_mode is
 	// persisted, so no future device set redistributes it.
 	//
-	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
+	// Placed after PreparePersistence (which packs and stamps the sizes) and before the
 	// statements are executed, so a refusal persists nothing.
 	if demand := u.builder.DeviceDemand(); len(demand) > 0 {
 		// This algorithm's own fraction, read from its cost class, so the gate
@@ -207,23 +220,34 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 	logutil.Infof("IVFPQ create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
 		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
-	for i, s := range sqls {
-		logutil.Infof("IVFPQ create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
-		t0 := time.Now()
-		res, err := ivfpq_runSql(sqlexec.NewSqlProcess(proc), s)
-		if err != nil {
-			logutil.Errorf("IVFPQ create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
+	storageProc := sqlexec.NewSqlProcess(proc)
+	storageProc.IndexRelationPolicy = u.policy
+	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
+		stmt := storageProc.StatementOption()
+		run := func(sql string) error {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
 			return err
 		}
-		logutil.Infof("IVFPQ create: SQL %d/%d done in %v", i+1, len(sqls), time.Since(t0))
-		res.Close()
-	}
-	logutil.Infof("IVFPQ create: all %d SQLs committed for `%s`.`%s`",
-		len(sqls), u.tblcfg.DbName, u.tblcfg.IndexTable)
-	return nil
+		if u.builder != nil {
+			if err := u.builder.PersistFiles(storageProc, exec.Txn(), run); err != nil {
+				return err
+			}
+		}
+		for _, sql := range sqls {
+			if err := run(sql); err != nil {
+				return err
+			}
+		}
+		if u.ignoredRows != nil {
+			return u.ignoredRows.sqls(u.tblcfg, buildSnapshotTS(proc), run)
+		}
+		return nil
+	})
 }
 
 func (u *ivfpqCreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -244,6 +268,7 @@ func (u *ivfpqCreateState) free(tf *TableFunction, proc *process.Process, pipeli
 	if u.builder != nil {
 		u.builder.Destroy()
 	}
+	u.ignoredRows.close()
 }
 
 func ivfpqCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -258,6 +283,29 @@ func ivfpqCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 
 // start is called once per input row.
 func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	admit := func() error {
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar || !cfgVec.IsConst() {
+			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig must be a string constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivfpq_create", cfgstr, u.admittedConfig, u.inited, ivfpqrt.MaintenanceOperands)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+		return nil
+	}
+	if u.inited && u.policy == nil {
+		if err = admit(); err != nil {
+			return err
+		}
+	}
 	if !u.inited {
 		// ---- parse Params ----
 		if len(tf.Params) > 0 {
@@ -325,19 +373,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 		u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
 
-		// ---- IndexTableConfig ----
-		cfgVec := tf.ctr.argVecs[0]
-		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "first argument (IndexTableConfig) must be a string")
-		}
-		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a string constant")
-		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
-		}
-		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+		if err = admit(); err != nil {
 			return err
 		}
 
@@ -363,7 +399,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// NULL) rows, matching the build cursor (which advances only on non-NULL
 		// rows), so srcRowCount equals the indexable rows actually streamed — the
 		// `rowsSeen >= cdcCutoff` split cannot drift even under concurrent writes.
-		srcRowCount, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+		srcRowCount, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart, u.policy)
 		if err != nil {
 			return err
 		}
@@ -578,8 +614,23 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// per-card capacity -- is applied by rows_fitting() in C++, which knows
 		// the distribution mode and the distinct device count. Scaling again here
 		// would double it.
+		// A build that leaves out rows holds the first holdRows rows of each sub-index in Go.
+		sharded := u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED)
+		holdRows := minSubIndexRows(threshold, sharded, len(u.devices))
+		if u.tblcfg.IgnoredTable != "" {
+			baseElem := uint64(4)
+			if u.baseOid == types.T_array_float16 {
+				baseElem = 2
+			}
+			heldRowBytes := uint64(u.idxcfg.CuvsIvfpq.Dimensions)*baseElem +
+				uint64(includeBytesPerRowFromCols(u.filterCols)) + heldRowOverhead
+			if hostRowsFit, err = reserveHeldRows(hostRowsFit, holdRows, heldRowBytes, hostPerRow, "ivfpq"); err != nil {
+				return err
+			}
+		}
+
 		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
-			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			sharded,
 			len(u.devices), "ivfpq", "max_index_capacity")
 		if err != nil {
 			return err
@@ -625,6 +676,11 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService, proc.GetService())
 		if spillDir == "" {
 			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
+		}
+		u.ignoredRows = newCuvsIgnoredRows(u.tblcfg, spillDir,
+			u.baseOid == types.T_array_float32 && qt == metric.Quantization_F16)
+		if u.ignoredRows != nil {
+			u.ignoredRows.setPlan(plan.Capacity, holdRows)
 		}
 
 		// ---- create builder ----
@@ -690,8 +746,8 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	// Build-stream position over indexable (non-NULL) rows only — matches the
 	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
+	// A row the index cannot store does not advance it, like a NULL vector.
 	srcPos := u.rowsSeen
-	u.rowsSeen++
 
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 
@@ -700,9 +756,10 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	// direct (half-storage) add; the CDC tail still transports f32 (exact widen)
 	// until the CDC pipeline is made native (step 5).
 	var fa []float32
+	var h []types.Float16
 	var hf []cuvs.Float16
 	if u.baseOid == types.T_array_float16 {
-		h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+		h = types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
 		if uint(len(h)) != u.idxcfg.CuvsIvfpq.Dimensions {
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
@@ -716,6 +773,19 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
 	}
+
+	if u.ignoredRows != nil {
+		var skip bool
+		if u.baseOid == types.T_array_float16 {
+			skip, err = checkCuvsRow(u.ignoredRows, id, h)
+		} else {
+			skip, err = checkCuvsRow(u.ignoredRows, id, fa)
+		}
+		if err != nil || skip {
+			return err
+		}
+	}
+	u.rowsSeen++
 
 	// Trailing rows below the cuvs k-means threshold (lists) route to
 	// the CDC tail (search-side brute-force replay) instead of the
@@ -750,6 +820,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	vecBytes := util.UnsafeSliceToBytes(fa)
 	if u.baseOid == types.T_array_float16 {
 		vecBytes = util.UnsafeSliceToBytes(hf)
+	}
+	if u.ignoredRows != nil {
+		return u.ignoredRows.route(u.builder, u.filterCols, tf.ctr.argVecs, nthRow, id, vecBytes)
 	}
 	if err = u.builder.AddRow(id, vecBytes); err != nil {
 		return err

@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -37,7 +39,7 @@ var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
-type HnswSearch[T types.RealNumbers] struct {
+type HnswSearch[T types.ArrayElement] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*HnswModel[T]
@@ -63,9 +65,13 @@ type HnswSearch[T types.RealNumbers] struct {
 	// cdc_tail frames), captured at metadata read so it reflects the generation searched.
 	// 0 = unknown. See BuildTS.
 	buildTS int64
+
+	// superseded is set when a newer generation replaced this one: Destroy then releases the
+	// models' index-file holds without counting them as a use.
+	superseded bool
 }
 
-func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
+func NewHnswSearch[T types.ArrayElement](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &HnswSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	s.Cond = sync.NewCond(&s.Mutex)
@@ -104,7 +110,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		// heap discards candidates before any transform. Reject it fail-fast -- do NOT modify the
 		// vector (rewriting it would silently disagree with the stored index). A normalized query uses
 		// native cosine ANN (#29082).
-		if norm, ok := metric.CosineVectorL2Norm(query); !ok {
+		if norm, ok := metric.CosineVectorL2Norm(storedFloat32(query, s.Idxcfg.Usearch.Quantization)); !ok {
 			return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm %g underflows the float32 domain the index computes in", norm))
 		}
@@ -135,6 +141,24 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, err
 		}
 	}
+	exact := rt.Membership != nil && rt.ExactThreshold > 0 && rt.MembershipCount <= rt.ExactThreshold
+	if rt.Membership != nil && rt.Iterative && !exact {
+		return s.searchIterative(sqlproc, query, indexCounts, rt)
+	}
+	return s.searchOnce(sqlproc, query, indexCounts, limit, rt.Membership, exact, rt.OrigFuncName)
+}
+
+// searchOnce searches every sub-index for its nearest limit keys that membership holds
+// (every key when membership is nil) and returns the global best limit, nearest first.
+func (s *HnswSearch[T]) searchOnce(
+	sqlproc *sqlexec.SqlProcess,
+	query []T,
+	indexCounts []uint,
+	limit uint,
+	membership docfilter.MembershipFilter,
+	exact bool,
+	origFuncName string,
+) (keys []int64, distances []float64, err error) {
 	indexLimits, limit := boundedHnswSearchLimits(indexCounts, limit)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -164,7 +188,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 					return ctx.Err()
 				}
 
-				keys, distances, err2 := subindex[j].Search(query, indexLimits[start+j])
+				keys, distances, err2 := subindex[j].SearchWithMembership(query, indexLimits[start+j], membership, exact)
 				if err2 != nil {
 					return err2
 				}
@@ -192,7 +216,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, moerr.NewInternalError(sqlproc.GetContext(), "heap return key is not int64")
 		}
 		reskeys[i] = sr.Id
-		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[rt.OrigFuncName], s.Idxcfg.Usearch.Metric)
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[origFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances[i] = sr.Distance
 	}
 
@@ -200,7 +224,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	// overflows float32 saturates to +/-Inf while the exact scalar stays finite -- silently
 	// corrupting the value, Top-K order, and any outer predicate (the derived-table row-loss,
 	// #29040 / #29050). Vector distances are a float32 domain, so fail fast rather than serve it.
-	if metric.HasFloat64DistanceOverflow[T](resdistances) {
+	if _, f64 := any(query).([]float64); f64 && metric.HasFloat64DistanceOverflow[float64](resdistances) {
 		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
 			"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
 	}
@@ -251,10 +275,21 @@ func (s *HnswSearch[T]) Destroy() {
 	// metadata with a nil Index (and possibly a fetched Path), and a load abandoned between
 	// Preload and Load reaches here. HnswModel.Destroy nil-checks the handle and also releases
 	// the on-disk file and buffer, matching what LoadIndex's error path already does.
+	// The cache delivers OnCacheInvalidated before Destroy or not at all for this generation;
+	// a retry reuses this object for the next generation, so Destroy clears it.
+	superseded := s.superseded
+	s.superseded = false
 	for _, idx := range s.Indexes {
-		idx.Destroy()
+		idx.destroy(superseded)
 	}
 	s.Indexes = nil
+}
+
+// OnCacheInvalidated records that a newer generation replaced this one.
+func (s *HnswSearch[T]) OnCacheInvalidated(reason string) {
+	if reason == veccache.ReasonGenerationChanged {
+		s.superseded = true
+	}
 }
 
 // load metadata from database
@@ -262,7 +297,7 @@ func (s *HnswSearch[T]) Destroy() {
 // commit reflected across ALL metadata rows -- base generations AND cdc_tail frames (which
 // LoadIndex later drops from the resident set). It is the coverage point the async-index
 // freshness gate reports via BuildTS. 0 = unknown (pre-migration index).
-func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
+func LoadMetadata[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
@@ -315,6 +350,26 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 	return indexes, newest, nil
 }
 
+// LoadModels is LoadMetadata with every model given the range its index maps vectors with: the
+// range in its dict table, else the range of a vecint8/vecuint8 column (tblcfg.KeyPartType).
+func LoadModels[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) ([]*HnswModel[T], int64, error) {
+	indexes, buildTS, err := LoadMetadata[T](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
+	if err != nil {
+		return nil, 0, err
+	}
+	bounds, err := LoadQuantizeBounds(sqlproc, tblcfg.DbName, tblcfg.DictTable)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !bounds.Set {
+		bounds = BaseBounds(tblcfg.KeyPartType)
+	}
+	for _, idx := range indexes {
+		idx.Bounds = bounds
+	}
+	return indexes, buildTS, nil
+}
+
 // load index from database
 func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
 	var err error
@@ -340,7 +395,7 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 // Load will claim in host memory. The models are parked on s.Indexes unloaded, so GetIndexSize
 // answers before a single model file is read.
 func (s *HnswSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
-	indexes, buildTS, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, buildTS, err := LoadModels[T](sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
 	}
@@ -355,7 +410,7 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	indexes := s.Indexes
 	if indexes == nil {
 		var err error
-		if indexes, s.buildTS, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
+		if indexes, s.buildTS, err = LoadModels[T](sqlproc, s.Tblcfg); err != nil {
 			return err
 		}
 	}
@@ -447,12 +502,12 @@ func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
 // The mmap is reclaimable page cache rather than allocation, so usearch's own figure omits it:
 // memory_usage() skips the node and vector bytes whenever viewed_file_ is set (index.hpp:
 // `if (!viewed_file_)`), reporting ~1.2% of the file. But it is not free, and it is not only
-// page cache. LoadIndexFromBuffer unlinks the spill file once View() has mapped it, so the
-// inode's blocks are held on the LOCAL fileservice volume until Destroy -- and since residency
-// is bounded by BYTES alone, the omission is what bounds admission. Charging only the
+// page cache. The mapped file stays on disk until Destroy: the index-file cache entry the model
+// holds, or the spill file LoadIndexFromBuffer unlinks once View() has mapped it -- and since
+// residency is bounded by BYTES alone, the omission is what bounds admission. Charging only the
 // bookkeeping lets one client hold N whole models for N distinct named-snapshot timestamps
-// while the governor sees a hundredth of them, filling the CN's scratch mount under a cap that
-// looks satisfied.
+// while the governor sees a hundredth of them, filling the CN's disk under a cap that looks
+// satisfied.
 //
 // So the file is charged too. It over-states heap, which is the honest trade: the number the
 // governor acts on is "bytes this entry keeps the CN from reusing", and for a viewed hnsw model

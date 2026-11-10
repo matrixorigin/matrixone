@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -37,7 +38,7 @@ func TestPreparedSeriesConsumers(t *testing.T) {
 		"create table gs_review as select result from generate_series(?,?,?) g",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare review_probe from '"+sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare review_probe from '"+sql+"'")
 			if err != nil {
 				t.Errorf("prepare: %v", err)
 				return
@@ -75,8 +76,61 @@ func TestPreparedSeriesConsumers(t *testing.T) {
 	}
 }
 
+func TestPreparedMixedTextBinarySetWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		ctas      bool
+	}{
+		{"binary after char", "select cast('' as char(1)) as d union all select ? as d", false},
+		{"binary before char", "select ? as d union all select cast('' as char(1)) as d", false},
+		{"binary after column", "select cast(n_name as char(1)) as d from nation union all select ? as d", false},
+		{"binary before column", "select ? as d union all select cast(n_name as char(1)) as d from nation", false},
+		{"prepared CTAS", "create table prepared_binary_width as select cast('' as char(1)) as d union all select ? as d", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"prepare mixed_width from '"+strings.ReplaceAll(tc.sql, "'", "''")+"'")
+			require.NoError(t, err)
+			original := prepared.GetDcl().GetPrepare().Plan
+			filled, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
+				ParamValue{Value: "hello-long", IsBinaryProtocol: true,
+					RuntimeType: types.New(types.T_varbinary, 10, 0), HasRuntimeType: true},
+			})
+			require.NoError(t, err)
+			require.True(t, changed)
+			query := filled.GetQuery()
+			if tc.ctas {
+				query = filled.GetDdl().GetQuery()
+			}
+			require.NotNil(t, query)
+			var setNodeFound bool
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_UNION_ALL {
+					continue
+				}
+				setNodeFound = true
+				require.Contains(t, []types.T{types.T_varbinary, types.T_blob}, types.T(node.ProjectList[0].Typ.Id))
+				require.GreaterOrEqual(t, node.ProjectList[0].Typ.Width, int32(10))
+				for _, childID := range node.Children {
+					require.Equal(t, node.ProjectList[0].Typ.Id, query.Nodes[childID].ProjectList[0].Typ.Id)
+					require.Equal(t, node.ProjectList[0].Typ.Width, query.Nodes[childID].ProjectList[0].Typ.Width)
+				}
+			}
+			require.True(t, setNodeFound)
+			if tc.ctas {
+				stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+				require.NoError(t, err)
+				require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+				col := filled.GetDdl().GetCreateTable().TableDef.Cols[0]
+				require.Equal(t, types.T_varbinary, types.T(col.Typ.Id))
+				require.Equal(t, int32(10), col.Typ.Width)
+			}
+		})
+	}
+}
+
 func TestPreparedUnnestLargeJSON(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(false), t, "prepare long_json from 'select value from unnest(?) u'")
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare long_json from 'select value from unnest(?) u'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +171,7 @@ func TestPreparedSeriesCTASColumnOrderAndExplicitType(t *testing.T) {
 		{"explicit override", "create table gs_explicit (result varchar(40)) as select result from generate_series(?,?,?) g", 0, 40, types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare gs_ctas from '"+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare gs_ctas from '"+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			values := []any{

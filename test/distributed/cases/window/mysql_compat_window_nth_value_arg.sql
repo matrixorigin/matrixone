@@ -34,6 +34,15 @@ select id, nth_value(id, 1 + 1) over (
 ) nth_id
 from t order by grp, id;
 
+-- Warning-free diagnostic-capable constants still fold for literal consumers.
+select id, nth_value(id, bit_count('3 ')) over (partition by grp order by id rows between unbounded preceding and unbounded following) nth_id from t order by grp, id;
+show count(*) warnings;
+select nth_value(1, bit_count('3 ')) over (order by 1) is null as missing_second;
+-- Warningful constants retain their runtime evaluation and cannot become an offset literal.
+select nth_value(id, bit_count('3x')) over (order by id) from t;
+select bit_count('3x') as bits;
+show count(*) warnings;
+
 -- A positional parameter marker is valid and is evaluated as an integer.
 prepare nth_param from 'select id, nth_value(id, ?) over (
   partition by grp order by id

@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 
@@ -151,6 +152,11 @@ func BuildDMLMatchedDeleteTargetFromBatch(ctx context.Context, req DMLMatchedRow
 	if req.IncludePositionRows {
 		if req.StartRowOrdinal < 0 {
 			return DMLMatchedDeleteTarget{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML matched batch row ordinal must be non-negative", map[string]string{
+				"path": api.RedactPath(dataPath),
+			}))
+		}
+		if req.StartRowOrdinal > math.MaxInt64-int64(req.Batch.RowCount()-1) {
+			return DMLMatchedDeleteTarget{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML matched batch row ordinal overflows int64", map[string]string{
 				"path": api.RedactPath(dataPath),
 			}))
 		}

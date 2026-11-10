@@ -15,19 +15,22 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
 		bin_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci,
@@ -35,7 +38,7 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 	) collate utf8mb4_bin`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	source := built.GetDdl().GetCreateTable().GetTableDef()
 	FindColumn(source.Cols, "packed").Typ.Charset = uint32(types.CharsetBinary)
@@ -44,7 +47,7 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
 	require.NoError(t, err)
 	defer likeStmt.Free()
-	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
 	require.NoError(t, err)
 	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), clone.DefaultCharset)
@@ -54,7 +57,7 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 }
 
 func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_bin", nil
@@ -65,7 +68,7 @@ func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T)
 		"create table source_general(v varchar(10)) collate utf8mb4_general_ci", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	mock.ctxt.tables["source_general"] = built.GetDdl().GetCreateTable().GetTableDef()
 
@@ -73,7 +76,7 @@ func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T)
 		"create table clone_general like source_general", 1)
 	require.NoError(t, err)
 	defer likeStmt.Free()
-	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
 	require.NoError(t, err)
 	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8), clone.DefaultCharset)
@@ -82,14 +85,14 @@ func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T)
 }
 
 func TestCreateTableLikePreservesLegacyBytewiseTextBehavior(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
 		legacy_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci
 	)`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	source := built.GetDdl().GetCreateTable().GetTableDef()
 	source.DefaultCharset = uint32(types.CharsetLegacy)
@@ -99,7 +102,7 @@ func TestCreateTableLikePreservesLegacyBytewiseTextBehavior(t *testing.T) {
 	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
 	require.NoError(t, err)
 	defer likeStmt.Free()
-	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
 	require.NoError(t, err)
 	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
 	// The legacy identity is reconstructed as the explicit bytewise collation;
@@ -143,14 +146,14 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, stmts, 1)
 		defer stmts[0].Free()
-		built, err := BuildPlan(mock.CurrentContext(), stmts[0], false)
+		built, err := BuildPlan(mock.CurrentContext(), stmts[0], false, nil)
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			source := build(t, mock, tc.createSQL, tc.sourceMode)
 			require.Len(t, source.Checks, 1)
 			mock.ctxt.tables["source_t"] = source
@@ -164,13 +167,70 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 	}
 }
 
+func TestRecoverLegacyChecksSkipsViewDefinitions(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	view := &plan.TableDef{
+		Name: "checkpoint", TableType: catalog.SystemViewRel,
+		Createsql: "create view checkpoint as select 1",
+	}
+	require.NoError(t, recoverLegacyChecks(mock.CurrentContext(), view))
+	require.Empty(t, view.Checks)
+}
+
+func TestCreateTableLikeCloneProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql  string
+		structured bool
+		wantError  bool
+	}{
+		{name: "clone identifier", sql: "create table source_t clone app.checkpoint"},
+		{name: "clone comment", sql: "create table source_t clone app.t /* CHECK */"},
+		{name: "create identifier", sql: "create table checkpoint(a int)"},
+		{name: "create comment", sql: "create table source_t(a int) /* CHECK */"},
+		{name: "structured clone", sql: "create table source_t clone app.checkpoint", structured: true},
+		{name: "malformed check", sql: "create table source_t(a int, check (", wantError: true},
+		{name: "unexpected statement", sql: "select 'CHECK'", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int check (a > 0))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			source.Createsql = tc.sql
+			if !tc.structured {
+				source.Checks = nil
+			}
+			mock.ctxt.tables["source_t"] = source
+			likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer likeStmt.Free()
+			clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			checks := clonePlan.GetDdl().GetCreateTable().GetTableDef().Checks
+			if tc.structured {
+				require.Len(t, checks, 1)
+				require.Equal(t, source.Checks[0].Check, checks[0].Check)
+			} else {
+				require.Empty(t, checks)
+			}
+		})
+	}
+}
+
 func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source := func() *plan.TableDef {
 		stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int check (a > 0))", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}()
@@ -198,8 +258,38 @@ func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+			_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.ErrorContains(t, err, "protocol version 7")
+		})
+	}
+}
+
+func TestRecoverLegacyChecksFailureDoesNotPublishPartialConstraints(t *testing.T) {
+	for _, legacySQL := range []string{
+		"create table source_t(a int, check (a > 0), check (missing > 0))",
+		"create table source_t(a int, check (a > 0), check (a < 10) not enforced)",
+		"create table source_t(a int check (a > 0), b int check (b > 0))",
+		"create table source_t(a int check (a > 0) not enforced)",
+		"create table source_t clone /* CHECK */",
+	} {
+		t.Run(legacySQL, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			source.Createsql = legacySQL
+			before := proto.Clone(source)
+			require.Error(t, recoverLegacyChecks(mock.CurrentContext(), source))
+			require.True(t, proto.Equal(before, source), "failed recovery mutated source metadata")
+
+			// A rejected attempt must not poison the next valid bind.
+			source.Createsql = "create table source_t(a int, constraint positive check (a > 0))"
+			require.NoError(t, recoverLegacyChecks(mock.CurrentContext(), source))
+			require.Len(t, source.Checks, 1)
+			require.Equal(t, "positive", source.Checks[0].Name)
 		})
 	}
 }
@@ -217,26 +307,26 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 		{
 			name:          "top level",
 			baseSQL:       "create table source_t(a int)",
-			legacySQL:     "create table source_t(a int, constraint legacy_positive check (a > 0))",
-			checkName:     "legacy_positive",
+			legacySQL:     "create table source_t(a int, constraint clone_t_chk_1 check (a > 0))",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint legacy_positive check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "column level",
 			baseSQL:       "create table source_t(a int)",
 			legacySQL:     "create table source_t(a int check (a > 0))",
-			checkName:     "__mo_chk_1",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint __mo_chk_1 check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "comment before top level",
 			baseSQL:       "create table source_t(a int)",
-			legacySQL:     "create table source_t(a int, /* retained */ constraint c check (a > 0))",
-			checkName:     "c",
+			legacySQL:     "create table source_t(a int, /* retained */ constraint clone_t_chk_1 check (a > 0))",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint c check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "no backslash escapes source",
@@ -266,17 +356,17 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			name:          "real as float uses catalog column type",
 			baseSQL:       "create table source_t(r float)",
 			legacySQL:     "create table source_t(r real, check (r > 0))",
-			checkName:     "__mo_chk_1",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`r` > 0",
-			persistedText: "constraint __mo_chk_1 check (`r` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`r` > 0) enforced",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), tc.baseSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 
 			source := built.GetDdl().GetCreateTable().GetTableDef()
@@ -287,7 +377,7 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
 			require.NoError(t, err)
 			defer likeStmt.Free()
-			clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+			clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false, nil)
 			if tc.wantAmbiguous {
 				require.ErrorContains(t, err, "ambiguous SQL mode")
 				return
@@ -306,6 +396,65 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 				}
 			}
 			require.Contains(t, createSQL, tc.persistedText)
+		})
+	}
+}
+
+// Snapshot/account restore reuses the LIKE planner branch but must keep the
+// captured constraint identity: a restored table has to come back with its
+// original explicit CHECK names, while an ordinary LIKE (and an ordinary
+// CLONE) regenerates <dst>_chk_<n>.
+func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		restore        bool
+		sessionRestore bool
+		cloneLevel     tree.CloneLevelType
+		wantName       string
+	}{
+		{name: "like regenerates", wantName: "clone_t_chk_1"},
+		{name: "restore preserves", restore: true, wantName: "ck_positive"},
+		{name: "background restore preserves", sessionRestore: true, wantName: "ck_positive"},
+		{name: "data branch table regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelTable, wantName: "clone_t_chk_1"},
+		{name: "data branch database regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelDatabase, wantName: "clone_t_chk_1"},
+		{name: "normal account clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelAccount, wantName: "clone_t_chk_1"},
+		{name: "normal cluster clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelCluster, wantName: "clone_t_chk_1"},
+		{name: "table restore preserves", cloneLevel: tree.RestoreCloneLevelTable, wantName: "ck_positive"},
+		{name: "database restore preserves", cloneLevel: tree.RestoreCloneLevelDatabase, wantName: "ck_positive"},
+		{name: "account restore preserves", cloneLevel: tree.RestoreCloneLevelAccount, wantName: "ck_positive"},
+		{name: "cluster restore preserves", cloneLevel: tree.RestoreCloneLevelCluster, wantName: "ck_positive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.GetProcess().GetSessionInfo().IsRestore = tc.sessionRestore
+			if tc.cloneLevel != 0 {
+				mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), tree.CloneLevelCtxKey{}, tc.cloneLevel))
+			}
+			require.Equal(t, tc.wantName == "ck_positive",
+				IsCheckConstraintRestoreReplay(mock.ctxt.GetContext(), tc.restore || tc.sessionRestore))
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, source.Checks, 1)
+			mock.ctxt.tables["source_t"] = source
+
+			raw, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer raw.Free()
+			createStmt := raw.(*tree.CreateTable)
+			var cloneStmt *tree.CloneTable
+			if tc.restore {
+				cloneStmt = &tree.CloneTable{IsRestore: true}
+			}
+			got, err := buildCreateTable(mock.CurrentContext(), createStmt, cloneStmt, false)
+			require.NoError(t, err)
+			clone := got.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, clone.Checks, 1)
+			require.Equal(t, tc.wantName, clone.Checks[0].Name)
+			require.Equal(t, "`a` > 0", clone.Checks[0].OriginSql)
 		})
 	}
 }

@@ -466,6 +466,14 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
+	case types.T_bf16:
+		return vector.GetFixedAtNoTypeCheck[types.BF16](col, int(row))
+	case types.T_float16:
+		return vector.GetFixedAtNoTypeCheck[types.Float16](col, int(row))
+	case types.T_float8:
+		return vector.GetFixedAtNoTypeCheck[types.Float8](col, int(row))
+	case types.T_float4:
+		return vector.GetFixedAtNoTypeCheck[types.Float4](col, int(row))
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
@@ -486,7 +494,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -558,6 +567,14 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 		GenericUpdateFixedValue[float32](col, row, val, isNull, mp)
 	case types.T_float64:
 		GenericUpdateFixedValue[float64](col, row, val, isNull, mp)
+	case types.T_bf16:
+		GenericUpdateFixedValue[types.BF16](col, row, val, isNull, mp)
+	case types.T_float16:
+		GenericUpdateFixedValue[types.Float16](col, row, val, isNull, mp)
+	case types.T_float8:
+		GenericUpdateFixedValue[types.Float8](col, row, val, isNull, mp)
+	case types.T_float4:
+		GenericUpdateFixedValue[types.Float4](col, row, val, isNull, mp)
 	case types.T_date:
 		GenericUpdateFixedValue[types.Date](col, row, val, isNull, mp)
 	case types.T_time:
@@ -579,7 +596,8 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink:
 		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
@@ -587,54 +605,6 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 }
 
 // ### Only used in testcases
-
-func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
-	if cnt == 1 {
-		return []*batch.Batch{bat}
-	}
-	length := bat.Vecs[0].Length()
-	rows := length / cnt
-	if length%cnt == 0 {
-		bats := make([]*batch.Batch, 0, cnt)
-		for i := 0; i < cnt; i++ {
-			newBat := batch.New(bat.Attrs)
-			for j := 0; j < len(bat.Vecs); j++ {
-				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
-				newBat.Vecs[j] = window
-			}
-			bats = append(bats, newBat)
-		}
-		return bats
-	}
-	rowArray := make([]int, 0)
-	if length/cnt == 0 {
-		for i := 0; i < length; i++ {
-			rowArray = append(rowArray, 1)
-		}
-	} else {
-		left := length
-		for i := 0; i < cnt; i++ {
-			if left >= rows && i < cnt-1 {
-				rowArray = append(rowArray, rows)
-			} else {
-				rowArray = append(rowArray, left)
-			}
-			left -= rows
-		}
-	}
-	start := 0
-	bats := make([]*batch.Batch, 0, cnt)
-	for _, row := range rowArray {
-		newBat := batch.New(bat.Attrs)
-		for j := 0; j < len(bat.Vecs); j++ {
-			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
-			newBat.Vecs[j] = window
-		}
-		start += row
-		bats = append(bats, newBat)
-	}
-	return bats
-}
 
 func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
@@ -672,6 +642,7 @@ func ForeachVectorWindow(
 			op2,
 			sel)
 	}
+	// typeswitch:partial low-precision floats cannot be primary keys; callers iterate keys, row ids or object stats
 	switch typ.Oid {
 	case types.T_bool:
 		var op func(bool, bool, int) error
@@ -1283,6 +1254,7 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		overload := overloads[t].(func(...any) func([]byte, bool, int) error)
 		return overload(args...)
 	}
+	// typeswitch:partial low-precision floats cannot be primary keys; callers iterate keys, row ids or object stats
 	switch t {
 	case types.T_bool:
 		overload := overloads[t].(func(...any) func(bool, bool, int) error)
@@ -1360,6 +1332,7 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 func DedupSortedBatches(
 	uniqueIdx int,
 	batches []*batch.Batch,
+	mp *mpool.MPool,
 ) error {
 	if len(batches) == 0 {
 		return nil
@@ -1383,7 +1356,9 @@ func DedupSortedBatches(
 			}
 		}
 		if len(sels) > 0 {
-			batches[i].Shrink(sels, true)
+			if err := batches[i].Shrink(sels, true, mp); err != nil {
+				return err
+			}
 			sels = sels[:0]
 		}
 	}

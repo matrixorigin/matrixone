@@ -37,7 +37,7 @@ t1  ¦  CREATE TABLE `t1` (
   `col1` date NOT NULL,
   `col2` datetime DEFAULT NULL,
   `col3` timestamp NULL DEFAULT NULL,
-  `col4` bool DEFAULT NULL
+  `col4` boolean DEFAULT NULL
 )
 drop table t1;
 drop stage stage01;
@@ -385,7 +385,7 @@ create database db01;
 use db01;
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data local infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t11;
 ➤ col1[4,32,0]  𝄀
 1  𝄀
@@ -400,13 +400,12 @@ show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage11  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  this is a stage
 select * from t11 into outfile 'stage://stage11/local_stage_table11.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 truncate t11;
 load data infile 'stage://stage11/local_stage_table11.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
+internal error: only the sys account moadmin role can access SQL file paths
 select * from t11;
-➤ col1[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3
+➤ col1[4,32,0]
 drop table t11;
 drop stage stage11;
 drop database db01;
@@ -539,4 +538,5 @@ select col1, col2, col3, col4, col5, col6, col7, col8, col9 from ex_table_01;
 drop stage ex_stage;
 drop table ex_table_01;
 drop database test01;
+drop database test;
 drop account acc01;

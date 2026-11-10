@@ -132,7 +132,7 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
-	if typ.Oid.IsArrayRelate() {
+	if typ.Oid.IsArray() {
 		value, err := arrayUserVariableValueToBytes(typ, val)
 		if err != nil {
 			return nil, err
@@ -270,9 +270,45 @@ func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
 		return arrayUserVariableTypedValueToBytes[int8](typ, val)
 	case types.T_array_uint8:
 		return arrayUserVariableTypedValueToBytes[uint8](typ, val)
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledUserVariableValueToBytes(typ, val)
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unsupported array type %s", typ.Oid.String())
 	}
+}
+
+// blockScaledUserVariableValueToBytes quantizes text or []float32 into a vecf8/vecf4
+// cell, or validates an existing cell ([]byte), and enforces a declared dimension.
+func blockScaledUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
+	f, _ := typ.Oid.BlockScaledFormat()
+	var cell []byte
+	var err error
+	switch v := val.(type) {
+	case string:
+		cell, err = types.StringToBlockScaled(f, v)
+	case []float32:
+		cell, err = types.AppendBlockScaled(nil, f, v)
+	case []byte:
+		cell = v
+	case types.BlockScaledValue:
+		cell = v.Cell
+	default:
+		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
+	}
+	if err != nil {
+		return nil, err
+	}
+	c, err := types.ParseBlockScaledCell(cell)
+	if err != nil {
+		return nil, err
+	}
+	if c.Format != f {
+		return nil, moerr.NewInvalidInputNoCtxf("%s value is not a %s cell", c.Format, f)
+	}
+	if typ.Width > 0 && typ.Width != types.MaxArrayDimension && c.Dim != int(typ.Width) {
+		return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return cell, nil
 }
 
 func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, val any) ([]byte, error) {
@@ -407,6 +443,26 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "float64", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, v64, err := types.Float32RoundToOddString(val)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, vec.GetType().Oid.String(), "value '%v'", val)
+		}
+		if err := types.RejectNarrowFloatInput(v, vec.GetType().Oid, v64, val); err != nil {
+			return err
+		}
+		switch vec.GetType().Oid {
+		case types.T_bf16:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.BF16FromFloat32(float32(v))))
+		case types.T_float16:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float16FromFloat32(float32(v))))
+		case types.T_float8:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float8FromFloat32(float32(v))))
+		case types.T_float4:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float4FromFloat32(float32(v))))
+		default:
+			return moerr.NewInternalErrorf(ctx, "unexpected low-precision type %s", vec.GetType().Oid)
+		}
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
@@ -825,13 +881,13 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
-		// (cast_assign), which honors sql_mode, the trailing-space exemption and
-		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
-		// hard rejection that would ignore sql_mode.
+		// CHAR/VARCHAR/TEXT/BLOB width is enforced at runtime by the assignment
+		// cast (cast_assign), which honors sql_mode, the trailing-space exemption
+		// and the INSERT IGNORE downgrade, and measures BLOB in bytes. Excluding
+		// them here avoids a plan-time hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
-			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
-			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
+			typ.Oid != types.T_text && typ.Oid != types.T_blob && typ.Oid != types.T_datalink &&
+			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArray()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
 			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
@@ -849,8 +905,8 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		}
 
 		var v []byte
-		if typ.Oid.IsArrayRelate() {
-			// 与参数绑定共用六类型解析及固定/动态维度校验。
+		if typ.Oid.IsArray() {
+			// 与参数绑定共用向量类型解析及固定/动态维度校验。
 			var err error
 			v, err = arrayUserVariableValueToBytes(*typ, s)
 			if err != nil {
@@ -883,7 +939,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
-		s := numVal.String()
+		s := insertLiteralText(numVal)
 		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
@@ -916,12 +972,27 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 	return
 }
 
+// Integer spelling carries logical precision, but assignment converts the
+// numeric value to text. Keep that spelling on the AST for metadata consumers.
+func insertLiteralText(numVal *tree.NumVal) string {
+	switch numVal.ValType {
+	case tree.P_int64:
+		value, _ := numVal.Int64()
+		return strconv.FormatInt(value, 10)
+	case tree.P_uint64:
+		value, _ := numVal.Uint64()
+		return strconv.FormatUint(value, 10)
+	default:
+		return numVal.String()
+	}
+}
+
 func SetInsertValueJSON(proc *process.Process, numVal *tree.NumVal) (canInsert bool, val []byte, err error) {
 	canInsert = true
 	switch numVal.ValType {
 	default:
 		var json bytejson.ByteJson
-		originStr := numVal.String()
+		originStr := insertLiteralText(numVal)
 		json, err = types.ParseStringToByteJson(originStr)
 		if err != nil {
 			return false, nil, err
@@ -1035,8 +1106,12 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 	appendWithStr := func(str string) (types.Decimal64, error) {
 		return types.ParseDecimal64(str, typ.Width, typ.Scale)
 	}
+	// Integer family literals (int/uint/hexnum/bit) must observe the same
+	// DECIMAL(width, scale) bound as string literals. Routing them through
+	// ParseDecimal64 keeps int writes from bypassing precision checking
+	// (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal64, error) {
-		return types.Decimal64(v).Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1045,7 +1120,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 
 	case tree.P_uint64:
@@ -1053,7 +1128,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
@@ -1088,9 +1163,11 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 	appendWithStr := func(str string) (types.Decimal128, error) {
 		return types.ParseDecimal128(str, typ.Width, typ.Scale)
 	}
+	// See SetInsertValueDecimal64: integer family literals must observe the
+	// DECIMAL(width, scale) bound instead of bypassing precision checking
+	// via Scale() (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal128, error) {
-		result := types.Decimal128{B0_63: v, B64_127: 0}
-		return result.Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1099,14 +1176,14 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:

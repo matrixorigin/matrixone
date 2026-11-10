@@ -23,6 +23,39 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.types import UserDefinedType
 
 
+def _vector_literal(value):
+    """One wire representation for lists, tuples and numeric NumPy vectors."""
+    if value is None or isinstance(value, str):
+        return value
+    import numpy as np
+    import numbers
+    import math
+
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError('A vector must be one-dimensional')
+        value = value.tolist()
+    if not isinstance(value, (list, tuple)):
+        raise TypeError('Vector values must be strings or one-dimensional numeric sequences')
+    if any(isinstance(item, (bool, np.bool_)) or not isinstance(item, numbers.Real) for item in value):
+        raise TypeError('Vector elements must be real numbers')
+    values = [int(item) if isinstance(item, numbers.Integral) else float(item) for item in value]
+    if any(not math.isfinite(item) for item in values):
+        raise ValueError('Vector elements must be finite')
+    return '[' + ','.join(map(str, values)) + ']'
+
+
+def _vector_result(value):
+    """Parse vector text while preserving unrecognized result values."""
+    if not isinstance(value, str):
+        return value
+    try:
+        contents = value.strip().strip("[]").strip()
+        return [float(item.strip()) for item in contents.split(",")] if contents else []
+    except ValueError:
+        return value
+
+
 class VectorPrecision:
     """Enum-like class for vector precision types."""
 
@@ -96,50 +129,14 @@ class VectorType(UserDefinedType):
 
     def bind_processor(self, dialect):
         """Return a conversion function for processing bind values."""
-
-        def process(value):
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-            if isinstance(value, list):
-                # Convert list to MatrixOne vector format
-                return "[" + ",".join(map(str, value)) + "]"
-            return str(value)
-
-        return process
+        return _vector_literal
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def result_processor(self, dialect, coltype):
-        """Return a conversion function for processing result values."""
-
-        def process(value):
-            if value is None:
-                return None
-            if isinstance(value, str):
-                # Parse MatrixOne vector format back to list
-                try:
-                    # Remove brackets and split by comma
-                    clean_value = value.strip("[]")
-                    if clean_value:
-                        return [float(x.strip()) for x in clean_value.split(",")]
-                    else:
-                        return []
-                except (ValueError, AttributeError):
-                    return value
-            return value
-
-        return process
+        return _vector_result
 
     def __str__(self):
         """Return the column specification for this type."""
@@ -179,37 +176,15 @@ class Vectorf32(TypeDecorator):
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            try:
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-
-        def process(value):
-            return self.process_bind_param(value, dialect)
-
-        return process
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -257,37 +232,15 @@ class Vectorf64(TypeDecorator):
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            try:
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-
-        def process(value):
-            return self.process_bind_param(value, dialect)
-
-        return process
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -336,36 +289,15 @@ class VectorTypeDecorator(TypeDecorator):
     def load_dialect_impl(self, dialect):
         """Return the appropriate type for the given dialect."""
         if dialect.name == "mysql":
-            return mysql.TEXT  # Use TEXT for large vector data
+            return mysql.TEXT()  # Use TEXT for large vector data
         return self.impl
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            # Parse MatrixOne vector format back to list
-            try:
-                # Remove brackets and split by comma
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def __repr__(self):
         if self.dimension:

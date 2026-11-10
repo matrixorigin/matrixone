@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -481,7 +482,7 @@ func Test_extractRowFromEveryVector(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	bat := batch.New([]string{"const_null", "const", "normal"})
-	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3, mp)
+	bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, mp)
 	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3, mp)
 	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 
@@ -522,7 +523,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeScalarNull(t, types.T_int32, 3, mp),
+				vec:      vector.NewConstNull(types.T_int32.ToType(), 3, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -798,32 +799,6 @@ func Test_extractRowFromVector(t *testing.T) {
 	}
 }
 
-func Test_floatArrayToString(t *testing.T) {
-	type args[T interface{ float32 | float64 }] struct {
-		arr []T
-	}
-	type testCase[T interface{ float32 | float64 }] struct {
-		name string
-		args args[T]
-		want string
-	}
-	tests := []testCase[float32]{
-		{
-			args: args[float32]{arr: []float32{}},
-			want: "'[]'",
-		},
-		{
-			args: args[float32]{arr: []float32{1.1, 2.2, 3.3}},
-			want: "'[1.100000,2.200000,3.300000]'",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, floatArrayToString(tt.args.arr), "floatArrayToString(%v)", tt.args.arr)
-		})
-	}
-}
-
 func Test_openDbConn(t *testing.T) {
 	deadlineSeen := false
 	stub := gostub.Stub(&tryConn, func(ctx context.Context, _ *mysql.Config) (*sql.DB, error) {
@@ -841,15 +816,22 @@ func Test_openDbConn(t *testing.T) {
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
-		return nil, moerr.NewInternalErrorNoCtx("")
-	})
-	defer stub.Reset()
+	synctest.Test(t, func(t *testing.T) {
+		var attempts int
+		failure := errors.New("connection failed")
+		stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+			attempts++
+			return nil, failure
+		})
+		t.Cleanup(stub.Reset)
 
-	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
-	assert.Error(t, err)
-	assert.True(t, IsRetryableConnectionError(err))
-	assert.Nil(t, conn)
+		conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		require.Error(t, err)
+		require.ErrorIs(t, err, failure)
+		require.True(t, IsRetryableConnectionError(err))
+		require.Nil(t, conn)
+		require.Equal(t, 3, attempts)
+	})
 }
 
 func TestOpenDbConnConfigurationErrorIsNotRetryable(t *testing.T) {
@@ -1055,22 +1037,6 @@ func TestAesCFBEncodeWithKey_EmptyKey(t *testing.T) {
 func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 	_, err := AesCFBDecodeWithKey(context.Background(), "01234567890123456789012345678901", []byte{})
 	assert.Error(t, err)
-}
-
-func Test_batchRowCount(t *testing.T) {
-	assert.Equal(t, 0, batchRowCount(nil))
-
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	bat := batch.New([]string{})
-	assert.Equal(t, 0, batchRowCount(bat))
-
-	bat = batch.New([]string{"a", "ts"})
-	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
-	bat.SetRowCount(3)
-	assert.Equal(t, 3, batchRowCount(bat))
 }
 
 func Test_compUriInfo(t *testing.T) {

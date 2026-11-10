@@ -104,3 +104,28 @@ func Test_Function(t *testing.T) {
 	dropIfExists.Format(ctx)
 	require.Equal(t, "drop function if exists sql_sum (a int, b int)", ctx.String())
 }
+
+func TestViewDefinitionNameConstFormattingIsScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		nameType  P_TYPE
+		valueType P_TYPE
+		want      string
+	}{
+		{"text literal", P_char, P_char, "(_utf8mb4 X'615c62') as `c`"},
+		{"binary value keeps function", P_char, P_ScoreBinary, "name_const('c', _binary 0x615c62) as `c`"},
+		{"invalid name keeps function", P_null, P_char, "name_const(null, _utf8mb4 X'615c62') as `name_const(null, a\\\\b)`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := NewUnresolvedColName("name_const")
+			value := NewNumVal(`a\b`, `a\b`, false, tc.valueType)
+			expr := &FuncExpr{Func: FuncName2ResolvableFunctionReference(name), FuncName: NewCStr("name_const", 1),
+				Exprs: Exprs{NewNumVal("c", "c", false, tc.nameType), value}}
+			projection := &SelectExpr{Expr: expr}
+			require.Equal(t, tc.want, StringWithOpts(projection, dialect.MYSQL, WithViewDefinition()))
+			require.Contains(t, StringWithOpts(projection, dialect.MYSQL, WithSingleQuoteString(), WithModeIndependentStringLiterals()), "name_const(")
+			require.Same(t, value, expr.Exprs[1], "formatting does not rewrite the source AST")
+			require.Nil(t, projection.As)
+		})
+	}
+}

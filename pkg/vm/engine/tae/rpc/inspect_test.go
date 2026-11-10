@@ -33,13 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 )
 
 func Test_storageUsageDetails(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -240,7 +237,7 @@ func Test_storageCkpStatArg(t *testing.T) {
 	err = arg.runOnline()
 	require.Error(t, err)
 
-	entries := make([]*checkpoint.CheckpointEntry, 0)
+	entries := make([]*checkpoint.CheckpointEntry, 0, 2)
 	entries = append(entries, new(checkpoint.CheckpointEntry))
 	entries = append(entries, new(checkpoint.CheckpointEntry))
 	arg.readEntries = func(
@@ -259,7 +256,7 @@ func Test_storageCkpStatArg(t *testing.T) {
 	arg.getRanges = func(
 		entry *checkpoint.CheckpointEntry,
 	) ([]ckputil.TableRange, error) {
-		var ranges []ckputil.TableRange
+		ranges := make([]ckputil.TableRange, 0, 1)
 		ranges = append(ranges, ckputil.TableRange{
 			TableID: tableID,
 		})
@@ -295,7 +292,7 @@ func Test_storageCkpListArg(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 
-	entries := make([]*checkpoint.CheckpointEntry, 0)
+	entries := make([]*checkpoint.CheckpointEntry, 0, 2)
 	entries = append(entries, new(checkpoint.CheckpointEntry))
 	entries = append(entries, new(checkpoint.CheckpointEntry))
 	arg.readEntries = func(

@@ -149,7 +149,7 @@ func TestGetCagraParams_Error(t *testing.T) {
 
 func TestBuildCagraCreate_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildCagraCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
+	_, err := buildCagraCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
@@ -158,13 +158,13 @@ func TestBuildCagraCreate_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildCagraCreate(b, tbl, nil, makeBuildArgs(4), nil)
+	_, err := buildCagraCreate(b, tbl, nil, makeBuildArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildCagraCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildCagraCreate(b, makeNumValTblFunc(`{"m":"32"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildCagraCreate(b, makeNumValTblFunc(`{"m":"32"}`), nil, makeBuildArgs(4), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), id)
 	node := b.nodes[id]
@@ -173,34 +173,4 @@ func TestBuildCagraCreate_OK(t *testing.T) {
 	// First arg was peeled off as Param; remaining 3 attach to TblFuncExprList.
 	require.Len(t, node.TblFuncExprList, 3)
 	require.True(t, node.TableDef.TblFunc.IsSingle, "create runs single-thread")
-}
-
-func TestBuildCagraSearch_BadArgCount(t *testing.T) {
-	b := newStubPlanBuilder()
-	// 2 is not 3 or 4 → error
-	_, err := buildCagraSearch(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(2), nil)
-	require.Error(t, err)
-	// 5 is not 3 or 4 → error
-	_, err = buildCagraSearch(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildCagraSearch_BadParams(t *testing.T) {
-	b := newStubPlanBuilder()
-	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
-	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildCagraSearch(b, tbl, nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
-}
-
-func TestBuildCagraSearch_OK(t *testing.T) {
-	for _, n := range []int{3, 4} {
-		b := newStubPlanBuilder()
-		id, err := buildCagraSearch(b, makeNumValTblFunc(`{"m":"32"}`), nil, makeBuildArgs(n), nil)
-		require.NoError(t, err)
-		node := b.nodes[id]
-		require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, CAGRASearchFuncName, node.TableDef.TblFunc.Name)
-		require.Len(t, node.TblFuncExprList, n-1, "first arg is peeled into Param")
-	}
 }

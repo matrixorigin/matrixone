@@ -100,6 +100,7 @@ func initMemMetrics() {
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
+	registry.MustRegister(CAllocatorTrimCounter)
 }
 
 func initTaskMetrics() {
@@ -149,6 +150,8 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
 	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheDownloadReadCounter)
+	registry.MustRegister(FSDiskCacheDownloadDeclinedBytesCounter)
 	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
@@ -186,8 +189,14 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLockRPCQueueRejectCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
 	registry.MustRegister(txnPKMayBeChangedCounter)
+	registry.MustRegister(TxnAObjectMaxCommitStateGauge)
+	registry.MustRegister(TxnAObjectMaxCommitTableTotalGauge)
+	registry.MustRegister(TxnTNPrePrepareObjectScanCounter)
+	registry.MustRegister(TxnTNPrePrepareObjectBookmarkCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
+	registry.MustRegister(TxnTNCommitQueueStageDurationHistogram)
+	registry.MustRegister(TxnTNFreezeDurationHistogram)
 	registry.MustRegister(TxnDeadlockDetectorQueueDepthGauge)
 
 	registry.MustRegister(txnCommitDurationHistogram)
@@ -318,7 +327,6 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamLifecycleGauge)
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
-	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initMongoDBMetrics() {

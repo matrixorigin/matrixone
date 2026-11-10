@@ -36,6 +36,7 @@ type sqlTaskCrons struct {
 }
 
 type sqlTaskCronJob struct {
+	ctx    context.Context // Borrowed lifecycle context from discovery.
 	state  cronJobState
 	taskMu sync.RWMutex
 	s      *taskService
@@ -108,9 +109,9 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 		}
 		current[t.TaskID] = t
 		if job, ok := s.sqlCrons.jobs[t.TaskID]; !ok {
-			s.addSQLTask(t)
+			s.addSQLTask(ctx, t)
 		} else if sqlTaskNeedsRefresh(job.taskSnapshot(), t) {
-			s.replaceSQLTask(t)
+			s.replaceSQLTask(ctx, t)
 		}
 	}
 
@@ -122,8 +123,8 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 	notifySQLTaskRefreshForTest(s)
 }
 
-func (s *taskService) addSQLTask(sqlTask SQLTask) {
-	job, err := newSQLTaskCronJob(sqlTask, s)
+func (s *taskService) addSQLTask(ctx context.Context, sqlTask SQLTask) {
+	job, err := newSQLTaskCronJob(ctx, sqlTask, s)
 	if err != nil {
 		s.rt.Logger().Error("failed to add sql task cron", zap.Uint64("task-id", sqlTask.TaskID), zap.Error(err))
 		return
@@ -146,9 +147,9 @@ func (s *taskService) addSQLTask(sqlTask SQLTask) {
 	s.sqlCrons.jobs[sqlTask.TaskID] = job
 }
 
-func (s *taskService) replaceSQLTask(sqlTask SQLTask) {
+func (s *taskService) replaceSQLTask(ctx context.Context, sqlTask SQLTask) {
 	s.removeSQLTask(sqlTask.TaskID)
-	s.addSQLTask(sqlTask)
+	s.addSQLTask(ctx, sqlTask)
 }
 
 func (s *taskService) removeSQLTask(taskID uint64) {
@@ -161,10 +162,11 @@ func (s *taskService) removeSQLTask(taskID uint64) {
 	delete(s.sqlCrons.jobs, taskID)
 }
 
-func newSQLTaskCronJob(sqlTask SQLTask, s *taskService) (*sqlTaskCronJob, error) {
+func newSQLTaskCronJob(ctx context.Context, sqlTask SQLTask, s *taskService) (*sqlTaskCronJob, error) {
 	spec := BuildSQLTaskCronSpec(sqlTask.CronExpr, sqlTask.Timezone)
 	cronRunner := cron.New(cron.WithParser(s.cronParser), cron.WithLogger(logutil.GetCronLogger(false)))
 	job := &sqlTaskCronJob{
+		ctx:  ctx,
 		s:    s,
 		task: sqlTask,
 		cron: cronRunner,
@@ -190,17 +192,20 @@ func (j *sqlTaskCronJob) setTask(sqlTask SQLTask) {
 }
 
 func (j *sqlTaskCronJob) Run() {
-	if !j.state.canRun() {
+	if j.ctx.Err() != nil || !j.state.canRun() {
 		return
 	}
 	defer j.state.endRun()
 
 	now := time.Now()
-	queryCtx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseDoRun)
+	queryCtx, cancel := context.WithTimeoutCause(j.ctx, 10*time.Second, moerr.CauseDoRun)
 	defer cancel()
 
 	scheduled := j.taskSnapshot()
 	tasks, err := j.s.store.QuerySQLTask(queryCtx, WithTaskIDCond(EQ, scheduled.TaskID))
+	if j.ctx.Err() != nil {
+		return
+	}
 	if err != nil || len(tasks) != 1 {
 		if err != nil {
 			j.s.rt.Logger().Error("query sql task failed", zap.Uint64("task-id", scheduled.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
@@ -242,7 +247,13 @@ func (j *sqlTaskCronJob) Run() {
 	asyncTask.ParentTaskID = fmt.Sprintf("sql-task:%d", current.TaskID)
 	asyncTask.CreateAt = now.UnixMilli()
 
+	if j.ctx.Err() != nil {
+		return
+	}
 	if _, err := j.s.store.TriggerSQLTask(queryCtx, current, asyncTask); err != nil {
+		if j.ctx.Err() != nil {
+			return
+		}
 		j.s.rt.Logger().Error("trigger sql task failed", zap.Uint64("task-id", current.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
 		return
 	}

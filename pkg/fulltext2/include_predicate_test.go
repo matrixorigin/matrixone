@@ -89,6 +89,29 @@ func TestIncludePrefilterOps(t *testing.T) {
 		`[{"col":-1,"op":">","val":2},{"col":0,"op":"=","val":"active"}]`))
 }
 
+// A high-scoring ineligible document must not consume the filtered TopK slot.
+func TestIncludeNullFilterBeforeBooleanShouldTopK(t *testing.T) {
+	docs := []TokenizedDoc{
+		{Pk: int64(1), Terms: []string{"fox", "rare", "rare"}, Positions: []int32{0, 1, 2}, Include: []any{int64(1)}},
+		{Pk: int64(2), Terms: []string{"fox"}, Positions: []int32{0}, Include: []any{nil}},
+		{Pk: int64(3), Terms: []string{"cat"}, Positions: []int32{0}, Include: []any{nil}},
+	}
+	seg, err := BuildSegmentFromTokenized("should", int32(types.T_int64), docs,
+		WithIncludeTypes([]int32{int32(types.T_int64)}))
+	require.NoError(t, err)
+	idx := NewIndex([]*Segment{seg}, nil)
+	preds, err := compileIncludePredicates([]byte(`[{"col":0,"op":"is_null"}]`), idx.includeTypes(), idx.pkType())
+	require.NoError(t, err)
+	all, err := idx.SearchQuery([]byte("fox rare"), true, ParserDefault, BM25, 3, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), all[0].Pk)
+	filtered, err := idx.SearchQuery([]byte("fox rare"), true, ParserDefault, BM25, 1,
+		&prefilter{include: preds})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	require.Equal(t, int64(2), filtered[0].Pk)
+}
+
 // TestIncludePredicateUnit covers the compiled-predicate evaluator directly, incl. the
 // NULL 3-valued rule (a value comparison against NULL is UNKNOWN ⇒ not admitted).
 func TestIncludePredicateUnit(t *testing.T) {

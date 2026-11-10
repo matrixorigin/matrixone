@@ -14,6 +14,8 @@
 
 package geo
 
+import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 // Coord is a single 2D coordinate. The engine does not support Z (elevation)
 // or M (measure) ordinates.
 type Coord struct {
@@ -111,3 +113,12 @@ var (
 	_ Geometry = MultiPolygon{}
 	_ Geometry = GeometryCollection{}
 )
+
+// ValidateLinearRingStructure checks admission syntax, independently of topology.
+// A ring includes its closing position; it is never implicitly closed or snapped.
+func ValidateLinearRingStructure(count int, first, last Coord) error {
+	if count < 4 || first != last {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload: polygon ring must have at least four positions and be closed")
+	}
+	return nil
+}

@@ -27,6 +27,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 // init wires the planplugin helper vars BuildSecondaryIndexDefs calls. Production
@@ -103,7 +104,10 @@ func (b *stubPlanBuilder) CanApplyIvfflat(_ *planplugin.VectorSortContext, _ *pl
 
 var _ planplugin.PlanBuilder = (*stubPlanBuilder)(nil)
 
-func newStubCompilerContext() vecViewCtx { return vecViewCtx{} }
+func newStubCompilerContext(t testing.TB) vecViewCtx {
+	t.Helper()
+	return vecViewCtx{proc: testutil.NewProcess(t, testutil.WithMPool(nil), testutil.WithFileService(nil))}
+}
 
 // vecColMap returns a colMap with an int64 pk and a vecf32 vector column, the
 // shape BuildSecondaryIndexDefs expects on the happy path.
@@ -132,6 +136,9 @@ func TestHooks_Redirects(t *testing.T) {
 		{"ApplyForSort", func() {
 			_, _, _ = Hooks{}.ApplyForSort(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 		}},
+		{"BuildLogicalSearch", func() {
+			_, _, _ = Hooks{}.BuildLogicalSearch(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			defer func() { require.Equal(t, "hnsw", recover()) }()
@@ -142,15 +149,27 @@ func TestHooks_Redirects(t *testing.T) {
 
 // --- schema.go: BuildSecondaryIndexDefs ------------------------------------
 
-// The happy path builds the two HNSW tables (metadata + storage).
+// The happy path builds the HNSW tables: metadata, storage and ignored rows.
 func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
 	require.Equal(t, catalog.Hnsw_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Hnsw_TblType_Storage, tblDefs[1].TableType)
+	ignored := tblDefs[2]
+	require.Equal(t, catalog.IndexIgnored_TblType, ignored.TableType)
+	require.Equal(t, catalog.IndexIgnored_TblType, idxDefs[2].IndexAlgoTableType)
+	require.Equal(t, ignored.Name, idxDefs[2].IndexTableName)
+	require.Equal(t, []string{"vec"}, idxDefs[2].Parts)
+	require.Equal(t, catalog.IndexIgnored_TblCol_Pk, ignored.Pkey.PkeyColName)
+	require.Equal(t, vecColMap("id", "vec")["id"].Typ.Id, ignored.Cols[0].Typ.Id)
+	require.Equal(t, []string{catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Code, catalog.IndexIgnored_TblCol_Reason, catalog.IndexIgnored_TblCol_Ts},
+		[]string{ignored.Cols[0].Name, ignored.Cols[1].Name, ignored.Cols[2].Name, ignored.Cols[3].Name})
+	require.Equal(t, int32(types.T_int32), ignored.Cols[1].Typ.Id)
+	require.False(t, ignored.Cols[1].Default.NullAbility, "every row has a code")
+	require.True(t, ignored.Cols[2].Default.NullAbility, "the message is optional")
 	for _, td := range tblDefs {
 		require.NotEmpty(t, td.Cols)
 		for _, col := range td.Cols {
@@ -162,7 +181,7 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 // The metadata table carries the provenance columns (nrow, build_ts) as int64.
 func TestBuildSecondaryIndexDefs_MetadataProvenanceColumns(t *testing.T) {
 	_, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
 
 	names := make(map[string]planpb.Type, len(tblDefs[0].Cols))
@@ -181,13 +200,13 @@ func TestBuildSecondaryIndexDefs_MetadataProvenanceColumns(t *testing.T) {
 
 func TestBuildSecondaryIndexDefs_EmptyPkey(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_FakePkey(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
 	require.Error(t, err)
 }
 
@@ -195,7 +214,7 @@ func TestBuildSecondaryIndexDefs_FakePkey(t *testing.T) {
 func TestBuildSecondaryIndexDefs_NonBigintPkey(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["id"].Typ.Id = int32(types.T_varchar)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -205,27 +224,27 @@ func TestBuildSecondaryIndexDefs_IncludeRefused(t *testing.T) {
 	idx.IndexOption = &tree.IndexOption{
 		IncludeColumns: []*tree.UnresolvedName{tree.NewUnresolvedName(tree.NewCStr("payload", 0))},
 	}
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_MultiColumn(t *testing.T) {
 	idx := indexOn("vec")
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedName(tree.NewCStr("vec2", 0))})
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_ColumnNotExist(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_NotAVector(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_int64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -233,7 +252,7 @@ func TestBuildSecondaryIndexDefs_NotAVector(t *testing.T) {
 func TestBuildSecondaryIndexDefs_F64Base(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_array_float64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.NoError(t, err)
 }
 
@@ -244,7 +263,7 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 		Parts:     []string{"vec"},
 	}}
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
 	require.Error(t, err)
 }
 
@@ -253,7 +272,7 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 // The fulltext hook errors for a vector plugin.
 func TestBuildFullTextIndexDefs_NotSupported(t *testing.T) {
 	_, _, err := Hooks{}.BuildFullTextIndexDefs(
-		newStubCompilerContext(), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
+		newStubCompilerContext(t), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
 	require.Error(t, err)
 }
 
@@ -305,13 +324,15 @@ func TestGetHnswParams_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBuildHnswCreate_TooFewArgs(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
+func TestBuildHnswCreate_WrongArgCount(t *testing.T) {
+	for _, n := range []int{1, 3, 4} {
+		_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(n), nil, nil)
+		require.Error(t, err, n)
+	}
 }
 
 func TestBuildHnswCreate_BadParams(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(4), nil)
+	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(2), nil, nil)
 	require.Error(t, err)
 }
 
@@ -319,39 +340,12 @@ func TestBuildHnswCreate_BadParams(t *testing.T) {
 // and marks the node single-threaded.
 func TestBuildHnswCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(2), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)
 	require.Equal(t, HNSWCreateFuncName, node.TableDef.TblFunc.Name)
 	require.Equal(t, `{"m":"48"}`, string(node.TableDef.TblFunc.Param))
-	require.Len(t, node.TblFuncExprList, 3)
+	require.Len(t, node.TblFuncExprList, 1)
 	require.True(t, node.TableDef.TblFunc.IsSingle)
-}
-
-// Search takes 3 args, or 4 with a filter payload.
-func TestBuildHnswSearch_BadArgCount(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(2), nil)
-	require.Error(t, err)
-	_, err = buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildHnswSearch_BadParams(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
-}
-
-// Search is not single-threaded, unlike create.
-func TestBuildHnswSearch_OK(t *testing.T) {
-	for _, n := range []int{3, 4} {
-		b := newStubPlanBuilder()
-		id, err := buildHnswSearch(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(n), nil)
-		require.NoError(t, err)
-		node := b.nodes[id]
-		require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, HNSWSearchFuncName, node.TableDef.TblFunc.Name)
-		require.Len(t, node.TblFuncExprList, n-1)
-		require.False(t, node.TableDef.TblFunc.IsSingle)
-	}
 }

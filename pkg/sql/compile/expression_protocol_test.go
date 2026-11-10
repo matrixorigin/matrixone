@@ -18,11 +18,18 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -30,27 +37,36 @@ import (
 type expressionVersionClient struct {
 	fakeQueryClient
 	version         int64
+	versions        map[string]int64
 	calls, releases int
 	customResponse  bool
 	response        *query.Response
 	sendErr         error
+	onSend          func()
 }
 
 func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {
 	return &query.Request{CmdMethod: m}
 }
-func (c *expressionVersionClient) SendMessage(ctx context.Context, _ string, _ *query.Request) (*query.Response, error) {
+func (c *expressionVersionClient) SendMessage(ctx context.Context, addr string, _ *query.Request) (*query.Response, error) {
 	c.calls++
+	if c.onSend != nil {
+		defer c.onSend()
+	}
 	if c.customResponse {
 		return c.response, c.sendErr
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: c.version}}, nil
+	version := c.version
+	if c.versions != nil {
+		version = c.versions[addr]
+	}
+	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: version}}, nil
 }
 func (c *expressionVersionClient) Release(*query.Response) { c.releases++ }
-func expressionProtocolTestCompile(t *testing.T) (*Compile, *expressionVersionClient) {
+func expressionProtocolTestCompile(t testing.TB) (*Compile, *expressionVersionClient) {
 	t.Helper()
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
@@ -90,7 +106,25 @@ func TestExpressionProtocolUnknownAndCanceledWorkers(t *testing.T) {
 	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{}}, defines.MORPCVersion67)
 	require.NoError(t, err)
 	require.False(t, supported)
-	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := value.(*schedulerTestCluster)
+	cluster.cns[0].QueryAddress = ""
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
+	require.NoError(t, err)
+	require.False(t, supported)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "unknown")
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
+	require.NoError(t, err)
+	require.False(t, supported)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	expired, expire := context.WithDeadline(c.proc.Ctx, time.Now().Add(-time.Second))
+	defer expire()
+	parent := c.proc.Ctx
+	c.proc.Ctx = expired
+	_, err = remoteWorkersSupportProtocol(c.proc, nil, defines.MORPCVersion67)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	ctx, cancel := context.WithCancel(parent)
 	cancel()
 	c.proc.Ctx = ctx
 	_, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker"}}, defines.MORPCVersion67)
@@ -109,6 +143,41 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
+func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	client.version = defines.MORPCVersion86
+
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+
+	client.version = defines.MORPCVersion85
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+}
+
+func TestAllCNsSupportProtocolWithContextIgnoresCanceledProcessContext(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion86
+	procCtx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = procCtx
+	cancel()
+
+	supported, err := AllCNsSupportProtocolWithContext(
+		context.Background(), c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+}
+
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -119,6 +188,9 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 		{"missing version", &query.Response{}, nil},
 		{"error without response", nil, errors.New("probe failed")},
 		{"error with response", &query.Response{}, errors.New("probe failed")},
+		{"error with supported version", &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: defines.MORPCLatestVersion}}, errors.New("probe failed")},
+		{"deadline with live parent", nil, context.DeadlineExceeded},
+		{"canceled probe with live parent", nil, context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -126,13 +198,348 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 			client.response = tc.response
 			client.sendErr = tc.err
 			ok, err := remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
-			require.NoError(t, err)
-			require.False(t, ok, "unknown capabilities must select local placement")
+			require.ErrorIs(t, err, tc.err)
+			require.NoError(t, c.proc.Ctx.Err())
+			require.False(t, ok, "failed or unknown observations cannot verify support")
 			want := 0
 			if tc.response != nil {
 				want = 1
 			}
 			require.Equal(t, want, client.releases)
+		})
+	}
+}
+
+func TestExpressionProtocolDiscoveryFailure(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	old, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.ClusterService, old) })
+	rt.SetGlobalVariables(moruntime.ClusterService, "invalid cluster")
+	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
+	supported, err := remoteWorkersSupportProtocol(c.proc, workers, defines.MORPCVersion67)
+	require.False(t, supported)
+	require.ErrorContains(t, err, "invalid mocluster service")
+	supported, err = remoteWorkersSupportProtocolForPlacement(c.proc, workers, defines.MORPCVersion67)
+	require.False(t, supported)
+	require.NoError(t, err)
+	require.Zero(t, client.calls)
+}
+
+func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	ip, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "inet_aton", []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}})
+	require.NoError(t, err)
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+		ip, decimalDivisionProtocolExpr(types.T_decimal128),
+	}}}, Steps: []int32{0}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	cluster, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster.(*schedulerTestCluster).cns = append(cluster.(*schedulerTestCluster).cns,
+		metadata.CNService{ServiceID: "second-worker", QueryAddress: "second:9000", PipelineServiceAddress: "second:6001"})
+	workers := engine.Nodes{
+		{Id: "old-worker", Addr: "remote:6001", Mcpu: 4},
+		{Id: "second-worker", Addr: "second:6001", Mcpu: 4},
+	}
+	client.versions = map[string]int64{"worker:9000": defines.MORPCVersion97, "second:9000": defines.MORPCVersion96}
+	place := func(want plan2.ExecType, probes int) {
+		t.Helper()
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = workers
+		calls, releases := client.calls, client.releases
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		require.Equal(t, want, c.execType)
+		require.Equal(t, probes, client.calls-calls)
+		require.Equal(t, probes, client.releases-releases)
+		if want == plan2.ExecTypeAP_ONECN {
+			require.Len(t, c.cnList, 1)
+			require.Equal(t, c.addr, c.cnList[0].Addr)
+		}
+	}
+	// The lower-version feature succeeds on both workers, but DIV still
+	// requires v97 on the second. One probe per worker proves both floors.
+	place(plan2.ExecTypeAP_ONECN, 2)
+	client.versions["second:9000"] = defines.MORPCVersion97
+	place(plan2.ExecTypeAP_MULTICN, 2)
+	// Mutating the same query and reusing Compile must recompute its floor.
+	qry.Nodes[0].ProjectList = []*planpb.Expr{ip}
+	client.versions["second:9000"] = defines.MORPCVersion72
+	place(plan2.ExecTypeAP_MULTICN, 2)
+	client.versions["second:9000"] = defines.MORPCVersion71
+	place(plan2.ExecTypeAP_ONECN, 2)
+	// View metadata joins the same placement floor and live worker checks.
+	for _, id := range []int32{function.MO_VIEW_DEFINITION, function.MO_VIEW_CHECK_OPTION} {
+		qry.Nodes[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+		}}}}
+		client.versions["worker:9000"] = defines.MORPCVersion126
+		client.versions["second:9000"] = defines.MORPCVersion109
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion113
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion114
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion115
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion116
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion117
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion118
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion119
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion121
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion122
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion120
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion126
+		place(plan2.ExecTypeAP_MULTICN, 2)
+	}
+	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
+	place(plan2.ExecTypeAP_MULTICN, 0)
+}
+
+func TestRemoteExpressionPlacementLocalRebindAndErrors(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	legacy := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL, 0)},
+	}}}
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{legacy}}}}
+	for _, kind := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
+		c.execType = kind
+		require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "legacy interval")
+		require.Equal(t, kind, c.execType)
+	}
+	malformed := integerProtocolExpr(function.IntegerArgumentCastOverload)
+	malformed.GetF().Args = nil
+	qry.Nodes[0].ProjectList = []*planpb.Expr{malformed}
+	require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "CAST arity")
+	require.Zero(t, client.calls)
+	qry.Nodes[0].ProjectList = []*planpb.Expr{decimalDivisionProtocolExpr(types.T_decimal128)}
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	cancel()
+	c.proc.Ctx = ctx
+	require.ErrorIs(t, c.constrainRemoteExpressionWorkers(qry), context.Canceled)
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	require.Zero(t, client.calls)
+}
+
+func TestRemoteExpressionPlacementProbeFailure(t *testing.T) {
+	for _, probeErr := range []error{errors.New("transport unavailable"), context.DeadlineExceeded, context.Canceled} {
+		t.Run(probeErr.Error(), func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{decimalDivisionProtocolExpr(types.T_decimal128)}}}}
+			workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			client.customResponse, client.sendErr = true, probeErr
+			c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+			require.NoError(t, c.proc.Ctx.Err())
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			require.Len(t, c.cnList, 1)
+			require.Equal(t, c.addr, c.cnList[0].Addr)
+			ctx, cancel := context.WithCancel(c.proc.Ctx)
+			defer cancel()
+			c.proc.Ctx, client.onSend = ctx, cancel
+			c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+			require.ErrorIs(t, c.constrainRemoteExpressionWorkers(qry), context.Canceled)
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.Equal(t, workers, c.cnList)
+		})
+	}
+}
+
+// Exercise the real send boundary, including serialization and all fences;
+// version probes are counted independently by the query-client fixture.
+func BenchmarkRemoteExpressionSend(b *testing.B) {
+	for _, shape := range []string{"plain", "mixed", "wide"} {
+		b.Run(shape, func(b *testing.B) {
+			c, client := expressionProtocolTestCompile(b)
+			client.version = defines.MORPCLatestVersion
+			integer := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.PLUS, 2)},
+				Args: []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+				},
+			}}}
+			ip, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "inet_aton", []*planpb.Expr{{
+				Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+			}})
+			require.NoError(b, err)
+			expressions := []*planpb.Expr{integer, decimalDivisionProtocolExpr(types.T_decimal128), ip}
+			if shape == "plain" {
+				expressions = []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}}
+			} else if shape == "wide" {
+				expressions = append(expressions, expressions...)
+				expressions = append(expressions, expressions...)
+				expressions = append(expressions, expressions...)
+				expressions = append(expressions, expressions...)
+			}
+			op := projection.NewArgument()
+			op.ProjectList = expressions
+			b.Cleanup(op.Release)
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := encodeRemoteScope(scope, c.proc); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(client.calls)/float64(b.N), "probes/op")
+		})
+	}
+}
+
+func TestRemoteExpressionSendReusesProbeAndRechecksNextSend(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	integer := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.PLUS, 2)},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		},
+	}}}
+	op := projection.NewArgument()
+	op.ProjectList = []*planpb.Expr{integer, decimalDivisionProtocolExpr(types.T_decimal128)}
+	t.Cleanup(op.Release)
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	for _, tc := range []struct {
+		version int64
+		message string
+	}{
+		{defines.MORPCVersion70, "checked integer arithmetic (MORPC version 71)"},
+		{defines.MORPCVersion90, "decimal division (MORPC version 97)"},
+		{defines.MORPCVersion97, ""},
+	} {
+		client.version = tc.version
+		calls, releases := client.calls, client.releases
+		data, err := encodeRemoteScope(scope, c.proc)
+		if tc.message == "" {
+			require.NoError(t, err)
+			require.NotEmpty(t, data)
+		} else {
+			require.ErrorContains(t, err, tc.message)
+		}
+		require.Equal(t, 1, client.calls-calls)
+		require.Equal(t, 1, client.releases-releases)
+	}
+	client.customResponse, client.sendErr = true, errors.New("destination unavailable")
+	calls := client.calls
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.ErrorIs(t, err, client.sendErr)
+	require.Empty(t, data)
+	require.Equal(t, calls+1, client.calls)
+	client.customResponse, client.sendErr = false, nil
+	// Reuse the same Scope, changing its expression generation after successful
+	// encoding: an old observation cannot authorize a later send.
+	op.ProjectList = []*planpb.Expr{integer}
+	client.version = defines.MORPCVersion71
+	before := client.calls
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, client.calls-before)
+	op.ProjectList = nil
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, client.calls-before, "no expression floor means no probe")
+}
+
+func TestRemoteExpressionDestinationPreservesLiveGuards(t *testing.T) {
+	for _, mode := range []string{"cancel", "cancel-error", "cancel-unknown", "downgrade", "upgrade"} {
+		t.Run(mode, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.version = defines.MORPCLatestVersion
+			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
+			features := planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true, RowDependentConvBases: true}
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			if mode == "cancel" || mode == "cancel-error" || mode == "cancel-unknown" {
+				features = planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true}
+				if mode != "cancel" {
+					client.customResponse = true
+				}
+				if mode == "cancel-error" {
+					client.sendErr = errors.New("transport failure during cancel")
+				}
+				ctx, cancel := context.WithCancel(c.proc.Ctx)
+				defer cancel()
+				c.proc.Ctx = ctx
+				client.onSend = cancel
+			} else if mode == "downgrade" {
+				client.onSend = func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69) }
+			} else {
+				features = planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true, DecimalDivisionSemantics: true}
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion71)
+				client.onSend = func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97) }
+			}
+			err := validateRemoteExpressionDestination(c.proc, p, features)
+			if mode == "cancel" || mode == "cancel-error" || mode == "cancel-unknown" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else if mode == "downgrade" {
+				require.ErrorContains(t, err, "row-dependent CONV bases (MORPC version 70)")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, 1, client.calls)
+			releases := 1
+			if mode == "cancel-error" || mode == "cancel-unknown" {
+				releases = 0
+			}
+			require.Equal(t, releases, client.releases)
+		})
+	}
+}
+
+func TestRemoteExpressionDestinationUnknownEvidence(t *testing.T) {
+	for _, mode := range []string{"nil", "empty", "error", "error-response", "wrong-id", "stale-address", "no-client", "no-node", "no-features"} {
+		t.Run(mode, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.version = defines.MORPCLatestVersion
+			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
+			f := planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true, DecimalDivisionSemantics: true}
+			expectedCalls, expectedReleases := 0, 0
+			switch mode {
+			case "nil", "empty", "error", "error-response":
+				client.customResponse = true
+				expectedCalls = 1
+				if mode == "empty" || mode == "error-response" {
+					client.response = &query.Response{}
+					expectedReleases = 1
+				}
+				if mode == "error" || mode == "error-response" {
+					client.sendErr = errors.New("probe failed")
+				}
+			case "wrong-id":
+				p.Node.Id = "other-worker"
+			case "stale-address":
+				p.Node.Addr = "stale:6001"
+			case "no-client":
+				c.proc.Base.QueryClient = nil
+			case "no-node":
+				p.Node = nil
+			case "no-features":
+				f = planpb.RemoteExpressionFeatures{}
+			}
+			err := validateRemoteExpressionDestination(c.proc, p, f)
+			if mode == "no-features" {
+				require.NoError(t, err)
+			} else if client.sendErr != nil {
+				require.ErrorIs(t, err, client.sendErr)
+			} else if mode == "no-node" {
+				require.ErrorContains(t, err, "versioned remote destination")
+			} else {
+				require.ErrorContains(t, err, "checked integer arithmetic (MORPC version 71)")
+			}
+			require.Equal(t, expectedCalls, client.calls)
+			require.Equal(t, expectedReleases, client.releases)
 		})
 	}
 }

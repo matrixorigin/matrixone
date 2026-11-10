@@ -344,7 +344,7 @@ func (ctr *container) appendSortedChunk(
 	for i := range sels {
 		sels[i] = int64(i)
 	}
-	mosort.SortByVectors(sels, orderCols, desc, nullsLast)
+	mosort.SortByVectorsWithTypes(sels, orderCols, desc, nullsLast, ctr.orderTypes)
 	if err = chunk.Shuffle(sels, proc.Mp()); err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
 		chunk.Clean(proc.Mp())
@@ -376,7 +376,7 @@ func (ctr *container) appendSortedChunk(
 
 	ctr.batchList = append(ctr.batchList, chunk)
 	ctr.orderCols = append(ctr.orderCols, orderCols)
-	ctr.spillMemUsage += int64(chunk.Size())
+	ctr.spillMemUsage += int64(chunk.Allocated())
 	if ctr.shouldSpill(0) {
 		return ctr.spillCachedRuns(proc, analyzer)
 	}

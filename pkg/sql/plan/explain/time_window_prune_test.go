@@ -26,7 +26,7 @@ import (
 // timeWindowNode returns the single TIME_WINDOW node of a built plan.
 func timeWindowNode(t *testing.T, sql string) *plan.Node {
 	t.Helper()
-	logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, sql)
+	logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 	require.NoError(t, err)
 
 	var found *plan.Node
@@ -42,7 +42,7 @@ func timeWindowNode(t *testing.T, sql string) *plan.Node {
 
 func fillNode(t *testing.T, sql string) *plan.Node {
 	t.Helper()
-	logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, sql)
+	logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 	require.NoError(t, err)
 
 	for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
@@ -170,7 +170,7 @@ func TestTimeWindowPruneOperatorShape(t *testing.T) {
 		require.Len(t, tw.AggList, 1, "the window's max(col) reference itself is inert and prunable")
 		requireSlotsWithinLayout(t, tw)
 
-		logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, sql)
+		logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		aggFound := false
 		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {

@@ -265,38 +265,11 @@ func UInt64Column(name, comment string) Column {
 	}
 }
 
-func Int32Column(name, comment string) Column {
-	return Column{
-		Name:    name,
-		ColType: TInt32,
-		Default: "0",
-		Comment: comment,
-	}
-}
-
 func UInt32Column(name, comment string) Column {
 	return Column{
 		Name:    name,
 		ColType: TUint32,
 		Default: "0",
-		Comment: comment,
-	}
-}
-
-func BoolColumn(name, comment string) Column {
-	return Column{
-		Name:    name,
-		ColType: TBool,
-		Default: "false",
-		Comment: comment,
-	}
-}
-
-func TimestampDefaultColumn(name, defaultVal, comment string) Column {
-	return Column{
-		Name:    name,
-		ColType: TTimestamp,
-		Default: defaultVal,
 		Comment: comment,
 	}
 }
@@ -341,12 +314,6 @@ var NormalTableEngine = "TABLE"
 // ExternalTableEngine
 // Deprecated
 var ExternalTableEngine = "EXTERNAL"
-
-type SchemaDiff struct {
-	AddedColumns []Column
-	TableName    string
-	DatabaseName string
-}
 
 type Table struct {
 	Account          string

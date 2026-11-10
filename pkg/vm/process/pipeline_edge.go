@@ -17,12 +17,17 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 )
+
+type pipelineCapacityNotification struct {
+	ready chan struct{}
+}
 
 // PipelineEdge is an explicit pipeline edge abstraction with typed lifecycle events.
 // It owns both the signal channel and the idempotent terminal state.
@@ -34,6 +39,8 @@ import (
 //  3. Done() provides an observable whole-edge terminal signal.
 //  4. Every send/receive is cancelable via context, or bounded by the edge
 //     timeout configuration.
+//  5. A full data channel wakes blocked producers from bounded receive-side
+//     notifications; Ch2 state remains the authority for actual capacity.
 type PipelineEdge struct {
 	// Ch2 is the underlying data+terminal signal channel.
 	// Exposed for direct select compatibility with PipelineSignalReceiver.
@@ -64,6 +71,12 @@ type PipelineEdge struct {
 	endRecorded    int
 	doneClosed     bool
 	abortClosed    bool
+
+	// capacityReady is a receive-side notification used by producers that wait
+	// before pulling another upstream batch. It is deliberately separate from
+	// Ch2: Ch2 remains the data protocol, while this channel only replaces
+	// timer-based polling when a receive creates buffer capacity.
+	capacityReady atomic.Pointer[pipelineCapacityNotification]
 }
 
 // NewPipelineEdge creates a new PipelineEdge.
@@ -110,6 +123,7 @@ done:
 	e.Ch2 = make(chan PipelineSignal, channelBufferSize)
 	e.NilBatchCnt = nilBatchCnt
 	e.OrderedStream = false
+	e.resetCapacityNotification()
 	e.resetTerminalStateLocked()
 }
 
@@ -127,7 +141,44 @@ func (e *PipelineEdge) SetNilBatchCntForReuse(nilBatchCnt int) {
 
 	e.NilBatchCnt = nilBatchCnt
 	e.drainChannelLocked()
+	e.resetCapacityNotification()
 	e.resetTerminalStateLocked()
+}
+
+func (e *PipelineEdge) capacityNotification() <-chan struct{} {
+	for {
+		if notification := e.capacityReady.Load(); notification != nil {
+			return notification.ready
+		}
+		size := cap(e.Ch2)
+		if size < 1 {
+			size = 1
+		}
+		created := &pipelineCapacityNotification{ready: make(chan struct{}, size)}
+		if e.capacityReady.CompareAndSwap(nil, created) {
+			return created.ready
+		}
+	}
+}
+
+// notifyCapacityAvailable publishes one receive-side progress event. The
+// notification is only a wake-up hint: waiters always recheck Ch2, so a stale
+// or coalesced event cannot admit data into a full channel.
+func (e *PipelineEdge) notifyCapacityAvailable() {
+	notification := e.capacityReady.Load()
+	if notification == nil {
+		return
+	}
+	select {
+	case notification.ready <- struct{}{}:
+	default:
+	}
+}
+
+// resetCapacityNotification is only called while an edge is being prepared
+// for reuse, when no live sender or receiver may still access it.
+func (e *PipelineEdge) resetCapacityNotification() {
+	e.capacityReady.Store(nil)
 }
 
 // ResetTerminalStateForReuse drains buffered stale signals and clears the
@@ -363,11 +414,28 @@ func (e *PipelineEdge) recordFatalTerminalLocked(signal PipelineSignal) Pipeline
 }
 
 func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
-	if e == nil || e.Ch2 == nil {
-		return false
-	}
 	if !signal.EventType.IsTerminal() {
 		return e.trySend(signal)
+	}
+	_, _, delivered := e.publishTerminal(signal)
+	return delivered
+}
+
+// PublishTerminal records cleanup without depending on data-channel capacity.
+// The effective signal is the first fatal cause, or End after graceful
+// completion. ok reports durable publication, not whether a message fitted in
+// Ch2; receivers recover missing messages from this same terminal state.
+func (e *PipelineEdge) PublishTerminal(signal PipelineSignal) (effective PipelineSignal, ok bool) {
+	effective, ok, _ = e.publishTerminal(signal)
+	return
+}
+
+func (e *PipelineEdge) publishTerminal(signal PipelineSignal) (PipelineSignal, bool, bool) {
+	if e == nil || e.Ch2 == nil {
+		return PipelineSignal{}, false, false
+	}
+	if !signal.EventType.IsTerminal() {
+		return PipelineSignal{}, false, false
 	}
 	e.initTerminalState()
 
@@ -376,7 +444,10 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 
 	if signal.EventType == EventEnd {
 		if !e.canDeliverEndLocked() {
-			return false
+			if e.fatalTerminal {
+				return e.fatalSignal, true, false
+			}
+			return NewEndSignal(), true, false
 		}
 		// End is a durable edge state, not merely a best-effort channel
 		// message.  Record it even when buffered data occupies Ch2.  Once all
@@ -387,25 +458,25 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 		default:
 		}
 		e.recordEndLocked()
-		return true
+		return signal, true, true
 	}
 
 	if e.doneClosed && !e.fatalTerminal {
-		return false
+		return NewEndSignal(), true, false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
 	if e.fatalDelivered >= e.fatalRemaining {
-		return false
+		return signal, true, false
 	}
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
-			return false
+			return signal, true, false
 		}
 	}
-	return true
+	return signal, true, true
 }
 
 func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal PipelineSignal) bool {
@@ -418,46 +489,7 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	if !signal.EventType.IsTerminal() {
 		return e.sendSignal(ctx, signal)
 	}
-	e.initTerminalState()
-
-	e.terminalMu.Lock()
-	defer e.terminalMu.Unlock()
-
-	if signal.EventType == EventEnd {
-		if !e.canDeliverEndLocked() {
-			return false
-		}
-		// Terminal progress must not depend on spare data-channel capacity.
-		// A non-blocking enqueue preserves the common fast path; durable state
-		// plus Done is the fallback delivery path.
-		select {
-		case e.Ch2 <- signal:
-		default:
-		}
-		e.recordEndLocked()
-		return true
-	}
-
-	if e.doneClosed && !e.fatalTerminal {
-		return false
-	}
-	signal = e.recordFatalTerminalLocked(signal)
-	if e.fatalDelivered >= e.fatalRemaining {
-		return false
-	}
-	// Fatal state is durable and wakes PipelineSignalReceiver through Done.
-	// Never make this control path wait behind the data channel it terminates;
-	// enqueue as many fatal signals as fit and let the receiver synthesize any
-	// missing remainder from the recorded state.
-	for e.fatalDelivered < e.fatalRemaining {
-		select {
-		case e.Ch2 <- signal:
-			e.fatalDelivered++
-		default:
-			return false
-		}
-	}
-	return true
+	return e.trySendTerminal(signal)
 }
 
 func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bool {

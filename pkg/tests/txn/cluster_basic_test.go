@@ -311,7 +311,7 @@ func TestAggTable(t *testing.T) {
 		wg.Add(1)
 		go func(i int, t *testing.T) {
 			defer wg.Done()
-			rows, err := txnList[i].ExecSQLQuery(fmt.Sprintf("SELECT DISTINCT a, AVG( b) FROM %s GROUP BY a HAVING AVG( b) > 50;", tblList[i]))
+			rows, err := txnList[i].ExecSQLQuery(fmt.Sprintf("SELECT DISTINCT a, AVG( b) FROM %s GROUP BY a HAVING AVG( b) > 50;", tblList[i])) //nolint:sqlclosecheck // rows closed via mustCloseRows defer; not tracked intraprocedurally
 			defer mustCloseRows(t, rows)
 			defer func() {
 				err := rows.Err()

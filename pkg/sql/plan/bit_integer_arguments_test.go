@@ -208,7 +208,7 @@ func TestBitIntegerArgumentPreparedDomains(t *testing.T) {
 		`select export_set((select ?),"Y","N","",4)`,
 	} {
 		t.Run(query, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare bit_source from '"+query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare bit_source from '"+query+"'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
 			snapshot, err := template.Marshal()

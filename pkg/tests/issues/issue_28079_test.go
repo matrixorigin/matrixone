@@ -44,8 +44,6 @@ import (
 
 func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
 
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -62,29 +60,7 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 		const accountB = "issue_28079_account_b"
 		accounts := []string{accountA, accountB}
 		cleanupAccounts := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cleanupCancel()
-			for _, account := range accounts {
-				if _, err := db0.ExecContext(
-					cleanupCtx,
-					"drop account if exists `"+account+"`",
-				); err != nil {
-					return fmt.Errorf("drop account %s: %w", account, err)
-				}
-			}
-			var remaining int
-			if err := db0.QueryRowContext(
-				cleanupCtx,
-				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-				accountA,
-				accountB,
-			).Scan(&remaining); err != nil {
-				return fmt.Errorf("verify account cleanup: %w", err)
-			}
-			if remaining != 0 {
-				return fmt.Errorf("account cleanup left %d rows", remaining)
-			}
-			return nil
+			return cleanupIssueAccounts(db0, accounts...)
 		}
 		require.NoError(t, cleanupAccounts())
 		t.Cleanup(func() {
@@ -92,6 +68,10 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 				t.Errorf("issue 28079 account cleanup: %v", err)
 			}
 		})
+
+		// Initial cleanup owns independent budgets; start the workload afterward.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+		defer cancel()
 
 		var snapshotTableID uint64
 		require.NoError(t, db0.QueryRowContext(ctx,
@@ -361,8 +341,6 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 
 func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cn1, err := cluster.GetCNService(1)
@@ -373,24 +351,7 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 		const successful = "issue_28079_refresh_success"
 		const rejected = "issue_28079_refresh_rejected"
 		cleanup := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
-			var cleanupErr error
-			for _, account := range []string{successful, rejected} {
-				_, dropErr := db0.ExecContext(cleanupCtx, "drop account if exists `"+account+"`")
-				if dropErr != nil {
-					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop %s: %w", account, dropErr))
-				}
-			}
-			var count int
-			if err := db0.QueryRowContext(cleanupCtx,
-				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-				successful, rejected).Scan(&count); err != nil {
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("verify account cleanup: %w", err))
-			} else if count != 0 {
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("account cleanup left %d rows", count))
-			}
-			return cleanupErr
+			return cleanupIssue28079RefreshAccounts(db0, successful, rejected)
 		}
 		require.NoError(t, cleanup())
 		t.Cleanup(func() {
@@ -398,6 +359,10 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 				t.Errorf("issue 28079 refresh account cleanup: %v", err)
 			}
 		})
+
+		// Initial cleanup owns independent budgets; start the workload afterward.
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
 
 		service, ok := cn1.RawService().(cnservice.Service)
 		require.True(t, ok)
@@ -610,6 +575,23 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 					[]byte(catalog.MO_VIEW_REFRESH)).total() == 0
 		}, 30*time.Second, 10*time.Millisecond, "account lifecycle locks remained after success/failure")
 	})
+}
+
+func cleanupIssue28079RefreshAccounts(db *sql.DB, successful, rejected string) error {
+	cleanupErr := cleanupIssueAccounts(db, successful, rejected)
+	// A timed-out DROP has an unknown result. Preserve the original aggregate
+	// check even when the per-account cleanup returned an error.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
+		successful, rejected).Scan(&count); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("verify account cleanup: %w", err))
+	} else if count != 0 {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("account cleanup left %d rows", count))
+	}
+	return cleanupErr
 }
 
 func issue28079CommitLifecycleGate(

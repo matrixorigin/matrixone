@@ -251,10 +251,84 @@ func waitUntilPipelineBatchFlowDrained(
 	if connectionCtx != nil && connectionCtx.Err() != nil {
 		return moerr.NewStreamClosed(messageCtx)
 	}
-	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+	if flow.wasStoppedByReceiver() && process.IsPipelineCancellationError(err) {
 		return nil
 	}
 	return err
+}
+
+// settleRemoteFragmentWorkspaceAfterDrain is the r6 terminal settlement
+// of a remote-run fragment's mirror workspace (issue #25590 round-22
+// review, finding H1): it first waits the message's batch flow DRAINED —
+// the adoption barrier, because the recording side's transport client
+// adopts every relayed object name at its intake BEFORE it acks the
+// batch — and then settles the fragment's workspace while the run's
+// Compile and Process are still alive (a non-transferred settlement
+// runs the full workspace Rollback, which needs the process to release
+// the workspace's entry batches). The run's error travels by pointer:
+// a post-run drain failure cancels the whole message.
+func settleRemoteFragmentWorkspaceAfterDrain(
+	receiver *messageReceiverOnServer,
+	runCompile *Compile,
+	runErr *error,
+) error {
+	txnOp := runCompile.proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	dtRun, ok := txnOp.GetWorkspace().(*disttae.Transaction)
+	if !ok {
+		return nil
+	}
+	// r23 registered-producer boundary (issue #25590 round-23 review,
+	// finding 3): a clean, drained run may transfer only when the
+	// fragment's own operator tree contains a REGISTERED persistence
+	// producer — the same predicate the coordinator's intake uses to
+	// admit its relayed ownership metadata for adoption. Every other
+	// fragment keeps a reachable local owner on every ending, so a
+	// producer class the intake does not cover cannot release files the
+	// recording side never adopted.
+	if !remoteRunScopesAdmitAdoption(runCompile.scopes) {
+		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
+	}
+	// r17 run-scoped barrier (issue #25590 round-52 review): the drain
+	// is the adoption proof in BOTH stream modes. A negotiated stream
+	// carries its windowed flow, and the run case late-registers an
+	// accounting-only (no-window) flow for admitted scopes on a fresh
+	// stream, so an admitted run has one here in every supported
+	// configuration. The admission stays fail-closed: a missing barrier
+	// keeps the ending local — transfer requires the clean run's own
+	// flow to exist AND drain, so no configuration can release names
+	// before the recording side's intake has adopted them.
+	transferred := *runErr == nil
+	if *runErr == nil {
+		flow := (*pipelineBatchFlow)(nil)
+		if receiver.streamLifecycle != nil {
+			flow = receiver.streamLifecycle.batchFlow
+		}
+		if flow == nil {
+			transferred = false
+		} else {
+			drainErr := waitUntilPipelineBatchFlowDrained(
+				receiver.messageCtx,
+				receiver.connectionCtx,
+				flow,
+				func(count int, bytes uint64) {
+					logutil.Warn("pipeline batch drain delayed before fragment settlement",
+						zap.Uint64("stream-id", receiver.messageId),
+						zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+						zap.Int("outstanding-batches", count),
+						zap.Uint64("outstanding-bytes", bytes))
+				})
+			// A receiver-driven stop maps an aborted flow to a drained
+			// terminal: batches the stream dropped after the stop never
+			// reached the recording side, so the fragment must keep its
+			// local owner for them instead of transferring.
+			transferred = drainErr == nil && !flow.wasStoppedByReceiver()
+			*runErr = drainErr
+		}
+	}
+	return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, transferred)
 }
 
 // waitUntilDisconnectedOrCancelled blocks until either the client connection is
@@ -281,47 +355,68 @@ func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
 		receiver.clientSession, receiver.messageId,
 	) {
 		receiver.streamLifecycle.batchFlow.stop(
-			moerr.NewQueryInterrupted(receiver.messageCtx),
+			process.ErrPipelineStopped,
 		)
 	}
 }
 
 func (receiver *messageReceiverOnServer) hasLiveReceiverStop() bool {
-	return receiver.connectionCtx.Err() == nil && receiver.messageCtx.Err() == nil &&
-		receiver.streamLifecycle.batchFlow.wasStoppedByReceiver()
+	return (receiver.connectionCtx == nil || receiver.connectionCtx.Err() == nil) &&
+		(receiver.messageCtx == nil || receiver.messageCtx.Err() == nil) &&
+		receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow.wasStoppedByReceiver()
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
+	// r17 run-scoped ownership barrier (issue #25590 round-52 review):
+	// the batch flow the run case late-registers below is owned by this
+	// message's handling; removal at return keeps the barrier from
+	// outliving the message stream. ACKs flushed after removal are
+	// handled as benign registration misses by handlePipelineBatchAck,
+	// and a StopSending that arrives during the run aborts the flow by
+	// key through abortPipelineBatchFlow, so no terminal leaves a flow
+	// unowned behind it.
+	var lateLifecycle *pipelineStreamLifecycle
+	defer func() {
+		if lateLifecycle != nil {
+			lateLifecycle.remove()
+		}
+	}()
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, dispatchNotifyCh, terminal, err := receiver.getRemoteDispatchReceiver(receiver.messageUuid)
+		var registrationStop context.Context
+		if receiver.streamLifecycle == nil || receiver.streamLifecycle.batchFlow == nil {
+			// Disabling stream reuse removes the flow certificate, but not
+			// StopSending's ownership of this unconsumed registration wait.
+			var cancel context.CancelCauseFunc
+			registrationStop, cancel = context.WithCancelCause(context.Background())
+			defer cancel(context.Canceled)
+			receiver.colexecServer.RecordPipelineCancellation(receiver.clientSession, receiver.messageId, cancel)
+		}
+		dispatchProc, dispatchNotifyCh, terminal, err := receiver.getRemoteDispatchReceiver(receiver.messageUuid, registrationStop)
 		if err != nil {
+			// Only an unconsumed registration wait can finish on StopSending.
+			// Attached producers still own their actual terminal outcome.
+			if err == process.ErrPipelineStopped {
+				if receiver.messageCtx != nil && receiver.messageCtx.Err() != nil {
+					return remoteRegistrationContextError(receiver.messageCtx)
+				}
+				if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
+					return moerr.NewStreamClosed(receiver.getMessageContext())
+				}
+				return nil
+			}
 			return err
 		}
-		if dispatchProc == nil && terminal != nil {
+		if dispatchProc == nil {
 			return receiver.waitRemoteReceiverTerminal(terminal)
-		}
-		if dispatchProc == nil || dispatchNotifyCh == nil {
-			err = moerr.NewInvalidStateNoCtxf(
-				"remote dispatch receiver %s attached with incomplete registration",
-				receiver.messageUuid.String(),
-			)
-			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-			return err
 		}
 
 		infoToDispatchOperator := &process.WrapCs{
-			ReceiverDone:   false,
-			TerminalBacked: terminal != nil,
-			MsgId:          receiver.messageId,
-			Uid:            receiver.messageUuid,
-			Cs:             receiver.clientSession,
-		}
-		if terminal == nil {
-			// Older registrations have no immutable generation terminal and
-			// retain the legacy error channel protocol.
-			infoToDispatchOperator.Err = make(chan error, 1)
+			ReceiverDone: false,
+			MsgId:        receiver.messageId,
+			Uid:          receiver.messageUuid,
+			Cs:           receiver.clientSession,
 		}
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
@@ -331,20 +426,26 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				return flow.reserve(ctx, receiver.connectionCtx, size)
 			}
 			infoToDispatchOperator.RollbackBatch = flow.rollback
+		} else {
+			// The same local cancellation owner survives dispatch attachment
+			// when reuse is disabled. No batch credits or ACKs are activated.
+			infoToDispatchOperator.ReceiverStopped = func() bool {
+				return context.Cause(registrationStop) == process.ErrPipelineStopped &&
+					(receiver.messageCtx == nil || receiver.messageCtx.Err() == nil) &&
+					(receiver.connectionCtx == nil || receiver.connectionCtx.Err() == nil)
+			}
+			infoToDispatchOperator.ReserveBatch = func(context.Context, uint64) (uint64, error) {
+				if registrationStop.Err() == nil {
+					return 0, nil
+				}
+				return 0, context.Cause(registrationStop)
+			}
 		}
 		receiver.colexecServer.RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
 		succeed := false
-		var procDone <-chan struct{}
-		var terminalDone <-chan struct{}
-		if terminal != nil {
-			// Local cancellation precedes Reset even for normal early finish.
-			// Only Reset knows whether to send End or a real execution error.
-			procDone = nil
-			terminalDone = terminal.Done()
-		} else {
-			procDone = contextDone(dispatchProc.Ctx)
-		}
+		// Reset owns the immutable generation result, even after local cancellation.
+		terminalDone := terminal.Done()
 		select {
 		case <-terminalDone:
 			return receiver.waitRemoteReceiverTerminal(terminal)
@@ -352,47 +453,28 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			succeed = true
 		case <-contextDone(receiver.connectionCtx):
 			err = moerr.NewStreamClosed(receiver.getMessageContext())
-			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+			terminal.Cancel(err)
 		case <-contextDone(receiver.messageCtx):
 			err = remoteRegistrationContextError(receiver.messageCtx)
-			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-		case <-procDone:
-			err = remoteRegistrationContextError(dispatchProc.Ctx)
+			terminal.Cancel(err)
 		}
 
 		if !succeed {
 			return err
 		}
 
-		if terminal != nil {
-			// The immutable generation terminal is the sole owner of the
-			// registration result. Do not race it against the legacy Err channel,
-			// but still cancel this generation when the notify stream disappears.
-			select {
-			case <-contextDone(receiver.connectionCtx):
-				err = moerr.NewStreamClosed(receiver.getMessageContext())
-				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-				return err
-			case <-contextDone(receiver.messageCtx):
-				err = remoteRegistrationContextError(receiver.messageCtx)
-				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-				return err
-			case <-terminalDone:
-				return receiver.waitRemoteReceiverTerminal(terminal)
-			}
-		}
-
 		select {
 		case <-contextDone(receiver.connectionCtx):
 			err = moerr.NewStreamClosed(receiver.getMessageContext())
-			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+			terminal.Cancel(err)
+			return err
 		case <-contextDone(receiver.messageCtx):
 			err = remoteRegistrationContextError(receiver.messageCtx)
-			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-		case err = <-infoToDispatchOperator.Err:
-			// Legacy registrations report their terminal result through the wrapper.
+			terminal.Cancel(err)
+			return err
+		case <-terminalDone:
+			return receiver.waitRemoteReceiverTerminal(terminal)
 		}
-		return err
 
 	case pipeline.Method_PipelineMessage:
 		runCompile, errBuildCompile := receiver.newCompile()
@@ -401,6 +483,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 		var allocationAttempt *statementAllocationAttempt
 		var allocationParticipant *remoteAllocationStatementParticipant
+		var boardOwnedByGroup bool
 		var allocationGroupKey string
 		var localAllocation resource.AllocationAccountTotals
 		var localAllocationQuality resource.QualityFlags
@@ -443,6 +526,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					moerr.ConvertPanicError(receiver.messageCtx, recovered),
 				)
 			}
+			allocationParticipant.recordFailure(err)
+			if cause := allocationParticipant.failureCause(); cause != nil {
+				receiver.statementError = cause
+			}
 			// Capture operator and descendant facts before cleanup. The MPool
 			// snapshot intentionally follows Compile.clear so temporary execution
 			// allocations are released before LiveBytesAtSeal is measured. The
@@ -474,7 +561,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					// owns the shared multi-CN board. Detach it before clear resets the
 					// fragment-local Compile state. A fragment rejected before it joins a
 					// group is terminal for the statement, so it closes its unowned board.
-					if allocationParticipant == nil {
+					if allocationParticipant == nil && !boardOwnedByGroup &&
+						sealUnownedRemoteAllocationStatementBoard(sharedMessageBoard) {
 						sharedMessageBoard.CloseAndDrain()
 					}
 					runCompile.MessageBoard = message.NewMessageBoard()
@@ -487,12 +575,25 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				// A terminal envelope can accompany an error response. ODKU facts
+				// are publishable only for a fully successful statement; do not let
+				// an invalidated attempt leak its partial action summary to the
+				// initiating CN.
+				if err == nil {
+					receiver.odkuResult = remoteODKUResultFromProcess(
+						runCompile.proc.GetODKUResultSummary())
+				} else {
+					receiver.odkuResult = nil
+				}
 				runCompile.clear()
 				return nil
 			}))
 			terminal, terminalErr := allocationParticipant.finish(err)
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 			for _, snapshot := range terminal.allocation {
 				localAllocationQuality |= addAllocationAccountTerminal(
 					&localAllocation,
@@ -535,6 +636,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
 			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 		}()
 		if statementGroupEnabled {
 			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
@@ -554,7 +658,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				runCompile.remoteExecutionID,
 				runCompile.addr,
 			)
-			allocationParticipant, runErr = acquireRemoteAllocationStatementParticipant(
+			allocationParticipant, boardOwnedByGroup, runErr = acquireRemoteAllocationStatementParticipant(
 				allocationGroupKey,
 				runCompile.MessageBoard,
 				expectedFragments,
@@ -565,6 +669,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				},
 			)
 			if runErr != nil {
+				if native, ok := runErr.(*moerr.Error); ok {
+					receiver.statementError = native
+				}
 				return runErr
 			}
 		}
@@ -591,6 +698,36 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		// r17 run-scoped ownership barrier (issue #25590 round-52
+		// review): a run whose decoded scopes admit adoption must
+		// sequence its names' release behind the recording side's
+		// intake adoption in EVERY supported configuration. A
+		// negotiated stream already carries its windowed flow
+		// (registered in cnPipelineHandler); a fresh stream — stream
+		// reuse disabled, or a run without a FinishAck request — has
+		// no flow at all, and before r17 the settlement then
+		// transferred the clean run with no adoption proof. The run
+		// registers an accounting-only (no-window) flow here: after
+		// the scope decode, the same classification the settlement
+		// uses, and before any emission. The sequences it stamps are
+		// acked by the recording side's unchanged receive loops after
+		// their intake adoption, so the settlement's drain proves
+		// adoption without imposing any credit window on the stream.
+		if receiver.streamLifecycle == nil &&
+			remoteRunScopesAdmitAdoption(runCompile.scopes) {
+			lateLifecycle, runErr = registerPipelineStreamLifecycle(
+				receiver.clientSession,
+				receiver.messageId,
+				newRunScopedPipelineBatchFlow())
+			if runErr != nil {
+				return runErr
+			}
+			receiver.streamLifecycle = lateLifecycle
+			// Close the same StopSending registration race the
+			// negotiated path closes: a stop that arrived before this
+			// registration is already in the cancellation tombstone.
+			receiver.abortBatchFlowForPendingStop()
+		}
 		if runErr = validateRemoteAllocationTopologyCapability(
 			runCompile.scopes,
 			runCompile.remoteFragmentCounts,
@@ -631,6 +768,47 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
+
+		// Issue #25590 round-22 review, finding H1 (design r6 §5.3): the
+		// fragment's ONE terminal settlement runs AFTER this run's batch
+		// flow drained — while the run's Compile and Process are still
+		// alive, because a non-transferred settlement runs the full
+		// workspace Rollback and needs the process to release the
+		// workspace's entry batches.
+		//
+		// The r5 settlement classified transfer from the run's error
+		// alone (round-21 finding G2): a clean fragment released every
+		// reserved and retained name on the wire's word — but the wire's
+		// acknowledgment only proves the recording side DECODED each
+		// batch (a discarded decoded batch acks the same), and nothing
+		// before the release listed the names on a workspace that could
+		// enumerate them, so cancellation and discarded metadata between
+		// the ack and the record left physical files ownerless.
+		//
+		// r6 makes the release structurally depend on adoption: the
+		// coordinator's transport client ADOPTS each relayed S3 object at
+		// its intake — before forwarding the batch into its pipeline,
+		// before the ack — through the SAME per-object reservation the
+		// writers use, so the batch-flow drain that finishes below proves
+		// every emitted metadata batch already has an enumerable cleanup
+		// owner on the recording side. Only then does the fragment
+		// TRANSFER: the drained, non-stopped, clean run releases its
+		// reservations and retained names without deleting anything (the
+		// adopted reservations own the files' fate on the recording
+		// side). Every other ending — the run failed, the drain failed
+		// (cancellation), the receiver stopped the stream before its
+		// end — settles through the ordinary rollback terminal and keeps
+		// a reachable deletion owner on THIS engine for exactly the names
+		// whose records can still land nowhere. A stream that ends
+		// without a batch flow keeps the same local settlement: r17
+		// made the barrier a property of the run — every admitted
+		// scope set carries a flow, negotiated windowed or late
+		// registered no-window, and a missing flow is fail-closed
+		// non-transfer, never the r5 clean-run release.
+		settleErr := settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr)
+		if settleErr != nil && runErr == nil {
+			runErr = settleErr
+		}
 		return runErr
 
 	case pipeline.Method_StopSending:
@@ -638,7 +816,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		abortPipelineBatchFlow(
 			receiver.clientSession,
 			receiver.messageId,
-			moerr.NewQueryInterrupted(receiver.messageCtx),
+			process.ErrPipelineStopped,
 		)
 
 	default:
@@ -844,10 +1022,13 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId                     uuid.UUID
 	statementRuntimeIgnore     bool
+	statementRuntimeSelect     bool
+	statementRuntimeDML        bool
 	planSnapshotTS             timestamp.Timestamp
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
 	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	odkuOrdinalBase            uint64
 	prepareParams              pipeline.PrepareParamInfo
 	affectedRows               int64
 	remoteFragmentCounts       map[string]uint32
@@ -856,8 +1037,9 @@ type processHelper struct {
 
 // messageReceiverOnServer supported a series methods to write back results.
 type messageReceiverOnServer struct {
-	messageCtx    context.Context
-	connectionCtx context.Context
+	statementError *moerr.Error // Immutable causal snapshot; cleanup diagnostics stay in handlerErr.
+	messageCtx     context.Context
+	connectionCtx  context.Context
 
 	messageId   uint64
 	messageTyp  pipeline.Method
@@ -896,6 +1078,7 @@ type messageReceiverOnServer struct {
 	groupConcatCutMessage             string
 	groupConcatReportingIncomplete    bool
 	statementLastInsertID             uint64
+	odkuResult                        *remoteODKUResultSummary
 }
 
 func newMessageReceiverOnServer(
@@ -990,6 +1173,9 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+	if err := process.ValidateODKUInputOrdinalBase(receiver.procBuildHelper.odkuOrdinalBase); err != nil {
+		return nil, err
+	}
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
@@ -1023,6 +1209,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.SetLastInsertID(pHelper.sessionInfo.LastInsertID)
+	// The range was checked before constructing the process.
+	_ = proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
 	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
 	if proc.Base.SessionInfo.MaxErrorCountSet {
 		warningLimit = proc.Base.SessionInfo.MaxErrorCount
@@ -1118,6 +1307,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		txnId := txn.GetID()
 		stmtProfile := process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
+		if pHelper.statementRuntimeSelect {
+			stmtProfile.SetStatementRuntimeProfile("Select", "DQL", pHelper.statementRuntimeIgnore)
+		} else if pHelper.statementRuntimeDML {
+			stmtProfile.SetStatementRuntimeProfile("", "DML", pHelper.statementRuntimeIgnore)
+		}
 		proc.Base.StmtProfile = stmtProfile
 	}
 
@@ -1200,7 +1394,11 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
-		message.SetMoError(receiver.messageCtx, errInfo)
+		wireErr := process.UnwrapPipelineFailure(errInfo)
+		if receiver.statementError != nil && !errors.Is(errInfo, mpool.ErrAllocationAccountInvariant) {
+			wireErr = receiver.statementError
+		}
+		message.SetMoError(receiver.messageCtx, wireErr)
 	}
 	if err = receiver.setTerminalAnalysis(message); err != nil {
 		return err
@@ -1332,6 +1530,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
 		StatementLastInsertID:     receiver.statementLastInsertID,
+		ODKUResult:                receiver.odkuResult,
 		WarningCount:              receiver.warningCount,
 		GroupConcatCut:            receiver.groupConcatCut,
 		GroupConcatCutMessage:     receiver.groupConcatCutMessage,
@@ -1393,6 +1592,9 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	if err := process.ValidateStatementRuntimeClassification(procInfo.StatementRuntimeSelect, procInfo.StatementRuntimeDml); err != nil {
+		return processHelper{}, err
+	}
 	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
 		procInfo.StringShuffleHashAlgorithm,
 	)
@@ -1408,7 +1610,10 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		txnClient:                  cli,
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		statementRuntimeSelect:     procInfo.StatementRuntimeSelect,
+		statementRuntimeDML:        procInfo.StatementRuntimeDml,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		odkuOrdinalBase:            procInfo.OdkuOrdinalBase,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {
@@ -1446,49 +1651,16 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	return result, nil
 }
 
-func newRemoteDispatchNotRegisteredYetError(_ context.Context, uid uuid.UUID) error {
-	// Registration lag is an expected, retryable protocol state. Keep the
-	// typed wire error without reporting every receiver attempt as an ERROR.
-	return moerr.NewRemoteDispatchNotRegistered(moerr.NoReportContext(), uid.String())
-}
-
-func isRemoteDispatchNotRegisteredYetError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
-}
-
-func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	dispatchProc, notifyChannel, state, waiter, _ := receiver.colexecServer.AttachProcByUuidOrWait(uid)
-	waiter.Close()
-	switch state {
-	case colexec.RemoteReceiverAttachedNow:
-		return dispatchProc, notifyChannel, nil
-	case colexec.RemoteReceiverAlreadyAttached:
-		return nil, nil, moerr.NewInvalidStateNoCtxf(
-			"remote dispatch receiver %s is already attached", uid.String())
-	case colexec.RemoteReceiverAlreadyClosed, colexec.RemoteReceiverFinished:
-		return nil, nil, moerr.NewInvalidStateNoCtxf(
-			"remote dispatch receiver %s is already closed", uid.String())
-	}
-	// A PrepareDoneNotify stream is one retry attempt. Its connection can be
-	// closed after a NotRegistered response, so it must not own or tombstone the
-	// query-wide receiver UUID while registration is still pending.
-	return nil, nil, newRemoteDispatchNotRegisteredYetError(receiver.getMessageContext(), uid)
-}
-
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	proc, ch, _, err := receiver.getRemoteDispatchReceiver(uid)
-	return proc, ch, err
-}
-
-func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, *colexec.RemoteReceiverTerminal, error) {
+func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID, registrationStop context.Context) (*process.Process, process.RemotePipelineInformationChannel, *colexec.RemoteReceiverTerminal, error) {
 	connectionDone := contextDone(receiver.connectionCtx)
 	messageDone := contextDone(receiver.messageCtx)
+	registrationDone := contextDone(registrationStop)
 	start := time.Now()
-	var publishedWaiter *colexec.RemoteReceiverWaiter
-	releasePublishedWaiter := func() {
-		if publishedWaiter != nil {
-			publishedWaiter.Close()
-			publishedWaiter = nil
+	var retainedWaiter *colexec.RemoteReceiverWaiter
+	releaseRetainedWaiter := func() {
+		if retainedWaiter != nil {
+			retainedWaiter.Close()
+			retainedWaiter = nil
 		}
 	}
 	handleAttachState := func(
@@ -1505,16 +1677,16 @@ func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID
 	) {
 		switch state {
 		case colexec.RemoteReceiverAttachedNow:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			select {
 			case <-connectionDone:
 				err := moerr.NewStreamClosed(receiver.getMessageContext())
-				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+				terminal.Cancel(err)
 				v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
 				return nil, nil, nil, true, err
 			case <-messageDone:
 				err := remoteRegistrationContextError(receiver.getMessageContext())
-				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+				terminal.Cancel(err)
 				v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
 				return nil, nil, nil, true, err
 			default:
@@ -1522,15 +1694,15 @@ func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID
 			v2.PipelineRemoteReceiverWaitReadyHistogram.Observe(time.Since(start).Seconds())
 			return dispatchProc, notifyChannel, terminal, true, nil
 		case colexec.RemoteReceiverFinished:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			return nil, nil, terminal, true, nil
 		case colexec.RemoteReceiverAlreadyAttached:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			v2.PipelineRemoteReceiverWaitAlreadyAttachedHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, nil, true, moerr.NewInvalidStateNoCtxf(
 				"remote dispatch receiver %s is already attached", uid.String())
 		case colexec.RemoteReceiverAlreadyClosed:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			v2.PipelineRemoteReceiverWaitAlreadyClosedHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, nil, true, moerr.NewInvalidStateNoCtxf(
 				"remote dispatch receiver %s is already closed", uid.String())
@@ -1541,26 +1713,63 @@ func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID
 	for {
 		select {
 		case <-connectionDone:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, nil, moerr.NewStreamClosed(receiver.getMessageContext())
 		case <-messageDone:
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
 		default:
 		}
 
+		var flow *pipelineBatchFlow
+		if receiver.streamLifecycle != nil {
+			flow = receiver.streamLifecycle.batchFlow
+		}
+		published := false
+		if retainedWaiter != nil {
+			select {
+			case <-retainedWaiter.Done():
+				published = true
+			default:
+			}
+		}
+		flowChanged, flowErr := flow.terminalNotification()
+		var registrationErr error
+		if registrationStop != nil {
+			registrationErr = context.Cause(registrationStop)
+		}
 		dispatchProc, notifyChannel, state, waiter, terminal := receiver.colexecServer.AttachProcByUuidOrWait(uid)
 		if proc, ch, terminal, done, err := handleAttachState(dispatchProc, notifyChannel, state, terminal); done {
 			waiter.Close()
 			return proc, ch, terminal, err
 		}
-		if publishedWaiter != nil {
+		if published {
 			waiter.Close()
-			releasePublishedWaiter()
+			releaseRetainedWaiter()
 			return nil, nil, nil, moerr.NewInvalidStateNoCtxf(
 				"remote dispatch receiver %s disappeared after publication", uid.String())
+		}
+		releaseRetainedWaiter()
+		if flowErr != nil || registrationErr != nil {
+			waiter.Close()
+			// The atomic attach lookup above gives published failures priority.
+			// An absent registration belongs to no producer; retire only this
+			// notify attempt without poisoning a later UUID registration.
+			if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
+				return nil, nil, nil, moerr.NewStreamClosed(receiver.getMessageContext())
+			}
+			if receiver.messageCtx != nil && receiver.messageCtx.Err() != nil {
+				return nil, nil, nil, remoteRegistrationContextError(receiver.messageCtx)
+			}
+			if registrationErr == process.ErrPipelineStopped || receiver.hasLiveReceiverStop() {
+				return nil, nil, nil, process.ErrPipelineStopped
+			}
+			if flowErr != nil {
+				return nil, nil, nil, process.MarkPipelineFailure(flowErr)
+			}
+			return nil, nil, nil, process.MarkPipelineFailure(registrationErr)
 		}
 
 		select {
@@ -1572,8 +1781,14 @@ func (receiver *messageReceiverOnServer) getRemoteDispatchReceiver(uid uuid.UUID
 			waiter.Close()
 			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
+		case <-registrationDone:
+			retainedWaiter = waiter
+		case <-flowChanged:
+			// Keep the reference across the next atomic lookup: closing the
+			// last waiter here could erase a concurrently finished producer.
+			retainedWaiter = waiter
 		case <-waiter.Done():
-			publishedWaiter = waiter
+			retainedWaiter = waiter
 		}
 	}
 }
@@ -1623,18 +1838,4 @@ func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
 		return receiver.messageCtx
 	}
 	return context.Background()
-}
-
-func (receiver *messageReceiverOnServer) cancelConsumedDispatchRegistration(
-	dispatchProc *process.Process,
-	terminal *colexec.RemoteReceiverTerminal,
-	err error,
-) {
-	if terminal != nil {
-		terminal.Cancel(err)
-		return
-	}
-	if dispatchProc != nil && dispatchProc.Cancel != nil {
-		dispatchProc.Cancel(err)
-	}
 }

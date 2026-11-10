@@ -25,6 +25,8 @@ from matrixone import Client, AsyncClient, LoadDataManager, LoadDataFormat, Comp
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, Text
 
+from .test_config import online_config
+
 # Create Base for model definitions
 Base = declarative_base()
 
@@ -752,7 +754,7 @@ class TestAsyncLoadDataOperations:
     async def test_async_basic_csv_load(self):
         """Test basic async CSV file loading"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Define table model
@@ -797,7 +799,7 @@ class TestAsyncLoadDataOperations:
     async def test_async_transaction_load(self):
         """Test async loading data within transaction"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Define table models
@@ -861,7 +863,7 @@ class TestAsyncLoadDataOperations:
     async def test_async_jsonline_load(self):
         """Test async JSONLINE file loading"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Define table model
@@ -905,7 +907,7 @@ class TestAsyncLoadDataOperations:
     async def test_async_stage_load(self):
         """Test async loading from stage"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Define table model
@@ -952,7 +954,7 @@ class TestAsyncLoadDataOperations:
     async def test_async_inline_load(self):
         """Test async inline data loading"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Define table model

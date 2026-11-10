@@ -25,30 +25,38 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
-	pb.CmdMethod_ShowProcessList:          defines.MORPCVersion1,
-	pb.CmdMethod_AlterAccount:             defines.MORPCVersion1,
-	pb.CmdMethod_KillConn:                 defines.MORPCVersion1,
-	pb.CmdMethod_TraceSpan:                defines.MORPCVersion1,
-	pb.CmdMethod_GetLockInfo:              defines.MORPCVersion1,
-	pb.CmdMethod_GetTxnInfo:               defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheInfo:             defines.MORPCVersion1,
-	pb.CmdMethod_SyncCommit:               defines.MORPCVersion1,
-	pb.CmdMethod_GetCommit:                defines.MORPCVersion1,
-	pb.CmdMethod_RunTask:                  defines.MORPCVersion1,
-	pb.CmdMethod_RemoveRemoteLockTable:    defines.MORPCVersion1,
-	pb.CmdMethod_GetLatestBind:            defines.MORPCVersion1,
-	pb.CmdMethod_UnsubscribeTable:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheData:             defines.MORPCVersion1,
-	pb.CmdMethod_GetStatsInfo:             defines.MORPCVersion1,
-	pb.CmdMethod_GetPipelineInfo:          defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion:       defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion:       defines.MORPCMinVersion,
-	pb.CmdMethod_CoreDumpConfig:           defines.MORPCMinVersion,
-	pb.CmdMethod_MigrateConnFrom:          defines.MORPCVersion1,
-	pb.CmdMethod_MigrateConnTo:            defines.MORPCVersion1,
-	pb.CmdMethod_ReloadAutoIncrementCache: defines.MORPCVersion1,
-	pb.CmdMethod_CtlReader:                defines.MORPCVersion1,
-	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
+	pb.CmdMethod_KillSession:           defines.MORPCVersion120,
+	pb.CmdMethod_DisconnectSession:     defines.MORPCVersion120,
+	pb.CmdMethod_ShowProcessList:       defines.MORPCVersion1,
+	pb.CmdMethod_AlterAccount:          defines.MORPCVersion1,
+	pb.CmdMethod_KillConn:              defines.MORPCVersion1,
+	pb.CmdMethod_TraceSpan:             defines.MORPCVersion1,
+	pb.CmdMethod_GetLockInfo:           defines.MORPCVersion1,
+	pb.CmdMethod_GetTxnInfo:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheInfo:          defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCommit:             defines.MORPCVersion1,
+	pb.CmdMethod_RunTask:               defines.MORPCVersion1,
+	pb.CmdMethod_RemoveRemoteLockTable: defines.MORPCVersion1,
+	pb.CmdMethod_GetLatestBind:         defines.MORPCVersion1,
+	pb.CmdMethod_UnsubscribeTable:      defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheData:          defines.MORPCVersion1,
+	pb.CmdMethod_GetStatsInfo:          defines.MORPCVersion1,
+	pb.CmdMethod_GetPipelineInfo:       defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
+	// Sys-admin vector-index cache knobs: gated so a mixed-version cluster rejects the call
+	// cluster-wide until every CN is upgraded, instead of dispatching to a CN with no handler.
+	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion102,
+	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion102,
+	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion102,
+	pb.CmdMethod_GetVectorIndexCacheKeys:         defines.MORPCVersion102,
+	pb.CmdMethod_CoreDumpConfig:                  defines.MORPCMinVersion,
+	pb.CmdMethod_MigrateConnFrom:                 defines.MORPCVersion1,
+	pb.CmdMethod_MigrateConnTo:                   defines.MORPCVersion1,
+	pb.CmdMethod_ReloadAutoIncrementCache:        defines.MORPCVersion1,
+	pb.CmdMethod_CtlReader:                       defines.MORPCVersion1,
+	pb.CmdMethod_ResetSession:                    defines.MORPCVersion1,
 	// Cache reuse must revalidate against a CN that understands the refresh
 	// request; older protocol versions fail closed and route a fresh backend.
 	pb.CmdMethod_RefreshSessionAuth:      defines.MORPCVersion54,
@@ -118,7 +126,7 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	if address == "" {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
 	}
-	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
+	if err := CheckMethodVersion(ctx, c.serviceID, req); err != nil {
 		return nil, err
 	}
 	f, err := c.client.Send(ctx, address, req)
@@ -165,6 +173,8 @@ func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, erro
 	return resp, nil
 }
 
-func checkMethodVersion(ctx context.Context, service string, req *pb.Request) error {
+// CheckMethodVersion validates the current service protocol for a query RPC.
+// Senders and effectful receivers share the same method requirements.
+func CheckMethodVersion(ctx context.Context, service string, req *pb.Request) error {
 	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }

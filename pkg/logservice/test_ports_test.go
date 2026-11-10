@@ -37,7 +37,7 @@ func TestTestPortAllocation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := allocatedPorts{ports: make(map[int]struct{})}
 			calls := 0
-			port, err := a.allocate(func(int) error {
+			port, err := a.allocate(firstTestPort, 32768, func(int) error {
 				calls++
 				if calls <= tc.failures {
 					return &net.OpError{Op: "listen", Err: tc.cause}
@@ -122,4 +122,49 @@ func listenUDPOnTCPAvailablePort(t *testing.T) (net.PacketConn, int) {
 	}
 	require.FailNow(t, "could not reserve a UDP port that is also available to TCP")
 	return nil, 0
+}
+
+func TestTestPortRangeOutsideEphemeral(t *testing.T) {
+	for _, tc := range []struct {
+		name, value  string
+		first, limit int
+	}{
+		{"linux default", "32768\t60999\n", 21024, 32768},
+		{"macos default", "49152 65535", 21024, 49152},
+		{"only above", "20000 40000", 40001, 65535},
+		{"only below", "25000 65535", 21024, 25000},
+		{"below candidates", "1024 20000", 21024, 65535},
+		{"last port", "65535 65535", 21024, 65535},
+		{"no candidates", "1024 65535", 0, 0},
+		{"reversed", "61000 32768", 0, 0},
+		{"missing", "32768", 0, 0},
+		{"extra", "32768 60999 0", 0, 0},
+		{"not numeric", "low high", 0, 0},
+		{"zero", "0 60999", 0, 0},
+		{"too high", "32768 65536", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, limit, err := testPortRangeOutsideEphemeral(tc.value)
+			if tc.first == 0 {
+				require.Error(t, err)
+				require.Zero(t, first)
+				require.Zero(t, limit)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.first, first)
+			require.Equal(t, tc.limit, limit)
+			a := allocatedPorts{ports: make(map[int]struct{})}
+			for range 100 {
+				port, err := a.allocate(first, limit, func(candidate int) error {
+					require.GreaterOrEqual(t, candidate, tc.first)
+					require.Less(t, candidate, tc.limit)
+					return nil
+				})
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, port, first)
+				require.Less(t, port, limit)
+			}
+		})
+	}
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -70,7 +71,6 @@ func TestCall(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -305,7 +305,6 @@ func TestInlineFilter(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -584,7 +583,7 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	defer bat.Clean(mp)
 
 	require.NotPanics(t, func() {
-		shrinkPopulatedVecs(bat, []int64{1, 3})
+		require.NoError(t, shrinkPopulatedVecs(bat, []int64{1, 3}, mp))
 	})
 
 	require.Equal(t, 2, bat.RowCount())
@@ -605,7 +604,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
 
-	shrinkPopulatedVecs(bat, []int64{0, 1, 2})
+	require.NoError(t, shrinkPopulatedVecs(bat, []int64{0, 1, 2}, mp))
 	require.Equal(t, 3, bat.RowCount())
 	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
 
@@ -614,6 +613,64 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	empty.SetRowCount(0)
 	defer empty.Clean(mp)
-	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
+	require.NotPanics(t, func() { require.NoError(t, shrinkPopulatedVecs(empty, []int64{}, mp)) })
 	require.Equal(t, 0, empty.RowCount())
+}
+
+func TestCallReadPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readPolicy fileservice.Policy
+		want       fileservice.Policy
+	}{
+		{name: "unset keeps the caller policy", want: fileservice.SkipMemoryCacheWrites},
+		{
+			name:       "set adds to the caller policy",
+			readPolicy: fileservice.SkipFullFilePreloads,
+			want:       fileservice.SkipMemoryCacheWrites | fileservice.SkipFullFilePreloads,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			proc := testutil.NewProc(t)
+			callerCtx := fileservice.WithFileServicePolicy(context.Background(), fileservice.SkipMemoryCacheWrites)
+			proc.Ctx = callerCtx
+
+			var seen []fileservice.Policy
+			var groups []uint64
+			reader := mock_frontend.NewMockReader(ctrl)
+			reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, _ []string, _ *plan.Expr, _ interface{}, _ *batch.Batch) (bool, error) {
+					seen = append(seen, fileservice.GetFileServicePolicy(ctx))
+					groups = append(groups, fileservice.GetPreloadGroup(ctx))
+					return true, nil
+				}).AnyTimes()
+			reader.EXPECT().Close().Return(nil).AnyTimes()
+			reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
+
+			typ := types.T_uint64.ToType()
+			arg := &TableScan{
+				Reader:     reader,
+				Attrs:      []string{"int_col"},
+				Types:      []plan.Type{plan.MakePlan2Type(&typ)},
+				ReadPolicy: tc.readPolicy,
+				TableID:    42,
+			}
+			require.NoError(t, arg.Prepare(proc))
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.Equal(t, []fileservice.Policy{tc.want}, seen)
+			wantGroup := uint64(0)
+			if tc.readPolicy != 0 {
+				wantGroup = 42
+			}
+			require.Equal(t, []uint64{wantGroup}, groups, "only scans with a read policy are grouped")
+			require.Equal(t, fileservice.Policy(fileservice.SkipMemoryCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
+
+			arg.Free(proc, false, nil)
+			proc.Free()
+		})
+	}
 }

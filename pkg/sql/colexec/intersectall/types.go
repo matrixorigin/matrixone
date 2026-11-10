@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,9 +37,7 @@ type container struct {
 
 	// built for the smaller of the two relations
 	hashTable *hashmap.StrHashMap
-
-	inserted      []uint8
-	resetInserted []uint8
+	iterator  hashmap.Iterator
 
 	buf *batch.Batch
 
@@ -46,6 +45,7 @@ type container struct {
 }
 
 type IntersectAll struct {
+	colexec.SetOperationAllocation
 	// execution container
 	ctr      container
 	KeyExprs []*plan.Expr
@@ -87,29 +87,40 @@ func (intersectAll *IntersectAll) Release() {
 func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersectAll.ctr
 	ctr.state = Build
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if intersectAll.ExpressionAllocation() != nil {
+		intersectAll.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Reset()
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
+	}
+	if cap(ctr.counter) > 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.counter)
 	}
 	ctr.counter = nil
 }
 
 func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersectAll.ctr
+	if cap(ctr.counter) > 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.counter)
+	}
+	ctr.counter = nil
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Free()
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
 	}
-}
-
-func (intersectAll *IntersectAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
+	intersectAll.FreeMetadata()
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

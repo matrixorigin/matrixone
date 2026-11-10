@@ -130,7 +130,8 @@ func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 		[]float32{3, 3, 3, 3},
 		axis.Min(0))
 
-	options := []row.Option{durationHistogram}
+	options := make([]row.Option, 0, 1+len(selectivityHistograms)+len(countHistograms))
+	options = append(options, durationHistogram)
 	options = append(options, selectivityHistograms...)
 	options = append(options, countHistograms...)
 
@@ -285,7 +286,8 @@ func (c *DashboardCreator) initTxnStarcountRow() dashboard.Option {
 		6,
 		axis.Min(0))
 
-	options := []row.Option{pathRate, durationHistogram, resultRowsHistogram, ratioHistogram, appendableScanDurationHistogram, appendableObjectsScannedHistogram}
+	options := make([]row.Option, 0, 6+len(estimateHistograms))
+	options = append(options, pathRate, durationHistogram, resultRowsHistogram, ratioHistogram, appendableScanDurationHistogram, appendableObjectsScannedHistogram)
 	options = append(options, estimateHistograms...)
 
 	return dashboard.Row(
@@ -387,7 +389,8 @@ func (c *DashboardCreator) initTxnPKMayBeChangedRow() dashboard.Option {
 		axis.Unit("s"),
 		axis.Min(0))
 
-	options := []row.Option{
+	options := make([]row.Option, 0, 2+len(histograms)+2)
+	options = append(options,
 		c.getHistogram(
 			"Primary Key Duplicate Check Duration",
 			c.getMetricWithFilter(`mo_txn_check_pk_dup_duration_seconds_bucket`, ``),
@@ -402,7 +405,7 @@ func (c *DashboardCreator) initTxnPKMayBeChangedRow() dashboard.Option {
 			6,
 			axis.Unit("s"),
 			axis.Min(0)),
-	}
+	)
 	options = append(options, histograms...)
 	options = append(options,
 		c.withMultiGraph(

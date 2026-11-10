@@ -83,6 +83,17 @@ func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 			require.Empty(t, queryInt64Rows(t, ctx, db, q))
 		})
 		t.Run("adaptive output boundary", func(t *testing.T) {
+			// This oracle requires AUTO's adaptive path, not the cheaper exact
+			// path selected for a small table with unknown filter NDV.
+			execSQLRequire(t, ctx, db, "select mo_ctl('dn','flush','"+dbName+".filtered_t')")
+			var count float64
+			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(
+				"select table_cnt from table_stats('%s.filtered_t','refresh','full') g", dbName)).Scan(&count))
+			require.Equal(t, float64(124), count)
+			patch := `{"table_cnt":124,"ndv_map":{"file_id":2,"id":124}}`
+			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(
+				"select table_cnt from table_stats('%s.filtered_t','patch','%s') g", dbName, patch)).Scan(&count))
+			require.Equal(t, float64(124), count)
 			q := fmt.Sprintf("select id + 100 from filtered_t where file_id = 'file1' order by l2_distance(v,'%s') limit 1 by rank with option 'mode=auto'", vec(0))
 			text := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")
 			require.Contains(t, text, "Adaptive Top", "the result oracle must exercise adaptive selection")

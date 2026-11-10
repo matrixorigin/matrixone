@@ -23,9 +23,8 @@ import (
 var _ logger.ILogger = (*DragonboatAdaptLogger)(nil)
 
 type DragonboatAdaptLogger struct {
-	logger  *zap.SugaredLogger
-	atom    *zap.AtomicLevel
-	pkgName string
+	logger *zap.SugaredLogger
+	atom   *zap.AtomicLevel
 }
 
 func (d *DragonboatAdaptLogger) SetLevel(level logger.LogLevel) {
@@ -78,9 +77,8 @@ func DragonboatFactory(name string) logger.ILogger {
 	options := cfg.getOptions()
 	options = append(options, zap.AddCallerSkip(2))
 	return &DragonboatAdaptLogger{
-		logger:  zap.New(zapcore.NewTee(cores...), options...).Named(name).Sugar(),
-		atom:    &atom,
-		pkgName: name,
+		logger: zap.New(zapcore.NewTee(cores...), options...).Named(name).Sugar(),
+		atom:   &atom,
 	}
 }
 

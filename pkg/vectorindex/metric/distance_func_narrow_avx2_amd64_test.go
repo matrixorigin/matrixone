@@ -1,4 +1,4 @@
-//go:build amd64 && go1.26 && goexperiment.simd
+//go:build amd64 && go1.27 && goexperiment.simd
 
 // Copyright 2023 Matrix Origin
 //

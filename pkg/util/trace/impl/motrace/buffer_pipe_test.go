@@ -281,58 +281,6 @@ func Test_withSizeThreshold(t *testing.T) {
 	}
 }
 
-/*
-var gCtrlSqlCh = make(chan struct{}, 1)
-func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
-	gCtrlSqlCh <- struct{}{}
-	type fields struct {
-		defaultOpts []BufferOption
-		ch          chan string
-	}
-	type args struct {
-		batch string
-	}
-
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   func(batch any)
-	}{
-		{
-			name: "nil",
-			fields: fields{
-				defaultOpts: []BufferOption{BufferWithSizeThreshold(GB)},
-				ch:          make(chan string, 10),
-			},
-			args: args{
-				batch: "batch",
-			},
-			want: func(batch any) {},
-		},
-	}
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			WithSQLExecutor(newDummyExecutorFactory(tt.fields.ch)).apply(&GetTracerProvider().tracerProviderConfig)
-			t := batchSqlHandler{
-				defaultOpts: tt.fields.defaultOpts,
-			}
-
-			got := t.NewItemBatchHandler(context.TODO())
-			go got(tt.args.batch)
-			batch, ok := <-tt.fields.ch
-			if ok {
-				require.Equal(t1, tt.args.batch, batch)
-			} else {
-				t1.Log("exec sql Done.")
-			}
-			//close(tt.fields.ch)
-		})
-	}
-	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
-	<-gCtrlSqlCh
-}*/
-
 var genFactory = func() table.WriterFactory {
 	return table.NewWriterFactoryGetter(
 		func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {

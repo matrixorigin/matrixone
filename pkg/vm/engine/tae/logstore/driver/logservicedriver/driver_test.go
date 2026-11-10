@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -67,6 +66,118 @@ func TestClientAcquisitionFailureCompletesWaiterBeforePanic(t *testing.T) {
 	require.Panics(t, func() { d.asyncCommit(committer) })
 	require.ErrorIs(t, e.WaitDone(), ErrClientPoolClosed)
 	require.NoError(t, d.Close())
+}
+
+func TestTruncateOnFlyClientFactoryErrorCanRetry(t *testing.T) {
+	backend := NewMockBackend()
+	var fail atomic.Bool
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			if fail.Load() {
+				return nil, errors.New("factory unavailable")
+			}
+			return newMockBackendClient(backend), nil
+		}))
+	cfg.ClientRetryTimes = 1
+	cfg.ClientRetryInterval = time.Nanosecond
+	cfg.ClientRetryDuration = time.Nanosecond
+	pool := newClientPool(&cfg)
+	defer pool.Close()
+	d := &LogServiceDriver{clientPool: pool, config: cfg}
+
+	fail.Store(true)
+	_, err := d.truncateFromRemote(context.Background(), 1, 1, 0)
+	require.ErrorContains(t, err, "factory unavailable")
+	psn, checkpointedDSN, err := backend.GetWALTruncate(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, psn)
+	require.Zero(t, checkpointedDSN)
+
+	fail.Store(false)
+	psn, err = d.truncateFromRemote(context.Background(), 1, 1, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), psn)
+	psn, checkpointedDSN, err = backend.GetWALTruncate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), psn)
+	require.Equal(t, uint64(1), checkpointedDSN)
+}
+
+type cancelTruncateClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   *atomic.Int32
+}
+
+func (c *cancelTruncateClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestCloseCancelsCheckpointTruncate(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	var calls atomic.Int32
+	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(3*time.Second),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return &cancelTruncateClient{
+				mockBackendClient: newMockBackendClient(backend),
+				started:           started,
+				calls:             &calls,
+			}, nil
+		}))
+	d := NewLogServiceDriver(&cfg)
+	d.replayState.Store(newReplayState(true, nil, driver.ReplayMode_ReplayForWrite, nil))
+	d.recordSequenceNumbers(1, common.ClosedInterval{Start: 1, End: 1})
+	require.NoError(t, d.Truncate(1))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint Truncate did not reach LogService")
+	}
+	result := make(chan error, 1)
+	go func() { result <- d.Close() }()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for the Truncate retry budget after shutdown")
+	}
+	require.EqualValues(t, 1, calls.Load())
+}
+
+func TestCloseCancelsCheckpointTruncateClientCreation(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return newMockBackendClient(backend), nil
+		}),
+		WithConfigOptContextClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+	d := NewLogServiceDriver(&cfg)
+	d.replayState.Store(newReplayState(true, nil, driver.ReplayMode_ReplayForWrite, nil))
+	d.recordSequenceNumbers(1, common.ClosedInterval{Start: 1, End: 1})
+	require.NoError(t, d.Truncate(1))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint Truncate did not start client creation")
+	}
+	result := make(chan error, 1)
+	go func() { result <- d.Close() }()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for in-flight client creation")
+	}
 }
 
 type blockingBackendClient struct {
@@ -342,7 +453,6 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 			d.waitCommitLoop.Stop()
 			d.truncateQueue.Stop()
 			d.clientPool.Close()
-			d.cancel()
 			close(d.commitWaitQueue)
 			close(d.postCommitQueue)
 		})
@@ -578,9 +688,14 @@ func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) 
 		secondWait <- second.WaitDone()
 	}()
 
-	// Invoke the production group-intent callback with two accepted entries so
-	// LogEntryWriter.Finish executes the pre-callbacks before BackendClient.Append.
-	d.onCommitIntents(first, second)
+	// Invoke the production group-intent callback with two accepted entries.
+	// Preparation now runs in this callback, so it remains blocked at fail-stop
+	// until the test releases that handler.
+	intentsDone := make(chan struct{})
+	go func() {
+		defer close(intentsDone)
+		d.onCommitIntents(first, second)
+	}()
 	select {
 	case <-failStopEntered:
 	case <-time.After(time.Second):
@@ -600,6 +715,11 @@ func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) 
 		t.Fatal("second waiter was not notified before fail-stop release")
 	}
 	release()
+	select {
+	case <-intentsDone:
+	case <-time.After(time.Second):
+		t.Fatal("commit-intent callback did not return after fail-stop release")
+	}
 	require.Equal(t, int32(2), callbacks.Load())
 	require.Zero(t, client.appendCalls.Load())
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
@@ -685,22 +805,13 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
-	// assert.Equal(t,len(preAddr),len(d.addr))
-	// for lsn,intervals := range preAddr{
-	// 	replayedInterval,ok:=d.addr[lsn]
-	// 	assert.True(t,ok)
-	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
-	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
-	// }
 	t.Logf("Valid lsn: %v", d.sequence.psns)
-	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	return d
 }
 
 func TestReplay1(t *testing.T) {
-	// t.Skip("debug")
 	service, ccfg := initTest(t)
 	defer service.Close()
 
@@ -738,13 +849,6 @@ func TestReplay1(t *testing.T) {
 		e.WaitDone()
 	}
 
-	// i := 0
-	// h := func(e *entry.Entry) {
-	// 	payload := []byte(fmt.Sprintf("payload %d", i))
-	// 	assert.Equal(t, payload, e.Entry.GetPayload())
-	// 	i++
-	// }
-
 	d = restartDriver(t, d, nil)
 
 	for _, e := range entries {
@@ -753,83 +857,3 @@ func TestReplay1(t *testing.T) {
 
 	d.Close()
 }
-
-func TestReplay2(t *testing.T) {
-	t.Skip("debug")
-
-	service, ccfg := initTest(t)
-	defer service.Close()
-
-	cfg := NewConfig(
-		"",
-		WithConfigOptClientConfig("", ccfg),
-		WithConfigOptClientBufSize(100),
-	)
-	driver := NewLogServiceDriver(&cfg)
-
-	entryCount := 10000
-	entries := make([]*entry.Entry, entryCount)
-
-	for i := 0; i < entryCount; i++ {
-		payload := []byte(fmt.Sprintf("payload %d", i))
-		e := entry.MockEntryWithPayload(payload)
-		driver.Append(e)
-		entries[i] = e
-	}
-
-	synced := driver.getCommittedDSNWatermark()
-	driver.Truncate(synced)
-
-	for i, e := range entries {
-		e.WaitDone()
-		assert.Equal(t, uint64(i+1), e.DSN)
-	}
-
-	truncated, err := driver.GetTruncated()
-	i := truncated
-	t.Logf("truncate %d", i)
-	assert.NoError(t, err)
-	h := func(e *entry.Entry) {
-		entryPayload := e.Entry.GetPayload()
-		strs := strings.Split(string(entryPayload), " ")
-		id, err := strconv.Atoi(strs[1])
-		assert.NoError(t, err)
-		if id <= int(truncated) {
-			return
-		}
-
-		payload := []byte(fmt.Sprintf("payload %d", i))
-		assert.Equal(t, payload, entryPayload)
-		i++
-	}
-
-	driver = restartDriver(t, driver, h)
-
-	for _, e := range entries {
-		e.Entry.Free()
-	}
-
-	driver.Close()
-}
-
-// func Test_TokenController(t *testing.T) {
-// 	c := newTokenController(100)
-// 	var wg sync.WaitGroup
-
-// 	pool, _ := ants.NewPool(64)
-// 	defer pool.Release()
-
-// 	now := time.Now()
-
-// 	for i := 0; i < 1000; i++ {
-// 		wg.Add(1)
-// 		pool.Submit(func() {
-// 			defer wg.Done()
-// 			token := c.Apply()
-// 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)+1))
-// 			c.Putback(token)
-// 		})
-// 	}
-// 	wg.Wait()
-// 	t.Logf("time cost: %v", time.Since(now))
-// }

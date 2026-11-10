@@ -38,10 +38,83 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
+
+func newTestGlobalStats(
+	ctx context.Context,
+	e *Engine,
+	keyRouter qclient.KeyRouter[statsinfo.StatsInfoKey],
+	opts ...GlobalStatsOption,
+) *GlobalStats {
+	var owner *GlobalStats
+	owner = NewGlobalStats(ctx, e, keyRouter, func(value *GlobalStats) {
+		owner = value
+	}, opts...)
+	return owner
+}
+
+func TestPatchStatsOwnsShuffleResult(t *testing.T) {
+	gs := &GlobalStats{}
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 2, TableID: 3}
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu.Mutex)
+
+	values := []float64{7, 8}
+	patch := &PatchArgs{ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{
+		"d": {Result: values},
+	}}
+	require.NoError(t, gs.PatchStats(key, patch))
+	values[0] = 999
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+
+	patch.ShuffleRangeMap["d"].Result = nil
+	require.NoError(t, gs.PatchStats(key, patch))
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+
+	patch.ShuffleRangeMap["d"].Result = []float64{}
+	require.NoError(t, gs.PatchStats(key, patch))
+	require.NotNil(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.Empty(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+}
+
+func TestGlobalStatsCloseJoinsOwnedRoots(t *testing.T) {
+	gs := newTestGlobalStats(context.Background(), nil, nil)
+	ex := gs.concurrentExecutor.(*concurrentExecutor)
+
+	gs.Close()
+	gs.Close()
+
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("global stats owner context is still active")
+	}
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("concurrent stats executor has not reached terminal completion")
+	}
+}
+
+func TestGlobalStatsPublishesBeforeOptionFailure(t *testing.T) {
+	var owner *GlobalStats
+	sentinel := "stats option failed"
+	require.PanicsWithValue(t, sentinel, func() {
+		NewGlobalStats(
+			context.Background(),
+			nil,
+			nil,
+			func(value *GlobalStats) { owner = value },
+			func(*GlobalStats) { panic(sentinel) },
+		)
+	})
+	require.NotNil(t, owner)
+	owner.Close()
+}
 
 type mockStatsKeyRouter struct {
 	target string
@@ -158,7 +231,8 @@ func runTest(
 	mp, err := mpool.NewMPool(sid, 1024*1024, mpool.NoFixed)
 	catalog.SetupDefines(sid)
 	assert.NoError(t, err)
-	e := New(
+	var e *Engine
+	e = New(
 		ctx,
 		sid,
 		mp,
@@ -167,6 +241,7 @@ func runTest(
 		nil,
 		nil,
 		4,
+		func(owner *Engine) { e = owner },
 	)
 	for _, opt := range opts {
 		opt(e.globalStats)
@@ -280,7 +355,7 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		MinUpdateInterval = time.Millisecond * 10
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 		k1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -306,7 +381,7 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		MinUpdateInterval = time.Second * 10
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 		k1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -489,29 +564,7 @@ func TestGetMinMaxValueByFloat64_Decimal(t *testing.T) {
 	})
 }
 
-// calculateConcurrency is a helper function that mirrors the concurrency calculation logic
-// in NewGlobalStats. This allows us to test the logic independently.
-func calculateConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
-	executorConcurrency = gomaxprocs
-	if updateWorkerFactor > 0 {
-		executorConcurrency = executorConcurrency * updateWorkerFactor
-	}
-	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
-	if executorConcurrency < MinExecutorConcurrency {
-		executorConcurrency = MinExecutorConcurrency
-	}
-	if executorConcurrency > MaxExecutorConcurrency {
-		executorConcurrency = MaxExecutorConcurrency
-	}
-	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
-	updateWorkerConcurrency = executorConcurrency / WorkerConcurrencyRatio
-	if updateWorkerConcurrency < MinWorkerConcurrency {
-		updateWorkerConcurrency = MinWorkerConcurrency
-	}
-	return executorConcurrency, updateWorkerConcurrency
-}
-
-// TestCalculateConcurrency tests the concurrency calculation logic with various scenarios
+// TestCalculateConcurrency checks the production pool sizing across boundary cases.
 func TestCalculateConcurrency(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -670,7 +723,7 @@ func TestCalculateConcurrency(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			executor, worker := calculateConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
+			executor, worker := globalStatsConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
 
 			assert.Equal(t, tt.expectedExecutor, executor,
 				"executor concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedExecutor, executor)
@@ -688,8 +741,8 @@ func TestCalculateConcurrency(t *testing.T) {
 	}
 }
 
-// TestGlobalStatsConcurrency_ActualCreation tests that GlobalStats actually creates
-// the correct number of goroutines by checking the concurrentExecutor's concurrency
+// TestGlobalStatsConcurrency_ActualCreation checks the executor pool size and
+// the worker sizing used by GlobalStats.
 func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -748,7 +801,7 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
 			// Create GlobalStats with the specified factor
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			// Verify concurrentExecutor concurrency
@@ -764,7 +817,7 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 				"executor concurrency should be <= MaxExecutorConcurrency")
 
 			// Verify worker concurrency matches expected calculation
-			_, expectedWorker := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			_, expectedWorker := globalStatsConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
 			assert.Equal(t, tc.expectedWorker, expectedWorker,
 				"worker concurrency calculation should match")
 
@@ -826,7 +879,7 @@ func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
@@ -945,7 +998,7 @@ func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
@@ -957,7 +1010,7 @@ func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
 				"%s: executor should be <= MaxExecutorConcurrency, got %d", tt.description, executorConcurrency)
 
 			// Verify it matches expected calculation
-			expectedExecutor, expectedWorker := calculateConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
+			expectedExecutor, expectedWorker := globalStatsConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
 			assert.Equal(t, expectedExecutor, executorConcurrency,
 				"%s: executor concurrency mismatch", tt.description)
 
@@ -1000,7 +1053,7 @@ func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
 			if gs == nil {
 				errors <- fmt.Errorf("goroutine %d: GlobalStats creation failed", id)
 				return
@@ -1077,11 +1130,11 @@ func TestGlobalStatsConcurrency_ReductionVerification(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
-			_, workerConcurrency := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			_, workerConcurrency := globalStatsConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
 			actualTotal := executorConcurrency + workerConcurrency
 
 			assert.Equal(t, tc.newTotal, actualTotal,
@@ -1340,7 +1393,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("first_time_enqueue", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 
 		key := statsinfo.StatsInfoKey{
@@ -1362,7 +1415,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("checkpoint_always_enqueue_large_table", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1386,7 +1439,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("checkpoint_with_changes_large_table", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1408,7 +1461,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_checkpoint", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1425,7 +1478,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_any_change", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1454,7 +1507,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_no_change", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1471,7 +1524,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_below_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1498,7 +1551,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_at_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1520,7 +1573,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_above_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1542,7 +1595,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_accumulated_changes", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1586,7 +1639,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1608,7 +1661,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_recent_update_no_timeout", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1630,7 +1683,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("boundary_large_table_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1654,7 +1707,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("boundary_small_table_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1672,7 +1725,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("zero_base_object_count", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1694,7 +1747,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("concurrent_enqueue_checks", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -2812,4 +2865,106 @@ func TestGlobalStatsGetReleasesRemoteResponseWithoutStatsPayload(t *testing.T) {
 		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
 		require.Equal(t, int32(1), qc.releases.Load())
 	})
+}
+
+func TestGlobalStatsCloseDuringSynchronousPublicationDoesNotStartRoots(t *testing.T) {
+	gs := NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) {
+		value.Close()
+	})
+	require.True(t, gs.startSealed)
+	require.Nil(t, gs.concurrentExecutor)
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("published owner is not closed")
+	}
+	gs.Close()
+}
+
+func TestGlobalStatsCloseBeforePublicationReturnsDoesNotStartRoots(t *testing.T) {
+	published := make(chan *GlobalStats, 1)
+	resume := make(chan struct{})
+	done := make(chan *GlobalStats, 1)
+	go func() {
+		done <- NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) {
+			published <- value
+			<-resume
+		})
+	}()
+	gs := <-published
+	gs.Close()
+	close(resume)
+	require.Same(t, gs, <-done)
+	require.True(t, gs.startSealed)
+	require.Nil(t, gs.concurrentExecutor)
+}
+
+func TestGlobalStatsCloseFromOptionBeforePanic(t *testing.T) {
+	var owner *GlobalStats
+	require.PanicsWithValue(t, "option after close", func() {
+		NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { owner = value }, func(value *GlobalStats) {
+			value.Close()
+			panic("option after close")
+		})
+	})
+	require.NotNil(t, owner)
+	require.True(t, owner.startSealed)
+	require.Nil(t, owner.concurrentExecutor)
+	owner.Close()
+}
+
+func TestGlobalStatsCloseAfterRootStartup(t *testing.T) {
+	published := make(chan *GlobalStats, 1)
+	started, release := make(chan struct{}), make(chan struct{})
+	constructed := make(chan *GlobalStats, 1)
+	go func() {
+		constructed <- NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { published <- value }, func(value *GlobalStats) {
+			value.afterRootsStarted = func() { close(started); <-release }
+		})
+	}()
+	gs := <-published
+	<-started
+	locked := gs.startMu.TryLock()
+	if locked {
+		gs.startMu.Unlock()
+	}
+	closed := make(chan struct{})
+	closeStarted := make(chan struct{})
+	go func() { close(closeStarted); gs.Close(); close(closed) }()
+	<-closeStarted
+	close(release)
+	actual := <-constructed
+	<-closed
+	require.Same(t, gs, actual)
+	require.False(t, locked, "startup must retain its lifecycle fence")
+	ex, ok := gs.concurrentExecutor.(*concurrentExecutor)
+	require.True(t, ok)
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("Close did not join the executor")
+	}
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("owner context was not canceled")
+	}
+}
+
+func TestGlobalStatsStartupPanicReleasesFenceAndJoins(t *testing.T) {
+	var owner *GlobalStats
+	require.PanicsWithValue(t, "startup failed", func() {
+		NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { owner = value }, func(value *GlobalStats) {
+			value.afterRootsStarted = func() { panic("startup failed") }
+		})
+	})
+	require.NotNil(t, owner)
+	ex, ok := owner.concurrentExecutor.(*concurrentExecutor)
+	require.True(t, ok)
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("startup panic did not join executor")
+	}
+	owner.Close()
 }

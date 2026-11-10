@@ -20,10 +20,245 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTemporalIntegerCastWrapperPolicy(t *testing.T) {
+	ctx := context.Background()
+	temporal := types.T_datetime.ToTypeWithScale(6)
+	target := types.T_int64.ToType()
+	column := &Expr{Typ: makePlan2Type(&temporal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1}}}
+	cast, err := appendSyntaxExplicitCastBeforeExpr(ctx, makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), column.Typ)
+	require.NoError(t, err)
+	condition := &Expr{Typ: makeSimplePlan2Type(types.T_bool), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2}}}
+	for _, name := range []string{"if", "case"} {
+		t.Run(name, func(t *testing.T) {
+			source, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{condition, column, cast})
+			require.NoError(t, err)
+			converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+			require.NoError(t, err)
+			require.Equal(t, source.GetF().Func.ObjName, converted.GetF().Func.ObjName)
+			require.Same(t, condition, converted.GetF().Args[0], "do not duplicate or convert the selector condition")
+			for i, want := range []int32{1, function.TemporalCastIntegerOverload} {
+				_, id := function.DecodeOverloadID(converted.GetF().Args[i+1].GetF().Func.Obj)
+				require.Equal(t, want, id, "the column branch must not inherit its CAST sibling's policy")
+			}
+			require.Equal(t, int32(types.T_int64), converted.Typ.Id)
+		})
+	}
+	for _, name := range []string{"coalesce", "least", "greatest"} {
+		source, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{column, cast})
+		require.NoError(t, err)
+		converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+		require.NoError(t, err)
+		_, id := function.DecodeOverloadID(converted.GetF().Func.Obj)
+		require.Equal(t, function.TemporalCastIntegerOverload, id, name)
+	}
+}
+
+func TestTemporalIntegerCastGuardedLiftProof(t *testing.T) {
+	ctx := context.Background()
+	temporal := types.T_datetime.ToTypeWithScale(6)
+	target := types.T_int64.ToType()
+	column := &Expr{Typ: makePlan2Type(&temporal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1}}}
+	random, err := BindFuncExprImplByPlanExpr(ctx, "rand", nil)
+	require.NoError(t, err)
+	condition, err := BindFuncExprImplByPlanExpr(ctx, "<", []*Expr{random, makePlan2Float64ConstExprWithType(0.5)})
+	require.NoError(t, err)
+	unstable, err := BindFuncExprImplByPlanExpr(ctx, "if", []*Expr{condition, column, column})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		source *Expr
+		unsafe bool
+	}{
+		{"stored_input", column, false},
+		{"volatile_input", unstable, true},
+		{"diagnostic_input", makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, err := appendSyntaxExplicitCastBeforeExpr(ctx, tc.source, column.Typ)
+			require.NoError(t, err)
+			converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+			require.NoError(t, err)
+			require.True(t, isTemporalIntegerPolicyCast(converted))
+			require.True(t, containsVolatileFunction(converted), "folding/index admission must remain conservative")
+			require.Equal(t, tc.unsafe, containsVolatileFunctionImpl(converted, true), "guarded lifting must still reject effects in inputs")
+		})
+	}
+}
+
+func TestTemporalIntegerCastFilteredCorrelation(t *testing.T) {
+	for _, projection := range []string{"l_shipdate", "cast(l_shipdate as datetime(6))", "least(l_shipdate,l_shipdate)", "if(l_orderkey=1,l_shipdate,cast(l_shipdate as datetime(6)))"} {
+		for _, target := range []string{"signed", "unsigned"} {
+			t.Run(projection+"/"+target, func(t *testing.T) {
+				opt := NewMockOptimizer(false, newPlanTestProcess(t))
+				ctx := opt.CurrentContext().(*MockCompilerContext)
+				col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+				col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+				_, err := runOneStmt(opt, t, "select cast((select "+projection+" where l_orderkey=1) as "+target+") from lineitem")
+				require.NoError(t, err, "filtered correlation must retain its projection contract before decorrelation")
+			})
+		}
+	}
+}
+
+func TestTemporalIntegerCastDecorrelationExits(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		dependent bool
+	}{
+		{"direct", "select cast(cast(l_shipdate as datetime(6)) as signed) from lineitem", false},
+		{"scalar", "select cast((select cast(l_shipdate as datetime(6))) as signed) from lineitem", false},
+		{"inner_on", "select a.l_orderkey from lineitem a join lineitem b on cast((select cast(a.l_shipdate as datetime(6))) as signed)=b.l_orderkey", false},
+		{"left_on", "select b.l_orderkey from lineitem a left join lineitem b on cast((select cast(a.l_shipdate as datetime(6))) as signed)=b.l_orderkey", false},
+		{"right_on", "select a.l_orderkey from lineitem a right join lineitem b on a.l_orderkey=cast((select cast(b.l_shipdate as datetime(6))) as signed)", false},
+		{"deep", "select cast((select (select cast(l_shipdate as datetime(6)))) as signed) from lineitem", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+			col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+			p, err := runOneStmt(opt, t, tc.sql)
+			require.NoError(t, err)
+			found := false
+			require.NoError(t, planpb.WalkQueryNodes(p.GetQuery(), func(_ int32, n *planpb.Node) error {
+				return planpb.VisitExpressionsInOwner(n, func(e *Expr) error {
+					return planpb.VisitExprTree(e, func(e *Expr) error {
+						if f := e.GetF(); f != nil && f.Func != nil {
+							id, overload := function.DecodeOverloadID(f.Func.Obj)
+							found = found || id == function.CAST && overload == function.TemporalCastIntegerOverload
+						}
+						return nil
+					})
+				})
+			}))
+			require.True(t, found, "every decorrelation exit must retain the producer's integer protocol")
+			if tc.dependent {
+				require.NotNil(t, p.GetQuery().Correlation)
+				require.NoError(t, p.GetQuery().ValidateCorrelation())
+				for _, program := range p.GetQuery().Correlation.Programs {
+					require.Equal(t, int32(types.T_int64), program.OutputTypes[0].Id)
+				}
+			}
+		})
+	}
+}
+
+func TestTemporalIntegerCastMaterializedCorrelation(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := opt.CurrentContext().(*MockCompilerContext)
+	col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+	col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+	p, err := runOneStmt(opt, t, "select cast((select distinct cast(l_shipdate as datetime(6))) as signed) from lineitem")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation, "the final integer projection must not be lost during lifting")
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
+	for _, program := range p.GetQuery().Correlation.Programs {
+		require.Equal(t, int32(types.T_int64), program.OutputTypes[0].Id)
+	}
+	found := false
+	for _, node := range p.GetQuery().Nodes {
+		for _, key := range node.GroupBy {
+			found = found || key.Typ.Id == int32(types.T_datetime)
+		}
+	}
+	require.True(t, found, "DISTINCT must retain the original temporal domain before integer conversion")
+}
+
+func TestTemporalIntegerCastAliasPreservesScalarOutput(t *testing.T) {
+	for _, tc := range []struct{ name, sql string }{
+		{"literal", "select (select cast('2024-02-29 23:59:59.500000' as datetime(6))) as d order by cast(d as signed)"},
+		{"correlated", "select (select cast(l_shipdate as datetime(6))) as d from lineitem order by cast(d as signed)"},
+		{"dependent", "select (select (select cast(l_shipdate as datetime(6)))) as d from lineitem order by cast(d as signed)"},
+		{"wrapped", "select coalesce((select cast(l_shipdate as datetime(6))),null) as d from lineitem order by cast(d as signed)"},
+		{"consumers", "select (select cast(l_shipdate as datetime(6))) as d from lineitem order by cast(d as signed),cast(d as unsigned)"},
+		{"having", "select (select cast(l_shipdate as datetime(6))) as d from lineitem having cast(d as signed)>0 order by cast(d as unsigned)"},
+		{"having_wrapped", "select coalesce((select cast(l_shipdate as datetime(6))),null) as d from lineitem having cast(d as signed)>0 order by cast(d as unsigned)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+			col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+			ctx.SetSqlModeOverride("")
+			p, err := runOneStmt(opt, t, tc.sql)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			result := q.Nodes[q.Steps[0]].ProjectList[0]
+			require.Equal(t, int32(types.T_datetime), result.Typ.Id, "sort/filter consumers must not rewrite a published scalar producer")
+			require.Equal(t, int32(6), result.Typ.Scale)
+			if q.Correlation != nil {
+				require.NoError(t, q.ValidateCorrelation())
+			}
+		})
+	}
+}
+
+func TestTemporalIntegerCastScalarProjectionPolicy(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(opt, t, "select cast((select cast('2024-02-29 23:59:59.500000' as datetime(6))) as signed)")
+	require.NoError(t, err)
+	found := false
+	var visit func(*Expr)
+	visit = func(expr *Expr) {
+		if fn := expr.GetF(); fn != nil {
+			id, overload := function.DecodeOverloadID(fn.Func.Obj)
+			found = found || id == function.CAST && overload == function.TemporalCastIntegerOverload
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			visit(expr)
+		}
+	}
+	require.True(t, found, "the scalar projection must retain the CAST result's integer protocol")
+}
+
+func TestTemporalIntegerCastPreservesNestedCastPolicy(t *testing.T) {
+	for _, temporal := range []types.T{types.T_datetime, types.T_time, types.T_timestamp} {
+		for _, target := range []types.T{types.T_int64, types.T_uint64} {
+			t.Run(temporal.String()+"/"+target.String(), func(t *testing.T) {
+				ctx := context.Background()
+				temporalType := temporal.ToTypeWithScale(6)
+				integerType := target.ToType()
+				inner, err := appendSyntaxExplicitCastBeforeExpr(ctx,
+					makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), makePlan2Type(&temporalType))
+				require.NoError(t, err)
+				outer, err := appendExplicitCastBeforeExpr(ctx, inner, makePlan2Type(&integerType))
+				require.NoError(t, err)
+				_, overload := function.DecodeOverloadID(outer.GetF().Func.Obj)
+				require.Equal(t, function.TemporalCastIntegerOverload, overload, "the integer policy must retain the nested CAST source")
+				wire, err := outer.Marshal()
+				require.NoError(t, err)
+				decoded := &Expr{}
+				require.NoError(t, decoded.Unmarshal(wire))
+				for _, expr := range []*Expr{decoded, DeepCopyExpr(decoded)} {
+					_, id := function.DecodeOverloadID(expr.GetF().Func.Obj)
+					require.Equal(t, overload, id)
+					impl, err := function.GetFunctionById(ctx, expr.GetF().Func.Obj)
+					require.NoError(t, err)
+					require.True(t, impl.IsVolatile(), "SQL mode must be resolved at execution, not frozen by folding")
+					require.True(t, isExplicitPreparedCast(expr))
+				}
+				// A typed value without the nested CAST keeps the storage-value policy.
+				value := DeepCopyExpr(inner)
+				value.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}
+				control, err := appendExplicitCastBeforeExpr(ctx, value, makePlan2Type(&integerType))
+				require.NoError(t, err)
+				_, id := function.DecodeOverloadID(control.GetF().Func.Obj)
+				require.EqualValues(t, 1, id)
+			})
+		}
+	}
+}
 
 func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	ctx := context.Background()
@@ -68,7 +303,7 @@ func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 func TestTypedDateExplicitCastRetainsProtocolAndNullabilityAfterSerialization(t *testing.T) {
 	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
 		t.Run(sourceType.String(), func(t *testing.T) {
-			opt := NewMockOptimizer(false)
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := opt.CurrentContext().(*MockCompilerContext)
 			source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
 			source.Typ.Id = int32(sourceType)

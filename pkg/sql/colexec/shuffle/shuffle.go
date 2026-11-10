@@ -17,9 +17,13 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,18 +67,56 @@ func (shuffle *Shuffle) PrepareChildrenProcess(proc *process.Process) *process.P
 }
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
+	if len(shuffle.ShuffleKeyColumns) > 0 &&
+		(!shuffle.DrainAllBuckets || shuffle.ShuffleExpr != nil ||
+			shuffle.ShuffleType != int32(plan.ShuffleType_Hash) || shuffle.BucketNum < 1) {
+		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle requires synchronous hash routing")
+	}
+	if shuffle.OwnedOutput && (!shuffle.DrainAllBuckets || len(shuffle.ShuffleKeyColumns) == 0 ||
+		shuffle.BucketNum > MaxOwnedBuckets || shuffle.OwnedColumnCount < 1 || shuffle.allocationAccount == nil || shuffle.outputAllocation == nil) {
+		return moerr.NewInternalError(proc.Ctx, "owned shuffle requires an allocation account and synchronous complete-key routing")
+	}
 	if shuffle.OpAnalyzer == nil {
 		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, opName)
 	} else {
 		shuffle.OpAnalyzer.Reset()
 	}
 
+	if shuffle.GetShufflePool() == nil {
+		if shuffle.OwnedOutput {
+			shuffle.SetShufflePool(NewOwnedShufflePool(shuffle.BucketNum, 1, shuffle.OwnedColumnCount))
+		} else {
+			shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1, true))
+		}
+		shuffle.DrainAllBuckets = true
+	}
+	if shuffle.OwnedOutput {
+		if !shuffle.ctr.shufflePool.ownedOutput || shuffle.ctr.shufflePool.bucketNum != shuffle.BucketNum ||
+			shuffle.ctr.shufflePool.ownedColumns != shuffle.OwnedColumnCount {
+			return mpool.ErrAllocationAccountMismatch
+		}
+		if err := shuffle.ctr.shufflePool.initOwned(proc, shuffle.outputAllocation); err != nil {
+			return err
+		}
+		if err := shuffle.ctr.shufflePool.ownedFailure(proc, nil); err != nil {
+			return err
+		}
+		if shuffle.ctr.selectionMetadata == nil {
+			// Covers the bounded bucket slices and key-vector references. The
+			// row-sized backing arrays are charged directly to the account.
+			if uint64(len(shuffle.ShuffleKeyColumns)) > (math.MaxUint64-(4<<10))/16 {
+				return shuffle.ctr.shufflePool.ownedFailure(proc, mpool.ErrAllocationAccountInvalid)
+			}
+			reservation, err := shuffle.ctr.shufflePool.reserveOwnedMemory(proc, 4<<10+uint64(len(shuffle.ShuffleKeyColumns))*16)
+			if err != nil {
+				return err
+			}
+			shuffle.ctr.selectionMetadata = reservation
+			shuffle.ctr.selectionOffsets = make([]int, int(shuffle.BucketNum)*2)
+		}
+	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
-	}
-	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1, true))
-		shuffle.DrainAllBuckets = true
 	}
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
@@ -88,6 +130,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		// Preserve cancellation and the primary execution failure for the
 		// scope collector; a generic admission error would mask their cause.
 		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+			return err
+		}
+		if err := process.PipelineContextError(proc.Ctx); err != nil {
 			return err
 		}
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
@@ -122,7 +167,7 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 	}
 
 	getFull := shuffle.ctr.shufflePool.getAnyFullBatch
-	getLast := shuffle.ctr.shufflePool.getAnyLastBatch
+	getLast := shuffle.ctr.shufflePool.getAnyStoppedBatch
 	wait := func() { shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc) }
 
 	for {
@@ -200,7 +245,9 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 		} else if bat.Last() {
 			return result, nil
 		} else if !bat.IsEmpty() {
-			if shuffle.ctr.exprExec != nil {
+			if len(shuffle.ShuffleKeyColumns) > 0 {
+				bat, err = shuffle.shuffleCompleteKey(bat, proc)
+			} else if shuffle.ctr.exprExec != nil {
 				bat, err = shuffle.evalAndShuffle(bat, proc)
 			} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(shuffle, bat, proc)
@@ -237,7 +284,7 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 			if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
 				return vm.CancelResult, err
 			}
-			if bat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx); bat != nil {
+			if bat := shuffle.ctr.shufflePool.getStoppedBatch(shuffle.CurrentShuffleIdx); bat != nil {
 				return shuffle.returnLocalBatch(proc, bat, true)
 			}
 			return vm.CancelResult, nil
@@ -412,6 +459,7 @@ func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct
 	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWrite(
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
+		shuffle.CurrentShuffleIdx,
 		shuffle.ctr.pendingBucket,
 		shuffle.ctr.pendingOffset,
 		proc,
@@ -432,6 +480,99 @@ func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) e
 	shuffle.ctr.pendingOffset = 0
 	_, _, err := shuffle.flushPending(proc)
 	return err
+}
+
+// shuffleCompleteKey uses the same canonical partition hash as Group spill.
+// Hash collisions only co-locate tuples: the receiving Group still compares
+// every equality key. Borrowed vectors never outlive the call.
+func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if shuffle.OwnedOutput && len(bat.Vecs) != shuffle.OwnedColumnCount {
+		return nil, moerr.NewInternalError(proc.Ctx, "owned shuffle input schema changed")
+	}
+	if len(shuffle.ctr.keyVectors) != len(shuffle.ShuffleKeyColumns) {
+		shuffle.ctr.keyVectors = make([]*vector.Vector, len(shuffle.ShuffleKeyColumns))
+	}
+	defer clear(shuffle.ctr.keyVectors)
+	for i, col := range shuffle.ShuffleKeyColumns {
+		if col < 0 || int(col) >= len(bat.Vecs) || bat.Vecs[col] == nil ||
+			bat.Vecs[col].Length() != bat.RowCount() {
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid complete-key shuffle column")
+		}
+		shuffle.ctr.keyVectors[i] = bat.Vecs[col]
+	}
+	if shuffle.ctr.keyHashes == nil {
+		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
+		if shuffle.OwnedOutput {
+			var err error
+			shuffle.ctr.keyHashes, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_uint64.ToType(), shuffle.outputAllocation)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		}
+	}
+	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+		return nil, err
+	}
+	shuffle.ctr.keyHashes.SetLength(bat.RowCount())
+	hashes := vector.MustFixedColNoTypeCheck[uint64](shuffle.ctr.keyHashes)
+	keycodec.ComputeXXHash(shuffle.ctr.keyVectors, hashes, 0)
+	if shuffle.OwnedOutput {
+		return nil, shuffle.enqueueOwnedKey(bat, hashes, proc)
+	}
+	sels := shuffle.clearSels()
+	for row, hash := range hashes {
+		idx := hash % uint64(shuffle.BucketNum)
+		sels[idx] = append(sels[idx], int32(row))
+	}
+	for bucket, rows := range sels {
+		if len(rows) == bat.RowCount() {
+			return shuffle.routeSingleBucket(bat, int32(bucket), proc)
+		}
+	}
+	return nil, shuffle.enqueueBySels(bat, proc)
+}
+
+// enqueueOwnedKey builds bucket views in a single charged row-index buffer.
+// The input and these views remain live until flushPending finishes.
+func (shuffle *Shuffle) enqueueOwnedKey(bat *batch.Batch, hashes []uint64, proc *process.Process) error {
+	rows := bat.RowCount()
+	if rows > math.MaxInt32 {
+		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle batch exceeds index range")
+	}
+	if cap(shuffle.ctr.selectionBacking) < rows {
+		next, err := mpool.MakeSliceAccounted[int32](rows, proc.Mp(), shuffle.allocationAccount, mpool.AllocationOwnerSet, 13)
+		if err != nil {
+			return err
+		}
+		if shuffle.ctr.selectionBacking != nil {
+			mpool.FreeSlice(proc.Mp(), shuffle.ctr.selectionBacking)
+		}
+		shuffle.ctr.selectionBacking = next
+	}
+	backing := shuffle.ctr.selectionBacking[:rows]
+	buckets := int(shuffle.BucketNum)
+	counts, positions := shuffle.ctr.selectionOffsets[:buckets], shuffle.ctr.selectionOffsets[buckets:]
+	clear(counts)
+	for _, hash := range hashes {
+		counts[hash%uint64(buckets)]++
+	}
+	start := 0
+	for i, count := range counts {
+		end := start + count
+		shuffle.ctr.sels[i] = backing[start:end:end]
+		positions[i] = start
+		start = end
+	}
+	for row, hash := range hashes {
+		i := hash % uint64(buckets)
+		backing[positions[i]] = int32(row)
+		positions[i]++
+	}
+	// Even a single bucket is copied, so the borrowed input is never relabelled
+	// or retained as an accounted output.
+	return shuffle.enqueueBySels(bat, proc)
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
@@ -553,9 +694,13 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *groupByVec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		return plan2.SimpleInt64HashToRange(uuidHash(groupByCol[0]), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -620,9 +765,19 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		appendStringHashSels(ap, sels, groupByVec, groupByCol, area, lenRegs, true)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		for row, v := range groupByCol {
+			var regIndex uint64 = 0
+			if !groupByVec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uuidHash(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -682,9 +837,16 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		appendStringHashSels(ap, sels, groupByVec, groupByCol, area, bucketNum, false)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uuidHash(v), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	default:
 		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", groupByVec.GetType())) //something got wrong here!
 	}
@@ -1141,7 +1303,7 @@ func shuffleConstVecByHash(ap *Shuffle, vec *vector.Vector) uint64 {
 		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(vec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *vec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!")
 	}
@@ -1492,6 +1654,12 @@ func hashShuffleVecWithoutNull(ap *Shuffle, sels [][]int32, vec *vector.Vector, 
 	}
 }
 
+// uuidHash reduces a UUID to one uint64 for bucket selection, the same
+// fold used for DECIMAL128 above. Bucketing only partitions rows.
+func uuidHash(v types.Uuid) uint64 {
+	return binary.LittleEndian.Uint64(v[0:8]) ^ binary.LittleEndian.Uint64(v[8:16])
+}
+
 func appendStringHashSels(
 	ap *Shuffle,
 	sels [][]int32,
@@ -1504,10 +1672,17 @@ func appendStringHashSels(
 	for row := range col {
 		regIndex := uint64(0)
 		if !withNull || !vec.IsNull(uint64(row)) {
-			regIndex = stringHashToRange(ap, col[row].GetByteSlice(area), bucketNum)
+			regIndex = stringHashToRangeForType(ap, *vec.GetType(), col[row].GetByteSlice(area), bucketNum)
 		}
 		sels[regIndex] = append(sels[regIndex], int32(row))
 	}
+}
+
+func stringHashToRangeForType(ap *Shuffle, typ types.Type, value []byte, bucketNum uint64) uint64 {
+	if types.IsUnicodeCollation(typ.Charset) {
+		value = types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return stringHashToRange(ap, value, bucketNum)
 }
 
 func stringHashToRange(ap *Shuffle, value []byte, bucketNum uint64) uint64 {

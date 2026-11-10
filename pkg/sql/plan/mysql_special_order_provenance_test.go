@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,8 +87,8 @@ func TestTransparentMySQLSpecialValueProof(t *testing.T) {
 	}
 }
 
-func newMySQLSpecialOrderMock() *MockOptimizer {
-	mock := NewMockOptimizer(false)
+func newMySQLSpecialOrderMock(t testing.TB) *MockOptimizer {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["enum_order_t"] = &planpb.ObjectRef{Obj: 9001, ObjName: "enum_order_t"}
 	mock.ctxt.tables["enum_order_t"] = &planpb.TableDef{
 		TblId: 9001,
@@ -132,6 +133,15 @@ func newMySQLSpecialOrderMock() *MockOptimizer {
 			{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
 		},
 	}
+	mock.ctxt.objects["enum_empty_label_t"] = &planpb.ObjectRef{Obj: 9006, ObjName: "enum_empty_label_t"}
+	mock.ctxt.tables["enum_empty_label_t"] = &planpb.TableDef{
+		TblId: 9006,
+		Name:  "enum_empty_label_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: ",a"}},
+		},
+	}
 	return mock
 }
 
@@ -148,9 +158,63 @@ func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	return found[0]
 }
 
+// Display recovery uses an unsigned ordinal IF to preserve the error member
+// without feeding its empty display into the assignment converter. Raw ENUM
+// keys retain their ENUM type; both representations have definition ordering.
+func requireMySQLSpecialOrderKeyType(t *testing.T, expr *planpb.Expr, typ types.T) {
+	t.Helper()
+	if typ == types.T_enum && expr.Typ.Id == int32(types.T_uint16) {
+		require.NotEmpty(t, expr.Typ.Enumvalues)
+		return
+	}
+	require.Equal(t, int32(typ), expr.Typ.Id)
+}
+
+func TestEnumOrderRecoveryPreservesErrorMember(t *testing.T) {
+	storage := &planpb.Type{Id: int32(types.T_enum), Enumvalues: "z,a"}
+	display := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "e"}}}
+	key, err := makeMySQLSpecialOrderKey(context.Background(), display, storage)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint16), key.Typ.Id)
+	require.Equal(t, storage.Enumvalues, key.Typ.Enumvalues)
+	require.False(t, key.Typ.NotNullable)
+	fn := key.GetF()
+	require.Equal(t, "if", fn.Func.ObjName)
+	require.Len(t, fn.Args, 3)
+	require.Equal(t, "=", fn.Args[0].GetF().Func.ObjName)
+	converted := fn.Args[2]
+	if cast := converted.GetF(); cast != nil && cast.Func.ObjName == "cast" {
+		converted = cast.Args[0]
+	}
+	converter := converted.GetF()
+	require.Equal(t, "cast_value_to_index", converter.Func.ObjName)
+	require.Equal(t, storage.Enumvalues, converter.Args[0].GetLit().GetSval())
+	placeholder := converter.Args[1].GetF()
+	require.Equal(t, "if", placeholder.Func.ObjName)
+	label := placeholder.Args[1]
+	for label.GetF() != nil && label.GetF().Func.ObjName == "cast" {
+		label = label.GetF().Args[0]
+	}
+	require.Equal(t, "z", label.GetLit().GetSval())
+	// Numeric coercion of the enum zero is represented as a cast by IF binding.
+	zero := fn.Args[1]
+	if cast := zero.GetF(); cast != nil {
+		zero = cast.Args[0]
+	}
+	require.NotNil(t, zero.GetLit())
+	switch value := zero.GetLit().Value.(type) {
+	case *planpb.Literal_EnumVal:
+		require.Zero(t, value.EnumVal)
+	case *planpb.Literal_U16Val:
+		require.Zero(t, value.U16Val)
+	default:
+		t.Fatalf("unexpected zero literal %T", value)
+	}
+}
+
 func requireSingleSortKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
 	t.Helper()
-	require.Equal(t, int32(typ), singleSortSpec(t, logicPlan).Expr.Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, singleSortSpec(t, logicPlan).Expr, typ)
 }
 
 func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
@@ -167,7 +231,7 @@ func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ t
 		found = append(found, window.OrderBy[0].Expr)
 	}
 	require.Len(t, found, 1)
-	require.Equal(t, int32(typ), found[0].Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, found[0], typ)
 }
 
 func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
@@ -191,11 +255,11 @@ func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, 
 		}
 	}
 	require.Len(t, found, 1)
-	require.Equal(t, int32(typ), found[0].Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, found[0], typ)
 }
 
 func TestMySQLSpecialMultiKeyEnumOrderUsesRawEnumKey(t *testing.T) {
-	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select id, e from enum_order_t order by e is null, e desc")
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select id, e from enum_order_t order by e is null, e desc")
 	require.NoError(t, err)
 	var found []*planpb.OrderBySpec
 	for _, node := range logicPlan.GetQuery().Nodes {
@@ -259,7 +323,7 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 	}
 	for _, tc := range orderCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, logicPlan, tc.typ)
 		})
@@ -286,7 +350,7 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 	}
 	for _, tc := range windowCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleWindowOrderKeyType(t, logicPlan, tc.typ)
 		})
@@ -299,14 +363,14 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			"create table enum_duplicate_ddl (e enum('same', 'same', 'other'))",
 			"create table enum_equal_fold_ddl (e enum('low', 'LOW', 'high'))",
 		} {
-			_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 		}
 	})
 
 	for _, table := range []string{"enum_duplicate_t", "enum_equal_fold_t"} {
 		t.Run(table+" direct keeps raw ordinal", func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 				"select e from "+table+" order by e")
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, logicPlan, types.T_enum)
@@ -319,7 +383,7 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			"select e from " + table + " union all select e from " + table + " order by e",
 		} {
 			t.Run(sql, func(t *testing.T) {
-				_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+				_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "non-unique display labels")
 			})
@@ -328,7 +392,7 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 }
 
 func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
-	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 		"select id, s from set_empty_member_t order by s")
 	require.NoError(t, err)
 	requireSingleSortKeyType(t, logicPlan, types.T_uint64)
@@ -338,7 +402,7 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 		"with c as (select id, s from set_empty_member_t) select id, s from c order by s",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, p, types.T_uint64)
 			require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun), "transparent projection must retain raw bitmap")
@@ -352,16 +416,30 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 		"select s from (select s from set_empty_member_t group by s) d order by s",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, p, types.T_uint64)
 			conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 			require.NotNil(t, conversion)
 			require.False(t, conversion.Typ.NotNullable)
+			hasGroupBy := strings.Contains(sql, "group by")
 			for _, node := range p.GetQuery().Nodes {
 				if node.NodeType == planpb.Node_AGG {
-					require.Len(t, node.GroupBy, 1, "raw payload must not split display equality")
-					require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					if hasGroupBy {
+						// The ENUM/SET boolean-contract change groups a plain
+						// GROUP BY by the composite (display, storage) key: the
+						// display key keeps its text identity and a hidden
+						// storage sibling carries the stored bitmap, so the
+						// empty-member declaration splits MySQL-correctly
+						// instead of merging the zero sentinel into it.
+						require.Len(t, node.GroupBy, 2,
+							"a display group key carries its storage sibling beside it")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						require.Equal(t, int32(types.T_uint64), node.GroupBy[1].Typ.Id)
+					} else {
+						require.Len(t, node.GroupBy, 1, "distinct keeps the raw payload")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					}
 				}
 			}
 		})
@@ -374,13 +452,14 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 			for _, source := range []string{"enum_order_t", "(select e, s from enum_order_t) d"} {
 				sql := "select " + name + "(" + operand + ") from " + source
 				t.Run(sql, func(t *testing.T) {
-					p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 					require.NoError(t, err)
 					fn := findPlanFunctionExpr(p, name)
 					require.NotNil(t, fn)
 					require.Len(t, fn.GetF().Args, 1)
 					typ := fn.GetF().Args[0].Typ
-					require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, typ.Id)
+					require.Equal(t, int32(types.T_float64), typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
 					require.Empty(t, typ.Enumvalues)
 					require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
 					require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
@@ -395,13 +474,26 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(s) from (select distinct s from set_empty_member_t) d",
 		"select s, sum(s), avg(s) from set_empty_member_t group by s",
 	} {
-		_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 		require.NoError(t, err, sql)
+		require.Equal(t, int32(types.T_float64), sumAvgTestExpression(t, p, "sum").Typ.Id)
 	}
-	_, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select s + 0 from set_empty_member_t group by s")
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select s + 0 from set_empty_member_t group by s")
 	require.ErrorContains(t, err, "without retained storage identity")
-	_, err = runOneStmt(newMySQLSpecialOrderMock(), t, "select sum(v) from enum_order_t")
-	require.Error(t, err, "ordinary VARCHAR aggregate rejection remains unchanged")
+	for _, name := range []string{"sum", "avg"} {
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select "+name+"(v) from enum_order_t")
+		require.NoError(t, err)
+		fn := findPlanFunctionExpr(p, name)
+		require.NotNil(t, fn)
+		arg := fn.GetF().Args[0]
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id,
+			"ordinary VARCHAR must use numeric conversion, not ENUM/SET storage identity")
+		require.True(t, isCastOverload(arg, 0))
+		require.Equal(t, int32(types.T_varchar), arg.GetF().Args[0].Typ.Id)
+		require.Empty(t, arg.GetF().Args[0].Typ.Enumvalues)
+		require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+		require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+	}
 }
 
 func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
@@ -412,15 +504,224 @@ func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(e), avg(s) from (select e, s from enum_order_t) d",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "prepare stmt1 from '"+sql+"'")
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "prepare stmt1 from '"+sql+"'")
 			require.NoError(t, err)
 			require.NotNil(t, p.GetDcl().GetPrepare())
 			for _, name := range []string{"sum", "avg"} {
 				fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, name)
 				require.NotNil(t, fn)
-				require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+			}
+			prepared := p.GetDcl().GetPrepare()
+			if len(prepared.ParamTypes) > 0 {
+				for _, value := range []int64{1, 2} {
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(t.Context(), prepared.Plan, []any{value})
+					require.NoError(t, err)
+					for _, name := range []string{"sum", "avg"} {
+						fn := sumAvgTestExpression(t, filled, name)
+						require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+						require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+					}
+				}
 			}
 		})
+	}
+}
+
+func TestMySQLSpecialBitwiseAggregateIdentity(t *testing.T) {
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name   string
+			prefix string
+			suffix string
+		}{
+			{"direct", "select ", " from enum_order_t"},
+			{"grouped", "select id, ", " from enum_order_t group by id"},
+			{"window", "select ", " over (order by id rows between unbounded preceding and current row) from enum_order_t"},
+			{"derived", "select ", " from (select id, e, s from enum_order_t) d"},
+			{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+			{"prepared", "prepare stmt1 from 'select ", " from (select id, e, s from enum_order_t) d where id = ?'"},
+		} {
+			for _, operand := range []string{"e", "s"} {
+				t.Run(name+"/"+tc.name+"/"+operand, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+name+"("+operand+")"+tc.suffix)
+					require.NoError(t, err)
+					if p.GetDcl().GetPrepare() != nil {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					if tc.name == "window" {
+						fn = firstWindowSpec(t, p).WindowFunc
+					}
+					require.NotNil(t, fn)
+					require.Equal(t, name, fn.GetF().Func.ObjName)
+					require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+					arg := fn.GetF().Args[0]
+					want := types.T_uint16
+					if operand == "s" {
+						want = types.T_uint64
+					}
+					require.Equal(t, int32(want), arg.Typ.Id)
+					require.False(t, isEnumOrSetPlanType(&arg.Typ), "aggregate must consume an ordinary integer domain")
+					require.False(t, isBitwiseAggregatePrivateCast(arg))
+				})
+			}
+		}
+		for _, operand := range []string{"v", "cast(e as char)", "concat(e, '')"} {
+			t.Run(name+"/string/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select "+name+"("+operand+") from enum_order_t")
+				require.NoError(t, err)
+				fn := findPlanFunctionExpr(p, name)
+				require.NotNil(t, fn)
+				arg := fn.GetF().Args[0]
+				require.True(t, isBitwiseAggregatePrivateCast(arg))
+				require.Equal(t, int32(types.T_varchar), arg.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
+func TestBitCountMySQLSpecialIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		suffix string
+	}{
+		{"direct", "select ", " from enum_order_t"},
+		{"derived", "select ", " from (select e, s from enum_order_t) d"},
+		{"materialized", "select ", " from (select e, s from enum_order_t limit 2) d"},
+		{"grouped", "select ", " from enum_order_t group by e, s"},
+		{"having", "select e, s from enum_order_t group by e, s having ", " > 0"},
+		{"prepared", "prepare bit_count_stmt from 'select ", " from enum_order_t where id = ?'"},
+	} {
+		for _, operand := range []string{"e", "s"} {
+			t.Run(tc.name+"/"+operand, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.prefix+"bit_count("+operand+")"+tc.suffix)
+				require.NoError(t, err)
+				if p.GetDcl().GetPrepare() != nil {
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				fn := findPlanFunctionExpr(p, "bit_count")
+				require.NotNil(t, fn)
+				require.Equal(t, int32(types.T_uint64), fn.Typ.Id)
+				arg := fn.GetF().Args[0]
+				want := types.T_uint16
+				if operand == "s" {
+					want = types.T_uint64
+				}
+				require.Equal(t, int32(want), arg.Typ.Id)
+				require.False(t, isEnumOrSetPlanType(&arg.Typ), "BIT_COUNT must consume an ordinary integer domain")
+			})
+		}
+	}
+	for _, operand := range []string{"v", "cast(e as char)", "cast(s as char)", "concat(e, '')", "concat(s, '')"} {
+		t.Run("string/"+operand, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count("+operand+") from enum_order_t")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_varchar), fn.GetF().Args[0].Typ.Id)
+		})
+	}
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select bit_count(s) from set_empty_member_t group by s")
+	require.ErrorContains(t, err, "without retained storage identity")
+}
+
+func TestStatisticalAggregateNumericDomains(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev"} {
+		for _, tc := range []struct {
+			label, operand, source string
+			want                   types.T
+		}{
+			{"enum", "e", "enum_order_t", types.T_uint16},
+			{"distinct enum", "distinct e", "enum_order_t", types.T_uint16},
+			{"derived enum", "e", "(select e from enum_order_t) d", types.T_uint16},
+			{"materialized enum", "e", "(select e from enum_order_t limit 2) d", types.T_uint16},
+			{"bool predicate", "id > 1", "enum_order_t", types.T_int8},
+			{"explicit enum label", "cast(e as char)", "enum_order_t", types.T_float64},
+		} {
+			for _, prepared := range []bool{false, true} {
+				sql := "select " + name + "(" + tc.operand + ") from " + tc.source
+				if prepared {
+					sql = "prepare stat_agg from '" + sql + "'"
+				}
+				t.Run(sql, func(t *testing.T) {
+					mock := newMySQLSpecialOrderMock(t)
+					mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+					p, err := runOneStmt(mock, t, sql)
+					require.NoError(t, err)
+					if prepared {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					fn := findPlanFunctionExpr(p, name)
+					require.NotNil(t, fn)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Len(t, fn.GetF().Args, 1)
+					require.Equal(t, int32(tc.want), fn.GetF().Args[0].Typ.Id, tc.label)
+					if tc.label == "materialized enum" {
+						// The existing label-to-ordinal recovery retains the ENUM
+						// definition on its numeric expression.
+						require.NotNil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+					} else {
+						require.Empty(t, fn.GetF().Args[0].Typ.Enumvalues)
+					}
+				})
+			}
+		}
+
+		for _, operand := range []struct {
+			sql  string
+			want types.T
+		}{{"e", types.T_uint16}, {"id > 1", types.T_int8}} {
+			t.Run(name+" window "+operand.sql, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
+					"select "+name+"("+operand.sql+") over (order by id rows between unbounded preceding and current row) from enum_order_t")
+				require.NoError(t, err)
+				var aggregate *planpb.Expr
+				for _, node := range p.GetQuery().Nodes {
+					for _, item := range node.WinSpecList {
+						if w := item.GetW(); w != nil && w.WindowFunc.GetF().Func.ObjName == name {
+							aggregate = w.WindowFunc
+						}
+					}
+				}
+				require.NotNil(t, aggregate)
+				require.Equal(t, int32(types.T_float64), aggregate.Typ.Id)
+				require.Len(t, aggregate.GetF().Args, 1)
+				require.Equal(t, int32(operand.want), aggregate.GetF().Args[0].Typ.Id)
+			})
+		}
+	}
+}
+
+func TestMySQLSpecialAggregateDoubleDomainBoundaries(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, operand := range []string{"e", "s"} {
+			for _, sql := range []string{
+				"select " + name + "(" + operand + ") from enum_order_t group by id",
+				"select " + name + "(" + operand + ") over () from enum_order_t",
+				"with c as (select e,s from enum_order_t) select " + name + "(" + operand + ") from c",
+			} {
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+					require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+				})
+			}
+			for _, expression := range []string{operand + "+0", "cast(" + operand + " as unsigned)", "cast(" + operand + " as decimal(20,0))"} {
+				sql := "select " + name + "(" + expression + ") from enum_order_t"
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
+					require.NoError(t, err)
+					fn := sumAvgTestExpression(t, p, name)
+					require.NotEqual(t, int32(types.T_float64), fn.Typ.Id,
+						"explicit numeric expressions establish their own aggregate domain")
+				})
+			}
+		}
 	}
 }
 
@@ -433,20 +734,31 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 			"select s from set_empty_member_t group by s order by s limit 2",
 		} {
 			t.Run(source, func(t *testing.T) {
-				p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from ("+source+") d")
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from ("+source+") d")
 				require.NoError(t, err)
 				conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 				require.NotNil(t, conversion, "cast must use surviving canonical display, not raw bitmap")
 				require.Empty(t, conversion.Typ.Enumvalues)
+				hasGroupBy := strings.Contains(source, "group by")
 				for _, node := range p.GetQuery().Nodes {
 					if node.NodeType == planpb.Node_AGG {
-						require.Len(t, node.GroupBy, 1)
-						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						if hasGroupBy {
+							// Composite (display, storage) grouping from the
+							// ENUM/SET boolean-contract change: the display
+							// group key keeps its text identity and the hidden
+							// storage sibling disambiguates the empty-member
+							// declaration's zero sentinel.
+							require.Len(t, node.GroupBy, 2)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						} else {
+							require.Len(t, node.GroupBy, 1)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						}
 					}
 				}
 			})
 		}
-		p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
 		require.NoError(t, err)
 		require.False(t, planHasVarcharToIntegerCast(p))
 		require.True(t, planHasPlainUint64ColRef(p), "transparent casts must carry raw numeric identity")
@@ -469,13 +781,13 @@ func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {
 		{name: "derived expression stays lexical", sql: "select group_concat(e order by concat(e, '')) from (select e from enum_order_t) d", typ: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleGroupConcatOrderKeyType(t, logicPlan, tc.typ)
 		})
 	}
 
-	_, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 		"select group_concat(e order by e) from (select e from enum_duplicate_t) d")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-unique display labels")

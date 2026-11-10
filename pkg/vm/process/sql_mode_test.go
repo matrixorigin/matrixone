@@ -75,6 +75,33 @@ func TestIsPadCharToFullLengthMode(t *testing.T) {
 	}
 }
 
+func TestTimeTruncateFractionalMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode any
+		want bool
+	}{
+		{mode: "TIME_TRUNCATE_FRACTIONAL", want: true},
+		{mode: "STRICT_TRANS_TABLES, time_truncate_fractional ", want: true},
+		{mode: "TIME_TRUNCATE_FRACTIONAL_EXTRA", want: false},
+		{mode: "", want: false},
+		{mode: 1, want: false},
+	} {
+		require.Equal(t, tc.want, IsTimeTruncateFractionalMode(tc.mode))
+	}
+
+	enabled, err := ResolveTimeTruncateFractional(nil)
+	require.NoError(t, err)
+	require.False(t, enabled)
+	proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "TIME_TRUNCATE_FRACTIONAL"}}}
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "", nil })
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.False(t, enabled)
+}
+
 func TestResolvePadCharToFullLength(t *testing.T) {
 	t.Run("nil process", func(t *testing.T) {
 		enabled, err := ResolvePadCharToFullLength(nil)
@@ -111,4 +138,22 @@ func TestResolvePadCharToFullLength(t *testing.T) {
 		_, err := ResolvePadCharToFullLength(proc)
 		require.ErrorIs(t, err, wantErr)
 	})
+}
+
+func TestIsDivisionByZeroMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode any
+		want bool
+	}{
+		{"", false}, {nil, false}, {1, false},
+		{"STRICT_TRANS_TABLES", false},
+		{"ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"TRADITIONAL", true},
+		{" traditional ,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{" error_for_division_by_zero , STRICT_ALL_TABLES", true},
+		{"ERROR_FOR_DIVISION_BY_ZERO_EXTRA", false},
+		{"TRADITIONAL_EXTRA", false},
+	} {
+		require.Equal(t, tc.want, IsDivisionByZeroMode(tc.mode), tc.mode)
+	}
 }

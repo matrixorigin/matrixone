@@ -20,11 +20,11 @@ execute insert_values using @id, @c, @v, @t, @plain;
 deallocate prepare insert_values;
 select id, ifnull(c, 'NULL'), ifnull(v, 'NULL'), ifnull(t, 'NULL'), ifnull(plain, 'NULL')
 from string_values order by id;
-➤ id[4,32,0]  ¦  ifnull(c, NULL)[12,20,0]  ¦  ifnull(v, NULL)[12,20,0]  ¦  ifnull(t, NULL)[12,0,0]  ¦  ifnull(plain, NULL)[12,0,0]  𝄀
+➤ id[4,32,0]  ¦  ifnull(c, NULL)[12,20,0]  ¦  ifnull(v, NULL)[12,20,0]  ¦  ifnull(t, NULL)[12,63,0]  ¦  ifnull(plain, NULL)[-1,16383,0]  𝄀
 1  ¦  before-c  ¦  before-v  ¦  before-t  ¦  before-text  𝄀
 2  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  𝄀
 3  ¦  after-c  ¦  after-v  ¦  after-t  ¦  after-text  𝄀
-4  ¦  7  ¦  8.5  ¦  true  ¦  control-text
+4  ¦  7  ¦  8.5  ¦  1  ¦  control-text
 insert into string_values values (10, 'seed', 'seed', 'seed', 'seed');
 prepare update_values from 'update string_values set c=?, v=?, t=?, plain=? where id=10';
 set @c = 'first-c', @v = 'first-v', @t = 'first-t', @plain = 'first-text';

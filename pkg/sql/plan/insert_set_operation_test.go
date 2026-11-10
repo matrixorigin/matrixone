@@ -43,7 +43,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(
 				context.Background(),
 				dialect.MYSQL,
@@ -57,7 +57,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 			require.True(t, ok)
 			require.IsType(t, &tree.UnionClause{}, insertStmt.Rows.Select)
 
-			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, insertPlanHasNodeType(logicPlan, test.nodeType))
 		})
@@ -65,7 +65,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 }
 
 func TestParenthesizedInsertSetOperationSourceRemainsSupported(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -79,13 +79,13 @@ func TestParenthesizedInsertSetOperationSourceRemainsSupported(t *testing.T) {
 	require.True(t, ok)
 	require.IsType(t, &tree.ParenSelect{}, insertStmt.Rows.Select)
 
-	logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	require.True(t, insertPlanHasNodeType(logicPlan, planpb.Node_UNION_ALL))
 }
 
 func TestLegacyDirectInsertSetOperationSource(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -101,7 +101,7 @@ func TestLegacyDirectInsertSetOperationSource(t *testing.T) {
 }
 
 func TestDirectInsertSetOperationReportsBranchWidthError(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -111,7 +111,7 @@ func TestDirectInsertSetOperationReportsBranchWidthError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
 
-	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.ErrorContains(t, err, "SELECT statements have different number of columns")
 }
 

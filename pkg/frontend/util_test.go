@@ -17,6 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -35,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -63,6 +66,35 @@ import (
 
 func init() {
 	testutil.SetupAutoIncrService("")
+}
+
+func TestCollectScalarSubqueriesCollate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"scalar", "select (select 'first') collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"argument order", "select concat((select 'first') collate utf8mb4_bin, (select 'second') collate utf8mb4_bin)", []string{"(select 'first')", "(select 'second')"}},
+		{"cast wrapper", "select cast((select 'first') as char) collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"outer subquery only", "select (select (select 'inner') collate utf8mb4_bin) collate utf8mb4_bin", []string{"(select ((select 'inner')) collate utf8mb4_bin)"}},
+		{"literal", "select 'literal' collate utf8mb4_bin", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			var subqueries []*tree.Subquery
+			collectScalarSubqueries(expr, &subqueries)
+			got := make([]string, len(subqueries))
+			for i, subquery := range subqueries {
+				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 type accountingMysqlWriter struct {
@@ -715,10 +747,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), false)
+	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), true)
+	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }
@@ -853,7 +885,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -911,7 +943,7 @@ func TestGetExprValue(t *testing.T) {
 		// through the session compiler context after SET evaluation.
 		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
 		cvey.So(err, cvey.ShouldBeNil)
-		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false)
+		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false, nil)
 		cvey.So(err, cvey.ShouldBeNil)
 
 	})
@@ -972,7 +1004,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -1031,6 +1063,13 @@ func TestRewriteError(t *testing.T) {
 		want1 string
 		want2 string
 	}{
+		{
+			name:  "deadlock retains MySQL retry identity",
+			args:  args{err: moerr.NewDeadLockDetectedNoCtx()},
+			want:  1213,
+			want1: "40001",
+			want2: "deadlock detected",
+		},
 		{
 			name: "t1",
 			args: args{
@@ -1269,13 +1308,115 @@ func Test_makeExecuteSql(t *testing.T) {
 			want: "",
 		},
 	}
+	require.NoError(t, ses1.SetPrepareStmt(ctx, "empty_sql", &PrepareStmt{Name: "empty_sql"}))
+	// Independent oracle: complete known diagnostic followed by a valid prefix.
+	abbreviate := func(full string, limit int) string {
+		if limit == 0 || limit < -1 {
+			return ""
+		}
+		if limit == -1 || len(full) <= limit {
+			return full
+		}
+		end := limit
+		for !utf8.ValidString(full[:end]) {
+			end--
+		}
+		return full[:end] + "..."
+	}
+	limits := func(full string) []int {
+		result := []int{-2, -1}
+		for limit := 0; limit <= len(full)+1; limit++ {
+			result = append(result, limit)
+		}
+		return result
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, ""); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
-				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
+			const env = "execute test"
+			full := env
+			if tt.want != "" {
+				full += " // " + tt.want
+				if strings.HasSuffix(tt.want, " ;") {
+					full += " "
+				}
+			}
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, "", env, limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
 			}
 		})
 	}
+	for _, env := range []string{"", "你😀"} {
+		full := env + " //  ; "
+		for _, limit := range limits(full) {
+			require.Equal(t, abbreviate(full, limit), makeExecuteSql(ctx, ses1, &tree.Select{}, true, "empty_sql", env, limit))
+		}
+	}
+	t.Run("malformed EXECUTE USING text", func(t *testing.T) {
+		const rawSQL = "select /* \xff */ ?"
+		const rawVariable = "set @value = '你\xe4\xbd'"
+		require.NoError(t, ses1.SetPrepareStmt(ctx, "malformed_sql", &PrepareStmt{Name: "malformed_sql", Sql: rawSQL}))
+		ses1.SetUserDefinedVar("malformed_value", "unused", rawVariable)
+		stmt := &tree.Execute{Name: "malformed_sql", Variables: []*tree.VarExpr{{Name: "malformed_value"}}}
+		const full = "execute ? // select /* ? */ ? ; set @value = '你??'"
+		for _, limit := range limits(full) {
+			got := makeExecuteSql(ctx, ses1, stmt, false, "", "execute \xff", limit)
+			require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+			require.True(t, utf8.ValidString(got))
+		}
+		prepared, err := ses1.GetPrepareStmt(ctx, "malformed_sql")
+		require.NoError(t, err)
+		require.Equal(t, rawSQL, prepared.Sql)
+		value, err := ses1.GetUserDefinedVar("malformed_value")
+		require.NoError(t, err)
+		require.Equal(t, rawVariable, value.Sql)
+	})
+
+	for _, tc := range []struct{ name, value, want string }{
+		{"binary", "\xff\xfe", "x'fffe'"},
+		{"partial two", "\xc2", "x'c2'"},
+		{"partial three", "\xe4\xbd", "x'e4bd'"},
+		{"partial four", "\xf0\x9f\x98", "x'f09f98'"},
+		{"invalid last", "你😀\xff", "x'e4bda0f09f9880ff'"},
+		{"NUL", "a\x00b", "x'610062'"},
+		{"control", "\x01\x1b\x7f", "x'011b7f'"},
+		{"text", "你😀�", "你😀�"},
+		{"whitespace and punctuation", "'\\\t\n\r", "'\\\t\n\r"},
+		{"numeric", "-123.5", "-123.5"},
+		{"empty", "", ""},
+		{"text NULL", "NULL", "NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params}
+			t.Cleanup(func() { prepared.params = nil; params.Free(mp) })
+			for _, value := range []string{tc.value, "", "42"} {
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
+			}
+			params.GetNulls().Add(1)
+			require.NoError(t, ses1.SetPrepareStmt(ctx, prepared.Name, prepared))
+			full := "execute binary_diagnostic // select ?, ?, ? ; " + tc.want + " ; NULL ; 42"
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, ses1, &tree.Select{}, true, prepared.Name, "execute binary_diagnostic", limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+				require.True(t, utf8.ValidString(got))
+			}
+			require.Equal(t, tc.value, params.GetStringAt(0))
+			require.True(t, params.GetNulls().Contains(1))
+			require.Equal(t, "42", params.GetStringAt(2))
+			if strings.HasPrefix(tc.want, "x'") {
+				decoded, err := hex.DecodeString(tc.want[2 : len(tc.want)-1])
+				require.NoError(t, err)
+				require.Equal(t, []byte(tc.value), decoded)
+			} else {
+				var retained bool
+				allocs := testing.AllocsPerRun(10, func() { retained = isTextExecuteParam(tc.value) })
+				require.True(t, retained)
+				require.Zero(t, allocs)
+			}
+		})
+	}
+
 }
 
 func Test_getVariableValue(t *testing.T) {
@@ -1312,18 +1453,22 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	// MySQL's default (innodb_rollback_on_timeout=OFF) scopes an expired lock
+	// wait to the failing statement only; the transaction stays open, so the
+	// local and remote lock-wait-timeout codes are NOT whole-transaction fatal.
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnWriteConflictNoCtx("test")))
 }
 
 func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
@@ -1910,6 +2055,27 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataMediumIntLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), signed: true, length: 9},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), signed: false, length: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tc.signed)
+			setMysqlColumnTypeMetadata(col, tc.typ)
+
+			require.Equal(t, tc.length, col.Length())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2103,7 +2269,7 @@ func TestJdbcResultMetadataForTextTemporalAndYear(t *testing.T) {
 }
 
 func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := buildSingleSql(mock, t,
 		"select partition_info, aes_encrypt(rel_createsql, 'key'), rel_createsql, relname from mo_catalog.mo_tables")
 	require.NoError(t, err)
@@ -2216,6 +2382,25 @@ func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	}
 }
 
+func TestMysqlMediumIntProtocolMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		sign bool
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), sign: true},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), sign: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, defines.MYSQL_TYPE_INT24, col.ColumnType())
+			require.Equal(t, tc.sign, col.IsSigned())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -2308,6 +2493,309 @@ func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "table", legacy.Table())
 	require.Equal(t, "table", legacy.OrgTable())
+}
+
+func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	computed, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "predicate",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(computed, int(COM_QUERY))
+	pos := HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	charset, pos, ok := proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint16(charsetBinary), charset)
+	length, pos, ok := proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(8), length)
+	typ, _, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+
+	native, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "flag",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, native.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), native.Length())
+	packet = proto.makeColumnDefinition41Payload(native, int(COM_QUERY))
+	pos = HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	_, pos, ok = proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	length, pos, ok = proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(boolColumnLength), length)
+	typ, _, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+}
+
+func TestAggregateBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"select min(n_nationkey is null) as p from nation",
+		"select max(n_nationkey is null) as p from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, uint32(8), column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{
+			name:   "computed predicate window",
+			sql:    "select max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed predicate window under distinct",
+			sql:    "select distinct max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed min predicate window",
+			sql:    "select min(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed first predicate window",
+			sql:    "select first_value(n_nationkey is null) over (order by n_nationkey) as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "aggregate over native boolean window",
+			sql:    "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "native boolean window",
+			sql:    "select first_value(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+			length: boolColumnLength,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, tc.kind, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, tc.length, column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultKeepsStoredBooleanSiblingWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select with_grant_option, max(with_grant_option is null) over () as p from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 2)
+
+	stored, err := colDef2MysqlColumn(context.Background(), columns[0])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, stored.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), stored.Length())
+
+	computed, err := colDef2MysqlColumn(context.Background(), columns[1])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+}
+
+func TestStackedWindowBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select first_value(with_grant_option) over (order by role_id), "+
+			"max(with_grant_option is null) over (), "+
+			"first_value(with_grant_option is null) over (order by role_id desc) "+
+			"from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 3)
+
+	for i, want := range []struct {
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+	} {
+		require.Equal(t, want.kind, columns[i].ResultColumnKind)
+		column, err := colDef2MysqlColumn(context.Background(), columns[i])
+		require.NoError(t, err)
+		require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+		require.Equal(t, want.length, column.Length())
+	}
+}
+
+func TestStackedWindowBooleanResultsKeepMixedOutputOrder(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []struct {
+			kind   plan2.ResultColumnKind
+			length uint32
+		}
+	}{
+		{
+			name: "stored then computed",
+			sql: "select first_value(with_grant_option) over (order by role_id), " +
+				"first_value(role_id is null) over (order by role_id desc) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+			},
+		},
+		{
+			name: "computed then stored",
+			sql: "select first_value(role_id is null) over (order by role_id desc), " +
+				"first_value(with_grant_option) over (order by role_id) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, want.kind, columns[i].ResultColumnKind)
+				column, err := colDef2MysqlColumn(context.Background(), columns[i])
+				require.NoError(t, err)
+				require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+				require.Equal(t, want.length, column.Length())
+			}
+		})
+	}
+}
+
+func TestJoinedBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "distinct cross join",
+			sql: "select a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a cross join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b",
+		},
+		{
+			name: "grouped left join",
+			sql: "select a.v, b.v from " +
+				"(select with_grant_option v from mo_catalog.mo_role_privs group by with_grant_option) a left join " +
+				"(select role_id is null v from mo_catalog.mo_role_privs group by role_id is null) b on a.v = b.v",
+		},
+		{
+			name: "outer distinct right join",
+			sql: "select distinct a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a right join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b on a.v = b.v",
+		},
+	} {
+		for _, reordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reordered_%t", tc.name, reordered), func(t *testing.T) {
+				sql := tc.sql
+				lengths := []uint32{boolColumnLength, 8}
+				if reordered {
+					sql = strings.Replace(sql, "a.v, b.v", "b.v, a.v", 1)
+					lengths = []uint32{8, boolColumnLength}
+				}
+				queryPlan, err := buildSingleSql(mock, t, sql)
+				require.NoError(t, err)
+				columns := plan.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 2)
+				proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+				for i, colDef := range columns {
+					column, err := colDef2MysqlColumn(t.Context(), colDef)
+					require.NoError(t, err)
+					for _, cmd := range []int{int(COM_QUERY), int(COM_STMT_PREPARE)} {
+						packet := proto.makeColumnDefinition41Payload(column, cmd)
+						pos := HeaderOffset
+						for range 6 {
+							_, next, ok := proto.readStringLenEnc(packet, pos)
+							require.True(t, ok)
+							pos = next
+						}
+						_, pos, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						_, pos, ok = proto.io.ReadUint16(packet, pos)
+						require.True(t, ok)
+						length, pos, ok := proto.io.ReadUint32(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, lengths[i], length, "column %d, command %d", i, cmd)
+						typ, _, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+					}
+				}
+			})
+		}
+	}
 }
 
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
@@ -2454,6 +2942,231 @@ func Test_convertRowsIntoBatchError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func Test_mysqlColDef2PlanResultColDefIntegerSignedness(t *testing.T) {
+	// Saved-result metadata must round-trip wire integer signedness so an
+	// unsigned count column saves into an unsigned destination type (issue
+	// #31498) instead of forcing values through a signed destination.
+	cases := []struct {
+		mysqlType defines.MysqlType
+		signed    bool
+		wantOid   types.T
+	}{
+		{defines.MYSQL_TYPE_TINY, true, types.T_int8},
+		{defines.MYSQL_TYPE_TINY, false, types.T_uint8},
+		{defines.MYSQL_TYPE_SHORT, true, types.T_int16},
+		{defines.MYSQL_TYPE_SHORT, false, types.T_uint16},
+		{defines.MYSQL_TYPE_LONG, true, types.T_int32},
+		{defines.MYSQL_TYPE_LONG, false, types.T_uint32},
+		{defines.MYSQL_TYPE_LONGLONG, true, types.T_int64},
+		{defines.MYSQL_TYPE_LONGLONG, false, types.T_uint64},
+	}
+	for _, c := range cases {
+		column := new(MysqlColumn)
+		column.SetColumnType(c.mysqlType)
+		column.SetSigned(c.signed)
+		pCols, oids, _, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, c.wantOid, oids[0].Oid)
+		require.Equal(t, int32(c.wantOid), pCols.ResultCols[0].Typ.Id)
+	}
+}
+
+func Test_convertRowsIntoBatchUnsignedRoundTrip(t *testing.T) {
+	// The SHOW COUNT(*) WARNINGS/ERRORS column publishes uint64 values with
+	// unsigned LONGLONG metadata. Saving must keep unsigned metadata and must
+	// not truncate counts above MaxInt64 (issue #31498).
+	column := new(MysqlColumn)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+	column.SetName("@@session.warning_count")
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(column)
+	values := []uint64{0, 1, math.MaxInt64, uint64(math.MaxInt64) + 1, math.MaxUint64}
+	for _, v := range values {
+		mrs.AddRow([]any{v})
+	}
+	mrs.AddRow([]any{nil}) // NULL rows must keep the unsigned metadata intact.
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_uint64), pColDefs.ResultCols[0].Typ.Id)
+	vec := data.Vecs[0]
+	assert.Equal(t, types.T_uint64, vec.GetType().Oid)
+	assert.Equal(t, len(values)+1, vec.Length())
+	assert.Equal(t, values, vector.MustFixedColWithTypeCheck[uint64](vec)[:len(values)])
+	assert.True(t, vec.GetNulls().Contains(uint64(len(values))))
+
+	// Nonnegative int64 row values also save for narrower unsigned metadata.
+	tinyCol := new(MysqlColumn)
+	tinyCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+	tinyCol.SetSigned(false)
+	tinyCol.SetName("tiny_unsigned")
+	tiny := &MysqlResultSet{}
+	tiny.AddColumn(tinyCol)
+	tiny.AddRow([]any{int64(7)})
+	tinyData, tinyDefs, err := convertRowsIntoBatch(pool, tiny.Columns, tiny.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(types.T_uint8), tinyDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, []uint8{7}, vector.MustFixedColWithTypeCheck[uint8](tinyData.Vecs[0]))
+}
+
+func Test_convertRowsIntoBatchVarStringBytesAndBinaryType(t *testing.T) {
+	// Engine-extracted VARCHAR/TEXT/VARBINARY cells arrive as []byte, and the
+	// diff path also publishes VARBINARY columns as VAR_STRING with the binary
+	// charset. Saving must keep the exact bytes and the binary type instead of
+	// rendering []byte as a Go numeric list (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	textCol.SetName("v")
+	textCol.SetCharset(charsetVarchar)
+
+	binCol := new(MysqlColumn)
+	binCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	binCol.SetName("bin")
+	binCol.SetCharset(charsetBinary)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(textCol)
+	mrs.AddColumn(binCol)
+	mrs.AddRow([]any{[]byte("中文"), []byte{0xFF, 0x00, 0x0A}})
+	mrs.AddRow([]any{"plain", []byte{}})
+	mrs.AddRow([]any{nil, nil})
+	// Counterexample: NULL, empty string and embedded NUL must stay distinct.
+	mrs.AddRow([]any{[]byte{0x00, 0x31}, []byte{0x00, 0x31}})
+
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_varchar), pColDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, int32(types.T_varbinary), pColDefs.ResultCols[1].Typ.Id)
+
+	textVec := data.Vecs[0]
+	assert.Equal(t, types.T_varchar, textVec.GetType().Oid)
+	require.Equal(t, []byte("中文"), (textVec.GetBytesAt(0)))
+	require.Equal(t, []byte("plain"), (textVec.GetBytesAt(1)))
+	assert.True(t, textVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (textVec.GetBytesAt(3)))
+
+	binVec := data.Vecs[1]
+	assert.Equal(t, types.T_varbinary, binVec.GetType().Oid)
+	require.Equal(t, []byte{0xFF, 0x00, 0x0A}, (binVec.GetBytesAt(0)))
+	require.Empty(t, (binVec.GetBytesAt(1)))
+	assert.True(t, binVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (binVec.GetBytesAt(3)))
+}
+
+func Test_convertRowsIntoBatchVectorTextPresentation(t *testing.T) {
+	// VECF32 cells published under VARCHAR metadata must save the same
+	// "[2, 2]" display text the client sees, not the Go "%v" form "[2 2]"
+	// (issue #31535 comment case).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	vecCol.SetName("vec")
+	vecCol.SetCharset(charsetVarchar)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	textCol.SetName("t")
+	textCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	mrs.AddColumn(textCol)
+	mrs.AddRow([]any{[]float32{2, 2}, []byte("bytes text")})
+	mrs.AddRow([]any{[]float64{1.5, 2.5}, nil})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.Equal(t, []byte("[2, 2]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 2.5]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("bytes text"), (data.Vecs[1].GetBytesAt(0)))
+	assert.True(t, data.Vecs[1].GetNulls().Contains(1))
+}
+
+func Test_convertRowsIntoBatchBlockScaledAndNarrowVectorText(t *testing.T) {
+	// BF16/Float16/int8 vector cells and a block-scaled (vecf8) cell published
+	// under VARCHAR metadata must save the same text the client-visible result
+	// presents; an unparseable block-scaled cell keeps the pre-fix "%v"
+	// rendering instead of failing the saved result (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	vecCol.SetName("v")
+	vecCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	// Counterexample: fmt.Sprintf("%v") would render these as Go numeric
+	// lists such as "[16384 48640]".
+	mrs.AddRow([]any{[]types.BF16{types.BF16FromFloat32(2), types.BF16FromFloat32(-0.5)}})
+	mrs.AddRow([]any{[]types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(0.25)}})
+	mrs.AddRow([]any{[]int8{3, -7}})
+
+	cell, cellErr := types.StringToBlockScaled(types.BlockScaledMXFP8, "[1, 2]")
+	require.NoError(t, cellErr)
+	blockScaled := types.BlockScaledValue{Oid: types.T_array_float8, Cell: cell}
+	mrs.AddRow([]any{blockScaled})
+	corruptCell := types.BlockScaledValue{Oid: types.T_array_float8, Cell: []byte{}}
+	mrs.AddRow([]any{corruptCell})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.NotNil(t, data)
+	require.Equal(t, 5, int(data.Vecs[0].Length()))
+
+	require.Equal(t, []byte("[2, -0.5]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 0.25]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("[3, -7]"), (data.Vecs[0].GetBytesAt(2)))
+
+	// The client-visible presentation is the oracle for the block-scaled
+	// cell: the saved bytes must equal MysqlResultSet.GetString for it.
+	clientText, clientErr := mrs.GetString(context.TODO(), 3, 0)
+	require.NoError(t, clientErr)
+	require.Equal(t, []byte(clientText), (data.Vecs[0].GetBytesAt(3)))
+
+	// A cell that cannot be parsed keeps the pre-fix "%v" presentation
+	// instead of failing the whole saved result: BlockScaledValue implements
+	// fmt.Stringer through BlockScaledToJSON, whose text for a corrupt cell
+	// is "", so fmt.Sprintf("%v") saves the same empty text as before this fix.
+	require.Empty(t, (data.Vecs[0].GetBytesAt(4)))
+}
+
+func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
+	// Values that cannot be represented exactly must fail fast instead of
+	// panicking, wrapping sign, or truncating (issue #31498).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	run := func(mysqlType defines.MysqlType, value any) error {
+		column := new(MysqlColumn)
+		column.SetColumnType(mysqlType)
+		column.SetSigned(false)
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(column)
+		mrs.AddRow([]any{value})
+		_, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+		return err
+	}
+	// Negative signed values fail instead of wrapping around.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, int64(-1)))
+	// Out-of-range values fail instead of truncating to the wire width.
+	assert.Error(t, run(defines.MYSQL_TYPE_TINY, uint64(math.MaxUint8)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_SHORT, uint64(math.MaxUint16)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_LONG, uint64(math.MaxUint32)+1))
+	// Foreign value types surface a clean error rather than a panic.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, "7"))
+}
+
 func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
@@ -2487,7 +3200,7 @@ func Test_isLegal(t *testing.T) {
 		want bool
 	}
 
-	tests := []kase{}
+	tests := make([]kase, 0, len(trueNames))
 	for i, name := range trueNames {
 		tests = append(tests, kase{
 			name: fmt.Sprintf("t%d", i),
@@ -2500,8 +3213,10 @@ func Test_isLegal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+			_, _, dbErr := CDCParseTableInfo(context.Background(), tt.args.name, cdc.CDCPitrGranularity_DB)
+			assert.Equalf(t, tt.want, dbErr == nil, "dbNameIsLegal(%v)", tt.args.name)
+			_, _, tableErr := CDCParseTableInfo(context.Background(), "*."+tt.args.name, cdc.CDCPitrGranularity_Table)
+			assert.Equalf(t, tt.want, tableErr == nil, "tableNameIsLegal(%v)", tt.args.name)
 		})
 	}
 }
@@ -2551,8 +3266,10 @@ func Test_islegal(t *testing.T) {
 
 func Test_accountNameIsLegal(t *testing.T) {
 	assert.False(t, accountNameIsLegal(",."))
-	assert.False(t, dbNameIsLegal(",."))
-	assert.False(t, tableNameIsLegal(",."))
+	_, _, dbErr := CDCParseTableInfo(context.Background(), ",.", cdc.CDCPitrGranularity_DB)
+	assert.Error(t, dbErr)
+	_, _, tableErr := CDCParseTableInfo(context.Background(), "*.,.", cdc.CDCPitrGranularity_Table)
+	assert.Error(t, tableErr)
 }
 
 func Test_replaceStr2(t *testing.T) {
@@ -2627,8 +3344,21 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		actual, err := buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 1)
+		convey.So(actual.TblId, convey.ShouldEqual, 100)
+		convey.So(actual.Version, convey.ShouldEqual, 3)
+		convey.So(actual.DbId, convey.ShouldEqual, 10)
+
+		// A View must be rebound, even if its persisted type blob is invalid.
+		bh.sql2result[sql] = newMrsForTableColumnDef([][]interface{}{{
+			"old", "invalid type", 1, 0, "invalid default", 0, 0, catalog.SystemViewRel,
+		}})
+		actual, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(actual.TableType, convey.ShouldEqual, catalog.SystemViewRel)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 0)
 	})
 }
 
@@ -2670,8 +3400,24 @@ func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
 	mrs.AddColumn(col5)
 	mrs.AddColumn(col6)
 	mrs.AddColumn(col7)
+	kind := &MysqlColumn{}
+	kind.SetName("relkind")
+	kind.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(kind)
+	for _, name := range []string{"rel_id", "rel_version", "reldatabase_id"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		mrs.AddColumn(column)
+	}
 
 	for _, row := range rows {
+		if len(row) == 7 {
+			row = append(row, catalog.SystemOrdinaryRel)
+		}
+		if len(row) == 8 {
+			row = append(row, uint64(100), uint32(3), uint64(10))
+		}
 		mrs.AddRow(row)
 	}
 
@@ -2692,7 +3438,7 @@ func Test_getTableColumnDefSql(t *testing.T) {
 			accountId: 1,
 			dbName:    "db1",
 			tableName: "tbl1",
-			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "'db1'", "'tbl1'"),
 			wantErr:   false,
 		},
 	}
@@ -3048,4 +3794,63 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
+}
+
+// TestLowPrecFloatFrontendPaths covers the frontend value paths for the scalar
+// low-precision float types (#20567): getValueFromVector (const scalar), the legacy
+// extractRowFromVector row path, and convertEngineTypeToMysqlType (presented as FLOAT).
+func TestLowPrecFloatFrontendPaths(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	ctx := context.Background()
+
+	cases := []struct {
+		oid types.T
+		app func(*vector.Vector, float32)
+	}{
+		{types.T_bf16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.BF16FromFloat32(f), false, mp) }},
+		{types.T_float16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float16FromFloat32(f), false, mp) }},
+		{types.T_float8, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float8FromFloat32(f), false, mp) }},
+		{types.T_float4, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float4FromFloat32(f), false, mp) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// convertEngineTypeToMysqlType -> FLOAT.
+			col := &MysqlColumn{}
+			require.NoError(t, convertEngineTypeToMysqlType(ctx, c.oid, col))
+			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
+
+			// getValueFromVector widens a const scalar to float32.
+			cv := vector.NewVec(c.oid.ToType())
+			defer cv.Free(mp)
+			c.app(cv, 1.5)
+			got, err := getValueFromVector(ctx, cv, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, float32(1.5), got)
+
+			// extractRowFromVector (legacy any-row path) yields float32.
+			rv := vector.NewVec(c.oid.ToType())
+			defer rv.Free(mp)
+			c.app(rv, -2.0)
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, nil, rv, 0, row, 0, false))
+			require.Equal(t, float32(-2.0), row[0])
+		})
+	}
+}
+
+func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
+	for _, size := range []int{16, 1 << 20} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			prepared := &PrepareStmt{Sql: "select '" + strings.Repeat("x", size) + "'"}
+			ses := &Session{prepareStmts: map[string]*PrepareStmt{"audit": prepared}}
+			stmt := &tree.Select{}
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := makeExecuteSql(b.Context(), ses, stmt, true, "audit", "execute audit", 4); got != "exec..." {
+					b.Fatalf("unexpected diagnostic: %q", got)
+				}
+			}
+		})
+	}
 }

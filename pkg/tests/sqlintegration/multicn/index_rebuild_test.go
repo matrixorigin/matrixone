@@ -1,0 +1,469 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package multicn
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
+)
+
+// A mirror transaction on a remote scan worker cannot commit the builder's
+// internal index INSERTs. Two CNs distinguish a remote source from its writer.
+func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	inventory := clusterservice.GetMOCluster(cn.ServiceID())
+	refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
+	require.True(t, ok)
+	var peer string
+	waitWorkers := func(ctx context.Context, want int) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			if refresher.Refresh(ctx) != nil {
+				return false
+			}
+			count := 0
+			inventory.GetCNService(clusterservice.NewSelector(), func(service metadata.CNService) bool {
+				count++
+				if service.ServiceID != cn.ServiceID() {
+					peer = service.PipelineServiceAddress
+				}
+				return true
+			})
+			return count == want
+		}, 30*time.Second, 100*time.Millisecond)
+	}
+	waitWorkers(ctx, 2)
+	oldForce := plan.GetForceScanOnMultiCN()
+	t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+	// Bookkeeping for the ISCP guard installed further below. The resume
+	// cleanup is registered here — before the connections even exist, and
+	// before any Pause or assertion that can FailNow — so in LIFO order it
+	// runs strictly after the leftover-transaction rollback, the conn closes,
+	// and the db closes, but before the cluster closes: Resume is only
+	// attempted after every server session that could still hold index/job
+	// locks has been destroyed, regardless of how the rollback itself ended.
+	var executor *iscp.ISCPTaskExecutor
+	var executorCN string
+	paused := false
+	t.Cleanup(func() {
+		if executor == nil || !paused {
+			return
+		}
+		if err := executor.Resume(); err != nil {
+			t.Errorf("resume ISCP executor before releasing the shared fixture: %v", err)
+		} else if restored, ready := iscp.GetExecutorRuntime(executorCN); !ready || restored != executor {
+			t.Errorf("ISCP executor for %s not restored (ready=%v)", executorCN, ready)
+		}
+	})
+	conns := make([]*sql.Conn, 0, 2)
+	for i := 0; i < 2; i++ {
+		cn, err := cluster.GetCNService(i)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		// Release reporting stays non-fatal: a cleanup that FailNows would
+		// abort runCleanups and skip the later executor-resume/account/executor
+		// releases registered before these.
+		t.Cleanup(func() {
+			if err := db.Close(); err != nil {
+				t.Errorf("close db for test connection: %v", err)
+			}
+		})
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close test connection: %v", err)
+			}
+		})
+		conns = append(conns, conn)
+	}
+	conn := conns[0]
+	const schema = "index_rebuild_coordinator"
+	// Cluster.Close owns the isolated database and its index jobs. Roll back
+	// any unfinished subtest transaction before the connections are closed;
+	// registered after the conn/db closes below so it runs first in LIFO
+	// order. Reporting is non-fatal (t.Errorf, never FailNow) so a failure
+	// here cannot skip the later conn/db closes. The executor-resume cleanup
+	// registered further above runs after those closes.
+	t.Cleanup(func() {
+		for i, c := range conns {
+			// Fresh ctx per connection: a shared budget lets one slow
+			// rollback consume the next connection's timeout.
+			rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, err := c.ExecContext(rctx, "rollback")
+			rcancel()
+			if err != nil {
+				t.Errorf("roll back leftover transaction on conn %d before closing it: %v", i, err)
+			}
+		}
+	})
+	exec := func(t *testing.T, statement string) {
+		t.Helper()
+		_, err := conn.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	// A committed write advances its own CN, not a different session's snapshot.
+	// Wait only at committed handoffs; transaction-local index assertions below
+	// must still work without publishing the writer's pending changes.
+	waitCrossCN := func(t *testing.T, writerIndex, readerIndex int) {
+		t.Helper()
+		writer, err := cluster.GetCNService(writerIndex)
+		require.NoError(t, err)
+		reader, err := cluster.GetCNService(readerIndex)
+		require.NoError(t, err)
+		frontier := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty(), "writer must publish a commit timestamp")
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		snapshot, err := reader.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(snapshot), "reader must advance past the writer's commit")
+	}
+	query := func(t *testing.T, statement string) []string {
+		t.Helper()
+		rows, err := conn.QueryContext(ctx, statement)
+		require.NoError(t, err, statement)
+		defer rows.Close()
+		cols, err := rows.Columns()
+		require.NoError(t, err)
+		out := make([]string, 0)
+		for rows.Next() {
+			values := make([]sql.NullString, len(cols))
+			args := make([]any, len(cols))
+			for i := range values {
+				args[i] = &values[i]
+			}
+			require.NoError(t, rows.Scan(args...))
+			texts := make([]string, len(cols))
+			for i, value := range values {
+				texts[i] = "NULL"
+				if value.Valid {
+					texts[i] = value.String
+				}
+			}
+			out = append(out, strings.Join(texts, "\t"))
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+	for _, statement := range []string{
+		"create database " + schema, "use " + schema,
+		"set experimental_fulltext2_index=1", "set experimental_hnsw_index=1",
+		"create table docs(id int primary key,body varchar(200))",
+		"insert into docs values(1,'bbbbbbbbbbbbbbbbbbbbbbbbbb'),(2,'aaaaaaaaaaaaaaaaaaaaaaa'),(3,'hello bbbbbbbbbbbbbbbbbbbbbbbbbb')",
+		"create fulltext2 index ft on docs(body) with parser ngram",
+		"create table vectors(id bigint primary key,v vecf64(2))",
+		"insert into vectors values(1,'[1,0]'),(2,'[2,0]'),(3,'[3,0]')",
+		"create index hx using hnsw on vectors(v) op_type 'vector_l2_ops' m=8 ef_construction=64 ef_search=64",
+	} {
+		exec(t, statement)
+	}
+	for _, table := range []string{"docs", "vectors"} {
+		exec(t, "select mo_ctl('dn','flush','"+schema+"."+table+"')")
+	}
+	waitCrossCN(t, 0, 1)
+	for _, statement := range []string{"use " + schema, "set experimental_fulltext2_index=1", "set experimental_hnsw_index=1"} {
+		_, err = conns[1].ExecContext(ctx, statement)
+		require.NoError(t, err)
+	}
+
+	// The periodic ISCP executor races the manual force_sync rebuilds below: its
+	// mo_catalog.mo_iscp_log job-state/watermark updates were observed to
+	// deadlock against an alter reindex force_sync issued from the second
+	// coordinator (lock cycle on the shared job row in the multi-CN CI).
+	// In the embedded multi-CN fixture only one CN hosts the executor, so
+	// discover the hosting CN, pause its executor before the manual rebuilds
+	// begin, and resume it before the cluster closes. Production retry
+	// ownership is unchanged; this only stops background ownership for the
+	// controlled manual path, as in the temporary-table fixture (#31288).
+	require.Eventually(t, func() bool {
+		for i := 0; i < 2; i++ {
+			cnService, err := cluster.GetCNService(i)
+			require.NoError(t, err)
+			service := cnService.RawService().(cnservice.Service)
+			if hosted, ready := iscp.GetExecutorRuntime(service.ID()); ready {
+				executor = hosted
+				executorCN = service.ID()
+				return true
+			}
+		}
+		return false
+	}, time.Minute, 10*time.Millisecond, "ISCP executor must be ready before pausing")
+	require.NoError(t, executor.Pause())
+	paused = true
+	_, running := iscp.GetExecutorRuntime(executorCN)
+	require.False(t, running, "Pause must drain and unpublish the executor")
+
+	for _, tc := range []struct {
+		name, table, index, algo, match, want, wantAfterDML, search, metaType string
+		mutations                                                             []string
+	}{
+		{
+			name:         "fulltext2",
+			table:        "docs",
+			index:        "ft",
+			algo:         "fulltext2",
+			match:        "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id",
+			want:         "1\n3",
+			wantAfterDML: "2\n3\n4",
+			search:       "Fulltext Index Scan",
+			metaType:     catalog.FullText2Index_TblType_Metadata,
+			mutations: []string{
+				"update docs set body='bbbbbbbbbbbbbbbbbbbbbbbbbb' where id=2",
+				"delete from docs where id=1",
+				"insert into docs values(4,'bbbbbbbbbbbbbbbbbbbbbbbbbb')",
+			},
+		},
+		{
+			name:         "hnsw",
+			table:        "vectors",
+			index:        "hx",
+			algo:         "hnsw",
+			match:        "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'",
+			want:         "1\n2\n3",
+			wantAfterDML: "4\n3\n1",
+			search:       "Vector Index Scan",
+			metaType:     catalog.Hnsw_TblType_Metadata,
+			mutations: []string{
+				"update vectors set v='[9,0]' where id=1",
+				"delete from vectors where id=2",
+				"insert into vectors values(4,'[0.5,0]')",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn = conns[0]
+			want := tc.want
+			require.Equal(t, want, strings.Join(query(t, tc.match), "\n"))
+			require.Contains(t, strings.Join(query(t, "explain "+tc.match), "\n"), tc.search)
+			metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='"+tc.table+"') and algo_table_type='"+tc.metaType+"'")
+			require.Len(t, metadataTable, 1)
+			meta := "`" + metadataTable[0] + "`"
+			rebuild := func() {
+				plan.SetForceScanOnMultiCN(true)
+				defer plan.SetForceScanOnMultiCN(oldForce)
+				exec(t, "alter table "+tc.table+" alter reindex "+tc.index+" "+tc.algo+" force_sync")
+			}
+			// Rebuild from both coordinators: a fixed physical object owner must
+			// be remote to one of them. No hash-dependent retries are needed.
+			for i, coordinator := range conns {
+				conn = coordinator
+				before := query(t, "select max(build_ts) from "+meta)
+				require.NotEqual(t, []string{"NULL"}, before)
+				if i == 0 {
+					physical := func() string {
+						plan.SetForceScanOnMultiCN(true)
+						defer plan.SetForceScanOnMultiCN(oldForce)
+						return strings.Join(query(t, "explain phyplan analyze select id from "+tc.table), "\n")
+					}()
+					require.NotEmpty(t, peer)
+					require.Contains(t, physical, peer, "source scans must use both CNs")
+				}
+				rebuild()
+				require.Equal(t, want, strings.Join(query(t, tc.match), "\n"), "successful rebuild on CN%d must commit replacement index writes", i)
+				after := query(t, "select max(build_ts) from "+meta)
+				require.NotEqual(t, []string{"NULL"}, after)
+				require.NotEqual(t, before, after, "successful rebuild must publish a new generation")
+				require.Equal(t, []string{"3"}, query(t, "select count(*) from "+tc.table), "source rows remain intact")
+				if i == 0 {
+					// Empty input still clears the old model, but both source and
+					// index changes must remain owned by this transaction.
+					exec(t, "begin")
+					exec(t, "delete from "+tc.table+" where id>=0")
+					rebuild()
+					require.Empty(t, query(t, tc.match))
+					require.Equal(t, []string{"NULL"}, query(t, "select max(build_ts) from "+meta))
+					exec(t, "rollback")
+					require.Equal(t, want, strings.Join(query(t, tc.match), "\n"))
+					require.Equal(t, after, query(t, "select max(build_ts) from "+meta), "rollback must preserve the prior committed generation")
+
+					// Rebuild the next generation from a persisted source snapshot that
+					// contains an UPDATE, DELETE and INSERT. This distinguishes a real
+					// replacement from accidentally re-publishing the previous model.
+					for _, statement := range tc.mutations {
+						exec(t, statement)
+					}
+					exec(t, "select mo_ctl('dn','flush','"+schema+"."+tc.table+"')")
+					waitCrossCN(t, 0, 1)
+					want = tc.wantAfterDML
+				}
+			}
+			if tc.name == "hnsw" {
+				t.Run("ordinary_user_hnsw_rebuild", func(t *testing.T) {
+					waitCrossCN(t, 1, 0)
+					conn = conns[0]
+					metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='vectors') and algo_table_type='"+catalog.Hnsw_TblType_Metadata+"'")
+					require.Len(t, metadataTable, 1)
+					meta := "`" + metadataTable[0] + "`"
+					cleanupSQL := func(statement string) {
+						cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+						defer stop()
+						if _, err := conns[0].ExecContext(cleanupCtx, statement); err != nil {
+							t.Errorf("cleanup %q: %v", statement, err)
+						}
+					}
+					exec(t, "create role rebuild_role")
+					t.Cleanup(func() { cleanupSQL("drop role rebuild_role") })
+					exec(t, "create user rebuild_user identified by '111' default role rebuild_role")
+					t.Cleanup(func() { cleanupSQL("drop user rebuild_user") })
+					for _, statement := range []string{
+						"grant connect on account * to rebuild_role",
+						"grant all on database " + schema + " to rebuild_role",
+						"grant all on table " + schema + ".* to rebuild_role",
+					} {
+						exec(t, statement)
+					}
+					waitCrossCN(t, 0, 1)
+
+					plan.SetForceScanOnMultiCN(true)
+					t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+					for i := range conns {
+						cn, err := cluster.GetCNService(i)
+						require.NoError(t, err)
+						db, err := sql.Open("mysql", fmt.Sprintf("sys#rebuild_user#rebuild_role:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+						require.NoError(t, err)
+						t.Cleanup(func() {
+							if err := db.Close(); err != nil {
+								t.Errorf("close ordinary user db: %v", err)
+							}
+						})
+						user, err := db.Conn(ctx)
+						require.NoError(t, err)
+						t.Cleanup(func() {
+							if err := user.Close(); err != nil {
+								t.Errorf("close ordinary user connection: %v", err)
+							}
+						})
+						conn = user
+						exec(t, "use "+schema)
+						exec(t, "set experimental_hnsw_index=1")
+						var ignored int
+						var denied *mysql.MySQLError
+						err = user.QueryRowContext(ctx, "select count(*) from "+meta).Scan(&ignored)
+						require.ErrorAs(t, err, &denied)
+						require.Contains(t, strings.ToLower(denied.Message), "privilege")
+
+						conn = conns[i]
+						before := query(t, "select max(build_ts) from "+meta)
+						require.NotEqual(t, []string{"NULL"}, before)
+						conn = user
+						exec(t, "alter table vectors alter reindex hx hnsw force_sync")
+						search := "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'"
+						require.Contains(t, strings.Join(query(t, "explain "+search), "\n"), "Vector Index Scan")
+						require.Equal(t, []string{"4", "3", "1"}, query(t, search))
+						conn = conns[i]
+						after := query(t, "select max(build_ts) from "+meta)
+						require.NotEqual(t, []string{"NULL"}, after)
+						require.NotEqual(t, before, after, "CN%d must publish a new generation", i)
+						waitCrossCN(t, i, 1-i)
+					}
+				})
+			}
+		})
+	}
+
+	// #29796: COPY ALTER builds from a new, uncommitted table incarnation.
+	// A remote name lookup must not scan the original committed table instead.
+	for _, flush := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy_alter/flush_%t", flush), func(t *testing.T) {
+			conn = conns[0]
+			plan.SetForceScanOnMultiCN(false)
+			t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+			table := fmt.Sprintf("copy_vectors_%t", flush)
+			exec(t, "create table "+table+"(id bigint primary key, embedding vecf32(3))")
+			exec(t, "insert into "+table+" values(1,'[1,0,0]'),(2,'[0,1,0]'),(3,'[0,0,1]')")
+			if flush {
+				exec(t, "select mo_ctl('dn','flush','"+schema+"."+table+"')")
+			}
+			waitCrossCN(t, 0, 1)
+			// Both ingress CNs use the same original object: at least one has
+			// a remote object owner. Rollback keeps it intact for the next CN.
+			for i, coordinator := range conns {
+				t.Run(fmt.Sprintf("cn%d", i), func(t *testing.T) {
+					cn, err := cluster.GetCNService(i)
+					require.NoError(t, err)
+					inventory := clusterservice.GetMOCluster(cn.ServiceID())
+					refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
+					require.True(t, ok)
+					require.NoError(t, refresher.Refresh(ctx))
+					workers := 0
+					inventory.GetCNService(clusterservice.NewSelector(), func(metadata.CNService) bool {
+						workers++
+						return true
+					})
+					require.Equal(t, 2, workers, "each coordinator must discover both scan workers")
+					conn = coordinator
+					t.Cleanup(func() {
+						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cleanupCancel()
+						_, err := coordinator.ExecContext(cleanupCtx, "rollback")
+						require.NoError(t, err)
+					})
+					plan.SetForceScanOnMultiCN(true)
+					// Existing committed tables must still combine remote persisted
+					// rows with the coordinator's transaction-local writes exactly once.
+					exec(t, "begin")
+					exec(t, "insert into "+table+" values(4,'[2,0,0]')")
+					require.Equal(t, []string{"1", "2", "3", "4"}, query(t, "select id from "+table+" order by id"))
+					exec(t, "rollback")
+
+					exec(t, "begin")
+					exec(t, "alter table "+table+" add column note int, add index h_embedding using hnsw(embedding) op_type 'vector_l2_ops'")
+					require.Equal(t, []string{"1\tNULL", "2\tNULL", "3\tNULL"}, query(t, "select id,note from "+table+" order by id"))
+					metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='"+table+"') and algo_table_type='"+catalog.Hnsw_TblType_Metadata+"'")
+					require.Len(t, metadataTable, 1)
+					// Validate the built generation directly; a query with pending
+					// writes may correctly fall back to a source scan.
+					require.Equal(t, []string{"3"}, query(t, "select sum(nrow) from `"+metadataTable[0]+"`"))
+					search := "select id from " + table + " order by l2_distance(embedding,'[1,0,0]') limit 1 by rank with option 'mode=post'"
+					require.Equal(t, []string{"1"}, query(t, search))
+					if i == 0 {
+						exec(t, "rollback")
+						require.Len(t, query(t, "show columns from "+table), 2)
+					} else {
+						exec(t, "commit")
+						waitCrossCN(t, 1, 0)
+						conn = conns[0]
+						require.Equal(t, []string{"1\tNULL", "2\tNULL", "3\tNULL"}, query(t, "select id,note from "+table+" order by id"))
+						require.Equal(t, []string{"1"}, query(t, search))
+					}
+				})
+			}
+		})
+	}
+}

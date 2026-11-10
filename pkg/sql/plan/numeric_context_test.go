@@ -61,11 +61,11 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -85,11 +85,11 @@ func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -115,7 +115,7 @@ func TestIssue28396StringFunctionNumericPrefixArguments(t *testing.T) {
 		"select left('abcdef', n_name) from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneExprStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 		})
 	}
@@ -146,7 +146,7 @@ func TestIssue28396StringFunctionNumericPrefixResults(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.sql, func(t *testing.T) {
-			pl, err := runOneExprStmt(NewMockOptimizer(false), t, test.sql)
+			pl, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			proc := testutil.NewProc(t)
 			defer proc.Free()
@@ -162,21 +162,21 @@ func TestIssue28396StringFunctionNumericPrefixResults(t *testing.T) {
 }
 
 func TestNumericContextModWithoutParametersInPrepareMode(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select mod(2024, 4)", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	require.Empty(t, collectPlanParamTypes(queryPlan))
 }
 
 func TestNumericContextUsesFunctionSpecificPreparedDomain(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select ? + abs(?)", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 
 	paramTypes := collectPlanParamTypes(queryPlan)
@@ -197,12 +197,12 @@ func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
 		{
 			name: "integer column",
 			sql:  "select (? + ?) + N_REGIONKEY from nation",
-			want: types.T_int32,
+			want: types.T_int64,
 		},
 		{
 			name: "qualified integer column",
 			sql:  "select (? + ?) + nation.N_REGIONKEY from nation",
-			want: types.T_int32,
+			want: types.T_int64,
 		},
 		{
 			name: "decimal column",
@@ -213,11 +213,11 @@ func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -273,14 +273,14 @@ func TestPreparedNumericContextTreatsBitColumnAsUnsignedBigint(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			optimizer.ctxt.tables["nation"].Cols[2].Typ = makePlan2Type(typePtrForPlanTest(
 				types.New(types.T_bit, 64, 0),
 			))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)
@@ -335,11 +335,11 @@ func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -363,11 +363,11 @@ func TestPreparedNumericContextCoversBinaryOperators(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 
 			paramTypes := collectPlanParamTypes(queryPlan)
@@ -398,11 +398,11 @@ func TestNumericContextDoesNotCrossComparisonOrTemporalBoundary(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			require.Equal(t, test.want, collectPlanParamTypes(queryPlan))
 		})
@@ -419,18 +419,18 @@ func TestPreparedNumericContextPreservesTemporalSubtraction(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 		})
 	}
 }
 
 func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
 		"select (? + ?) + N_REGIONKEY as numeric_alias from nation group by N_REGIONKEY order by numeric_alias",
@@ -438,9 +438,9 @@ func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
-	require.Equal(t, []types.T{types.T_int32, types.T_int32}, collectPlanParamTypes(queryPlan))
+	require.Equal(t, []types.T{types.T_int64, types.T_int64}, collectPlanParamTypes(queryPlan))
 }
 
 func TestPreparedNumericContextMergesExactSiblingTypes(t *testing.T) {
@@ -485,11 +485,11 @@ func TestPreparedNumericContextMergesExactSiblingTypes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)
@@ -510,23 +510,23 @@ func TestPreparedNumericContextUsesCorrelatedColumnType(t *testing.T) {
 		"select (select ? + N_REGIONKEY) from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.NotEmpty(t, paramTypes)
 			for _, typ := range paramTypes {
-				require.Equal(t, types.T_int32, typ)
+				require.Equal(t, types.T_int64, typ)
 			}
 		})
 	}
 }
 
 func TestNumericColumnTypeScopeLookup(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	parent := NewBindContext(builder, nil)
 	parent.binder = NewWhereBinder(builder, parent)
 	parentBinding := numericTestBinding("scope_table", "scope_col", types.T_int64.ToType())
@@ -589,11 +589,11 @@ func TestPreparedDirectCastKeepsOriginalParameterPath(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			castPaths := collectPlanParamCastPaths(queryPlan)
 			require.Len(t, castPaths, 1)
@@ -614,11 +614,11 @@ func TestPreparedCastPropagatesContextOnlyIntoArithmetic(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.NotEmpty(t, paramTypes)
@@ -697,11 +697,11 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)

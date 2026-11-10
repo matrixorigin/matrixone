@@ -194,7 +194,7 @@ func TestPlanArrowCompileRuntimeBuildsFingerprintAndRecordShards(t *testing.T) {
 			ScanType: tree.INFILE, Format: tree.ARROW,
 			ArrowContainer: tree.ARROW_CONTAINER_FILE,
 		},
-		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs, Parallel: true},
+		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs, Ctx: fileservice.WithSQLFileAccess(ctx, "sys", "moadmin"), Parallel: true},
 	}
 	c := &Compile{proc: testutil.NewProc(t), ncpu: 3, addr: "local-cn"}
 	runtime, err := c.planArrowCompileRuntime(node, param, []string{path}, []int64{int64(len(payload))})
@@ -233,7 +233,7 @@ func TestPlanArrowCompileRuntimeBalancesSkewedRecordWireBytes(t *testing.T) {
 			ScanType: tree.INFILE, Format: tree.ARROW,
 			ArrowContainer: tree.ARROW_CONTAINER_FILE,
 		},
-		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs, Parallel: true},
+		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs, Ctx: fileservice.WithSQLFileAccess(ctx, "sys", "moadmin"), Parallel: true},
 	}
 	c := &Compile{proc: testutil.NewProc(t), ncpu: 2, addr: "local-cn"}
 	runtime, err := c.planArrowCompileRuntime(node, param, []string{path}, []int64{int64(len(payload))})
@@ -275,7 +275,7 @@ func TestPlanArrowCompileRuntimeRejectsCrossObjectSchemaDrift(t *testing.T) {
 		ExParamConst: tree.ExParamConst{
 			ScanType: tree.INFILE, Format: tree.ARROW, ArrowContainer: tree.ARROW_CONTAINER_FILE,
 		},
-		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs},
+		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs, Ctx: fileservice.WithSQLFileAccess(ctx, "sys", "moadmin")},
 	}
 	c := &Compile{proc: testutil.NewProc(t), ncpu: 1}
 	_, err = c.planArrowCompileRuntime(node, param, paths, sizes)

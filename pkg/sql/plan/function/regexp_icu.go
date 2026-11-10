@@ -25,9 +25,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/clipperhouse/uax29/v2/graphemes"
-	"github.com/dlclark/regexp2"
-	regexp2syntax "github.com/dlclark/regexp2/syntax"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2"
+	regexp2syntax "github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2/syntax"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexpclass"
 )
 
 // regexp2MatchTimeout bounds the only path in which MatrixOne permits
@@ -94,6 +95,8 @@ type regexp2Matcher struct {
 	rule              string
 	binary            bool
 	hasGrapheme       bool
+	lineMode          regexp2.LineMode
+	lineMask          bool
 	userGroupToEngine []int
 	groupName         map[string]int
 	estimatedBytes    int
@@ -193,7 +196,17 @@ func requiresRegexp2Pattern(pattern string) bool {
 			}
 		}
 		if pattern[i] == '(' {
+			if strings.HasPrefix(pattern[i:], "(?#") {
+				return true
+			}
 			if end, enabled, scoped, ok := regexpInlineFreeSpacing(pattern, i, freeSpacing); ok {
+				// RE2 accepts only these inline options. ICU comments and flags
+				// must be classified before the regular compiler is selected.
+				for _, option := range pattern[i+2 : end] {
+					if !strings.ContainsRune("imsU-:)", option) {
+						return true
+					}
+				}
 				if scoped {
 					freeSpacingStack = append(freeSpacingStack, freeSpacing)
 					freeSpacing = enabled
@@ -551,6 +564,12 @@ func isRegexpPatternWhitespace(ch byte) bool {
 // consumed together so forms such as (?ix:...) do not make a comment scanner
 // lose synchronization. enabled is the x state after applying the header.
 func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, enabled, scoped, ok bool) {
+	return regexpInlineOption(pattern, start, current, 'x')
+}
+
+// regexpInlineOption reads one flag's state while consuming the complete
+// existing inline-option grammar. Other flags must not split the header.
+func regexpInlineOption(pattern string, start int, current bool, option byte) (end int, enabled, scoped, ok bool) {
 	if start+2 >= len(pattern) || pattern[start] != '(' || pattern[start+1] != '?' {
 		return 0, false, false, false
 	}
@@ -569,10 +588,10 @@ func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, 
 			off = true
 		case '+':
 			off = false
-		case 'x', 'X':
-			enabled = !off
-			seenOption = true
-		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U':
+		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U', 'x', 'X':
+			if pattern[i] == option || pattern[i] == option-('a'-'A') {
+				enabled = !off
+			}
 			seenOption = true
 		default:
 			return 0, false, false, false
@@ -835,17 +854,24 @@ func translateRegexp2PatternWithGrapheme(
 	binary bool,
 	graphemePattern string,
 ) (string, error) {
-	if err := validateRegexp2TranslationBudget(pattern, graphemePattern); err != nil {
-		return "", err
-	}
+	// The translated-size bound is enforced exactly: every potentially
+	// large write goes through appendRegexp2TranslatedPart, and the loop
+	// rechecks the accumulated size at every token. A conservative
+	// bytes-per-source-byte estimate would reject patterns whose actual
+	// translation fits the bound — for example the case-fold expansion of
+	// a deduplicated alternation, which translates at roughly one output
+	// byte per source byte (issue #31175 design, resource contract).
 	var out strings.Builder
-	out.Grow(len(pattern) + 32)
+	out.Grow(min(regexp2MaxTranslatedPatternBytes, len(pattern)+32))
 	groupStarts := make([]int, 0, 8)
 	freeSpacing := false
 	freeSpacingStack := make([]bool, 0, 8)
 	lastAtomStart := -1
 
 	for i := 0; i < len(pattern); {
+		if out.Len() > regexp2MaxTranslatedPatternBytes {
+			return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		}
 		if freeSpacing {
 			if isRegexpPatternWhitespace(pattern[i]) {
 				out.WriteByte(pattern[i])
@@ -857,7 +883,9 @@ func translateRegexp2PatternWithGrapheme(
 				for i < len(pattern) && pattern[i] != '\n' {
 					i++
 				}
-				out.WriteString(pattern[start:i])
+				if err := appendRegexp2TranslatedPart(&out, pattern[start:i]); err != nil {
+					return "", err
+				}
 				continue
 			}
 		}
@@ -909,7 +937,9 @@ func translateRegexp2PatternWithGrapheme(
 					literalEnd = i + 2 + end
 				}
 				hasLiteral := literalEnd > i+2
-				out.WriteString(regexp2QuoteLiteral(pattern[i+2:literalEnd], binary))
+				if err := appendRegexp2TranslatedPart(&out, regexp2QuoteLiteral(pattern[i+2:literalEnd], binary)); err != nil {
+					return "", err
+				}
 				if end >= 0 {
 					i = literalEnd + 2
 				} else {
@@ -995,6 +1025,9 @@ func translateRegexp2PatternWithGrapheme(
 			if quantifierEnd < len(pattern) && pattern[quantifierEnd] == '+' && lastAtomStart >= 0 {
 				atom := out.String()[lastAtomStart:]
 				prefix := out.String()[:lastAtomStart]
+				if len(prefix)+len(atom)+quantifierEnd-i+4 > regexp2MaxTranslatedPatternBytes {
+					return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+				}
 				out.Reset()
 				out.Grow(len(prefix) + len(atom) + quantifierEnd - i + 4)
 				out.WriteString(prefix)
@@ -1038,6 +1071,9 @@ func translateRegexp2PatternWithGrapheme(
 		i++
 	}
 
+	if out.Len() > regexp2MaxTranslatedPatternBytes {
+		return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+	}
 	return out.String(), nil
 }
 
@@ -1064,28 +1100,6 @@ func translateRegexp2CharClass(pattern string, start, end int, binary bool) (str
 		i += length
 	}
 	return out.String(), nil
-}
-
-func validateRegexp2TranslationBudget(pattern, graphemePattern string) error {
-	// Quoted bytes and possessive rewrites expand the source, and binary
-	// encoding can add UTF-8 bytes for each mapped byte. Reserve a conservative
-	// upper bound before building the expression; in particular, do not create
-	// the same subject-specific \X expansion once per source token and only then
-	// discover that the result is too large.
-	perSourceByte := int64(8)
-	upper := int64(len(pattern))*perSourceByte + 64
-	if graphemePattern != "" {
-		count := int64(regexp2GraphemeTokenCount(pattern))
-		expansion := int64(len(graphemePattern)) - 2
-		if expansion > 0 && count > (int64(regexp2MaxTranslatedPatternBytes)-upper)/expansion {
-			return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
-		}
-		upper += count * expansion
-	}
-	if upper > int64(regexp2MaxTranslatedPatternBytes) {
-		return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
-	}
-	return nil
 }
 
 func regexpNamedBackreferenceEnd(pattern string, start int) (int, bool) {
@@ -1313,63 +1327,150 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp2Matcher, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	key := regexpCacheKey{pattern: rule, binary: binary, binaryCaseFold: binaryCaseFold}
+	key := regexpCacheKey{pattern: pat, matchType: pureMatchType, binary: binary, binaryCaseFold: binaryCaseFold}
 	if rs.icu == nil {
 		rs.icu = make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp)
 	}
 	if matcher, ok := rs.icu[key]; ok {
 		return matcher, nil
 	}
-	if len(rule) > regexp2MaxPatternBytes {
-		return nil, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
-	}
-	if binary {
-		if err := validateBinaryRegexpPattern(rule); err != nil {
-			return nil, err
+	key.pattern = strings.Clone(pat)
+	key.matchType = strings.Clone(pureMatchType)
+	// The case-fold expansion (issue #31175) can push a pattern the
+	// unexpanded admission accepted over one of the downstream size limits
+	// below, or exhaust a rewrite budget. The source pattern's own verdict
+	// stands when it has one (malformed stays malformed; the build below
+	// already validates the source form on the expanded path); a
+	// well-formed, source-admitted pattern raises the bounded
+	// resource-limit error, because its faithful full-fold expansion
+	// cannot be evaluated within bounds and falling back to the engine's
+	// per-character caseless orbit would silently narrow the promised
+	// match set (issue #31175 design, ownership item 4).
+	matcher, expanded, err := rs.buildRegexp2MatcherWithMatchType(pat, pureMatchType, binary, true)
+	if err != nil && expanded {
+		foldErr := err
+		matcher, _, err = rs.buildRegexp2MatcherWithMatchType(pat, pureMatchType, binary, false)
+		if err == nil {
+			// The source pattern is admissible: only its faithful
+			// expansion exceeds a bound. Keep the rewrite's own
+			// resource-limit error when it has one; otherwise name the
+			// engine admission bound the expanded form crossed.
+			if moerr.IsMoErrCode(foldErr, moerr.ErrInternal) {
+				err = foldErr
+			} else {
+				err = regexpCaseFoldResourceLimitf("expanded-pattern admission: %v", foldErr)
+			}
+			matcher = nil
 		}
 	}
-	if err := validateRegexp2SourceRepeatBounds(rule); err != nil {
-		return nil, err
-	}
-	rule = strings.Clone(rule)
-	key.pattern = rule
-	expression, err := translateRegexp2Pattern(rule, binary)
 	if err != nil {
 		return nil, err
 	}
+	for len(rs.mp)+len(rs.icu) >= mapSizeForRegexp ||
+		rs.icuBytes+matcher.estimatedBytes > regexp2MaxCachedBytes {
+		if len(rs.mp)+len(rs.icu) == 0 {
+			break
+		}
+		rs.evictRegexpCacheEntry()
+	}
+	rs.icu[key] = matcher
+	rs.icuBytes += matcher.estimatedBytes
+	return matcher, nil
+}
+
+// buildRegexp2MatcherWithMatchType runs the regexp2 admission chain for one
+// prepared form of pat: with expand set the case-fold literal expansion is
+// applied first, and the returned expanded reports whether that rewrite
+// changed the pattern bytes. The caller retries with expand=false when the
+// expanded form exceeds a downstream admission limit.
+func (rs *regexpSet) buildRegexp2MatcherWithMatchType(
+	pat, pureMatchType string,
+	binary, expand bool,
+) (*regexp2Matcher, bool, error) {
+	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
+	rule, expanded, err := regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType, binary, expand)
+	if err != nil {
+		return nil, expanded, err
+	}
+	if binary {
+		if err := validateBinaryRegexpPattern(rule); err != nil {
+			return nil, expanded, err
+		}
+	}
+	if expanded {
+		// The case-fold rewrite can escape text the base grammar rejects
+		// (an unmatched '{' becomes a quoted literal), so a malformed
+		// interval would compile where the unexpanded admission errored.
+		// Validate the source form too and keep its verdict; returning
+		// expanded=false keeps the caller from retrying what already
+		// carries the base verdict.
+		srcRule, _, srcErr := regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType, binary, false)
+		if srcErr != nil {
+			return nil, false, srcErr
+		}
+		if err := validateRegexp2SourceRepeatBounds(srcRule); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := validateRegexp2SourceRepeatBounds(rule); err != nil {
+		return nil, expanded, err
+	}
+	rule = strings.Clone(rule)
+	lineMode := regexp2.UnixLines
+	if regexpMatchTypeWideMultiline(pureMatchType) {
+		lineMode = regexp2.WideTextLines
+		if binary {
+			lineMode = regexp2.WideBinaryLines
+		}
+	}
+	// The shared classifier reads the original rule with the flag prefix
+	// before the possessive rewrite obscures its flavor. The binary route
+	// leaves \U escapes to the engine as literal text.
+	classDialect := regexpclass.DialectRegexp2
+	if binary {
+		classDialect = regexpclass.DialectRegexp2Binary
+	}
+	expression, err := translateRegexp2Pattern(rule, binary)
+	if err != nil {
+		return nil, expanded, err
+	}
 	if len(expression) > regexp2MaxTranslatedPatternBytes {
-		return nil, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		return nil, expanded, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 	}
 	if binary {
 		expression, err = encodeBinaryRegexpPattern(expression, binaryCaseFold)
 		if err != nil {
-			return nil, err
+			return nil, expanded, err
 		}
 		if len(expression) > regexp2MaxTranslatedPatternBytes {
-			return nil, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+			return nil, expanded, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 		}
 	}
 	estimatedBytes := regexp2EstimatedMatcherBytes(len(rule), len(expression))
 	if estimatedBytes > regexp2MaxCachedBytes {
-		return nil, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported cache size of %d bytes", regexp2MaxCachedBytes)
+		return nil, expanded, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported cache size of %d bytes", regexp2MaxCachedBytes)
 	}
 	if int64(estimatedBytes) > regexp2MaxEvaluationMemoryBytes {
-		return nil, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
+		return nil, expanded, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
 	}
 	tree, _, release, err := regexp2PrepareExpression(expression)
 	if err != nil {
-		return nil, err
+		return nil, expanded, err
 	}
 	defer release()
+	// The cheap size verdicts and the engine's own parse gate ran above, so
+	// classification (which never fails) executes only for admitted
+	// patterns and inside the reserved compilation budget.
+	lineMask := lineMode != regexp2.UnixLines &&
+		regexpclass.Classify(rule, classDialect).SuppressCRLFInterior()
 	userGroupToEngine, groupName, err := regexp2CaptureMapping(pat, tree)
 	if err != nil {
-		return nil, err
+		return nil, expanded, err
 	}
-	_, err = compileRegexp2Expression(expression, userGroupToEngine)
+	_, err = compileRegexp2Expression(expression, userGroupToEngine, lineMode, lineMask)
 	if err != nil {
-		return nil, err
+		return nil, expanded, err
 	}
 
 	matcher := &regexp2Matcher{
@@ -1378,20 +1479,13 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		rule:              rule,
 		binary:            binary,
 		hasGrapheme:       !binary && regexp2PatternHasGrapheme(pat),
+		lineMode:          lineMode,
+		lineMask:          lineMask,
 		userGroupToEngine: userGroupToEngine,
 		groupName:         groupName,
 		estimatedBytes:    estimatedBytes,
 	}
-	for len(rs.mp)+len(rs.icu) >= mapSizeForRegexp ||
-		rs.icuBytes+estimatedBytes > regexp2MaxCachedBytes {
-		if len(rs.mp)+len(rs.icu) == 0 {
-			break
-		}
-		rs.evictRegexpCacheEntry()
-	}
-	rs.icu[key] = matcher
-	rs.icuBytes += estimatedBytes
-	return matcher, nil
+	return matcher, expanded, nil
 }
 
 func regexp2EstimatedMatcherBytes(patternBytes, expressionBytes int) int {
@@ -2035,13 +2129,19 @@ func regexp2EvaluationBudget(matcher *regexp2Matcher) int64 {
 	return budget
 }
 
-func compileRegexp2Expression(expression string, userGroupToEngine []int) (*regexp2.Regexp, error) {
+func compileRegexp2Expression(
+	expression string,
+	userGroupToEngine []int,
+	lineMode regexp2.LineMode,
+	lineMask bool,
+) (*regexp2.Regexp, error) {
 	expression = remapRegexp2Backreferences(expression, userGroupToEngine)
 	re, err := regexp2.Compile(expression, regexp2.RE2)
 	if err != nil {
 		return nil, err
 	}
 	re.MatchTimeout = regexp2MatchTimeout
+	re.SetLinePolicy(lineMode, lineMask)
 	return re, nil
 }
 
@@ -2078,7 +2178,7 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		release()
 		return nil, err
 	}
-	re, err := compileRegexp2Expression(expression, m.userGroupToEngine)
+	re, err := compileRegexp2Expression(expression, m.userGroupToEngine, m.lineMode, m.lineMask)
 	if err != nil {
 		release()
 		return nil, err
@@ -2089,6 +2189,8 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		rule:              m.rule,
 		binary:            m.binary,
 		hasGrapheme:       false,
+		lineMode:          m.lineMode,
+		lineMask:          m.lineMask,
 		userGroupToEngine: m.userGroupToEngine,
 		groupName:         m.groupName,
 		estimatedBytes:    compiledBytes,
@@ -2102,17 +2204,10 @@ func (m *regexp2Matcher) release() {
 		return
 	}
 	m.mu.Lock()
-	re := m.re
 	releaseBudget := m.releaseBudget
 	m.re = nil
 	m.releaseBudget = nil
 	m.mu.Unlock()
-	if re != nil {
-		// The last matching call clears its input. Run one final nil-input
-		// search for early-return paths, then let the local regexp and all of
-		// its retained runner storage become unreachable together.
-		_, _ = re.FindRunesMatch(nil)
-	}
 	if releaseBudget != nil {
 		releaseBudget()
 	}
@@ -2231,11 +2326,8 @@ func (input *regexp2Input) byteOffsetAtRune(runeOffset int) int {
 func (m *regexp2Matcher) findAtOrAfter(input *regexp2Input, startRune int) (*regexp2.Match, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	defer func() {
-		// regexp2's runner cache retains its last input. Clear that reference
-		// before returning so a cached matcher cannot pin a large SQL value.
-		_, _ = m.re.FindRunesMatch(nil)
-	}()
+	// Executable regexps belong to this evaluation, so runner reuse retains
+	// input only until the evaluation matcher is released.
 	if startRune <= 0 {
 		match, err := m.re.FindRunesMatch(input.runes)
 		return match, regexp2MatchError(err)
@@ -2662,30 +2754,7 @@ func (rs *regexpSet) regexp2ReplaceWithTemplate(
 				matcher, str, regexpReplacementLiteral(template), startByte,
 				occurrence, subjectIsBinary, pureMatchType, maxBytes, deadline)
 		}
-		size, err := regexpAddReplacementSize(0, indices[0], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddTemplateSize(size, str, indices, template, maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddReplacementSize(size, len(str)-indices[1], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		var result strings.Builder
-		result.Grow(int(size))
-		if err := regexpWriteReplacementString(&result, str[:indices[0]], maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteTemplate(&result, str, indices, template, maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteReplacementString(&result, str[indices[1]:], maxBytes); err != nil {
-			return "", err
-		}
-		return result.String(), nil
+		return regexpReplaceSingleTemplate(str, indices, template, maxBytes)
 	}
 
 	upperBound, bounded := regexpReplaceOutputUpperBound(len(str), len(replacement))

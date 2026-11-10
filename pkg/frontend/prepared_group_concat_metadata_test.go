@@ -26,6 +26,97 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedGroupConcatDependentMainOutputMetadata(t *testing.T) {
+	for _, dependent := range []bool{false, true} {
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("dependent=%t/binary=%t", dependent, binary), func(t *testing.T) {
+				value := "t.k"
+				if binary {
+					value = "convert(t.k using binary)"
+				}
+				companion := "t.k"
+				if dependent {
+					companion = "(select (select t.k))"
+				}
+				sql := fmt.Sprintf("select group_concat(%s) as gc, %s as k from (select 1 as k union all select 2) t group by t.k", value, companion)
+				proto, _, prepared := newBinaryPrepareProtocolTestCase(t, sql)
+				defer prepared.Close()
+				q := prepared.PreparePlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+				if dependent {
+					require.NotNil(t, q.Correlation)
+					require.NotEqual(t, int32(len(q.Steps)-1), q.MainOutputStep())
+					require.Len(t, q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList, 1)
+				}
+				for _, floor := range []uint64{64, 512, 513} {
+					prepared.groupConcatMaxLenFloor = floor
+					columns := getPreparedResultColumns(prepared, false)
+					require.Len(t, columns, 2)
+					column, err := colDef2MysqlColumn(t.Context(), columns[0])
+					require.NoError(t, err)
+					want := defines.MYSQL_TYPE_VAR_STRING
+					if floor > 512 {
+						want = defines.MYSQL_TYPE_LONG_BLOB
+						if binary {
+							want = defines.MYSQL_TYPE_BLOB
+						}
+					}
+					for _, command := range []int{int(COM_STMT_PREPARE), int(COM_STMT_EXECUTE)} {
+						packet := proto.makeColumnDefinition41Payload(column, command)
+						definition := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
+						require.Equal(t, want, definition.typ)
+						if binary {
+							require.Equal(t, uint16(charsetBinary), definition.charset)
+							require.NotZero(t, definition.flags&uint16(defines.BINARY_FLAG))
+						}
+					}
+					// Result metadata must not change the execution aggregate type.
+					for _, node := range q.Nodes {
+						for _, expr := range node.AggList {
+							if preparedExprContainsGroupConcat(expr) {
+								wantType := types.T_text
+								if binary {
+									wantType = types.T_blob
+								}
+								require.Equal(t, int32(wantType), expr.Typ.Id)
+							}
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPreparedGroupConcatMetadataOutputSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		correlated, returning bool
+		main, returningStep   int32
+		want                  types.T
+	}{
+		{"main_not_last", true, false, 0, 0, types.T_text},
+		{"returning_override", true, true, 0, 1, types.T_varchar},
+		{"invalid_returning", true, true, 0, -1, types.T_text},
+		{"ordinary_last", false, false, 0, 0, types.T_varchar},
+		{"invalid_main_negative", true, false, -1, 0, types.T_text},
+		{"invalid_main_large", true, false, 2, 0, types.T_text},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &plan.Query{Steps: []int32{0, 1}, HasReturning: tc.returning, ReturningStep: tc.returningStep,
+				Nodes: []*plan.Node{
+					{ProjectList: []*plan.Expr{{}}},
+					{ProjectList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "group_concat"}}}}}},
+				}}
+			if tc.correlated {
+				q.Correlation = &plan.CorrelationSpec{MainOutputStep: tc.main}
+			}
+			column := &plan.ColDef{Typ: types.T_text.ToType().PlanType()}
+			overlayPreparedGroupConcatResultMetadata(q, []*plan.ColDef{column}, 64)
+			require.Equal(t, int32(tc.want), column.Typ.Id)
+		})
+	}
+}
+
 func TestPreparedGroupConcatResultMetadataFollowsMonotonicFloor(t *testing.T) {
 	_, _, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select group_concat(?) as gc")
 	defer prepareStmt.Close()

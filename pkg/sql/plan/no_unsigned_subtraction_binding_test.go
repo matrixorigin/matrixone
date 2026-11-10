@@ -63,13 +63,13 @@ func TestUnsignedSubtractionModeBindsAtExpressionBoundary(t *testing.T) {
 				{name: "signed flag case insensitive", text: "no_unsigned_subtraction", want: test.flagType},
 			} {
 				t.Run(mode.name, func(t *testing.T) {
-					ctx := NewMockCompilerContext(false)
+					ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 					ctx.SetSqlModeOverride(mode.text)
 					stmt, err := mysql.ParseOne(ctx.GetContext(), test.sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
 
-					built, err := BuildPlan(ctx, stmt, false)
+					built, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					projectExpr := firstProjectExpr(built)
 					require.NotNil(t, projectExpr)
@@ -90,13 +90,13 @@ func TestUnsignedSubtractionModeBindsExecutionDomain(t *testing.T) {
 		{name: "flag permits negative result", mode: mysql.SQLModeNoUnsignedSubtraction, wantResult: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.SetSqlModeOverride(test.mode)
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select cast(0 as unsigned) - 1", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			expr := firstProjectExpr(built)
 			require.NotNil(t, expr)

@@ -54,6 +54,18 @@ func (m *TableMetadata) CurrentSchema() (Schema, bool) {
 	return Schema{}, false
 }
 
+// PartitionSpecFieldCounts returns the number of fields in each partition spec.
+func (m *TableMetadata) PartitionSpecFieldCounts() map[int]int {
+	if m == nil {
+		return nil
+	}
+	out := make(map[int]int, len(m.PartitionSpecs))
+	for _, spec := range m.PartitionSpecs {
+		out[spec.SpecID] = len(spec.Fields)
+	}
+	return out
+}
+
 func (m *TableMetadata) DefaultSpec() (PartitionSpec, bool) {
 	for _, spec := range m.PartitionSpecs {
 		if spec.SpecID == m.DefaultSpecID {
@@ -387,7 +399,12 @@ type ManifestEntry struct {
 	SnapshotID     int64
 	SequenceNumber int64
 	FileSequence   int64
-	DataFile       DataFile
+	// Set flags distinguish explicit values (including zero) from ADDED
+	// entries whose sequence numbers must be assigned by the manifest.
+	// Unmarked non-ADDED entries retain their concrete numeric values.
+	SequenceNumberSet bool
+	FileSequenceSet   bool
+	DataFile          DataFile
 }
 
 type DataFileContent int

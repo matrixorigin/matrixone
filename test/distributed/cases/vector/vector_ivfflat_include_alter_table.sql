@@ -40,7 +40,7 @@ select id, headline, category
 from vector_ivfflat_include_phase7_include
 where headline = "epsilon"
 order by l2_distance(embedding, "[1,2,3]")
-limit 1 by rank with option 'mode=include';
+limit 1 by rank with option 'mode=iterative';
 
 alter table vector_ivfflat_include_phase7_include drop column category;
 

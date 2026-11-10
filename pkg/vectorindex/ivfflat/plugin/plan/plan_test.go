@@ -67,13 +67,15 @@ func init() {
 	}
 }
 
-type stubCompilerContext struct{ ctx context.Context }
+type stubCompilerContext struct {
+	ctx  context.Context
+	proc *process.Process
+}
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
 
-// GetProcess hands back a test process on the default service runtime, which carries
-// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
-func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+// GetProcess borrows the fixture process without allocating dependencies.
+func (c stubCompilerContext) GetProcess() *process.Process { return c.proc }
 
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
@@ -81,8 +83,9 @@ func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, e
 
 var _ planplugin.CompilerContext = stubCompilerContext{}
 
-func newStubCompilerContext() stubCompilerContext {
-	return stubCompilerContext{ctx: context.Background()}
+func newStubCompilerContext(t testing.TB) stubCompilerContext {
+	t.Helper()
+	return stubCompilerContext{ctx: context.Background(), proc: testutil.NewProcess(t, testutil.WithMPool(nil), testutil.WithFileService(nil))}
 }
 
 func vecColMap(pkName, vecName string) map[string]*planpb.ColDef {
@@ -97,12 +100,22 @@ func indexOn(colName string) *tree.Index {
 	return &tree.Index{KeyParts: []*tree.KeyPart{{ColName: un}}}
 }
 
+func ivfIndexWithInclude(vecCol string, includeCols ...string) *tree.Index {
+	index := indexOn(vecCol)
+	index.IndexOption = &tree.IndexOption{}
+	for _, col := range includeCols {
+		index.IndexOption.IncludeColumns = append(index.IndexOption.IncludeColumns,
+			tree.NewUnresolvedName(tree.NewCStr(col, 0)))
+	}
+	return index
+}
+
 // --- schema.go: BuildSecondaryIndexDefs -----------------------------------
 
 // The happy path builds the three IVFFLAT tables (metadata, centroids, entries).
 func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
 	require.NotEmpty(t, idxDefs)
 	require.NotEmpty(t, tblDefs)
@@ -116,13 +129,13 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 func TestBuildSecondaryIndexDefs_MultiColumn(t *testing.T) {
 	idx := indexOn("vec")
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedName(tree.NewCStr("vec2", 0))})
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_ColumnNotExist(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
@@ -130,7 +143,7 @@ func TestBuildSecondaryIndexDefs_ColumnNotExist(t *testing.T) {
 func TestBuildSecondaryIndexDefs_NotAVector(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_int64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -141,7 +154,7 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 		Parts:     []string{"vec"},
 	}}
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
 	require.Error(t, err)
 }
 
@@ -149,8 +162,38 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 func TestBuildSecondaryIndexDefs_F64Base(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_array_float64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.NoError(t, err)
+}
+
+func TestBuildSecondaryIndexDefs_PreservesEnumMetadata(t *testing.T) {
+	ctx := newStubCompilerContext(t)
+	indexInfo := ivfIndexWithInclude("vec", "status")
+	colMap := vecColMap("id", "vec")
+	colMap["status"] = &planpb.ColDef{
+		Name: "status",
+		Typ: planpb.Type{
+			Id:         int32(types.T_enum),
+			Enumvalues: "cold,hot",
+		},
+	}
+	colMap["id"].Typ.AutoIncr = true
+
+	_, tableDefs, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
+	require.NoError(t, err)
+	entries := tableDefs[2]
+	require.Equal(t, "cold,hot", entries.Cols[4].Typ.Enumvalues)
+	// Copying the physical type must not carry source-table auto-increment or
+	// constraint state into the hidden entries relation.
+	require.False(t, entries.Cols[2].Typ.AutoIncr)
+
+	pkMap := map[string]*planpb.ColDef{
+		"status": colMap["status"],
+		"vec":    colMap["vec"],
+	}
+	_, pkTables, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexOn("vec"), pkMap, nil, "status")
+	require.NoError(t, err)
+	require.Equal(t, "cold,hot", pkTables[2].Cols[2].Typ.Enumvalues)
 }
 
 // --- schema.go: BuildFullTextIndexDefs ------------------------------------
@@ -158,7 +201,7 @@ func TestBuildSecondaryIndexDefs_F64Base(t *testing.T) {
 // IVFFLAT is a vector algorithm; the fulltext hook is not applicable to it.
 func TestBuildFullTextIndexDefs_NotSupported(t *testing.T) {
 	_, _, err := Hooks{}.BuildFullTextIndexDefs(
-		newStubCompilerContext(), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
+		newStubCompilerContext(t), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
 	require.Error(t, err)
 }
 
@@ -208,7 +251,7 @@ func TestHandleAlterRenameColumn_NoIndexes(t *testing.T) {
 
 // ValidateViewDefinition accepts any query: IVFFLAT places no view restriction.
 func TestValidateViewDefinition(t *testing.T) {
-	require.NoError(t, Hooks{}.ValidateViewDefinition(newStubCompilerContext(), &planpb.Query{}))
+	require.NoError(t, Hooks{}.ValidateViewDefinition(newStubCompilerContext(t), &planpb.Query{}))
 }
 
 // --- schema.go: INCLUDE columns -------------------------------------------
@@ -242,7 +285,7 @@ func TestIvfflatIncludeColumnNames(t *testing.T) {
 }
 
 func TestValidateIvfflatIncludeColumns(t *testing.T) {
-	ctx := newStubCompilerContext()
+	ctx := newStubCompilerContext(t)
 	colMap := includeColMap()
 
 	for _, c := range []struct {
@@ -289,7 +332,7 @@ func TestValidateIvfflatIncludeColumns(t *testing.T) {
 // The INCLUDE list reaches the entries table as prefixed payload columns.
 func TestBuildSecondaryIndexDefs_WithInclude(t *testing.T) {
 	_, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexWithInclude("vec", "payload"), includeColMap(), nil, "id")
+		newStubCompilerContext(t), indexWithInclude("vec", "payload"), includeColMap(), nil, "id")
 	require.NoError(t, err)
 
 	var entries *planpb.TableDef
@@ -335,7 +378,7 @@ func TestBuildSecondaryIndexDefs_Quantization(t *testing.T) {
 		idx := indexOn("vec")
 		idx.IndexOption = &tree.IndexOption{Quantization: "int8"}
 		_, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-			newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+			newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_array_int8), entryTypeOf(t, tblDefs).Id)
 	})
@@ -345,7 +388,7 @@ func TestBuildSecondaryIndexDefs_Quantization(t *testing.T) {
 		colMap["vec"].Typ.Id = int32(types.T_array_int8)
 		idx := indexOn("vec")
 		idx.IndexOption = &tree.IndexOption{Quantization: "float32"}
-		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, colMap, nil, "id")
+		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, colMap, nil, "id")
 		require.Error(t, err)
 	})
 
@@ -353,7 +396,7 @@ func TestBuildSecondaryIndexDefs_Quantization(t *testing.T) {
 		idx := indexOn("vec")
 		idx.IndexOption = &tree.IndexOption{Quantization: "int8", AlgoParamVectorOpType: "vector_cosine_ops"}
 		_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-			newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+			newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 		require.Error(t, err)
 	})
 }
@@ -361,6 +404,6 @@ func TestBuildSecondaryIndexDefs_Quantization(t *testing.T) {
 // A rejected INCLUDE list fails the whole index build.
 func TestBuildSecondaryIndexDefs_BadInclude(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexWithInclude("vec", "nope"), includeColMap(), nil, "id")
+		newStubCompilerContext(t), indexWithInclude("vec", "nope"), includeColMap(), nil, "id")
 	require.Error(t, err)
 }

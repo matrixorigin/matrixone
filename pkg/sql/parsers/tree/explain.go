@@ -58,15 +58,7 @@ type explainImpl struct {
 	Options   []OptionElem
 }
 
-func (e *explainImpl) Free() {
-}
-
-// EXPLAIN stmt statement
-type ExplainStmt struct {
-	explainImpl
-}
-
-func (node *ExplainStmt) Format(ctx *FmtCtx) {
+func (node *explainImpl) format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
 	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
@@ -81,7 +73,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 		ctx.WriteString(temp[:len(temp)-1] + ")")
 	}
 
-	stmt := node.explainImpl.Statement
+	stmt := node.Statement
 	switch st := stmt.(type) {
 	case *ShowColumns:
 		if st.Table != nil {
@@ -98,6 +90,18 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 			stmt.Format(ctx)
 		}
 	}
+}
+
+func (node *explainImpl) Free() {
+}
+
+// EXPLAIN stmt statement
+type ExplainStmt struct {
+	explainImpl
+}
+
+func (node *ExplainStmt) Format(ctx *FmtCtx) {
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
@@ -128,37 +132,7 @@ type ExplainAnalyze struct {
 }
 
 func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain")
-	if len(node.Options) > 0 {
-		ctx.WriteString(" (")
-		var temp string
-		for _, v := range node.Options {
-			temp += v.Name
-			if v.Value != "NULL" {
-				temp += " " + v.Value
-			}
-			temp += ","
-		}
-		ctx.WriteString(temp[:len(temp)-1] + ")")
-	}
-
-	stmt := node.explainImpl.Statement
-	switch st := stmt.(type) {
-	case *ShowColumns:
-		if st.Table != nil {
-			ctx.WriteByte(' ')
-			st.Table.ToTableName().Format(ctx)
-		}
-		if st.ColName != nil {
-			ctx.WriteByte(' ')
-			st.ColName.Format(ctx)
-		}
-	default:
-		if stmt != nil {
-			ctx.WriteByte(' ')
-			stmt.Format(ctx)
-		}
-	}
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
@@ -188,9 +162,13 @@ type ExplainFor struct {
 }
 
 func (node *ExplainFor) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain format = ")
-	ctx.WriteString(node.explainImpl.Format)
-	ctx.WriteString(" for connection ")
+	ctx.WriteString("explain ")
+	if node.explainImpl.Format != "" {
+		ctx.WriteString("format = '")
+		ctx.WriteString(node.explainImpl.Format)
+		ctx.WriteString("' ")
+	}
+	ctx.WriteString("for connection ")
 	ctx.WriteString(strconv.FormatInt(int64(node.ID), 10))
 }
 
@@ -249,19 +227,55 @@ func OptionContains(options []OptionElem, option string) bool {
 }
 
 func MakeExplainStmt(stmt Statement, options []OptionElem) Statement {
-	if OptionContains(options, PhyPlanOption) {
-		explainStmt := NewExplainPhyPlan(stmt, "text")
+	format := explainOptionFormat(options)
+	if explainOptionEnabled(options, PhyPlanOption) {
+		explainStmt := NewExplainPhyPlan(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
-	} else if OptionContains(options, AnalyzeOption) {
-		explainStmt := NewExplainAnalyze(stmt, "text")
+	} else if explainOptionEnabled(options, AnalyzeOption) {
+		explainStmt := NewExplainAnalyze(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
 	} else {
-		explainStmt := NewExplainStmt(stmt, "text")
+		explainStmt := NewExplainStmt(stmt, format)
 		explainStmt.Options = options
 		return explainStmt
 	}
+}
+
+func explainOptionFormat(options []OptionElem) string {
+	for _, elem := range options {
+		if !strings.EqualFold(elem.Name, FormatOption) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(elem.Value), "'\"")
+		if value == "" {
+			break
+		}
+		switch strings.ToUpper(value) {
+		case "TEXT":
+			return "text"
+		case "JSON":
+			return "json"
+		default:
+			return strings.ToLower(value)
+		}
+	}
+	return "text"
+}
+
+// explainOptionEnabled distinguishes an option being present from an option
+// whose value enables the execution mode. Parenthesized EXPLAIN accepts
+// ANALYZE FALSE, which must remain a regular (non-executing) EXPLAIN.
+func explainOptionEnabled(options []OptionElem, option string) bool {
+	for _, elem := range options {
+		if !strings.EqualFold(elem.Name, option) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(elem.Value), "'\"")
+		return strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+	}
+	return false
 }
 
 // --------------------------------------------------------------------------------------
@@ -271,37 +285,7 @@ type ExplainPhyPlan struct {
 }
 
 func (node *ExplainPhyPlan) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain")
-	if len(node.Options) > 0 {
-		ctx.WriteString(" (")
-		var temp string
-		for _, v := range node.Options {
-			temp += v.Name
-			if v.Value != "NULL" {
-				temp += " " + v.Value
-			}
-			temp += ","
-		}
-		ctx.WriteString(temp[:len(temp)-1] + ")")
-	}
-
-	stmt := node.explainImpl.Statement
-	switch st := stmt.(type) {
-	case *ShowColumns:
-		if st.Table != nil {
-			ctx.WriteByte(' ')
-			st.Table.ToTableName().Format(ctx)
-		}
-		if st.ColName != nil {
-			ctx.WriteByte(' ')
-			st.ColName.Format(ctx)
-		}
-	default:
-		if stmt != nil {
-			ctx.WriteByte(' ')
-			stmt.Format(ctx)
-		}
-	}
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainPhyPlan) GetStatementType() string { return "Explain PhyPlan" }

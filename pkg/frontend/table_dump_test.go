@@ -17,10 +17,13 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -44,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -243,6 +247,8 @@ func TestOpenLocalTableDump(t *testing.T) {
 func TestOpenStageTableDump(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	root := t.TempDir()
 	ses.proc.GetStageCache().Set("fixture", stage.StageDef{
@@ -754,6 +760,8 @@ func TestSubmitTableDumpObjectsRejectsInvalidMetadata(t *testing.T) {
 func TestHandleLoadTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -832,6 +840,8 @@ func TestHandleLoadTable(t *testing.T) {
 func TestHandleLoadTableRejectsMissingAutoIncrementState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpcc")
 
@@ -912,6 +922,8 @@ func TestHandleLoadTableRejectsMissingAutoIncrementState(t *testing.T) {
 func TestHandleDumpTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -983,6 +995,8 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -1113,6 +1127,8 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
 			defer ses.Close()
 			ses.SetDatabaseName("tpch")
 			eng := mock_frontend.NewMockEngine(ctrl)
@@ -1121,11 +1137,11 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 			ses.txnHandler.storage = eng
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
-			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def).Times(2)
 			err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: t.TempDir(),
 			})
-			require.Error(t, err)
+			require.ErrorContains(t, err, "DUMP TABLE and LOAD TABLE with")
 		})
 	}
 }
@@ -1155,7 +1171,7 @@ func TestHandleLoadTableRejectsNonObjectBackedRelations(t *testing.T) {
 			ses.txnHandler.storage = eng
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
-			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def).Times(2)
 
 			err := handleLoadTable(context.Background(), ses, &tree.LoadTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil),
@@ -1712,12 +1728,12 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 		}}
 	}
 	source := &plan.TableDef{Cols: []*plan.ColDef{
-		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a / b", Expr: boundInt(10)}},
+		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a + b", Expr: boundInt(10)}},
 		// Old catalog metadata can carry an on-update expression even when current
 		// SQL syntax would not accept this declaration.
-		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a / b", Expr: boundInt(11)}},
-		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a / b", IsStored: true, Expr: boundInt(12)}},
-	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a / b > 1", Check: boundBool(true)}}}
+		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a + b", Expr: boundInt(11)}},
+		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a + b", IsStored: true, Expr: boundInt(12)}},
+	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a + b > 1", Check: boundBool(true)}}}
 	target := proto.Clone(source).(*plan.TableDef)
 	target.TblId = 123
 	target.Cols[0].Default.Expr = boundInt(1)
@@ -1727,7 +1743,6 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 	before := proto.Clone(target)
 	payload, digest, err := tableDumpBoundExpressions(source)
 	require.NoError(t, err)
-	require.True(t, tableDumpMayDependOnDivision(source))
 	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -1745,11 +1760,11 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 		want   string
 		change func(*plan.TableDef)
 	}{
-		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a / (b + 1)" }},
-		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a / (b + 1)" }},
+		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a + (b + 1)" }},
+		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a + (b + 1)" }},
 		{"generated storage", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.IsStored = false }},
-		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a / (b + 1)" }},
-		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a / b > 2" }},
+		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a + (b + 1)" }},
+		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a + b > 2" }},
 		{"check name", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].Name = "other" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2152,4 +2167,126 @@ func TestTableDumpRelationSchemaMatches(t *testing.T) {
 	require.False(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{
 		SchemaHash: "legacy", LogicalSchemaHash: "other",
 	}), "a present logical hash must not fall back to the legacy hash")
+}
+
+func TestTableDumpRequiresServerFileAuthority(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "denied")
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.proc.Base.SessionInfo.Account = "tenant"
+	ses.proc.Base.SessionInfo.Role = "accountadmin"
+	for _, tc := range []struct{ name, prefix, suffix string }{
+		{"absolute", "", "/denied"},
+		{"file URL", "file://", "/denied"},
+		{"service syntax in local name", "", "/unused,remote:x/../denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := tc.prefix + root + tc.suffix
+			_, closeFS, err := openTableDumpFS(t.Context(), ses, target)
+			if closeFS != nil {
+				t.Cleanup(closeFS)
+			}
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = os.Stat(filepath.Join(root, "denied"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+	require.ErrorContains(t, validateOutputDirPath(t.Context(), ses, dir), "only the sys account moadmin role")
+}
+
+func TestReadTableDumpManifestBindingFormats(t *testing.T) {
+	ctx := t.Context()
+	fs, err := fileservice.NewLocalETLFS("binding-formats", t.TempDir())
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	payload, digest, err := tableDumpBoundExpressions(&plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "1", Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}}}}})
+	require.NoError(t, err)
+	for _, version := range []int{tableDumpLegacyBoundFormatVersion, tableDumpBoundFormatVersion, tableDumpBoundFormatVersion + 1} {
+		require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: version, BoundExpressions: payload, ExpressionHash: digest}))
+		got, err := readTableDumpManifest(ctx, fs)
+		if version == tableDumpBoundFormatVersion+1 {
+			require.ErrorContains(t, err, "unsupported table dump format version")
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, version, got.Version)
+			require.Equal(t, payload, got.BoundExpressions)
+		}
+		require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+	}
+}
+
+func TestTableDumpDefaultHashesMatchPre31067(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "default_quote_hashes_pre31067.json"))
+	require.NoError(t, err)
+	var fixtures []struct {
+		Name         string
+		Definition   []byte
+		PhysicalHash string
+		LogicalHash  string
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 12)
+	for _, f := range fixtures {
+		t.Run(f.Name, func(t *testing.T) {
+			var def plan.TableDef
+			require.NoError(t, def.Unmarshal(f.Definition))
+			before := proto.Clone(&def)
+			physical, err := tableSchemaHash(&def)
+			require.NoError(t, err)
+			require.Equal(t, f.PhysicalHash, physical)
+			logical, err := tableLogicalSchemaHashWithResolver(t.Context(), &def, nil)
+			require.NoError(t, err)
+			require.Equal(t, f.LogicalHash, logical)
+			require.True(t, proto.Equal(before, &def), "hashing must not rewrite catalog defaults")
+		})
+	}
+}
+
+func TestTableDumpRejectsResolvedInternalIndex(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		flags      uint64
+		deny       bool
+		missingDef bool
+	}{
+		{catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd", "", 0, true, false},
+		{"legacy_storage", catalog.SystemIndexRel, 0, true, false},
+		{"plugin_storage", "unregistered_index_kind", 0, true, false},
+		{"flagged_storage", catalog.SystemOrdinaryRel, features.IndexTable, true, false},
+		{"unknown_definition", "", 0, true, true},
+		{"ordinary", catalog.SystemOrdinaryRel, 0, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetFromRealUser(true)
+			ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "admin", DefaultRole: "accountadmin"})
+			ses.SetDatabaseName("app")
+			eng := mock_frontend.NewMockEngine(ctrl)
+			ses.txnHandler.storage = eng
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "app", gomock.Any()).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), tc.name, nil).Return(rel, nil)
+			var def *plan.TableDef
+			if !tc.missingDef {
+				def = &plan.TableDef{Name: tc.name, TableType: tc.kind, FeatureFlag: tc.flags}
+			}
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+			_, _, got, err := getTableForDump(context.Background(), ses, tree.NewTableName(tree.Identifier(tc.name), tree.ObjectNamePrefix{}, nil))
+			if !tc.deny {
+				require.NoError(t, err)
+				require.Same(t, rel, got)
+			} else if tc.missingDef {
+				require.ErrorContains(t, err, "table definition is unavailable")
+				require.Nil(t, got)
+			} else {
+				require.ErrorContains(t, err, "privilege")
+				require.Nil(t, got)
+			}
+		})
+	}
 }

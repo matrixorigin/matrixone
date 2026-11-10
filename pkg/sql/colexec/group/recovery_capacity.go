@@ -132,3 +132,14 @@ func (ctr *container) recoveryCapacityTarget(incomingRows int) (uint64, error) {
 	}
 	return groupRecoveryAdd(hashBytes, rowIDBytes)
 }
+
+func (ctr *container) recoveryCapacityGrowth(incomingRows int) (uint64, error) {
+	target, err := ctr.recoveryCapacityTarget(incomingRows)
+	if err != nil {
+		return 0, err
+	}
+	if target <= ctr.recoveryCapacityFloor {
+		return 0, nil
+	}
+	return target - ctr.recoveryCapacityFloor, nil
+}

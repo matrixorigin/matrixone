@@ -92,18 +92,24 @@ func viewMetadataRequireRevalidationSQL() []string {
 }
 
 // ViewMetadataRequireRevalidationSQL returns the statements that atomically
-// fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
-// statements in their existing transaction while this lifecycle layer remains
-// inactive, matching Compile.viewMetadataRefreshAvailable.
+// fence an explicit lifecycle-unaware mutation. Snapshot/restore pathways may
+// call these while View refresh is inactive; ordinary Compile DDL does not
+// maintain an incremental marker while View refresh is inactive.
 func ViewMetadataRequireRevalidationSQL() []string {
 	return viewMetadataRequireRevalidationSQL()
 }
 
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while lifecycle activation is unavailable.
+// skipped while lifecycle activation is unavailable. The operation owner's
+// deadline covers lock acquisition and Commit; only unbounded callers receive
+// the default recovery timeout. Background recovery pages retain their own bound.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
-	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
-	defer cancel()
+	callCtx := ctx
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+		defer cancel()
+	}
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
 		statements := viewMetadataRequireRevalidationSQL()
 		result, err := txn.Exec(statements[0], executor.StatementOption{})
@@ -659,11 +665,18 @@ func (c *recoveryCompilerContext) DatabaseExists(
 	return exists
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 func (c *recoveryCompilerContext) Resolve(
 	databaseName string,
 	relationName string,
-	snapshot *plan2.Snapshot,
+	snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
 	for _, dependency := range c.dependencies {
 		bindingDatabase := dependency.BindingDatabaseName
 		if bindingDatabase == "" {
@@ -698,7 +711,7 @@ func (c *recoveryCompilerContext) Resolve(
 		var err error
 		c.withTopContext(physicalContext, func() {
 			object, tableDef, err = c.compilerContext.Resolve(
-				dependency.DatabaseName, dependency.RelationName, snapshot)
+				dependency.DatabaseName, dependency.RelationName, snapshot, nil)
 		})
 		if err != nil {
 			return nil, nil, err
@@ -724,7 +737,7 @@ func (c *recoveryCompilerContext) Resolve(
 		var object *plan2.ObjectRef
 		var tableDef *plan2.TableDef
 		c.withTopContext(physicalContext, func() {
-			object, tableDef, err = c.compilerContext.Resolve(subscription.DbName, relationName, snapshot)
+			object, tableDef, err = c.compilerContext.Resolve(subscription.DbName, relationName, snapshot, nil)
 		})
 		if err != nil || object == nil || tableDef == nil {
 			return object, tableDef, err
@@ -736,7 +749,7 @@ func (c *recoveryCompilerContext) Resolve(
 	var object *plan2.ObjectRef
 	var tableDef *plan2.TableDef
 	c.withTopContext(c.GetContext(), func() {
-		object, tableDef, err = c.compilerContext.Resolve(databaseName, relationName, snapshot)
+		object, tableDef, err = c.compilerContext.Resolve(databaseName, relationName, snapshot, nil)
 	})
 	return object, tableDef, err
 }
@@ -802,7 +815,7 @@ func (c *recoveryCompilerContext) ResolveById(
 			if bindingRelation == "" {
 				bindingRelation = dependency.RelationName
 			}
-			return c.Resolve(bindingDatabase, bindingRelation, snapshot)
+			return c.Resolve(bindingDatabase, bindingRelation, snapshot, nil)
 		}
 	}
 	var object *plan2.ObjectRef
@@ -1357,11 +1370,7 @@ func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	return c.enqueueDependentViewClosure(fmt.Sprintf(

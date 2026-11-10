@@ -1,0 +1,44 @@
+drop database if exists subscription_identifier;
+create database subscription_identifier;
+use subscription_identifier;
+create table dmz_org (id int primary key, c_authconfig varchar(200), c_sub varchar(200));
+insert into dmz_org values (1,'{"method":"password"}','中文 😀𠮷'),(2,null,null);
+select id,c_sub as subscription from dmz_org order by id;
+➤ id[4,32,0]  ¦  subscription[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+select id,c_sub subscription from dmz_org order by id;
+➤ id[4,32,0]  ¦  subscription[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+select id,c_sub as `subscription` from dmz_org order by id;
+➤ id[4,32,0]  ¦  subscription[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+select id,c_sub as subscriptions from dmz_org order by id;
+➤ id[4,32,0]  ¦  subscriptions[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+select coalesce(c_authconfig,JSON_UNQUOTE('{}')) as authconfig,
+coalesce(c_sub,JSON_UNQUOTE('{}')) as subscription from dmz_org order by id;
+➤ authconfig[12,200,0]  ¦  subscription[12,200,0]  𝄀
+{"method":"password"}  ¦  中文 😀𠮷  𝄀
+{}  ¦  {}
+prepare subscription_alias_prepare from 'select id,c_sub as subscription from dmz_org order by id';
+execute subscription_alias_prepare;
+➤ id[4,32,0]  ¦  subscription[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+deallocate prepare subscription_alias_prepare;
+insert into dmz_org(id) values(1);
+Duplicate entry '1' for key 'id'
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+select id,c_sub as subscription from dmz_org order by id;
+➤ id[4,32,0]  ¦  subscription[12,200,0]  𝄀
+1  ¦  中文 😀𠮷  𝄀
+2  ¦  null
+drop database subscription_identifier;
+show databases like 'subscription_identifier';
+➤ Database[12,5000,0]

@@ -17,6 +17,7 @@ package upgrade
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,26 +41,53 @@ func openViewDescriptionDB(t *testing.T, port int64, user string) *sql.DB {
 	return db
 }
 
+func cleanupViewDescriptionSQL(t *testing.T, db *sql.DB, query string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx, query)
+	if err != nil {
+		t.Errorf("view description cleanup %q: %v", query, err)
+	}
+}
+
 func TestViewDescriptionPublicSQL(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
+		setupCtx, setupCancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer setupCancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		db := openViewDescriptionDB(t, cn.GetServiceConfig().CN.Frontend.Port, "dump:111")
 		var viewName, viewDDL, charset, collation string
-		require.NoError(t, db.QueryRowContext(ctx, "show create view information_schema.columns").Scan(
+		require.NoError(t, db.QueryRowContext(setupCtx, "show create view information_schema.columns").Scan(
 			&viewName, &viewDDL, &charset, &collation))
 		require.Equal(t, "columns", viewName)
 		require.Contains(t, strings.ToLower(viewDDL), "__mo_visible_subscription_views")
 		require.Equal(t, "utf8mb4", charset)
 		require.Equal(t, "utf8mb4_general_ci", collation)
-		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
-		exec("create database view_description_test")
-		defer exec("drop database view_description_test")
-		t.Run("SHOW target replacement", func(t *testing.T) {
+		_, err = db.ExecContext(setupCtx, "create database view_description_test")
+		require.NoError(t, err)
+		defer cleanupViewDescriptionSQL(t, db, "drop database view_description_test")
+		setupCancel()
+		// Each phase owns its budget. A successful subtest (including its
+		// cleanup) must not consume the next phase's execution context.
+		if !t.Run("SHOW target replacement", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			testShowColumnsTargetReplacement(t, ctx, db)
-		})
+		}) {
+			return
+		}
+		if !t.Run("current schema consumers", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
+			testViewMetadataConsumers(t, ctx, db)
+		}) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
 		exec("create table view_description_test.src (x varchar(5), qty int not null default 7)")
 		exec("create view view_description_test.v as select x as label, qty from view_description_test.src")
 		describe := func(query string) [][]sql.NullString {
@@ -84,27 +112,27 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		}
 		before := describe("desc view_description_test.v")
 		require.Len(t, before, 2)
-		require.Equal(t, "VARCHAR(5)", before[0][1].String)
+		require.Equal(t, "varchar(5)", before[0][1].String)
 		exec("alter table view_description_test.src modify column x varchar(60)")
 		exec("alter table view_description_test.src modify column qty bigint not null default 9")
 		after := describe("desc view_description_test.v")
 		require.Len(t, after, 2)
-		require.Equal(t, "VARCHAR(60)", after[0][1].String)
+		require.Equal(t, "varchar(60)", after[0][1].String)
 		require.Equal(t, "9", after[1][4].String)
 		require.Equal(t, "NO", after[1][2].String)
 		filtered := describe("show columns from view_description_test.v like 'label'")
 		require.Len(t, filtered, 1)
-		require.Equal(t, "VARCHAR(60)", filtered[0][1].String)
+		require.Equal(t, "varchar(60)", filtered[0][1].String)
 		filtered = describe("show columns from view_description_test.v where Field = 'qty'")
 		require.Len(t, filtered, 1)
 		require.Equal(t, "9", filtered[0][4].String)
 		full := describe("show full columns from view_description_test.v")
 		require.Len(t, full, 2)
-		require.Equal(t, "VARCHAR(60)", full[0][1].String)
+		require.Equal(t, "varchar(60)", full[0][1].String)
 		require.Equal(t, "9", full[1][5].String)
 		var stored string
 		require.NoError(t, db.QueryRowContext(ctx, "select mo_show_visible_bin(atttyp,3) from mo_catalog.mo_columns where att_database='view_description_test' and att_relname='v' and attname='label'").Scan(&stored))
-		require.Equal(t, "VARCHAR(5)", stored)
+		require.Equal(t, "varchar(5)", stored)
 		// A prepared SHOW must not retain the VALUES rows produced by its first bind.
 		showConn, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -131,7 +159,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 				require.Equal(t, want, got)
 				return firstType
 			}
-			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
+			require.Equal(t, "varchar(60)", checkShow("label", "qty"))
 			writer, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer writer.Close()
@@ -159,11 +187,11 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
 			}
-			checkNested("VARCHAR(60)")
+			checkNested("varchar(60)")
 			_, err = writer.ExecContext(ctx, "alter table src modify column x varchar(70)")
 			require.NoError(t, err)
-			require.Equal(t, "VARCHAR(70)", checkShow("label", "qty"))
-			checkNested("VARCHAR(70)")
+			require.Equal(t, "varchar(70)", checkShow("label", "qty"))
+			checkNested("varchar(70)")
 			_, err = writer.ExecContext(ctx, "drop table src")
 			require.NoError(t, err)
 			func() {
@@ -176,7 +204,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			}()
 			_, err = writer.ExecContext(ctx, "create table src (x varchar(60), qty bigint not null default 9)")
 			require.NoError(t, err)
-			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
+			require.Equal(t, "varchar(60)", checkShow("label", "qty"))
 		}()
 		exec("create table view_description_test.unrelated_source (x int)")
 		exec("create view view_description_test.unrelated_view as select x from view_description_test.unrelated_source")
@@ -190,7 +218,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 60, width)
 		exec("create snapshot view_description_history for account")
-		defer exec("drop snapshot view_description_history")
+		defer cleanupViewDescriptionSQL(t, db, "drop snapshot view_description_history")
 		exec("drop table view_description_test.src")
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select character_maximum_length from information_schema.columns {snapshot = 'view_description_history'} "+
@@ -229,7 +257,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		exec("create table view_description_test.src (x varchar(90), qty bigint not null default 11)")
 		repaired := describe("desc view_description_test.v")
 		require.Len(t, repaired, 2)
-		require.Equal(t, "VARCHAR(90)", repaired[0][1].String)
+		require.Equal(t, "varchar(90)", repaired[0][1].String)
 		require.Equal(t, "11", repaired[1][4].String)
 		require.NoError(t, db.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
 		require.Equal(t, 90, width)
@@ -272,14 +300,19 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			warnings, err := missingConn.QueryContext(ctx, "show warnings")
 			require.NoError(t, err)
 			defer warnings.Close()
-			require.True(t, warnings.Next())
-			var level, message string
-			var code int
-			require.NoError(t, warnings.Scan(&level, &code, &message))
-			require.Equal(t, "Warning", level)
-			require.Equal(t, 1356, code)
-			require.Contains(t, message, "missing_db_view")
+			var messages []string
+			for warnings.Next() {
+				var level, message string
+				var code int
+				require.NoError(t, warnings.Scan(&level, &code, &message))
+				require.Equal(t, "Warning", level)
+				require.Equal(t, 1356, code)
+				messages = append(messages, message)
+			}
 			require.NoError(t, warnings.Err())
+			allWarnings := strings.Join(messages, "\n")
+			require.Contains(t, allWarnings, "missing_db_view")
+			require.Contains(t, allWarnings, "missing_default_db_view")
 		}()
 	})
 }
@@ -336,7 +369,7 @@ func testShowColumnsTargetReplacement(t *testing.T, ctx context.Context, db *sql
 			}()
 		}
 	}
-	check("VARCHAR(5)")
+	check("varchar(5)")
 	exec("drop table view_description_test.show_target")
 	exec("create view view_description_test.show_target as select x from view_description_test.show_source")
 	exec("alter table view_description_test.show_source modify column x varchar(60)")
@@ -345,12 +378,12 @@ func testShowColumnsTargetReplacement(t *testing.T, ctx context.Context, db *sql
 		"select character_maximum_length from information_schema.columns "+
 			"where table_schema='view_description_test' and table_name='show_target'").Scan(&width))
 	require.Equal(t, 60, width, "execution-time metadata is the independent control")
-	check("VARCHAR(60)")
+	check("varchar(60)")
 	// A rebuilt View plan must also notice replacement by an ordinary table.
 	exec("drop view view_description_test.show_target")
 	exec("create table view_description_test.show_target (x bigint)")
 	exec("drop table view_description_test.show_source")
-	check("BIGINT(64)")
+	check("bigint")
 	exec("drop table view_description_test.show_target")
 	rows, err := prepared.QueryContext(ctx)
 	if rows != nil {
@@ -393,37 +426,72 @@ func TestViewDescriptionPrivileges(t *testing.T) {
 		var sourceValue string
 		err = reader.QueryRowContext(ctx, "select x from view_description_priv.src").Scan(&sourceValue)
 		require.Error(t, err, "metadata visibility must not grant source-table SELECT")
-	})
-}
 
-func TestViewDescriptionTwoCN(t *testing.T) {
-	cluster, err := embed.NewCluster(embed.WithCNCount(2), embed.WithTesting(), embed.WithConcurrentTestClusters())
-	require.NoError(t, err)
-	defer func() { require.NoError(t, cluster.Close()) }()
-	require.NoError(t, cluster.Start())
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	cn0, err := cluster.GetCNService(0)
-	require.NoError(t, err)
-	cn1, err := cluster.GetCNService(1)
-	require.NoError(t, err)
-	first := openViewDescriptionDB(t, cn0.GetServiceConfig().CN.Frontend.Port, "dump:111")
-	second := openViewDescriptionDB(t, cn1.GetServiceConfig().CN.Frontend.Port, "dump:111")
-	_, err = first.ExecContext(ctx, "create database view_description_two_cn")
-	require.NoError(t, err)
-	defer func() {
-		_, err := first.ExecContext(ctx, "drop database view_description_two_cn")
-		require.NoError(t, err)
-	}()
-	_, err = first.ExecContext(ctx, "create table view_description_two_cn.src (x varchar(5))")
-	require.NoError(t, err)
-	_, err = first.ExecContext(ctx, "create view view_description_two_cn.v as select x from view_description_two_cn.src")
-	require.NoError(t, err)
-	_, err = first.ExecContext(ctx, "alter table view_description_two_cn.src modify column x varchar(60)")
-	require.NoError(t, err)
-	var width int
-	require.NoError(t, second.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_two_cn' and table_name='v'").Scan(&width))
-	require.Equal(t, 60, width)
+		t.Run("historical data uses current authorization", func(t *testing.T) {
+			exec := func(q string) {
+				t.Helper()
+				_, err := admin.ExecContext(ctx, q)
+				require.NoError(t, err, q)
+			}
+			reader, err := reader.Conn(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			_, err = reader.ExecContext(ctx, "set role view_description_role")
+			require.NoError(t, err)
+			exec("insert into view_description_priv.src values ('old')")
+			exec("grant select on view view_description_priv.v to view_description_role")
+			exec("create snapshot view_description_priv_history for account sys")
+			t.Cleanup(func() { cleanupViewDescriptionSQL(t, admin, "drop snapshot view_description_priv_history") })
+			exec("update view_description_priv.src set x='new'")
+			exec("alter table view_description_priv.src modify column x varchar(90)")
+
+			current := "select x from view_description_priv.v"
+			historical := current + " {snapshot='view_description_priv_history'}"
+			read := func(q, want string) {
+				t.Helper()
+				var value string
+				require.NoError(t, reader.QueryRowContext(ctx, q).Scan(&value), q)
+				require.Equal(t, want, value, q)
+			}
+			denied := func(row *sql.Row) {
+				t.Helper()
+				var value string
+				require.ErrorContains(t, row.Scan(&value), "do not have privilege")
+			}
+			metadata := "select character_maximum_length from information_schema.columns " +
+				"{snapshot='view_description_priv_history'} " +
+				"where table_schema='view_description_priv' and table_name='v' and column_name='x'"
+			read(current, "new")
+			read(historical, "old")
+			read(metadata, "60")
+			denied(reader.QueryRowContext(ctx, "select x from view_description_priv.src"))
+
+			prepared, err := reader.PrepareContext(ctx, historical)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+			readPrepared := func() {
+				t.Helper()
+				var value string
+				require.NoError(t, prepared.QueryRowContext(ctx).Scan(&value))
+				require.Equal(t, "old", value)
+			}
+			readPrepared()
+			exec("revoke select on view view_description_priv.v from view_description_role")
+			denied(reader.QueryRowContext(ctx, current))
+			denied(reader.QueryRowContext(ctx, historical))
+			denied(prepared.QueryRowContext(ctx))
+			// SHOW permission remains independent of SELECT and uses the old schema.
+			read(metadata, "60")
+			exec("grant select on view view_description_priv.v to view_description_role")
+			readPrepared()
+			exec("revoke view_description_role from view_description_reader")
+			denied(reader.QueryRowContext(ctx, historical))
+			denied(prepared.QueryRowContext(ctx))
+			exec("grant view_description_role to view_description_reader")
+			read(historical, "old")
+			readPrepared()
+		})
+	})
 }
 
 func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
@@ -448,7 +516,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "create view v as select f_answer() as answer")
 		require.NoError(t, err)
-		expectedType := "BIGINT"
+		expectedType := "bigint"
 		checkShow := func(query string) {
 			t.Helper()
 			rows, queryErr := definition.QueryContext(ctx, query)
@@ -465,7 +533,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			}
 			require.NoError(t, rows.Scan(targets...))
 			require.Equal(t, "answer", values[0].String)
-			require.Equal(t, expectedType, strings.ToUpper(values[1].String))
+			require.Equal(t, expectedType, values[1].String)
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
@@ -502,7 +570,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			require.NoError(t, prepared.QueryRowContext(ctx).Scan(
 				&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 			require.Equal(t, "answer", field.String)
-			require.Equal(t, expectedType, strings.ToUpper(typ.String))
+			require.Equal(t, expectedType, typ.String)
 		}
 		checkShow("desc view_description_udf.v")
 		checkPrepared()
@@ -527,7 +595,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "use mo_catalog")
 		require.NoError(t, err)
-		expectedType = "VARCHAR(9)"
+		expectedType = "varchar(9)"
 		checkShow("show full columns from view_description_udf.v")
 		checkShow("execute view_udf_columns")
 		checkPrepared()
@@ -545,7 +613,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 					result.ReadRows(func(n int, cols []*vector.Vector) bool {
 						require.Equal(t, 1, n)
 						require.Equal(t, "answer", executor.GetStringRows(cols[0])[0])
-						require.Equal(t, expectedType, strings.ToUpper(executor.GetStringRows(cols[1])[0]))
+						require.Equal(t, expectedType, executor.GetStringRows(cols[1])[0])
 						found = true
 						return true
 					})
@@ -571,6 +639,63 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 	})
 }
 
+// Fail after the real replacement, while leaving transaction ownership to ExecTxn.
+// This proves rollback/retry against storage, unlike an in-memory SQL recorder.
+type failedViewColumnsUpgradeTxn struct {
+	executor.TxnExecutor
+	failure error
+}
+
+func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
+	result, err := txn.TxnExecutor.Exec(sql, opts)
+	if err == nil && sql == strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+		result.Close()
+		return executor.Result{}, txn.failure
+	}
+	return result, err
+}
+
+func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32, legacyDDL string) {
+	t.Helper()
+	// Run the tenant-upgrade transaction as the sys account, mirroring the production
+	// driver (service.MaybeUpgradeTenant scopes the txn to System_Account and targets
+	// the tenant via the tenantID passed to HandleTenantUpgrade, whose per-tenant
+	// statements carry UpgradeStatementOption(tenantID)). An upgrade entry's cluster-wide
+	// protocol-version check runs mo_ctl, which only the sys account may execute (#28985).
+	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
+		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
+	definition := func() string {
+		t.Helper()
+		var exists bool
+		var ddl string
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			var err error
+			exists, ddl, err = versions.CheckViewDefinition(txn, tenantID, "information_schema", "columns")
+			return err
+		}, opts))
+		require.True(t, exists, "failed migration must not leave COLUMNS missing")
+		return ddl
+	}
+	require.Equal(t, legacyDDL, definition())
+	entry := versions.InformationSchemaColumnsUpgradeEntry()
+	injected := errors.New("injected COLUMNS creation failure")
+	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		return entry.Upgrade(failedViewColumnsUpgradeTxn{txn, injected}, tenantID)
+	}, opts)
+	require.ErrorIs(t, err, injected)
+	require.Equal(t, legacyDDL, definition(), "the replacement must roll back on failure")
+	for i := 0; i < 2; i++ {
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			if i == 1 {
+				// Exact readiness must bypass DDL when the handler is replayed.
+				txn = failedViewColumnsUpgradeTxn{txn, injected}
+			}
+			return entry.Upgrade(txn, tenantID)
+		}, opts))
+		require.Equal(t, strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition())
+	}
+}
+
 func TestViewDescriptionSubscription(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -580,22 +705,47 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		sys := openViewDescriptionDB(t, port, "dump:111")
 		exec := func(q string) { t.Helper(); _, err := sys.ExecContext(ctx, q); require.NoError(t, err, q) }
+		cleanup := func(db *sql.DB, q string) {
+			t.Helper()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, cleanupErr := db.ExecContext(cleanupCtx, q)
+			require.NoError(t, cleanupErr, q)
+		}
+		// Verify teardown before the enclosing fixture destroys the cluster.
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			var count int
+			require.NoError(t, sys.QueryRowContext(cleanupCtx,
+				"select count(*) from mo_catalog.mo_account where account_name='view_description_sub'").Scan(&count))
+			require.Zero(t, count, "the subscriber account must be removed")
+			require.NoError(t, sys.QueryRowContext(cleanupCtx,
+				"select count(*) from mo_catalog.mo_database where datname='view_description_pub'").Scan(&count))
+			require.Zero(t, count, "the publisher database must be removed")
+		}()
 		exec("create account view_description_sub admin_name='admin' identified by '111'")
-		defer exec("drop account view_description_sub")
+		defer cleanup(sys, "drop account view_description_sub")
 		exec("create database view_description_pub")
-		defer exec("drop database view_description_pub")
+		defer cleanup(sys, "drop database view_description_pub")
 		exec("create table view_description_pub.src (x varchar(5) character set utf8mb4 collate utf8mb4_general_ci)")
+		exec("insert into view_description_pub.src values ('old')")
 		exec("create table view_description_pub.charset_src (mb4 varchar(5) character set utf8mb4 collate utf8mb4_general_ci, mb4_bin varchar(5) character set utf8mb4 collate utf8mb4_bin, legacy varchar(5) character set utf8, raw varbinary(5), txt text)")
 		exec("create view view_description_pub.charset_v as select mb4, mb4_bin, legacy, raw, txt from view_description_pub.charset_src")
 		exec("create table view_description_pub.bad_src (x int)")
 		exec("create view view_description_pub.v as select x from view_description_pub.src")
 		exec("create view view_description_pub.bad_view as select x from view_description_pub.bad_src")
 		exec("create publication view_description_publication database view_description_pub account view_description_sub")
-		defer exec("drop publication view_description_publication")
+		defer cleanup(sys, "drop publication view_description_publication")
 		subscriber := openViewDescriptionDB(t, port, "view_description_sub#admin#accountadmin:111")
 		_, err = subscriber.ExecContext(ctx, "create database subscribed from sys publication view_description_publication")
 		require.NoError(t, err)
-		defer func() { _, err := subscriber.ExecContext(ctx, "drop database subscribed"); require.NoError(t, err) }()
+		defer cleanup(subscriber, "drop database subscribed")
+		t.Run("qualified publisher source without local database", func(t *testing.T) {
+			var value string
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select x from subscribed.v").Scan(&value))
+			require.Equal(t, "old", value)
+		})
 		// Simulate a tenant whose V58 COLUMNS definition has not yet been migrated,
 		// while all SQL and table functions execute on this newer CN.
 		var tenantID uint32
@@ -625,6 +775,13 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, subscriber.QueryRowContext(ctx,
 			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
 		require.Equal(t, "x", legacyColumn)
+		// The historical system template is still V58, but its View must be
+		// described using the source visible at that snapshot after migration.
+		exec("alter table view_description_pub.src modify column x varchar(7)")
+		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_legacy_columns for account")
+		require.NoError(t, err)
+		defer cleanup(subscriber, "drop snapshot view_description_legacy_columns")
+		exec("alter table view_description_pub.src modify column x varchar(5)")
 		// Compare the historical projection with the new one on the same CN.
 		// Publisher View, subscription table and subscription View must all
 		// agree on the supported character-set selector variants.
@@ -670,25 +827,63 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		publisherView := readCharsets(sys, "view_description_pub", "charset_v")
 		require.Equal(t, publisherTable, publisherView)
 		legacySubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
-		require.Equal(t, publisherView, legacySubscriptionView)
+		require.Len(t, legacySubscriptionView, len(publisherView),
+			"pre-refresh the subscriber must still project the same ordered column list")
+		for i, c := range legacySubscriptionView {
+			require.Equal(t, publisherView[i].name, c.name)
+			if c.name != "raw" {
+				require.Equal(t, publisherView[i], c,
+					"non-binary column %q must match the publisher in every persisted COLUMNS generation", c.name)
+				continue
+			}
+			// raw is the varbinary column (selector 2 of
+			// internal_column_character_set). Until the subscriber's persisted
+			// COLUMNS text is rebuilt by the V109/V118 MODIFY_VIEW refresh, the
+			// historical selector projection renders 'binary'; the current
+			// projection renders NULL (read as "" here, NullString). Both are
+			// valid pre-refresh states; charset/collation must stay consistent.
+			require.True(t, c.charset == "binary" || c.charset == "",
+				"raw charset %q is neither the historical 'binary' projection nor the refreshed NULL", c.charset)
+			require.Equal(t, c.charset, c.collation,
+				"raw charset/collation must stay consistent in every projection")
+		}
 		require.Equal(t, "utf8mb4", publisherTable[0].charset)
 		require.Equal(t, "utf8mb4_general_ci", publisherTable[0].collation)
-		require.Equal(t, "binary", publisherTable[3].charset)
+		require.Equal(t, "", publisherTable[3].charset, "binary-family columns render NULL charset in information_schema (#31160)")
+		require.Equal(t, "", publisherTable[3].collation, "binary-family columns render NULL collation in information_schema (#31160)")
 
-		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsDDL))
+		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID, sysview.InformationSchemaColumnsV58DDL())
+		checkHistoricalColumnsWidth := func() {
+			t.Helper()
+			var historicalWidth int
+			require.NoError(t, subscriber.QueryRowContext(ctx,
+				"select character_maximum_length from information_schema.columns {snapshot='view_description_legacy_columns'} "+
+					"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
+			require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
+		}
+		// Both published and intermediate legacy definitions converge directly to
+		// the final view, including rollback and repeated execution.
+		checkHistoricalColumnsWidth()
+		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsV100DDL()))
+		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID, sysview.InformationSchemaColumnsV100DDL())
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
-		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
-		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+		refreshedSubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
+		require.Equal(t, publisherView, refreshedSubscriptionView,
+			"the V109/V118 refresh must converge the subscription projection to the publisher's NULL charset/collation (#31160)")
+		for i, c := range legacySubscriptionView {
+			if c.name == "raw" && c.charset == "binary" {
+				require.NotEqual(t, c, refreshedSubscriptionView[i],
+					"a column that still carried the historical 'binary' projection must be rewritten by the native refresh")
+			}
+		}
+		checkHistoricalColumnsWidth()
 
 		// The snapshot belongs to the subscriber, but the View's source database
 		// belongs to the publisher. Database existence and relation binding must
 		// use the same account and historical timestamp.
 		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_history for account")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_history")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop snapshot view_description_sub_history")
 		exec("alter table view_description_pub.src modify column x varchar(60)")
 		checkHistoricalView := func(snapshotName string, wantWidth int) {
 			t.Helper()
@@ -731,15 +926,12 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		// substitute for the publisher's source catalog at a later snapshot.
 		_, err = subscriber.ExecContext(ctx, "create database view_description_pub")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop database view_description_pub")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop database view_description_pub")
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
 			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 		require.Equal(t, "x", field.String)
-		require.Equal(t, "VARCHAR(60)", typ.String)
+		require.Equal(t, "varchar(60)", typ.String)
 		showStmt, err := subscriber.PrepareContext(ctx, "show columns from subscribed.v")
 		require.NoError(t, err)
 		defer showStmt.Close()
@@ -754,8 +946,8 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
-		checkSubscribedShow("VARCHAR(60)")
-		checkSubscribedShow("VARCHAR(60)")
+		checkSubscribedShow("varchar(60)")
+		checkSubscribedShow("varchar(60)")
 		// System View columns remain sourced from the catalog, not regenerated
 		// from the internal SQL used to populate the View.
 		rows, err := subscriber.QueryContext(ctx, "desc mo_catalog.mo_variables")
@@ -780,13 +972,10 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer prepared.Close()
 		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_same_name for account")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_same_name")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop snapshot view_description_sub_same_name")
 		exec("alter table view_description_pub.src modify column x varchar(90)")
 		checkHistoricalView("view_description_sub_same_name", 60)
-		checkSubscribedShow("VARCHAR(90)")
+		checkSubscribedShow("varchar(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
 		// Batch metadata scans omit invalid Views, but retain a diagnostic for
@@ -832,8 +1021,8 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "create user metadata_user identified by 'reader_pass'")
 		require.NoError(t, err)
-		defer subscriber.ExecContext(ctx, "drop user metadata_user")
-		defer subscriber.ExecContext(ctx, "drop role metadata_reader")
+		defer cleanup(subscriber, "drop user metadata_user")
+		defer cleanup(subscriber, "drop role metadata_reader")
 		_, err = subscriber.ExecContext(ctx, "grant metadata_reader to metadata_user")
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "grant connect on account * to metadata_reader")
@@ -874,5 +1063,147 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, reader.QueryRowContext(ctx, query).Scan(&width))
 		require.Equal(t, 90, width)
+		t.Run("historical publication authorization and source", func(t *testing.T) {
+			conn, err := subscriber.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			exec("create database view_description_remapped")
+			defer cleanup(sys, "drop database view_description_remapped")
+			exec("create table view_description_remapped.src (x varchar(37))")
+			exec("insert into view_description_remapped.src values ('remapped-value')")
+			exec("create view view_description_remapped.v as select x from view_description_remapped.src")
+			_, err = conn.ExecContext(ctx, "create snapshot view_description_pub_auth for account")
+			require.NoError(t, err)
+			defer cleanup(subscriber, "drop snapshot view_description_pub_auth")
+			exec("alter table view_description_pub.src modify column x varchar(120)")
+			exec("update view_description_pub.src set x='new'")
+			history := "select x from subscribed.v {snapshot='view_description_pub_auth'}"
+			prepared, err := conn.PrepareContext(ctx, history)
+			require.NoError(t, err)
+			defer prepared.Close()
+			check := func(t *testing.T, allowed bool) {
+				t.Helper()
+				var value string
+				for _, query := range []func() *sql.Row{
+					func() *sql.Row { return conn.QueryRowContext(ctx, history) },
+					func() *sql.Row { return prepared.QueryRowContext(ctx) },
+				} {
+					err := query().Scan(&value)
+					if allowed {
+						require.NoError(t, err)
+						require.Equal(t, "old", value)
+					} else {
+						require.Error(t, err)
+					}
+				}
+				for _, hint := range []string{"", " {snapshot='view_description_pub_auth'}"} {
+					var count int
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select count(*) from information_schema.columns"+hint+
+							" where table_schema='subscribed' and table_name='v'").Scan(&count))
+					if allowed {
+						require.Equal(t, 1, count)
+					} else {
+						require.Zero(t, count, "historical schema must not revive current publication eligibility")
+					}
+				}
+			}
+			check(t, true)
+			var historicalWidth int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select character_maximum_length from information_schema.columns {snapshot='view_description_pub_auth'} "+
+					"where table_schema='subscribed' and table_name='v'").Scan(&historicalWidth))
+			require.Equal(t, 90, historicalWidth, "current authorization must not replace historical schema T")
+			for _, tc := range []struct{ name, revoke, restore string }{
+				{"membership", "alter publication view_description_publication account drop view_description_sub", "alter publication view_description_publication account add view_description_sub"},
+				{"table scope", "alter publication view_description_publication table src", "alter publication view_description_publication table src,v"},
+				{"publication", "drop publication view_description_publication", "create publication view_description_publication database view_description_pub account view_description_sub"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					exec(tc.revoke)
+					defer exec(tc.restore)
+					check(t, false)
+				})
+				check(t, true)
+			}
+			t.Run("older data transaction uses current eligibility", func(t *testing.T) {
+				_, err := conn.ExecContext(ctx, "set session transaction_isolation='REPEATABLE-READ'")
+				require.NoError(t, err)
+				tx, err := conn.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer tx.Rollback()
+				var count int
+				query := "select count(*) from information_schema.columns where table_schema='subscribed' and table_name='v'"
+				require.NoError(t, tx.QueryRowContext(ctx, query).Scan(&count))
+				require.Equal(t, 1, count)
+				exec("alter publication view_description_publication account drop view_description_sub")
+				restored := false
+				defer func() {
+					if !restored {
+						cleanup(sys, "alter publication view_description_publication account add view_description_sub")
+					}
+				}()
+				require.NoError(t, tx.QueryRowContext(ctx, query).Scan(&count))
+				require.Zero(t, count)
+				var value string
+				require.ErrorContains(t, tx.QueryRowContext(ctx, "select x from subscribed.v").Scan(&value), "not allowed to subscribe")
+				require.ErrorContains(t, prepared.QueryRowContext(ctx).Scan(&value), "not allowed to subscribe")
+				exec("alter publication view_description_publication account add view_description_sub")
+				restored = true
+				require.NoError(t, tx.QueryRowContext(ctx, "select x from subscribed.v").Scan(&value))
+				require.Equal(t, "new", value)
+				require.NoError(t, prepared.QueryRowContext(ctx).Scan(&value))
+				require.Equal(t, "old", value)
+				require.NoError(t, tx.QueryRowContext(ctx, query).Scan(&count))
+				require.Equal(t, 1, count)
+			})
+			defer func() {
+				cleanup(sys, "drop publication view_description_publication")
+				cleanup(sys, "create publication view_description_publication database view_description_pub account view_description_sub")
+			}()
+			exec("drop publication view_description_publication")
+			exec("create publication view_description_publication database view_description_remapped account view_description_sub")
+			var value string
+			require.NoError(t, prepared.QueryRowContext(ctx).Scan(&value))
+			require.Equal(t, "remapped-value", value)
+			var width int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select character_maximum_length from information_schema.columns {snapshot='view_description_pub_auth'} "+
+					"where table_schema='subscribed' and table_name='v'").Scan(&width))
+			require.Equal(t, 37, width, "historical columns must describe the source admitted by SELECT")
+			t.Run("alias membership remains historical", func(t *testing.T) {
+				_, err := subscriber.ExecContext(ctx, "drop database subscribed")
+				require.NoError(t, err)
+				defer cleanup(subscriber, "create database subscribed from sys publication view_description_publication")
+				_, err = subscriber.ExecContext(ctx, "create database subscribed_late from sys publication view_description_publication")
+				require.NoError(t, err)
+				defer cleanup(subscriber, "drop database subscribed_late")
+				var count int
+				for _, tc := range []struct {
+					name, hint string
+					expected   int
+				}{
+					{"subscribed", "", 0},
+					{"subscribed_late", "", 1},
+					{"subscribed", "{snapshot='view_description_pub_auth'}", 1},
+					{"subscribed_late", "{snapshot='view_description_pub_auth'}", 0},
+				} {
+					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from information_schema.columns "+tc.hint+
+						" where table_schema=? and table_name='v'", tc.name).Scan(&count))
+					require.Equal(t, tc.expected, count, tc.name+tc.hint)
+				}
+			})
+		})
+		t.Run("cached historical alias ignores denied current replacement", func(t *testing.T) {
+			testHistoricalSubscriptionCachedAlias(t, ctx, sys, subscriber)
+		})
+		t.Run("cross-account snapshot metadata namespace", func(t *testing.T) {
+			testSnapshotMetadataNamespace(t, ctx, sys, subscriber)
+		})
+		t.Run("historical foreign source remapping", func(t *testing.T) {
+			testHistoricalSubscriptionForeignSource(t, sys, subscriber)
+		})
+		// Cleanup must work after the scenario's context is cancelled or expires.
+		cancel()
 	})
 }

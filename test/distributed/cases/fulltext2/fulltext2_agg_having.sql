@@ -33,7 +33,7 @@ select id from docs group by id, body having sum(match(body) against('alpha')) >
 
 -- the served aggregate score is genuinely used, not a full scan.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, max(match(body) against('alpha')) as score
 from docs group by id, body having score > 0 order by id;
 
@@ -118,7 +118,7 @@ alter table rd alter reindex rdft fulltext2 force_sync;
 -- Constant, non-null digits IS drop-safe: round(0,2)=0 is the SUM identity, so driving is
 -- result-preserving and the index is used.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select cat, sum(round(match(body) against('alpha'), 2)) as total
 from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 select cat, sum(round(match(body) against('alpha'), 2)) as total
@@ -148,7 +148,7 @@ having cast(cast(cast(max(match(body) against('alpha')) as signed) as char) as y
 -- Control: a cast to a zero-preserving numeric type (DECIMAL) IS drop-safe -- CAST(0 AS DECIMAL)=0 is
 -- the SUM identity -- so driving stays result-preserving and the index is used.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
 from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s

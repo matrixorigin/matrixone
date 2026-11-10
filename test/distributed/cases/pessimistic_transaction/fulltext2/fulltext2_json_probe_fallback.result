@@ -8,7 +8,7 @@ insert into t values (1, '{"foo":"needle"}'), (2, '{"foo":"hay"}');
 begin;
 insert into t values (3, '{"foo":"needle"}');
 explain select id from t where json_extract_string(j,'$.foo') = 'needle';
--- @regex("Table Function on fulltext2_search", false)
+-- @regex("Fulltext Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Table Scan on ft2_json_probe_fallback.t  𝄀

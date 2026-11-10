@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -47,6 +48,85 @@ func loadedSearch(t *testing.T) *Fulltext2Search {
 	s.idx = NewIndex([]*Segment{seg}, nil)
 	s.loaded = true
 	return s
+}
+
+// Unlimited normal MATCH searches emit every live document once, including
+// zero/negative scores. A repeated PK in the CDC tail must replace its base
+// copy, and repeated terms in one document must not multiply output rows.
+func TestFulltext2SearchUnlimitedCompleteUniqueScores(t *testing.T) {
+	baseBuilder := NewBuilder("base", int32(types.T_int64))
+	feed(t, baseBuilder, int64(1), "common", "rare")
+	feed(t, baseBuilder, int64(2), "common")
+	feed(t, baseBuilder, int64(3), "common")
+	base := loadedSeg(t, baseBuilder)
+	t.Cleanup(func() { require.NoError(t, base.dict.Close()) })
+
+	tailBuilder := NewBuilder("tail", int32(types.T_int64))
+	feed(t, tailBuilder, int64(1), "common", "rare", "rare")
+	feed(t, tailBuilder, int64(4), "common")
+	tail := loadedSeg(t, tailBuilder)
+	t.Cleanup(func() { require.NoError(t, tail.dict.Close()) })
+	tail.Recency = 1
+
+	s := NewFulltext2Search(TableConfig{IndexTable: "__store", Parser: ParserDefault})
+	s.idx = NewIndex([]*Segment{base, tail}, nil)
+	s.loaded = true
+	require.Equal(t, int64(4), s.idx.NumDocs(), "duplicate PK has one live copy")
+
+	for _, algo := range []ScoreAlgo{TfIdf, BM25} {
+		for _, tc := range []struct {
+			name      string
+			pattern   string
+			boolean   bool
+			bag       bool
+			signAtPK1 int
+		}{
+			{"natural language", "common", false, false, 0},
+			{"boolean disjunction", "common rare", true, false, 1},
+			{"boolean penalty", "+common ~rare", true, false, -1},
+			{"bm25 mode", "common rare", false, true, 1},
+		} {
+			t.Run(fmt.Sprintf("%s/algo=%d", tc.name, algo), func(t *testing.T) {
+				query := Fulltext2Query{Pattern: []byte(tc.pattern), Boolean: tc.boolean, BagOfWords: tc.bag, Algo: algo}
+				got := make(map[int64]float32)
+				keys, scores, err := s.Search(newSearchProc(t), query, vectorindex.RuntimeConfig{
+					Limit: 0,
+					Emit: func(out *vectorindex.SearchOutput) error {
+						defer PutColumnBuffer(out.Keys)
+						require.Equal(t, out.Keys.N, len(out.Dists))
+						require.Empty(t, out.Keys.Nulls, "document IDs are non-NULL")
+						for i, pk := range int64ColumnBuffer(out.Keys) {
+							require.NotContains(t, got, pk, "one result per live document across segments")
+							got[pk] = out.Dists[i]
+						}
+						return nil
+					},
+				})
+				require.NoError(t, err)
+				require.Empty(t, keys, "unlimited results are emitted rather than materialized")
+				require.Empty(t, scores)
+				require.ElementsMatch(t, []int64{1, 2, 3, 4}, keysOf(got), "complete, independently labeled live PK set")
+				for _, pk := range []int64{2, 3, 4} {
+					require.Equal(t, float32(0), got[pk], "ubiquitous common term has zero IDF")
+				}
+				// Independent scorer oracle: four live docs, rare df=1 and
+				// tf=2 in the winning tail copy, docLen=3, avgDocLen=1.5.
+				wantRare := 2 * math.Pow(math.Log10(4), 2)
+				if algo == BM25 {
+					wantRare = math.Pow(math.Log10(4), 2) * (2 * 2.5 / (2 + 1.5*(0.25+0.75*(3/1.5))))
+				}
+				require.InDelta(t, float64(tc.signAtPK1)*wantRare, got[1], 1e-6)
+				switch tc.signAtPK1 {
+				case -1:
+					require.Less(t, got[1], float32(0), "penalty is retained")
+				case 0:
+					require.Equal(t, float32(0), got[1])
+				case 1:
+					require.Greater(t, got[1], float32(0), "rare repeated term contributes relevance")
+				}
+			})
+		}
+	}
 }
 
 func TestFulltext2SearchNewAndUnloaded(t *testing.T) {

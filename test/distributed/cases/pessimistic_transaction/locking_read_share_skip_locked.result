@@ -1,0 +1,74 @@
+drop database if exists locking_read_share_skip_locked_db;
+create database locking_read_share_skip_locked_db;
+use locking_read_share_skip_locked_db;
+create table t(id int primary key, v int);
+insert into t values (1, 10), (2, 20), (3, 30);
+set @saved_lock_timeout = @@session.lock_wait_timeout;
+set session lock_wait_timeout = 1;
+begin;
+select id from t where id = 1 for update;
+➤ id[4,32,0]  𝄀
+1
+use locking_read_share_skip_locked_db;
+set @saved_lock_timeout = @@session.lock_wait_timeout;
+set session lock_wait_timeout = 1;
+begin;
+select id from t order by id limit 2 for share skip locked;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from t order by id limit 1 offset 1 for share skip locked;
+➤ id[4,32,0]  𝄀
+3
+select id from t where id = 1 for share skip locked;
+➤ id[4,32,0]
+prepare skip_stmt from 'select id from t where id >= ? order by id limit 2 for share skip locked';
+set @first_id = 1;
+execute skip_stmt using @first_id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+deallocate prepare skip_stmt;
+select cast(id as char character set binary) from t where id = (select (select t.id)) order by id limit 1 offset 1 for share skip locked;
+➤ cast(id as char character set binary)[-3,11,0]  𝄀
+3
+select id from t where id = 2 for update nowait;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+rollback;
+rollback;
+begin;
+select id from t where id = 1 for share;
+➤ id[4,32,0]  𝄀
+1
+begin;
+select id from t where id = 1 for share skip locked;
+➤ id[4,32,0]  𝄀
+1
+rollback;
+rollback;
+begin;
+select id from t order by id for update;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+begin;
+select id from t order by id limit 2 for share skip locked;
+➤ id[4,32,0]
+rollback;
+rollback;
+begin;
+select id from t order by id for share skip locked;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+rollback;
+set session lock_wait_timeout = @saved_lock_timeout;
+select id from t for update skip locked;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 32 near " skip locked;";
+select sum(v) as original_sum from t;
+➤ original_sum[-5,64,0]  𝄀
+60
+set session lock_wait_timeout = @saved_lock_timeout;
+drop database locking_read_share_skip_locked_db;

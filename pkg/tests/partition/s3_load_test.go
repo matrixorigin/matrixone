@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -64,15 +65,7 @@ func TestLoadS3(t *testing.T) {
 
 			n := partitionLoadRowCount()
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
-					require.Equal(t, uint64(n), r.AffectedRows)
-				},
-				sql,
-			)
+			loadPartitionFixture(t, db, cn, sql, n)
 
 			loaded := 0
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
@@ -143,15 +136,7 @@ func TestLoadS3WithIndex(t *testing.T) {
 
 			n := partitionLoadRowCount()
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
-					require.Equal(t, uint64(n), r.AffectedRows)
-				},
-				sql,
-			)
+			loadPartitionFixture(t, db, cn, sql, n)
 
 			loaded := 0
 			indexLoaded := 0
@@ -233,4 +218,25 @@ func genLoadFile(
 	}
 
 	return csvFilePath
+}
+
+// Only this server-local import runs with the fixture's explicit sys/moadmin
+// identity; ordinary internal executor calls keep their existing identity.
+func loadPartitionFixture(t *testing.T, db string, cn embed.ServiceOperator, sql string, rows int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 0), time.Minute)
+	defer cancel()
+	var txnOp client.TxnOperator
+	err := testutils.GetSQLExecutor(cn).ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+		res, err := tx.Exec(sql, executor.StatementOption{}.WithSessionIdentity("sys", "moadmin"))
+		defer res.Close()
+		if err != nil {
+			return err
+		}
+		require.Equal(t, uint64(rows), res.AffectedRows)
+		txnOp = tx.Txn()
+		return nil
+	}, executor.Options{}.WithDatabase(db).WithAccountID(0))
+	require.NoError(t, err)
+	testutils.WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
 }

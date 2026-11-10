@@ -54,25 +54,17 @@ func (alloc *IDAllocator) CurrObject() uint64 { return alloc.objAlloc.Get() }
 func (alloc *IDAllocator) CurrBlock() uint64  { return alloc.blkAlloc.Get() }
 
 func (alloc *IDAllocator) OnReplayBlockID(id uint64) {
-	if alloc.CurrBlock() < id {
-		alloc.blkAlloc.SetStart(id)
-	}
+	alloc.blkAlloc.AdvanceTo(id)
 }
 
 func (alloc *IDAllocator) OnReplayObjectID(id uint64) {
-	if alloc.CurrObject() < id {
-		alloc.objAlloc.SetStart(id)
-	}
+	alloc.objAlloc.AdvanceTo(id)
 }
 func (alloc *IDAllocator) OnReplayTableID(id uint64) {
-	if alloc.CurrTable() < id {
-		alloc.tblAlloc.SetStart(id)
-	}
+	alloc.tblAlloc.AdvanceTo(id)
 }
 func (alloc *IDAllocator) OnReplayDBID(id uint64) {
-	if alloc.CurrDB() < id {
-		alloc.dbAlloc.SetStart(id)
-	}
+	alloc.dbAlloc.AdvanceTo(id)
 }
 
 func (alloc *IDAllocator) IDStates() string {

@@ -47,7 +47,7 @@ func TestBetweenDatetimeTimestampPreservesInstantSemantics(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want, false}, []bool{false, true}),
 		betweenImpl,
 	)
-	ok, info := testCase.Run()
+	ok, info := testCase.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -71,7 +71,7 @@ func TestBetweenDatetimeTimestampPreservesCommonValueScale(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
 		betweenImpl,
 	)
-	ok, info := testCase.Run()
+	ok, info := testCase.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -156,7 +156,7 @@ func TestBetweenDatetimeTimestampTypeArrangements(t *testing.T) {
 				),
 				betweenImpl,
 			)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -217,7 +217,7 @@ func TestOpBetweenBool(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, tc.wantNul),
 				betweenImpl,
 			)
-			ok, info := fn.Run()
+			ok, info := fn.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -246,7 +246,7 @@ func TestOpBetweenRowsFalseDominatesNull(t *testing.T) {
 					[]bool{false, false}, []bool{false, false}),
 				betweenImpl,
 			)
-			ok, info := fn.Run()
+			ok, info := fn.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -266,7 +266,7 @@ func TestOpBetweenFixedNullBound(t *testing.T) {
 			[]bool{false, false, false}, []bool{true, true, true}),
 		betweenImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -285,7 +285,7 @@ func TestOpBetweenFixedRowBounds(t *testing.T) {
 			[]bool{true, true, false, false}, []bool{false, false, true, false}),
 		betweenImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -304,7 +304,7 @@ func TestOpBetweenBytesRowBounds(t *testing.T) {
 			[]bool{true, false, false}, []bool{false, false, true}),
 		betweenImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -336,7 +336,7 @@ func TestInRangeBool(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, nil),
 				inRangeImpl,
 			)
-			ok, info := fn.Run()
+			ok, info := fn.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -354,7 +354,7 @@ func TestInRangeBool(t *testing.T) {
 				[]bool{false, false}, []bool{true, true}),
 			inRangeImpl,
 		)
-		ok, info := fn.Run()
+		ok, info := fn.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -375,6 +375,6 @@ func TestInRangeFixedNullBound(t *testing.T) {
 			[]bool{false, false, false}, []bool{true, true, true}),
 		inRangeImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }

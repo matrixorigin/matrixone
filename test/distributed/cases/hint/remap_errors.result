@@ -11,9 +11,9 @@ internal error: the system variable is session
 set remap_rewrites = '{not json}';
 invalid input: invalid remap_rewrites value "{not json}": invalid character 'n' looking for beginning of object key string
 set remap_rewrites = '[1,2,3]';
-invalid input: invalid remap_rewrites value "[1,2,3]": json: cannot unmarshal array into Go value of type map[string]json.RawMessage
+invalid input: invalid remap_rewrites value "[1,2,3]": json: cannot unmarshal array into Go value of type map[string]jsontext.Value
 set remap_rewrites = '123';
-invalid input: invalid remap_rewrites value "123": json: cannot unmarshal number into Go value of type map[string]json.RawMessage
+invalid input: invalid remap_rewrites value "123": json: cannot unmarshal number into Go value of type map[string]jsontext.Value
 set remap_rewrites = '{"rerr.t": "delete from t"}';
 invalid input: invalid rewrite rule SQL "delete from t": only accept SELECT-like statements as rewrites
 set remap_rewrites = '{"rerr.t": "update t set v = 0"}';
@@ -53,7 +53,7 @@ invalid input: remapdb must not remap a system database, got "x" -> "mo_secret"
 set remap_rewrites = '{"remapdb": {"x": "mysql"}}';
 invalid input: remapdb must not remap a system database, got "x" -> "mysql"
 select @@remap_rewrites as cur;
-➤ cur[12,0,0]  𝄀
+➤ cur[-1,16383,0]  𝄀
 
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀

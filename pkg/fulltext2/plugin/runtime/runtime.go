@@ -33,11 +33,13 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 type CatalogHooks struct{}
 
 // HiddenTableTypes — a chunked segment store + a metadata table (no postings
-// table; segments are built from source and CDC-maintained).
+// table; segments are built from source and CDC-maintained), and an ignored table
+// for an index created with one.
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.FullText2Index_TblType_Storage,
 		catalog.FullText2Index_TblType_Metadata,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -70,9 +72,6 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{"lower_case_table_names"}
 }
-
-// DefaultOptions — no statement-level option JSON required.
-func (CatalogHooks) DefaultOptions() map[string]string { return nil }
 
 // Fulltext2IndexFlag gates CREATE FULLTEXT2 INDEX behind the
 // experimental_fulltext2_index session var (mirrors bm25's Bm25IndexFlag /

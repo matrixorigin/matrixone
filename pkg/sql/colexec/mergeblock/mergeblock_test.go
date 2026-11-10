@@ -64,8 +64,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid1,
 			loc1.Name().Num(),
 			loc1.ID()),
-		//non-appendable block
-		//Appendable: false,
 	}
 	blkInfo1.SetMetaLocation(loc1)
 
@@ -75,8 +73,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid2,
 			loc2.Name().Num(),
 			loc2.ID()),
-		//non-appendable block
-		//Appendable: false,
 	}
 	blkInfo2.SetMetaLocation(loc2)
 
@@ -86,8 +82,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid3,
 			loc3.Name().Num(),
 			loc3.ID()),
-		//non-appendable block
-		//Appendable: false,
 	}
 	blkInfo3.SetMetaLocation(loc3)
 
@@ -109,27 +103,11 @@ func TestMergeBlock(t *testing.T) {
 	}
 	batch1.SetRowCount(3)
 
-	argument1 := MergeBlock{
-		container: Container{
-			source: &mockRelation{},
-			mp:     make(map[int]*batch.Batch),
-			mp2:    make(map[int][]*batch.Batch),
-		},
-		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
-		AddAffectedRows: true,
-	}
-	resetChildren(&argument1, batch1)
+	argument1 := newTestArgument()
+	resetChildren(argument1, batch1)
 
-	// argument1.Prepare(proc)
 	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergeblock")
-	_, err := vm.Exec(&argument1, proc)
+	_, err := vm.Exec(argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.container.affectedRows)
 	// Check Tbl
@@ -142,26 +120,9 @@ func TestMergeBlock(t *testing.T) {
 		))
 		// check vector
 		require.Equal(t, 2, len(result.Vecs))
-		//for i, vec := range result.Vecs {
 		require.Equal(t, 3, result.Vecs[0].Length(), fmt.Sprintf("column number: %d", 0))
 		require.Equal(t, 3, result.Vecs[1].Length(), fmt.Sprintf("column number: %d", 1))
-		//}
 	}
-	// Check UniqueTables
-	//for j := range argument1.Unique_tbls {
-	//	tbl := argument1.Unique_tbls[j]
-	//	result := tbl.(*mockRelation).result
-	//	// check attr names
-	//	require.True(t, reflect.DeepEqual(
-	//		[]string{catalog.BlockMeta_MetaLoc},
-	//		result.Attrs,
-	//	))
-	//	// check vector
-	//	require.Equal(t, 1, len(result.Vecs))
-	//	for i, vec := range result.Vecs {
-	//		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
-	//	}
-	//}
 	argument1.Free(proc, false, nil)
 	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.Free()
@@ -236,7 +197,7 @@ func makeLegacyBlockInfoBat(
 	return bat
 }
 
-func newSplitTestArgument() *MergeBlock {
+func newTestArgument() *MergeBlock {
 	return &MergeBlock{
 		container: Container{
 			source: &mockRelation{},
@@ -251,7 +212,7 @@ func TestMergeBlockSplitRejectsLegacyIndexTable(t *testing.T) {
 	for _, tableIdx := range []int16{1, -2} {
 		t.Run(fmt.Sprintf("encoded-index-%d", tableIdx), func(t *testing.T) {
 			proc := testutil.NewProc(t)
-			arg := newSplitTestArgument()
+			arg := newTestArgument()
 			bat := makeLegacyBlockInfoBat(t, proc, tableIdx, 15)
 			t.Cleanup(func() {
 				bat.Clean(proc.GetMPool())
@@ -279,7 +240,7 @@ func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
 			procMP, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", procMP)
-			arg := newSplitTestArgument()
+			arg := newTestArgument()
 			bat := makeLegacyBlockInfoBat(t, proc, 0, 15)
 			var filler []byte
 			t.Cleanup(func() {
@@ -326,27 +287,10 @@ func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
 }
 
 func TestArgument_GetMetaLocBat(t *testing.T) {
-	arg := MergeBlock{
-		container: Container{
-			source: &mockRelation{},
-			mp:     make(map[int]*batch.Batch),
-			mp2:    make(map[int][]*batch.Batch),
-		},
-		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
-		AddAffectedRows: true,
-	}
+	arg := newTestArgument()
 
 	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
-
-	// arg.Prepare(proc)
 
 	bat := mockBlockInfoBat(proc, true)
 	arg.GetMetaLocBat(bat, proc)

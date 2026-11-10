@@ -57,5 +57,14 @@ select d, ew, ey, sy, sm, sq, sd, w, wy, wd, yw, dw, dy, dn, mn, fd, typed_y fro
 -- retain the native result. Constant and typed-column paths agree.
 select extract(week from date '2024-01-01') as mode0_week;
 
+-- #29999: direct calendar calls expose BIGINT; their CTAS columns store INT.
+select week(d,3) as w, dayofyear(d) as doy from source_dates order by d;
+create table calendar_types as select week(d,3) as w, dayofyear(d) as doy from source_dates;
+select column_name, column_type from information_schema.columns
+ where table_schema = 'temporal_typed_date_ctas_28851'
+   and table_name = 'calendar_types' order by ordinal_position;
+insert into calendar_types(w,doy) values (-1,-1),(255,65535),(256,65536);
+select w,doy from calendar_types order by w,doy;
+
 set sql_mode = @old_sql_mode;
 drop database temporal_typed_date_ctas_28851;

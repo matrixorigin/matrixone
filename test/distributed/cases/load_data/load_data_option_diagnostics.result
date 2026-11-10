@@ -1,0 +1,7 @@
+load data infile 'load_option_diagnostics_unused.csv' into table mo_catalog.load_option_diagnostics_missing parallel 'invalid';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error parallel flag at line 1 column 126 near " 'invalid';";
+load data infile 'load_option_diagnostics_unused.csv' into table mo_catalog.load_option_diagnostics_missing strict 'invalid';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error strict flag at line 1 column 124 near " 'invalid';";
+select 1 as connection_usable;
+➤ connection_usable[-5,64,0]  𝄀
+1

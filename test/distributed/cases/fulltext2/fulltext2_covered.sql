@@ -102,7 +102,15 @@ create table cs (id bigint primary key, body text not null, tag varchar(10));
 insert into cs values (1, 'red fox', 'Active'), (2, 'blue fox', 'active'), (3, 'grey fox', 'ACTIVE');
 create fulltext2 index csidx on cs (body) include (tag);
 select id, tag from cs where match(body) against('fox') and tag = 'active' order by match(body) against('fox') desc, id;  -- only id 2
-select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by match(body) against('fox') desc, id; -- only id 1
+select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by match(body) against('fox') desc, id; -- ci fold: ids 1,2,3
 drop table cs;
+
+-- Apply exact INCLUDE qualification before score TopK: doc 1 is the highest
+-- scorer but ineligible, so doc 2 must survive LIMIT 1.
+create table topk_docs (id bigint primary key, body text not null, prio int);
+insert into topk_docs values (1, 'fox rare rare', 1), (2, 'fox', null), (3, 'cat', null);
+create fulltext2 index topk_idx on topk_docs (body) include (prio);
+select id from topk_docs where match(body) against('fox rare' in boolean mode) and prio is null order by match(body) against('fox rare' in boolean mode) desc limit 1;
+drop table topk_docs;
 
 drop database fulltext2_covered;

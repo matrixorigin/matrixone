@@ -232,7 +232,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
@@ -259,6 +259,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			unixTime:                   time.Now().Unix(),
 			affectedRows:               42,
 			statementRuntimeIgnore:     true,
+			statementRuntimeSelect:     true,
 			planSnapshotTS:             timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 			hasPlanSnapshotTS:          true,
 			planGenerationReused:       true,
@@ -301,6 +302,9 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
+	require.True(t, compile.proc.IsSelectStatement())
+	compile.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	requireRemoteDivisionWarning(t, compile.proc)
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
@@ -389,6 +393,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 		UnixTime:                   time.Now().Unix(),
 		AffectedRows:               42,
 		StatementRuntimeIgnore:     true,
+		StatementRuntimeSelect:     true,
 		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 		PlanGenerationReused:       true,
 		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
@@ -420,6 +425,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
 	require.True(t, helper.statementRuntimeIgnore)
+	require.True(t, helper.statementRuntimeSelect)
 	require.True(t, helper.hasPlanSnapshotTS)
 	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
 	require.True(t, helper.planGenerationReused)
@@ -629,7 +635,7 @@ func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
 
 	select {
 	case err = <-drainDone:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+		require.ErrorIs(t, err, process.ErrPipelineStopped)
 	case <-time.After(time.Second):
 		t.Fatal("StopSending did not release the terminal-response drain barrier")
 	}
@@ -678,16 +684,15 @@ func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
 	pipelineReceiver.abortBatchFlowForPendingStop()
 
 	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	_, err = flow.reserve(context.Background(), context.Background(), 1)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
 
 	dispatchReceiver := &process.WrapCs{
 		MsgId: streamID,
 		Uid:   uuid.Must(uuid.NewV7()),
 		Cs:    session,
-		Err:   make(chan error, 1),
 	}
 	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
 	require.False(t, dispatchReceiver.ReceiverDone,
@@ -881,8 +886,6 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Fatal("notify did not attach")
 			}
-			require.True(t, info.TerminalBacked)
-			require.Nil(t, info.Err)
 			_, err := info.ReserveBatch(proc.Ctx, 1)
 			require.NoError(t, err)
 			observed := &observedDoneContext{Context: proc.Ctx, entered: make(chan struct{})}
@@ -945,8 +948,9 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			}
 			require.ErrorIs(t, terminal.Err(), cause)
 			require.ErrorIs(t, context.Cause(proc.Ctx), cause)
-			_, _, registered = server.GetProcByUuid(uid, false)
-			require.False(t, registered)
+			_, _, state, lookupWaiter, _ := server.AttachProcByUuidOrWait(uid)
+			lookupWaiter.Close()
+			require.Equal(t, colexec.RemoteReceiverMissing, state)
 			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: id, BatchAckSequence: 1}, session))
 		})
 	}

@@ -18,8 +18,12 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"math"
+	"slices"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
+func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeIndexSelection bool) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		for _, childID := range node.Children {
-			builder.mergeFiltersOnCompositeKey(childID)
+			builder.mergeFiltersOnCompositeKey(childID, beforeIndexSelection)
 		}
 
 		return
@@ -42,10 +46,625 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	newFilterList := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
+	deferred := compositeKeyFiltersNeedIndexSelection(node.TableDef)
+	if beforeIndexSelection && deferred {
+		// Keep logical normalization before matching, but never hide a key
+		// component behind physical compound-key encoding at this phase.
+		for _, filter := range node.FilterList {
+			if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "or" {
+				node.FilterList = builder.doMergeFiltersOnCompositeKey(false, node.TableDef, node.BindingTags[0], node.FilterList...)
+				break
+			}
+		}
+		// optimizeFilters owns the following fold/statistics refresh.
+		return
+	}
+	if !beforeIndexSelection && !deferred {
+		return
+	}
+
+	newFilterList := builder.doMergeFiltersOnCompositeKey(true, node.TableDef, node.BindingTags[0], node.FilterList...)
 	node.FilterList = newFilterList
-	node.Stats = calcScanStats(node, builder)
-	resetHashMapStats(node.Stats)
+	if beforeIndexSelection {
+		node.Stats = calcScanStats(node, builder)
+		resetHashMapStats(node.Stats)
+	} else {
+		// Lower only after index consumers have used the logical predicates.
+		// Preserve distribution decisions; the following stats pass does too.
+		foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, nodeID, true)
+	}
+}
+
+// Secondary access matching needs the component predicates, not their physical
+// compound encoding. Keep one logical FilterList until that consumer finishes.
+func compositeKeyFiltersNeedIndexSelection(table *plan.TableDef) bool {
+	if table == nil {
+		return false
+	}
+	for _, index := range table.Indexes {
+		if index != nil && index.TableExist && catalog.IsRegularIndexAlgo(index.IndexAlgo) && !isSpatialIndexDef(index) {
+			return len(compositeKeyPartColumns(table)) > 1
+		}
+	}
+	return false
+}
+
+func comparisonCastSource(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return nil
+	}
+	return fn.Args[0]
+}
+
+// Evaluate a bound DOUBLE peer only for the uniqueness proof. Keep the
+// executable expression intact, and keep value-dependent plans out of the
+// type-only prepared cache.
+func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bool) {
+	if value, ok := floatingComparisonConstant(expr); ok {
+		return value, true
+	}
+	state := preparedBindingState(builder.GetContext())
+	if state == nil || !state.selectStatement || expr.Typ.Id != int32(types.T_float64) ||
+		!preparedExprContainsParam(expr) {
+		return 0, false
+	}
+	copy := DeepCopyExpr(expr)
+	var substitute func(*plan.Expr) bool
+	substitute = func(current *plan.Expr) bool {
+		if param := current.GetP(); param != nil {
+			binding, ok := state.bindingForPosition(param.Pos)
+			if !ok {
+				return false
+			}
+			if binding.Type.Oid == types.T_float64 && current.Typ.Id == int32(types.T_float64) {
+				bound, ok := preparedBoundDoubleValue(builder.GetContext(), current)
+				if !ok {
+					return false
+				}
+				current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}}
+				current.Typ = makeSimplePlan2Type(types.T_float64)
+				return true
+			}
+			if binding.Type.Oid.IsMySQLString() && types.T(current.Typ.Id).IsMySQLString() {
+				raw, present := preparedConfigurationValue(builder.GetContext(), current)
+				value, isText := raw.(string)
+				if !present || !isText || !PreparedNumericStringIsComplete(value) {
+					return false
+				}
+				current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}
+				return true
+			}
+			return false
+		}
+		if fn := current.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !substitute(arg) {
+					return false
+				}
+			}
+			return true
+		}
+		return current.GetLit() != nil || current.GetT() != nil
+	}
+	if !substitute(copy) || !function.IsConstant(copy, false) {
+		return 0, false
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, copy, builder.compCtx.GetProcess(), false, true)
+	if err != nil {
+		return 0, false
+	}
+	return floatingComparisonConstant(folded)
+}
+
+// Resolve only actual expressions from the executor's one-row dummy input.
+// The returned copy is a proof witness; callers retain the executable peer.
+func (builder *QueryBuilder) singletonProjectedPeerExpression(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
+	if node == nil || node.NodeType != plan.Node_JOIN {
+		return nil, false
+	}
+	projections := make(map[[2]int32]*plan.Expr)
+	for _, childID := range node.Children {
+		project := builder.qry.Nodes[childID]
+		_, expanded := DecodeGroupingSetExpandOption(project.ExtraOptions)
+		if project.NodeType != plan.Node_PROJECT || len(project.BindingTags) != 1 || len(project.Children) != 1 ||
+			project.Limit != nil || project.Offset != nil || project.RankOption != nil || len(project.FilterList) != 0 || expanded {
+			continue
+		}
+		input := builder.qry.Nodes[project.Children[0]]
+		if input.NodeType != plan.Node_VALUE_SCAN || input.TableDef != nil || input.RowsetData != nil || len(input.Children) != 0 ||
+			input.Limit != nil || input.Offset != nil || input.RankOption != nil || len(input.FilterList) != 0 {
+			continue
+		}
+		for position, candidate := range project.ProjectList {
+			projections[[2]int32{project.BindingTags[0], int32(position)}] = candidate
+		}
+	}
+	var compatible func(*plan.Expr) bool
+	compatible = func(current *plan.Expr) bool {
+		if current == nil {
+			return false
+		}
+		if column := current.GetCol(); column != nil {
+			candidate := projections[[2]int32{column.RelPos, column.ColPos}]
+			return candidate != nil && isSameColumnType(current.Typ, candidate.Typ) && current.Typ.PadSpace == candidate.Typ.PadSpace
+		}
+		if fn := current.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !compatible(arg) {
+					return false
+				}
+			}
+		}
+		if list := current.GetList(); list != nil {
+			for _, item := range list.List {
+				if !compatible(item) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !compatible(peer) {
+		return nil, false
+	}
+	resolved := replaceColumnsForExpr(DeepCopyExpr(peer), projections)
+	return resolved, function.IsStatementConstantInput(resolved)
+}
+
+func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
+	candidate, ok := builder.singletonProjectedPeerExpression(node, expr)
+	if !ok {
+		return 0, false
+	}
+	if value, ok := builder.decimalFloatPeerValue(candidate); ok {
+		return value, true
+	}
+	if !function.IsConstant(candidate, false) {
+		return 0, false
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, candidate, builder.compCtx.GetProcess(), false, true)
+	if err != nil {
+		return 0, false
+	}
+	return floatingComparisonConstant(folded)
+}
+
+func (builder *QueryBuilder) preparedIntegerPeerWitness(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
+	if function.ContainsParameter(peer) && function.IsStatementConstantInput(peer) {
+		return peer, true
+	}
+	resolved, ok := builder.singletonProjectedPeerExpression(node, peer)
+	return resolved, ok && function.ContainsParameter(resolved)
+}
+
+func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node, expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	name := fn.Func.GetObjName()
+	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2 && fn.Args[1].GetList() != nil
+	isBetween := name == "between" && len(fn.Args) == 3
+	if !isList && !isBetween && (!isDecimalComparisonOperator(name) || len(fn.Args) != 2) {
+		return expr
+	}
+	for side := range fn.Args {
+		if (isList || isBetween) && side != 0 {
+			break
+		}
+		castColumn := fn.Args[side]
+		column := comparisonCastSource(castColumn)
+		if castColumn.Typ.Id != int32(types.T_float64) || isExplicitPreparedCast(castColumn) ||
+			column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsDecimal() {
+			continue
+		}
+		peers := []*plan.Expr{fn.Args[1-side]}
+		if isList {
+			peers = fn.Args[1].GetList().List
+		} else if isBetween {
+			peers = fn.Args[1:]
+		}
+		if len(peers) == 0 {
+			return expr
+		}
+		converted := make([]*plan.Expr, len(peers))
+		for i, peer := range peers {
+			value, ok := builder.decimalFloatPeerValue(peer)
+			if !ok && node.NodeType == plan.Node_JOIN {
+				value, ok = builder.singletonProjectedFloatValue(node, peer)
+			}
+			if !ok || !decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(column)) {
+				break
+			}
+			var err error
+			converted[i], err = makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			if err != nil {
+				break
+			}
+		}
+		if converted[len(converted)-1] == nil {
+			continue
+		}
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			args[i] = DeepCopyExpr(arg)
+		}
+		args[side] = DeepCopyExpr(column)
+		if isList {
+			args[1].Typ = column.Typ
+			args[1].GetList().List = converted
+		} else if isBetween {
+			copy(args[1:], converted)
+		} else {
+			args[1-side] = converted[0]
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+		if err == nil {
+			return rewritten
+		}
+	}
+	return expr
+}
+
+// integerComparisonCastColumn proves every conversion, not just the chain's
+// endpoints. A small peer cannot authorize removing a lossy column conversion.
+// Explicit integer casts are transparent only in this predicate-local proof;
+// projection metadata and explicitly selected non-integer domains stay intact.
+func integerComparisonCastColumn(expr *plan.Expr) *plan.Expr {
+	for {
+		source := comparisonCastSource(expr)
+		if source == nil || !types.T(source.Typ.Id).IsInteger() || isEnumOrSetPlanType(&source.Typ) {
+			return nil
+		}
+		fn := expr.GetF()
+		castID, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if castID != function.CAST || overload < 0 || overload > 1 {
+			return nil
+		}
+		target := fn.Args[1]
+		if target == nil || target.GetT() == nil || target.Typ.Id != expr.Typ.Id ||
+			target.Typ.Width != expr.Typ.Width || target.Typ.Scale != expr.Typ.Scale {
+			return nil
+		}
+		sourceID, targetID := types.T(source.Typ.Id), types.T(expr.Typ.Id)
+		if targetID.IsInteger() {
+			if !integerDomainFits(sourceID, targetID) {
+				return nil
+			}
+		} else {
+			if !targetID.IsDecimal() || fn.SyntaxExplicitCast || overload != 0 {
+				return nil
+			}
+			precision := expr.Typ.Width
+			capacity := targetID.ToType().Width
+			if precision == 0 {
+				// Width=0 still has the physical carrier's precision bound.
+				precision = capacity
+			}
+			if precision <= 0 || precision > capacity || expr.Typ.Scale < 0 ||
+				integerDecimalDigits(sourceID) > precision-expr.Typ.Scale {
+				return nil
+			}
+		}
+		if source.GetCol() != nil {
+			return source
+		}
+		expr = source
+	}
+}
+
+// Folded literals can retain their executable source in Src. Do not use an
+// execution-specific value or unresolved prepared provenance as a static proof.
+func staticIntegerComparisonPeer(expr *plan.Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return !lit.Isnull && (lit.Src == nil || staticIntegerComparisonPeer(lit.Src))
+	}
+	if expr.GetT() != nil {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	f, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || f.CannotFold() || f.IsRealTimeRelated() || f.IsAgg() || f.IsWin() {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if !staticIntegerComparisonPeer(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	name := fn.Func.ObjName
+	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2
+	isBetween := name == "between" && len(fn.Args) == 3
+	if !isList && !isBetween && (!isDecimalComparisonOperator(name) || len(fn.Args) != 2) {
+		return expr
+	}
+	for side, castColumn := range fn.Args {
+		if (isList || isBetween) && side != 0 {
+			break
+		}
+		column := integerComparisonCastColumn(castColumn)
+		if column == nil {
+			continue
+		}
+		peers := []*plan.Expr{fn.Args[1-side]}
+		if isList {
+			var ok bool
+			peers, ok = inRHSValues(fn.Args[1], castColumn.Typ)
+			if !ok {
+				continue
+			}
+		} else if isBetween {
+			peers = fn.Args[1:]
+		}
+		if len(peers) == 0 {
+			return expr
+		}
+		converted := make([]*plan.Expr, len(peers))
+		for i, peer := range peers {
+			peerID := types.T(peer.Typ.Id)
+			if !staticIntegerComparisonPeer(peer) || (!peerID.IsInteger() && !peerID.IsDecimal()) ||
+				!checkNoNeedCast(builder.GetContext(), makeTypeByPlan2Expr(peer), makeTypeByPlan2Expr(column), peer) {
+				break
+			}
+			var err error
+			converted[i], err = makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			if err != nil {
+				break
+			}
+		}
+		if converted[len(converted)-1] == nil {
+			continue
+		}
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			args[i] = DeepCopyExpr(arg)
+		}
+		args[side] = DeepCopyExpr(column)
+		if isList {
+			args[1].Typ = column.Typ
+			args[1].Expr = &plan.Expr_List{List: &plan.ExprList{List: converted}}
+		} else if isBetween {
+			copy(args[1:], converted)
+		} else {
+			args[1-side] = converted[0]
+			name = canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+			args = []*plan.Expr{args[side], args[1-side]}
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+		if err == nil {
+			rewritten.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
+			return rewritten
+		}
+	}
+	return expr
+}
+
+// Rewrite scan domains after filter pushdown, before choosing block filters.
+// Rewrite JOIN domains after simple projections expose singleton peers.
+func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32, target plan.Node_NodeType) error {
+	var visit func(int32) error
+	visit = func(id int32) error {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return err
+		}
+		node := builder.qry.Nodes[id]
+		for _, child := range node.Children {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		if node.NodeType != target {
+			return nil
+		}
+		filters := node.FilterList
+		if target == plan.Node_JOIN {
+			filters = node.OnList
+		}
+		for _, filter := range filters {
+			changed := false
+			if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
+				if rewritten := builder.rewriteNativeIntegerComparison(current); rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				rewritten, err := builder.rewritePreparedIntegerComparison(node, current)
+				if err != nil {
+					return err
+				}
+				if rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if changed && target == plan.Node_JOIN {
+				// Logical parents may still carry estimates from the old domain.
+				if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
+					current.Ndv, current.Selectivity = 0, 0
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return visit(nodeID)
+}
+
+// A derived expression is proved through its actual executor result, not its
+// marker spelling. Keep that expression executable and use the vector only as
+// a witness; value-dependent planning remains owned by prepared binding.
+func (builder *QueryBuilder) rewritePreparedIntegerComparison(node *plan.Node, expr *plan.Expr) (*plan.Expr, error) {
+	state := preparedBindingState(builder.GetContext())
+	fn := expr.GetF()
+	if state != nil && state.selectStatement && fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+		column := preparedIntegerComparisonCastColumn(fn.Args[0])
+		_, lowerOK := builder.preparedIntegerPeerWitness(node, fn.Args[1])
+		_, upperOK := builder.preparedIntegerPeerWitness(node, fn.Args[2])
+		if column != nil && lowerOK && upperOK {
+			// BETWEEN may survive folding as one function. Reuse its existing
+			// comparison lowering so each bound has the same domain proof.
+			lowered, err := bindBetweenAsComparisons(builder.GetContext(), []*plan.Expr{DeepCopyExpr(fn.Args[0]), DeepCopyExpr(fn.Args[1]), DeepCopyExpr(fn.Args[2])})
+			if err != nil {
+				return expr, err
+			}
+			if err := plan.VisitExprTree(lowered, func(current *plan.Expr) error {
+				rewritten, err := builder.rewritePreparedIntegerComparison(node, current)
+				if err == nil && rewritten != current {
+					*current = *rewritten
+				}
+				return err
+			}); err != nil {
+				return expr, err
+			}
+			return lowered, nil
+		}
+	}
+	if state == nil || !state.selectStatement || fn == nil || fn.Func == nil ||
+		!isPreparedNumericComparison(fn.Func.GetObjName()) || len(fn.Args) != 2 {
+		return expr, nil
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || proc.GetPrepareParams() == nil {
+		return expr, nil
+	}
+	for side, castColumn := range fn.Args {
+		column := preparedIntegerComparisonCastColumn(castColumn)
+		peer := fn.Args[1-side]
+		witness, admitted := builder.preparedIntegerPeerWitness(node, peer)
+		if column == nil || !makeTypeByPlan2Expr(peer).IsNumeric() || !admitted {
+			continue
+		}
+		state.valueDependent = true
+		vec, free, warned, err := rule.EvaluateConstantExpression(proc, witness, batch.EmptyForConstFoldBatch)
+		if err != nil {
+			if free != nil {
+				free()
+			}
+			if isStatementConversionError(err) {
+				continue
+			}
+			return expr, err
+		}
+		// The evaluator owns the witness even when admission fails.
+		converted, ok, err := func() (*plan.Expr, bool, error) {
+			defer free()
+			if warned || vec == nil || vec.Length() == 0 || vec.IsConstNull() || vec.GetNulls().Contains(0) {
+				return nil, false, nil
+			}
+			spelling, ok := numericComparisonWitness(vec)
+			if !ok || !integerComparisonMappingIsExact(makeTypeByPlan2Expr(column), makeTypeByPlan2Expr(castColumn), spelling) {
+				return nil, false, nil
+			}
+			_, exact, err := preparedComparisonExactIntegerExpr(builder.GetContext(), spelling, column.Typ)
+			if err != nil || !exact {
+				return nil, false, err
+			}
+			converted, err := makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			return converted, err == nil, err
+		}()
+		if err != nil {
+			return expr, err
+		}
+		if !ok {
+			continue
+		}
+		args := make([]*plan.Expr, 2)
+		args[side], args[1-side] = DeepCopyExpr(column), converted
+		name := canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{args[side], args[1-side]})
+		return rewritten, err
+	}
+	return expr, nil
+}
+
+// Retain the existing value-dependent implicit DOUBLE/DECIMAL proof, while
+// admitting explicit integer chains only through the full-domain proof above.
+func preparedIntegerComparisonCastColumn(expr *plan.Expr) *plan.Expr {
+	if column := integerComparisonCastColumn(expr); column != nil {
+		return column
+	}
+	column := comparisonCastSource(expr)
+	if isExplicitPreparedCast(expr) || column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsInteger() {
+		return nil
+	}
+	return column
+}
+
+// The comparison conversion must preserve the column domain independently of
+// whether this execution's peer happens to produce an integer.
+func integerComparisonMappingIsExact(column, domain types.Type, spelling string) bool {
+	switch {
+	case domain.Oid.IsInteger():
+		return integerDomainFits(column.Oid, domain.Oid)
+	case domain.Oid.IsDecimal():
+		required, ok := function.InferNumericParameterType([]types.Type{column, domain}, nil)
+		return ok && domain.Width >= required.Width && domain.Scale == required.Scale && domain.Oid.TypeLen() >= required.Oid.TypeLen()
+	case domain.Oid.IsFloat():
+		value, err := strconv.ParseFloat(spelling, 64)
+		limit := float64((1 << 53) - 1)
+		if domain.Oid == types.T_float32 {
+			limit = (1 << 24) - 1
+		}
+		return err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value && value >= -limit && value <= limit
+	default:
+		return false
+	}
+}
+
+func numericComparisonWitness(vec *vector.Vector) (string, bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](vec, 0)), 10), true
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int16](vec, 0)), 10), true
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int32](vec, 0)), 10), true
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](vec, 0), 10), true
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, 0)), 10), true
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, 0)), 10), true
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, 0)), 10), true
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, 0), 10), true
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](vec, 0)), 'g', -1, 32), true
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](vec, 0), 'g', -1, 64), true
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0).Format(vec.GetType().Scale), true
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0).Format(vec.GetType().Scale), true
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0).Format(vec.GetType().Scale), true
+	default:
+		return "", false
+	}
 }
 
 // collectCompositePartBlockFilters preserves zonemappable predicates on the
@@ -59,10 +678,12 @@ type compositePartBlockFilter struct {
 	copy     *plan.Expr
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[int32][]compositePartBlockFilter {
-	ret := make(map[int32][]compositePartBlockFilter)
-	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
-		return ret
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, points *compositePointCapture) (map[int32][]compositePartBlockFilter, bool) {
+	var ret map[int32][]compositePartBlockFilter
+	needsLate := false
+	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
+	if blockDisabled && !deferredOnly && points == nil {
+		return nil, false
 	}
 	visited := make(map[int32]struct{})
 	var visit func(int32)
@@ -76,6 +697,24 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[
 			for _, childID := range node.Children {
 				visit(childID)
 			}
+			return
+		}
+		if points != nil {
+			points.collect(builder, id, node)
+		}
+
+		if deferredOnly {
+			if len(node.FilterList) == 0 || len(node.BindingTags) == 0 || node.TableDef.Pkey == nil || !compositeKeyFiltersNeedIndexSelection(node.TableDef) {
+				return
+			}
+			needsLate = true
+		} else if compositeKeyFiltersNeedIndexSelection(node.TableDef) && !hasCompoundKeyFilter(node.FilterList, node) {
+			// Fresh deferred scans consume no component predicates in the early
+			// phase. Snapshot them only at late lowering; preserve already-lowered
+			// scans whose component predicates survive only in BlockFilterList.
+			return
+		}
+		if blockDisabled {
 			return
 		}
 
@@ -92,12 +731,15 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[
 		for _, filter := range filters {
 			if ExprIsZonemappable(builder.GetContext(), filter) &&
 				exprOnlyReferencesColumns(filter, node.BindingTags[0], partCols) {
+				if ret == nil {
+					ret = make(map[int32][]compositePartBlockFilter)
+				}
 				ret[id] = append(ret[id], compositePartBlockFilter{original: filter, copy: DeepCopyExpr(filter)})
 			}
 		}
 	}
 	visit(nodeID)
-	return ret
+	return ret, needsLate
 }
 
 func compositeKeyPartColumns(tableDef *plan.TableDef) map[int32]struct{} {
@@ -169,18 +811,21 @@ func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][
 	for nodeID, candidates := range filters {
 		node := builder.qry.Nodes[nodeID]
 		for _, candidate := range candidates {
-			duplicate := false
-			for _, existing := range node.BlockFilterList {
-				if blockFilterEquivalent(existing, candidate.copy) {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				node.BlockFilterList = append(node.BlockFilterList, candidate.copy)
-			}
+			appendUniqueBlockFilter(node, candidate.copy, false)
 		}
 	}
+}
+
+func appendUniqueBlockFilter(node *plan.Node, filter *plan.Expr, copyFilter bool) {
+	for _, existing := range node.BlockFilterList {
+		if existing.GetCandidateFilter() == filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter) {
+			return
+		}
+	}
+	if copyFilter {
+		filter = DeepCopyExpr(filter)
+	}
+	node.BlockFilterList = append(node.BlockFilterList, filter)
 }
 
 // retainConsumedCompositePartBlockFilters keeps only predicates removed by the
@@ -282,24 +927,143 @@ func (builder *QueryBuilder) appendCompoundKeyBlockFilters(nodeID int32) {
 			return
 		}
 		allowed := map[int32]struct{}{compoundPos: {}}
-		for _, filter := range node.FilterList {
-			if !ExprIsZonemappable(builder.GetContext(), filter) ||
-				!exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
-				continue
-			}
-			duplicate := false
-			for _, existing := range node.BlockFilterList {
-				if blockFilterEquivalent(existing, filter) {
-					duplicate = true
-					break
+		var leadingPos int32 = -1
+		if node.TableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(node.TableDef.ClusterBy.Name) {
+			parts := util.SplitCompositeClusterByColumnName(node.TableDef.ClusterBy.Name)
+			if len(parts) > 0 {
+				if pos, found := node.TableDef.Name2ColIndex[parts[0]]; found {
+					leadingPos = pos
 				}
 			}
-			if !duplicate {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(filter))
+		} else if node.TableDef.Pkey != nil && len(node.TableDef.Pkey.Names) > 1 {
+			if pos, found := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]; found {
+				leadingPos = pos
 			}
+		}
+		for _, filter := range node.FilterList {
+			zonemappable := ExprIsZonemappable(builder.GetContext(), filter)
+			if leadingPos >= 0 && zonemappable {
+				if prefix := builder.leadingCompositeRangeBlockFilter(filter, node.TableDef, node.BindingTags[0], leadingPos, compoundPos); prefix != nil {
+					appendUniqueBlockFilter(node, prefix, false)
+				}
+			}
+			if !zonemappable || !exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+				continue
+			}
+			appendUniqueBlockFilter(node, filter, true)
 		}
 	}
 	visit(nodeID)
+}
+
+// leadingCompositeRangeBlockFilter adds an object-pruning predicate without
+// replacing the SQL row predicate. In particular, NULL and unsupported bound
+// types must continue through the ordinary row comparison.
+func (builder *QueryBuilder) leadingCompositeRangeBlockFilter(filter *plan.Expr, tableDef *plan.TableDef, tag, leadingPos, compoundPos int32) *plan.Expr {
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil {
+		return nil
+	}
+	op := fn.Func.ObjName
+	col := fn.Args[0]
+	if op == "<" || op == "<=" || op == ">" || op == ">=" {
+		op = canonicalRangeOp(fn)
+		if fn.Args[0].GetCol() == nil && len(fn.Args) == 2 {
+			col = fn.Args[1]
+		}
+	}
+	if col.GetCol() == nil || col.GetCol().RelPos != tag || col.GetCol().ColPos != leadingPos ||
+		!compositeRangeOrderPreserving(types.T(col.Typ.Id)) {
+		return nil
+	}
+	boundCompatible := func(bound *plan.Expr) bool {
+		if bound == nil {
+			return false
+		}
+		if lit := stripConstLiteralCasts(bound).GetLit(); lit != nil && lit.Isnull {
+			return false
+		}
+		return isRuntimeConstExpr(bound) && bound.Typ.Id == col.Typ.Id &&
+			bound.Typ.Scale == col.Typ.Scale
+	}
+	key := &plan.Expr{Typ: tableDef.Cols[compoundPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: tag, ColPos: compoundPos, Name: tableDef.Cols[compoundPos].Name,
+	}}}
+	serial := func(bound *plan.Expr) *plan.Expr {
+		ret, ok := builder.bindCompositeKeySerial([]*plan.Expr{bound})
+		if !ok {
+			return nil
+		}
+		return ret
+	}
+	var name string
+	var args []*plan.Expr
+	switch op {
+	case "between", "in_range":
+		if (op == "between" && len(fn.Args) != 3) ||
+			(op == "in_range" && len(fn.Args) != 4) {
+			return nil
+		}
+		if !boundCompatible(fn.Args[1]) || !boundCompatible(fn.Args[2]) {
+			return nil
+		}
+		lower, upper := serial(fn.Args[1]), serial(fn.Args[2])
+		if lower == nil || upper == nil {
+			return nil
+		}
+		name = "prefix_between"
+		args = []*plan.Expr{key, lower, upper}
+		if op == "in_range" {
+			if fn.Args[3] == nil || !isRuntimeConstExpr(fn.Args[3]) {
+				return nil
+			}
+			name = "prefix_in_range"
+			args = append(args, fn.Args[3])
+		}
+	case "<", "<=", ">", ">=":
+		boundExpr := rangeFilterConstValue(fn)
+		if len(fn.Args) != 2 || !boundCompatible(boundExpr) {
+			return nil
+		}
+		bound := serial(boundExpr)
+		if bound == nil {
+			return nil
+		}
+		empty := makePlan2StringConstExprWithType("")
+		empty.Typ.Id = int32(types.T_varchar)
+		var flag byte
+		if op == "<" || op == "<=" {
+			args = []*plan.Expr{key, empty, bound}
+			if op == "<" {
+				flag = 2
+			}
+		} else {
+			args = []*plan.Expr{key, bound, empty}
+			if op == ">" {
+				flag = 1
+			}
+		}
+		name = "prefix_in_range"
+		args = append(args, makePlan2Uint8ConstExprWithType(flag))
+	default:
+		return nil
+	}
+	ret, ok := builder.bindCompositeKeyPredicate(name, args...)
+	if !ok {
+		return nil
+	}
+	return ret
+}
+
+func compositeRangeOrderPreserving(oid types.T) bool {
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return true
+	}
+	return false
 }
 
 func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
@@ -307,15 +1071,13 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 		return nil
 	}
 	allowed := compositeKeyPartColumns(node.TableDef)
-	if allowed == nil {
-		return nil
-	}
-	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok && allowed != nil {
 		allowed[compoundPos] = struct{}{}
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+		if filter.GetCandidateFilter() ||
+			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent
 			// block-filter expression instead of deep-copying it on every stats
@@ -430,10 +1192,11 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 		return nil, false
 	}
 	typ := plan.Type{
-		Id:      int32(vec.GetType().Oid),
-		Scale:   vec.GetType().Scale,
-		Width:   vec.GetType().Width,
-		Charset: uint32(vec.GetType().Charset),
+		Id:               int32(vec.GetType().Oid),
+		Scale:            vec.GetType().Scale,
+		Width:            vec.GetType().Width,
+		Charset:          uint32(vec.GetType().Charset),
+		CollationVersion: uint32(vec.GetType().CollationVersion),
 	}
 	if physicalLength == 0 {
 		return make(map[string]struct{}), true
@@ -515,11 +1278,9 @@ func literalVecMatchesType(vecType *types.Type, expectedType plan.Type) bool {
 }
 
 // decodeLiteralVec validates the minimum structural invariants needed before
-// reading a serialized literal vector. UnmarshalBinary is intentionally no-copy
-// and trusts encoded lengths, so an invalid plan must disable an optimization
-// rather than panic or allocate from an untrusted logical length. Callers own
-// the panic boundary because malformed varlen metadata can also fail while
-// materializing individual values after decoding.
+// reading a serialized literal vector. Checked UnmarshalBinary validates its
+// framing and payload; the planner additionally checks logical length and
+// provenance before using the no-copy vector or materializing its members.
 func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalLength int, ok bool) {
 	if literalVec == nil || literalVec.Len < 0 {
 		return vector.Vector{}, 0, false
@@ -677,7 +1438,9 @@ func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
 		hash := blockFilterSemanticHash(filter)
 		duplicate := false
 		for _, existing := range buckets[hash] {
-			if blockFilterSemanticallyEquivalent(existing, filter) {
+			if existing.GetCandidateFilter() == filter.GetCandidateFilter() &&
+				((filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter)) ||
+					(!filter.GetCandidateFilter() && blockFilterSemanticallyEquivalent(existing, filter))) {
 				duplicate = true
 				break
 			}
@@ -1038,15 +1801,31 @@ func (builder *QueryBuilder) rewriteExprByInDomains(
 		newExpr, changed := builder.mergeInsInAnd(expr)
 		return newExpr, anyChanged || changed
 	case "or":
+		// Normalize the whole OR component before grouping its equalities.
+		// Merging each prefix turns pairs into IN nodes which cannot join
+		// later equality groups, and repeatedly rebinds the remaining tree.
+		leaves := collectInDomainORLeaves(expr)
+		disjuncts := make([]*plan.Expr, 0, len(leaves))
 		anyChanged := false
-		for idx, arg := range fn.Args {
-			newArg, changed := builder.rewriteExprByInDomains(arg, domains)
+		for _, leaf := range leaves {
+			newArg, changed := builder.rewriteExprByInDomains(leaf.expr, domains)
 			if changed {
-				fn.Args[idx] = newArg
+				// Keep successful child rewrites in the original topology so
+				// a failed merge/rebind can return a valid fallback expression.
+				leaf.parent.Args[leaf.index] = newArg
 				anyChanged = true
 			}
+			// Cast-aware rewrites can generate another OR. Flatten that
+			// result for grouping without rewriting its prefixes again.
+			if newFn := newArg.GetF(); newFn != nil && newFn.Func.ObjName == "or" {
+				for _, generated := range collectInDomainORLeaves(newArg) {
+					disjuncts = append(disjuncts, generated.expr)
+				}
+			} else {
+				disjuncts = append(disjuncts, newArg)
+			}
 		}
-		newExpr, changed := builder.mergeEqualsInOr(expr)
+		newExpr, changed := builder.mergeEqualsInOr(expr, disjuncts)
 		return newExpr, anyChanged || changed
 	default:
 		anyChanged := false
@@ -1059,6 +1838,34 @@ func (builder *QueryBuilder) rewriteExprByInDomains(
 		}
 		return expr, anyChanged
 	}
+}
+
+type inDomainORLeaf struct {
+	expr   *plan.Expr
+	parent *plan.Function
+	index  int
+}
+
+// collectInDomainORLeaves walks a maximal OR component in input order without
+// growing the Go stack for a left-associated predicate. Parent slots preserve
+// the original tree when no grouping succeeds or reconstruction fails.
+func collectInDomainORLeaves(expr *plan.Expr) []inDomainORLeaf {
+	stack := []inDomainORLeaf{{expr: expr}}
+	leaves := make([]inDomainORLeaf, 0, 4)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		item := stack[last]
+		stack = stack[:last]
+		fn := item.expr.GetF()
+		if fn == nil || fn.Func.ObjName != "or" {
+			leaves = append(leaves, item)
+			continue
+		}
+		for i := len(fn.Args) - 1; i >= 0; i-- {
+			stack = append(stack, inDomainORLeaf{expr: fn.Args[i], parent: fn, index: i})
+		}
+	}
+	return leaves
 }
 
 func (builder *QueryBuilder) rewriteNotInByDomains(
@@ -1245,9 +2052,7 @@ func (builder *QueryBuilder) mergeInsInAnd(expr *plan.Expr) (*plan.Expr, bool) {
 // mergeEqualsInOr collapses `col = v1 OR col = v2 ...` into `col IN (...)`.
 // It runs after cast-aware rewrites, where a cast IN list may have been
 // represented as many equality disjuncts by the binder.
-func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool) {
-	disjuncts := make([]*plan.Expr, 0, 4)
-	flattenLogicalExpressions(expr, "or", &disjuncts)
+func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr, disjuncts []*plan.Expr) (*plan.Expr, bool) {
 	if len(disjuncts) < 2 {
 		return expr, false
 	}
@@ -1324,7 +2129,7 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 	if len(newDisjuncts) == 0 {
 		return MakeFalseExpr(), true
 	}
-	newExpr, err := combinePlanDisjunction(builder.GetContext(), newDisjuncts)
+	newExpr, err := combinePlanExprsBalanced(builder.GetContext(), "or", newDisjuncts)
 	if err != nil {
 		return expr, false
 	}
@@ -1334,6 +2139,9 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
+		return nil, nil, false
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
@@ -1348,6 +2156,9 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 {
+		return nil, nil, false
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
@@ -1365,6 +2176,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 func extractEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
+		return nil, nil, false
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
@@ -1519,6 +2333,9 @@ func classifyDomainConjunct(expr *plan.Expr) (*plan.Expr, domainKind, []*plan.Ex
 
 func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, domainKind, []*plan.Expr) {
 	if len(fn.Args) != 2 {
+		return nil, domainOther, nil
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, domainOther, nil
 	}
 	var colExpr, constExpr *plan.Expr
@@ -1891,6 +2708,10 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
+		// a cast to bf16/float16/float8/float4 rounds; the source literal is not its value
+		if types.T(expr.Typ.Id).IsLowPrecisionFloat() {
+			return nil, plan.Type{}, false
+		}
 		expr = fn.Args[0]
 	}
 }
@@ -1905,6 +2726,18 @@ func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*pl
 			DeepCopyExpr(colExpr),
 			stripped[0],
 		})
+	}
+	if types.T(colExpr.Typ.Id).IsLowPrecisionFloat() {
+		// bf16/float16/float8/float4: a disjunction of equalities
+		eqs := make([]*plan.Expr, len(stripped))
+		for i, v := range stripped {
+			eq, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{DeepCopyExpr(colExpr), v})
+			if err != nil {
+				return nil, err
+			}
+			eqs[i] = eq
+		}
+		return combinePlanDisjunction(ctx, eqs)
 	}
 	listExpr := &plan.Expr{
 		Typ: colExpr.Typ,
@@ -1971,9 +2804,28 @@ func (builder *QueryBuilder) bindCompositeKeyPredicate(name string, args ...*pla
 	return expr, err == nil && expr != nil
 }
 
-func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
+// Composite-key rewrites require a shared key domain. Mixed JSON/numeric
+// predicates must stay as SQL residuals, including both bounds of a range.
+func compositeKeyPredicateHasMixedJSONNumericArgs(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<", "<=", ">", ">=":
+		return isJSONNumericComparisonArgs(fn.Args)
+	case "between", "in_range":
+		return len(fn.Args) >= 3 && (isJSONNumericComparisonArgs(fn.Args[:2]) ||
+			isJSONNumericComparisonArgs([]*plan.Expr{fn.Args[0], fn.Args[2]}))
+	}
+	return false
+}
+
+func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool, tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	sortkeyIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-	col2filter := make(map[int32]int)
+	var col2filter map[int32]int
+	if lowerCompoundKey {
+		col2filter = make(map[int32]int)
+	}
 	Parts := tableDef.Pkey.Names
 	numParts := len(Parts)
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
@@ -1981,17 +2833,38 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 		numParts = len(Parts)
 	}
+	// The serialized composite-key shortcut is byte-oriented.  It is not a
+	// valid replacement for predicates over native Unicode collations, whose
+	// equality domain is defined by the UCA key rather than the source bytes.
+	// Keep the original component predicates so the normal collation-aware
+	// expression path remains responsible for filtering rows.  Treat missing
+	// metadata as unsafe as well; this path must never optimize on an unknown
+	// key definition.
+	if tableDefHasNativeUnicodeKeyPart(tableDef, Parts) {
+		return filters
+	}
 
 	for i, expr := range filters {
 		if expr == nil {
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
+		if fn != nil && fn.Func != nil && fn.Func.ObjName == "in" && len(fn.Args) == 2 &&
+			fn.Args[0] != nil && fn.Args[1] != nil && fn.Args[1].GetVec() != nil &&
+			!serializedIndexInUsable(builder.GetContext(), fn.Args[1], fn.Args[0].Typ) {
+			// A malformed or incompatible folded vector is not an executable
+			// scalar bound. Leave this optional rewrite entirely unchanged.
+			return filters
+		}
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
 
 		funcName := fn.Func.ObjName
+		if !lowerCompoundKey && funcName != "=" && funcName != "or" {
+			continue
+		}
 		if funcName == "=" {
 			if !hasNonNilFunctionArgs(fn, 2) {
 				continue
@@ -2005,7 +2878,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				continue
 			}
 
-			col2filter[col.ColPos] = i
+			if lowerCompoundKey {
+				col2filter[col.ColPos] = i
+			}
 		} else if funcName == "between" {
 			if !hasNonNilFunctionArgs(fn, 3) {
 				continue
@@ -2077,8 +2952,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
 					if numParts > 1 {
-						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
-						if len(newArgs) == 0 {
+						newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, subExpr)
+						if len(newArgs) != 1 {
+							// A candidate with residuals is not an equivalent OR arm.
 							newOrArgs = append(newOrArgs, subExpr)
 							continue
 						}
@@ -2088,16 +2964,18 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					var andArgs []*plan.Expr
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
 
-					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, andArgs...)
-					if len(newArgs) == 1 {
-						subExpr = newArgs[0]
-					} else {
-						subFn.Args = newArgs
+					newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, andArgs...)
+					if len(newArgs) > 0 {
+						combined, err := combinePlanConjunction(builder.GetContext(), newArgs)
+						if err == nil {
+							subExpr = combined
+						}
 					}
 				}
 
 				mergedFn := subExpr.GetF()
-				if !hasNonNilFunctionArgs(mergedFn, 2) || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+				if !hasNonNilFunctionArgs(mergedFn, 2) || compositeKeyPredicateHasMixedJSONNumericArgs(mergedFn) ||
+					mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2116,6 +2994,30 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 						continue
 					}
 				default:
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+
+				// IN reads every element with the column's physical type. Do not
+				// relabel a heterogeneous list as homogeneous when merging OR.
+				compatible := true
+				for _, value := range candidateValues {
+					if value == nil {
+						compatible = false
+						break
+					}
+					leftType, valueType := mergedFn.Args[0].Typ, value.Typ
+					// String arms can carry serialized byte constants with a
+					// different declared width or varchar/varbinary identity.
+					// Keep that existing byte-valued IN representation valid.
+					sameStorage := leftType.Id == valueType.Id && leftType.Scale == valueType.Scale ||
+						types.T(leftType.Id).IsMySQLString() && types.T(valueType.Id).IsMySQLString()
+					if !sameStorage {
+						compatible = false
+						break
+					}
+				}
+				if !compatible {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2151,6 +3053,32 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			canMerge := !(hasPrefixEq && hasEquality)
+			if canMerge && hasEquality && len(inArgs) > 0 {
+				// Equality may compare compatible but physically distinct domains
+				// (for example TIMESTAMP and DATETIME). A typed IN vector cannot.
+				// Retain those OR arms rather than imposing a lossy column cast.
+				leftType := makeTypeByPlan2Expr(firstEquiExpr.GetF().Args[0])
+				for _, candidate := range mergeCandidates {
+					if !makeTypeByPlan2Expr(candidate.GetF().Args[0]).Eq(leftType) {
+						canMerge = false
+						break
+					}
+				}
+				for _, value := range inArgs {
+					if value == nil {
+						canMerge = false
+						break
+					}
+					valueType := makeTypeByPlan2Expr(value)
+					// Text and binary strings share the existing collation-aware
+					// IN kernel. Preserve that path, including serialized bytes.
+					if !valueType.Eq(leftType) &&
+						!(leftType.Oid.IsMySQLString() && valueType.Oid.IsMySQLString()) {
+						canMerge = false
+						break
+					}
+				}
+			}
 
 			if len(inArgs) == 0 {
 				// no merge candidates
@@ -2197,7 +3125,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
-				if firstEquiExpr != nil {
+				if lowerCompoundKey && firstEquiExpr != nil {
 					colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
 					if colPos != sortkeyIdx {
 						col2filter[colPos] = i
@@ -2209,7 +3137,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
-	if numParts == 1 {
+	if !lowerCompoundKey || numParts == 1 {
 		return filters
 	}
 
@@ -2229,7 +3157,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)
@@ -2237,6 +3166,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			continue
 		}
 		if _, ok := sortKeyPartCols[col.ColPos]; !ok {
+			continue
+		}
+		// Keep first-component SQL bounds intact. Their optional compound-key
+		// object filter is added separately without casting or consuming them.
+		if col.ColPos == tableDef.Name2ColIndex[Parts[0]] {
 			continue
 		}
 		if isLower {
@@ -2266,7 +3200,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		upperOp := canonicalRangeOp(upperFn)
 		lowerVal := rangeFilterConstValue(lowerFn)
 		upperVal := rangeFilterConstValue(upperFn)
-		if lowerVal == nil || upperVal == nil {
+		if lowerVal == nil || upperVal == nil ||
+			!builder.compositeKeyComparisonUsable(lowerFn, tableDef) ||
+			!builder.compositeKeyComparisonUsable(upperFn, tableDef) {
 			continue
 		}
 
@@ -2275,20 +3211,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			colExpr = lowerFn.Args[1]
 		}
 
-		lb := lowerVal
-		ub := upperVal
-
-		// Cast bounds to column type so between/in_range runtime gets uniform types.
-		colTyp := colExpr.Typ
-		if lb.Typ.Id != colTyp.Id || lb.Typ.Width != colTyp.Width || lb.Typ.Scale != colTyp.Scale {
-			if casted, err := appendCastBeforeExpr(builder.GetContext(), lb, colTyp); err == nil {
-				lb = casted
-			}
+		// Only proven lossless key-domain conversions may precede range
+		// coalescing. Assignment casts can round a bound or change timezones.
+		lb, err := normalizeIndexComparisonBound(builder.GetContext(), lowerVal, colExpr.Typ)
+		if err != nil {
+			continue
 		}
-		if ub.Typ.Id != colTyp.Id || ub.Typ.Width != colTyp.Width || ub.Typ.Scale != colTyp.Scale {
-			if casted, err := appendCastBeforeExpr(builder.GetContext(), ub, colTyp); err == nil {
-				ub = casted
-			}
+		ub, err := normalizeIndexComparisonBound(builder.GetContext(), upperVal, colExpr.Typ)
+		if err != nil {
+			continue
 		}
 
 		compositeFilterSel := filters[lowerIdx].Selectivity * filters[upperIdx].Selectivity
@@ -2321,11 +3252,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			break
 		}
 
-		filterIdx = append(filterIdx, idx)
 		fn := filters[idx].GetF()
 		if fn == nil || fn.Func == nil {
 			return filters
 		}
+		if compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			!builder.compositeKeyComparisonUsable(fn, tableDef) {
+			break
+		}
+		filterIdx = append(filterIdx, idx)
 		funcName := fn.Func.ObjName
 		if funcName == "in" || funcName == "between" ||
 			funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" ||
@@ -2336,6 +3271,21 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 	if len(filterIdx) == 0 {
 		return filters
+	}
+
+	// Normalize copies only after selecting the safe prefix. Remaining SQL
+	// filters retain their original comparison overload and operand metadata.
+	lookupFilters := make([]*plan.Expr, len(filterIdx))
+	for i, pos := range filterIdx {
+		column := indexComparisonColumn(filters[pos].GetF())
+		if column == nil {
+			return filters
+		}
+		normalized, err := normalizeSerializedIndexComparison(builder.GetContext(), filters[pos], column.Typ)
+		if err != nil {
+			return filters
+		}
+		lookupFilters[i] = normalized
 	}
 
 	var compositePKFilter *plan.Expr
@@ -2351,15 +3301,19 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 	compositePKFilterSel := 1.0
 	for i := range filterIdx {
-		compositePKFilterSel *= (filters[filterIdx[i]]).Selectivity
+		compositePKFilterSel *= (lookupFilters[i]).Selectivity
 	}
 
-	lastFilter := filters[filterIdx[len(filterIdx)-1]]
+	lastFilter := lookupFilters[len(lookupFilters)-1]
 	lastFn := lastFilter.GetF()
 	if lastFn == nil || lastFn.Func == nil {
 		return filters
 	}
 	lastFuncName := lastFn.Func.ObjName
+	if len(filterIdx) == 1 && (lastFuncName == "between" || lastFuncName == "in_range" ||
+		lastFuncName == "<" || lastFuncName == "<=" || lastFuncName == ">" || lastFuncName == ">=") {
+		return filters
+	}
 	if lastFuncName == "in" {
 		if !hasNonNilFunctionArgs(lastFn, 2) {
 			return filters
@@ -2371,7 +3325,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		inArgs := make([]*plan.Expr, len(lastArgs))
@@ -2410,7 +3364,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
@@ -2445,11 +3399,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
-		}
-
-		if len(filterIdx) < numParts && len(serialArgs) == 0 {
-			return filters
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
@@ -2470,11 +3420,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			funcName = "prefix_in_range"
 		}
 
+		flag := lastFn.Args[3]
+		if funcName == "prefix_in_range" && indexFunctionComparesByteStringColumn(lastFn) {
+			flag = closePrefixRangeLowerBound(flag)
+		}
 		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
 			leftArg,
 			rightArg,
-			lastFn.Args[3],
+			flag,
 		)
 		if !ok {
 			return filters
@@ -2485,11 +3439,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
-		}
-
-		if len(filterIdx) < numParts && len(serialArgs) == 0 {
-			return filters
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFn.Args[1])
@@ -2524,6 +3474,12 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			flag = 0 // both closed
 		}
 
+		// Prefix comparison treats an escaped embedded NUL as equality
+		// with the shorter endpoint. Widen an open string lower bound and
+		// retain the original SQL predicate below for exact filtering.
+		if indexFunctionComparesByteStringColumn(lastFn) {
+			flag &^= 1
+		}
 		flagExpr := makePlan2Uint8ConstExprWithType(flag)
 
 		compositePKFilter, ok = builder.bindCompositeKeyPredicate("prefix_in_range",
@@ -2538,7 +3494,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
 		for i := range filterIdx {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 		rightArg, ok := builder.bindCompositeKeySerial(serialArgs)
 		if !ok {
@@ -2568,15 +3524,42 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		hitFilterSet[filterIdx[i]] = true
 	}
 
-	newFilterList := make([]*plan.Expr, 0, len(filters)-len(filterIdx)+1)
+	leadingPos := make([]int32, len(filterIdx))
+	for i, pos := range filterIdx {
+		leadingPos[i] = int32(pos)
+	}
+	residualPos := serializedLookupResidualLeadingFilterPositions(tableDef, filters, leadingPos,
+		indexLookupUsesPrefixComparison(compositePKFilter),
+		tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name))
+	newFilterList := make([]*plan.Expr, 0, len(filters)-len(filterIdx)+1+len(residualPos))
 	newFilterList = append(newFilterList, compositePKFilter)
 	for i, filter := range filters {
 		if !hitFilterSet[i] {
 			newFilterList = append(newFilterList, filter)
+		} else if slices.Contains(residualPos, int32(i)) {
+			residual := DeepCopyExpr(filter)
+			residual.Selectivity = 1 // The candidate already carries SQL selectivity.
+			newFilterList = append(newFilterList, residual)
 		}
 	}
 
 	return newFilterList
+}
+
+func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bool {
+	if tableDef == nil || len(parts) == 0 {
+		return true
+	}
+	for _, part := range parts {
+		idx, ok := tableDef.Name2ColIndex[part]
+		if !ok || idx < 0 || int(idx) >= len(tableDef.Cols) || tableDef.Cols[idx] == nil {
+			return true
+		}
+		if types.IsUnicodeCollation(uint8(tableDef.Cols[idx].Typ.GetCharset())) {
+			return true
+		}
+	}
+	return false
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {

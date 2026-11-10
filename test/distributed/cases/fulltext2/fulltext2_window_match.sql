@@ -23,7 +23,7 @@ from docs where match(body) against('alpha' in boolean mode) order by id;
 -- The MATCH beneath the WINDOW is served by the fulltext2 index scan (the rewrite fired); no bare
 -- fulltext_match survives on the base-table scan.
 -- @separator:table
--- @regex("fulltext2_search",true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, row_number() over (order by l2_distance(v,'[0,0,0]'), id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
 
@@ -39,7 +39,7 @@ select id, row_number() over (partition by body order by id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
 
 -- @separator:table
--- @regex("fulltext2_search",true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, row_number() over (partition by body order by id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
 
@@ -73,7 +73,7 @@ select id, rn from (
 ) q where rn = 1 or score > 0 order by id;
 
 -- @separator:table
--- @regex("fulltext2_search",true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, rn from (
   select id, match(body) against('alpha' in boolean mode) as score,
          row_number() over (order by id) as rn
@@ -92,7 +92,7 @@ select id, rn from (
 ) q where score > 0 order by id;
 
 -- @separator:table
--- @regex("fulltext2_search",true)
+-- @regex("Fulltext Index Scan on", true)
 -- @regex("fulltext_match",false)
 explain select id, rn from (
   select id, match(body) against('alpha' in boolean mode) as score,

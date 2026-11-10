@@ -34,6 +34,7 @@ import (
 )
 
 type cloneDatabaseSource struct {
+	defaults           *plan.DatabaseDefaults
 	srcResolveDBName   string
 	srcPrivilegeDBName string
 	srcTblInfos        []*tableInfo
@@ -44,6 +45,7 @@ type cloneDatabaseSource struct {
 	fkTableMap         map[string]*tableInfo
 	hasFkCycle         bool
 	snapshot           *plan.Snapshot
+	requestSnapshot    *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
 }
@@ -505,27 +507,6 @@ func collectCloneRoutineReferences(
 	return references, cloneRoutineDependenciesInspected, nil
 }
 
-// filterCloneDatabaseRoutines keeps independent routine families and omits
-// families whose direct or transitive dependencies cannot exist in the target.
-// SQL routines whose bodies cannot be inspected are omitted when the source
-// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
-// are preserved after validateCloneUserDefinedFunctions rejects imported
-// package bodies. UDF overloads are one family here: call sites do not carry
-// enough resolved type information for this metadata pass to distinguish
-// overloads safely.
-func filterCloneDatabaseRoutines(
-	ctx context.Context,
-	source cloneDatabaseSource,
-	lowerCaseTableNames int64,
-) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
-	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
-	if err != nil {
-		return nil, nil, err
-	}
-	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
-	return source.userDefinedFuncs, source.storedProcedures, nil
-}
-
 func collectCloneDatabaseSource(
 	ctx context.Context,
 	ses *Session,
@@ -550,7 +531,10 @@ func collectCloneDatabaseSource(
 	if err := validateCloneDatabaseAccounts(ctx, accounts); err != nil {
 		return source, err
 	}
+	// A subscription uses the publisher account to read physical objects, but
+	// the caller's snapshot still names the subscriber's logical database.
 	snapshot := accounts.snapshot
+	requestSnapshot := snapshot
 
 	srcDBName := stmt.SrcDatabase.String()
 	subMeta, err := ses.GetTxnCompileCtx().GetSubscriptionMeta(srcDBName, snapshot)
@@ -560,6 +544,8 @@ func collectCloneDatabaseSource(
 	if subMeta != nil {
 		srcDBName = subMeta.DbName
 		if snapshot != nil {
+			copy := *snapshot
+			snapshot = &copy
 			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
 		} else {
 			snapshot = &plan.Snapshot{
@@ -577,6 +563,20 @@ func collectCloneDatabaseSource(
 	}
 	if !sourceExists {
 		return source, moerr.NewBadDB(ctx, srcDBName)
+	}
+
+	sourceAccountID, sourceTS := accounts.opAccountId, int64(0)
+	if snapshot != nil {
+		if snapshot.Tenant != nil {
+			sourceAccountID = snapshot.Tenant.TenantID
+		}
+		if snapshot.TS != nil {
+			sourceTS = snapshot.TS.PhysicalTime
+		}
+	}
+	source.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, srcDBName, sourceAccountID, sourceTS)
+	if err != nil {
+		return source, err
 	}
 
 	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")
@@ -597,7 +597,14 @@ func collectCloneDatabaseSource(
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
+	// FK ordering selects from this collection's logical objects. Re-querying
+	// each dependency duplicates enumeration and SHOW CREATE work, and can
+	// replace the definitions used to derive the dependency order.
+	var fkSource *partialRestoreSource
+	if len(sortedFkTbls) != 0 {
+		fkSource = newPartialRestoreSource(srcTblInfos)
+	}
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, fkSource)
 	if err != nil {
 		return source, err
 	}
@@ -616,6 +623,7 @@ func collectCloneDatabaseSource(
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
 	source.snapshot = snapshot
+	source.requestSnapshot = requestSnapshot
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil
@@ -680,7 +688,7 @@ func getUserDefinedFunctionInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_user_defined_function",
-		"name, args, retType, body, language, sql_mode",
+		"name, args, retType, body, language",
 		0, 1, 2, 3, 4, 5,
 	)
 	if err != nil {
@@ -716,7 +724,7 @@ func getStoredProcedureInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_stored_procedure",
-		"name, args, lang, body, sql_mode",
+		"name, args, lang, body",
 		0, 1, 2, 3, 4,
 	)
 	if err != nil {
@@ -747,15 +755,27 @@ func getDatabaseRoutineMetadataRows(
 	colIndices ...uint64,
 ) ([][]string, error) {
 	queryCtx := ctx
-	sql := fmt.Sprintf("select %s from %s", columns, catalogTable)
+	sourceSnapshot := ""
 	if snapshot != nil {
 		if snapshot.TS != nil {
-			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+			sourceSnapshot = fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
 		}
 		if snapshot.Tenant != nil {
 			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
 		}
 	}
+	mode := "sql_mode"
+	if sourceSnapshot != "" {
+		account, err := defines.GetAccountId(queryCtx)
+		if err != nil {
+			return nil, err
+		}
+		mode, err = historicalRoutineSQLModeExpression(queryCtx, bh, strings.TrimPrefix(catalogTable, "mo_catalog."), sourceSnapshot, account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sql := fmt.Sprintf("select %s, %s from %s%s", columns, mode, catalogTable, sourceSnapshot)
 	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
 	return getStringColsList(queryCtx, bh, sql, colIndices...)
 }
@@ -776,6 +796,24 @@ func restoreCloneDatabaseUserDefinedFunctions(
 		}
 	}
 	return nil
+}
+
+// cloneTargetContext keeps same-account ownership and assigns cross-account
+// creations to the target administrator. Override DDL ownership as well as the
+// execution role: the request may carry a source-account DDL-owner provider.
+// RESTORE uses its separate historical ownership contract, not this policy.
+func cloneTargetContext(ctx context.Context, callerAccount, targetAccount uint32) context.Context {
+	ctx = defines.AttachAccountId(ctx, targetAccount)
+	if callerAccount == targetAccount {
+		return ctx
+	}
+	userID, roleID := uint32(GetAdminUserId()), uint32(accountAdminRoleID)
+	if targetAccount == sysAccountID {
+		admin := getDefaultAccount()
+		userID, roleID = admin.GetUserID(), admin.GetDefaultRoleID()
+	}
+	ctx = defines.AttachAccount(ctx, targetAccount, userID, roleID)
+	return defines.AttachDDLOwnerRoleId(ctx, roleID)
 }
 
 // resolveCloneDatabaseRoutineTenant preserves the caller identity for a
@@ -806,13 +844,14 @@ func resolveCloneDatabaseRoutineTenant(
 	if len(rows) != 1 {
 		return nil, moerr.NewInternalErrorNoCtxf("target account %d has no administrator metadata", targetAccountID)
 	}
+	targetCtx := cloneTargetContext(ctx, caller.GetTenantID(), targetAccountID)
 	return &TenantInfo{
 		Tenant:        rows[0][0],
 		User:          rows[0][1],
 		DefaultRole:   accountAdminRoleName,
 		TenantID:      targetAccountID,
-		UserID:        GetAdminUserId(),
-		DefaultRoleID: accountAdminRoleID,
+		UserID:        defines.GetUserId(targetCtx),
+		DefaultRoleID: defines.GetRoleId(targetCtx),
 	}, nil
 }
 

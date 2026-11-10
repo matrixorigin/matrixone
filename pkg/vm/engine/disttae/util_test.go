@@ -403,7 +403,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 
 func TestEvalZonemapFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	type myCase = struct {
 		exprs  []*plan.Expr
 		meta   objectio.BlockObject
@@ -1175,7 +1175,7 @@ func TestShrinkBatchWithRowids(t *testing.T) {
 	}
 	bat.SetRowCount(10)
 
-	shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7})
+	require.NoError(t, shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7}, mp))
 	require.Equal(t, bat.RowCount(), 6)
 
 	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])

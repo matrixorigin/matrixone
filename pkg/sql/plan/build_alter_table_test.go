@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -36,8 +37,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func newAutoIncrementAlterOptimizer() *MockOptimizer {
-	mock := NewMockOptimizer(false)
+// Restore shared runtime state before the test-owned resources it may reference close.
+func setPlanTestGlobalVariable(t testing.TB, service, name string, value any) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime(service)
+	previous, existed := rt.GetGlobalVariables(name)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(name, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(name, value)
+		}
+	})
+	rt.SetGlobalVariables(name, value)
+}
+
+func TestPlanTestExecutorRestoresParentState(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if existed {
+		require.True(t, rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, original))
+	}
+	t.Cleanup(func() {
+		if current, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, current)
+		}
+		if existed {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, original)
+		}
+	})
+	for _, withParent := range []bool{false, true} {
+		parent := executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		})
+		if withParent {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, parent)
+		}
+		t.Run(fmt.Sprintf("parent_present_%t", withParent), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			// Registered after the pool owner, this check runs before its destruction.
+			t.Cleanup(func() {
+				current, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+				require.Equal(t, withParent, ok)
+				if withParent {
+					require.Same(t, parent, current)
+				}
+			})
+			installed := executor.NewMemExecutor(func(string) (executor.Result, error) {
+				return executor.Result{}, nil
+			})
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor, installed)
+			current, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			require.True(t, ok)
+			require.Same(t, installed, current)
+		})
+	}
+}
+
+func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["auto_incr_t"] = &ObjectRef{
 		SchemaName: "constraint_test",
 		ObjName:    "auto_incr_t",
@@ -73,6 +131,50 @@ func newAutoIncrementAlterOptimizer() *MockOptimizer {
 	return mock
 }
 
+func TestAlterTableCharsetAdmission(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion118)
+	for _, tc := range []struct {
+		option string
+		err    string
+	}{
+		{"character set latin1", "unsupported character set"},
+		{"convert to character set latin1", "unsupported character set"},
+		{"character set latin1, algorithm=copy", "unsupported character set"},
+		{"add column c int, character set latin1", "unsupported character set"},
+		{"character set utf8mb4 collate latin1_bin", "unsupported collation"},
+		{"convert to character set utf8mb4 collate utf8mb4_0900_bin", "unsupported collation"},
+		{"convert to character set utf8 collate 'binary'", "is not valid for CHARACTER SET"},
+		{"character set 'force'", "unsupported character set"},
+		{"character set utf8", ""},
+		{"convert to character set utf8mb3 collate utf8mb3_bin", ""},
+		{"force", ""},
+		{"enable keys", ""},
+		{"disable keys", ""},
+		{"discard tablespace", ""},
+		{"import tablespace", ""},
+		{"with validation", ""},
+		{"without validation", ""},
+	} {
+		t.Run(tc.option, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer(t)
+			source := mock.ctxt.tables["auto_incr_t"]
+			before, err := source.Marshal()
+			require.NoError(t, err)
+			p, err := buildSingleStmt(mock, t, "alter table auto_incr_t "+tc.option)
+			if tc.err == "" {
+				require.NoError(t, err)
+				require.NotNil(t, p)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+				require.Nil(t, p)
+			}
+			after, err := source.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after, "admission must not rewrite the resolved table")
+		})
+	}
+}
+
 func TestAlterTableAutoIncrementPlan(t *testing.T) {
 	for _, tc := range []struct {
 		sql        string
@@ -85,7 +187,7 @@ func TestAlterTableAutoIncrementPlan(t *testing.T) {
 		{sql: `ALTER TABLE constraint_test.auto_incr_t ADD COLUMN c int, AUTO_INCREMENT = 100;`, wantOffset: 99, wantCopy: true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			p, err := buildSingleStmt(newAutoIncrementAlterOptimizer(), t, tc.sql)
+			p, err := buildSingleStmt(newAutoIncrementAlterOptimizer(t), t, tc.sql)
 			require.NoError(t, err)
 			alter := p.GetDdl().GetAlterTable()
 			if tc.wantCopy {
@@ -131,11 +233,25 @@ func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
 	)
 	statements, err := mysql.Parse(context.Background(), sql, 1)
 	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
 	require.Len(t, statements, 1)
+
+	// A replacement column reads its default expression, not a source column.
+	// One entry also exercises the first SELECT item independently of map order.
+	alterCtx.alterColMap["target`column"] = selectExpr{sexprType: exprConstValue, sexprStr: "42"}
+	sql, err = buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT 42 FROM `db``name`.`source``table`", sql)
 }
 
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
-	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+	_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`)
 	require.ErrorContains(t, err, "does not have an AUTO_INCREMENT column")
 }
@@ -144,7 +260,7 @@ func TestAlterTable1(t *testing.T) {
 	//sql := "ALTER TABLE t1 ADD (d TIMESTAMP, e INT not null);"
 	//sql := "ALTER TABLE t1 ADD d INT NOT NULL PRIMARY KEY;"
 	sql := "ALTER TABLE t1 MODIFY b INT;"
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -163,7 +279,7 @@ func TestInvisibleColumnClausesAreRejected(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.ErrorContains(t, err, "not supported: invisible columns")
 		})
 	}
@@ -175,7 +291,7 @@ func TestExplicitVisibleColumnClausesRemainSupported(t *testing.T) {
 		`ALTER TABLE t1 ALTER COLUMN b SET VISIBLE;`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 		})
 	}
@@ -229,7 +345,7 @@ func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing
 }
 
 func newMetadataOnlyChangeColumnOptimizer(t *testing.T) *MockOptimizer {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	mock.ctxt.objects["metadata_only"] = &ObjectRef{
 		SchemaName: "tpch",
 		ObjName:    "metadata_only",
@@ -277,8 +393,7 @@ func newMetadataOnlyChangeColumnOptimizer(t *testing.T) *MockOptimizer {
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			require.Equal(t,
 				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 987654", sql)
@@ -295,7 +410,7 @@ func newMetadataOnlyChangeColumnOptimizer(t *testing.T) *MockOptimizer {
 }
 
 func TestAlterTableAddColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// CREATE TABLE t1 (a INTEGER, b CHAR(10));
 	sqls := []string{
 		`ALTER TABLE t1 ADD d TIMESTAMP;`,
@@ -313,7 +428,7 @@ func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
 		`ALTER TABLE t1 ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a), ADD COLUMN parent_id BIGINT`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 
 			alter := logicPlan.GetDdl().GetAlterTable()
@@ -353,7 +468,7 @@ func TestAlterTableCopyForeignKeyUsesAddedUniqueIndex(t *testing.T) {
 			ADD UNIQUE INDEX uk_parent(parent_code)`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 
 			alter := logicPlan.GetDdl().GetAlterTable()
@@ -371,7 +486,7 @@ func TestAlterTableCopyForeignKeyUsesAddedUniqueIndex(t *testing.T) {
 }
 
 func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
-	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		ALTER TABLE constraint_test.t1
 		ADD COLUMN parent_id INT,
 		ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
@@ -395,8 +510,84 @@ func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
 }
 
+// Issue #30254: MySQL installs a FOREIGN KEY declared under
+// foreign_key_checks=0 without validating pre-existing child rows; the
+// orphan survives and only later DML is rejected. With checks enabled the
+// detect SQLs must still reject orphans at DDL time.
+func TestAlterTableForeignKeyChecksDisabledSkipsDetectSqls(t *testing.T) {
+	for _, parent := range []struct {
+		name      string
+		column    string
+		reference string
+	}{
+		{name: "external", column: "INT", reference: "constraint_test.replace_fk_p(id)"},
+		{name: "self", column: "BIGINT", reference: "constraint_test.t1(a)"},
+	} {
+		for _, algorithm := range []plan.AlterTable_AlgorithmType{plan.AlterTable_COPY, plan.AlterTable_INPLACE} {
+			for _, tc := range []struct {
+				name        string
+				checks      int64
+				resolveErr  error
+				wantDetects int
+			}{
+				{name: "enabled", checks: 1, wantDetects: 1},
+				{name: "disabled", checks: 0, wantDetects: 0},
+				{name: "resolution error", resolveErr: errors.New("foreign_key_checks unavailable")},
+			} {
+				t.Run(parent.name+"/"+algorithm.String()+"/"+tc.name, func(t *testing.T) {
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
+					originalContext := mock.ctxt
+					mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+						if name == "foreign_key_checks" {
+							return tc.checks, tc.resolveErr
+						}
+						return originalContext.ResolveVariable(name, system, global)
+					}
+
+					addColumn := fmt.Sprintf("ADD COLUMN parent_id %s,", parent.column)
+					if algorithm == plan.AlterTable_INPLACE {
+						typ := types.T_int32
+						if parent.column == "BIGINT" {
+							typ = types.T_int64
+						}
+						table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+						table.Cols = append(table.Cols, &plan.ColDef{Name: "parent_id", OriginName: "parent_id", ColId: 10, Typ: typ.ToType().PlanType(), Default: &plan.Default{}})
+						addColumn = ""
+					}
+					logicPlan, err := buildSingleStmt(mock, t, fmt.Sprintf(`
+					ALTER TABLE constraint_test.t1 %s
+						ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES %s`,
+						addColumn, parent.reference))
+					if tc.resolveErr != nil {
+						require.ErrorIs(t, err, tc.resolveErr)
+						return
+					}
+					require.NoError(t, err)
+
+					alter := logicPlan.GetDdl().GetAlterTable()
+					require.Equal(t, algorithm, alter.AlgorithmType)
+					addFKs := 0
+					for _, action := range alter.Actions {
+						if action.GetAddFk() != nil {
+							addFKs++
+							require.Equal(t, "fk_t1_parent", action.GetAddFk().Fkey.Name)
+						}
+					}
+					require.Equal(t, 1, addFKs, "the constraint definition must be installed in both modes")
+					if algorithm == plan.AlterTable_COPY {
+						require.Len(t, alter.CopyTableDef.Fkeys, 1)
+					}
+					require.Len(t, alter.UpdateFkSqls, 1,
+						"catalog maintenance for the new FK must still be planned")
+					require.Len(t, alter.DetectSqls, tc.wantDetects)
+				})
+			}
+		}
+	}
+}
+
 func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
 	tableDef.Fkeys = []*plan.ForeignKeyDef{{Name: "FK_T1_PARENT"}}
 
@@ -439,7 +630,7 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 
 			logicPlan, err := buildSingleStmt(mock, t, tc.sql)
@@ -458,7 +649,7 @@ func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *t
 		"collate utf8mb4_general_ci",
 	} {
 		t.Run(clause, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
 
 			logicPlan, err := buildSingleStmt(mock, t,
@@ -476,7 +667,7 @@ func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *t
 }
 
 func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 
 	logicPlan, err := buildSingleStmt(mock, t, "alter table t1 modify column b char(20)")
@@ -514,7 +705,7 @@ func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
 			logicPlan, err := buildSingleStmt(mock, t,
 				"alter table t1 modify column b char(20) "+tc.clause)
@@ -531,7 +722,7 @@ func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
 }
 
 func TestAlterTableAddColumnCharacterSetBinaryChangesType(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t,
 		"alter table t1 add column d varchar(10) character set binary")
 	if !assert.NoError(t, err) {
@@ -551,7 +742,7 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN tmp INT, RENAME COLUMN tmp TO b;`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			assert.NoError(t, err)
 
 			alter := logicPlan.GetDdl().GetAlterTable()
@@ -611,7 +802,7 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			alter := logicPlan.GetDdl().GetAlterTable()
@@ -635,7 +826,7 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=INPLACE`,
 		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=COPY`,
 	} {
-		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), sql)
 	}
 }
@@ -651,7 +842,7 @@ func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
 		{name: "unique with unique", existingUnique: true, addClause: "ADD UNIQUE INDEX idx(b)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
 				IndexName:  "idx",
 				Parts:      []string{"a"},
@@ -670,7 +861,7 @@ func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
 }
 
 func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
 		IndexName:  "idx",
 		Parts:      []string{"a"},
@@ -685,7 +876,7 @@ func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
 
 func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
 	newMock := func() *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
 			IndexName:  "MixedCaseIdx",
 			Parts:      []string{"a"},
@@ -696,7 +887,7 @@ func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
 	}
 
 	t.Run("standalone create", func(t *testing.T) {
-		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"CREATE INDEX MixedCaseIdx ON t1(b)")
 		require.NoError(t, err)
 		indexes := logicPlan.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
@@ -736,7 +927,7 @@ func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
 
 func TestUnicodeIndexNamesUseSameCreationAndLookupContract(t *testing.T) {
 	newMock := func(names ...string) *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		for i, name := range names {
 			part := "a"
 			if i > 0 {
@@ -753,7 +944,7 @@ func TestUnicodeIndexNamesUseSameCreationAndLookupContract(t *testing.T) {
 	}
 
 	t.Run("inline create preserves distinct final sigma", func(t *testing.T) {
-		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"CREATE TABLE unicode_idx (a INT, b INT, KEY `Σ` (a), KEY `ς` (b))")
 		require.NoError(t, err)
 		indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
@@ -808,7 +999,7 @@ func TestUnicodeIndexNamesUseSameCreationAndLookupContract(t *testing.T) {
 
 func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
 	newMock := func() *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
 			IndexName:  "idx",
 			Parts:      []string{"a"},
@@ -835,7 +1026,7 @@ func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
 
 func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	newMock := func() *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
 		mock.ctxt.tables["t1"].Fkeys = []*plan.ForeignKeyDef{{
 			Name:       "fk_x",
@@ -860,9 +1051,94 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
 }
 
+func TestAlterTableInplaceForeignKeysUseFinalTableName(t *testing.T) {
+	for _, tc := range []struct {
+		name, options, finalName, parent string
+		mutations                        []string
+	}{
+		{"external rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"external rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a), RENAME TO renamed", "renamed", "fk_parent", []string{"insert"}},
+		{"self rename first", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"insert"}},
+		{"self rename last", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO renamed", "renamed", "t1", []string{"insert"}},
+		{"ordered replacement", "RENAME TO renamed, DROP FOREIGN KEY fk_old, ADD CONSTRAINT fk_old FOREIGN KEY(b) REFERENCES t1(a)", "renamed", "t1", []string{"delete", "insert"}},
+		{"ordered add drop", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), DROP FOREIGN KEY fk_new", "renamed", "t1", []string{"insert", "delete"}},
+		{"quoted target", "RENAME TO `renamed``t1`, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "renamed`t1", "t1", []string{"insert"}},
+		{"no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"checks disabled rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "renamed", "fk_parent", []string{"insert"}},
+		{"checks disabled no rename", "ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES fk_parent(a)", "t1", "fk_parent", []string{"insert"}},
+		{"no-op rename", "RENAME TO t1, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a)", "t1", "t1", []string{"insert"}},
+		{"trailing no-op rename", "RENAME TO renamed, ADD CONSTRAINT fk_new FOREIGN KEY(b) REFERENCES t1(a), RENAME TO t1", "renamed", "t1", []string{"insert"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			if strings.HasPrefix(tc.name, "checks disabled") {
+				originalContext := mock.ctxt
+				mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "foreign_key_checks" {
+						return int64(0), nil
+					}
+					return originalContext.ResolveVariable(name, system, global)
+				}
+			}
+			table := mock.ctxt.tables["t1"]
+			table.Cols[1].Typ = table.Cols[0].Typ
+			table.Fkeys = []*plan.ForeignKeyDef{{Name: "fk_old", Cols: []uint64{table.Cols[1].ColId}, ForeignCols: []uint64{table.Cols[0].ColId}}}
+			parent := DeepCopyTableDef(table, true)
+			parent.Name, parent.TblId = "fk_parent", table.TblId+10000
+			parent.Fkeys = nil
+			mock.ctxt.tables[parent.Name] = parent
+			mock.ctxt.objects[parent.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: parent.Name, Obj: int64(parent.TblId)}
+
+			logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 "+tc.options)
+			require.NoError(t, err)
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			require.Equal(t, "t1", alter.TableDef.Name, "execution must still open the original relation")
+			require.Equal(t, "t1", table.Name)
+			require.Len(t, table.Fkeys, 1, "planning must not mutate catalog state")
+			if strings.HasPrefix(tc.name, "checks disabled") {
+				require.Empty(t, alter.DetectSqls, "FK catalog updates must survive without historical-row detection")
+			} else {
+				require.Len(t, alter.DetectSqls, 1)
+				finalIdent := "`tpch`.`" + strings.ReplaceAll(tc.finalName, "`", "``") + "`"
+				require.Contains(t, alter.DetectSqls[0], "from "+finalIdent)
+				if tc.finalName != "t1" {
+					require.NotContains(t, alter.DetectSqls[0], "`tpch`.`t1`")
+				}
+				if tc.parent == "t1" {
+					require.Equal(t, 2, strings.Count(alter.DetectSqls[0], "from "+finalIdent))
+				} else {
+					require.Contains(t, alter.DetectSqls[0], "from `tpch`.`fk_parent`")
+				}
+				parsed, err := mysql.ParseOne(t.Context(), alter.DetectSqls[0], 1)
+				require.NoError(t, err)
+				parsed.Free()
+			}
+			for _, action := range alter.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					require.Equal(t, tc.parent, fk.TableName, "declaration binding retains its original parent")
+				}
+			}
+			updates := alter.UpdateFkSqls
+			want := len(tc.mutations)
+			if tc.finalName != "t1" {
+				want += 2
+			}
+			require.Len(t, updates, want)
+			for i, mutation := range tc.mutations {
+				require.True(t, strings.HasPrefix(updates[i], mutation), updates[i])
+			}
+			if tc.finalName != "t1" {
+				require.Contains(t, updates[want-2], "set table_name = ")
+				require.Contains(t, updates[want-1], "set refer_table_name = ")
+			}
+		})
+	}
+}
+
 func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) {
 	newMock := func() *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
 		return mock
 	}
@@ -879,7 +1155,7 @@ func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) 
 		`ALTER TABLE t1 ADD CONSTRAINT MixedFK FOREIGN KEY (b) REFERENCES t1(a), ADD CONSTRAINT mixedfk FOREIGN KEY (b) REFERENCES t1(a)`)
 	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'mixedfk'")
 
-	_, err = buildSingleStmt(NewMockOptimizer(false), t,
+	_, err = buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`CREATE TABLE child_fk_case (
 			a BIGINT,
 			b BIGINT,
@@ -891,7 +1167,7 @@ func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) 
 
 func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 	newMock := func(withUniqueIndex, withForeignKey bool) *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		tableDef := mock.ctxt.tables["t1"]
 		tableDef.TblId = 100
 		tableDef.Cols[1].Typ = tableDef.Cols[0].Typ
@@ -917,8 +1193,17 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 		return mock
 	}
 
+	logicPlan, err := buildSingleStmt(newMock(false, false), t,
+		`ALTER TABLE t1 ADD CONSTRAINT fk_new FOREIGN KEY (b) REFERENCES t1(a)`)
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+	require.Len(t, alter.UpdateFkSqls, 1,
+		"INPLACE self-references must persist their catalog row")
+	require.Contains(t, alter.UpdateFkSqls[0], "'fk_new'")
+
 	failedMock := newMock(true, false)
-	_, err := buildSingleStmt(failedMock, t, `ALTER TABLE t1
+	_, err = buildSingleStmt(failedMock, t, `ALTER TABLE t1
 		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
 		DROP INDEX idx_b`)
 	require.Error(t, err)
@@ -926,7 +1211,7 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 	require.Empty(t, failedMock.ctxt.tables["t1"].Fkeys)
 	require.Equal(t, "idx_b", failedMock.ctxt.tables["t1"].Indexes[0].IndexName)
 
-	logicPlan, err := buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
+	logicPlan, err = buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
 		DROP FOREIGN KEY fk_old,
 		DROP INDEX idx_b`)
 	require.NoError(t, err)
@@ -953,8 +1238,35 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 	require.ErrorContains(t, err, "failed to add the foreign key constraint")
 }
 
+func TestAlterTableInplaceSelfForeignKeyPersistsCompositeCatalogRows(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	tableDef := mock.ctxt.tables["t1"]
+	intType := tableDef.Cols[0].Typ
+	tableDef.Cols[1].Typ = intType
+	tableDef.Cols = append(tableDef.Cols,
+		&ColDef{ColId: 2, Name: "c", Typ: intType},
+		&ColDef{ColId: 3, Name: "d", Typ: intType},
+	)
+	tableDef.Pkey = &plan.PrimaryKeyDef{Names: []string{"a", "b"}}
+
+	logicPlan, err := buildSingleStmt(mock, t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_composite FOREIGN KEY (c, d) REFERENCES t1(a, b)`)
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+	require.Len(t, alter.UpdateFkSqls, 1)
+	insert := alter.UpdateFkSqls[0]
+	require.Contains(t, insert, "'fk_composite'")
+	require.Contains(t, insert, "'b'")
+	require.Contains(t, insert, "'c'")
+	require.Contains(t, insert, "'d'")
+	require.Contains(t, insert, "'a'")
+	require.Equal(t, 2, strings.Count(insert, "'fk_composite'"),
+		"one catalog row is written for each composite FK column")
+}
+
 func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 		if name == "experimental_fulltext2_index" {
 			return int64(1), nil
@@ -977,7 +1289,7 @@ func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {
 }
 
 func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// Match the type metadata produced by ADD COLUMN so the only difference is
 	// the source-column identity. A name/type comparison alone must not prove
 	// that the replacement key is copied from the old key.
@@ -1014,7 +1326,7 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 		{`ALTER TABLE t1 ALGORITHM=COPY, RENAME COLUMN b TO bb, MODIFY COLUMN a BIGINT;`, "bb", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			assert.NoError(t, err)
 
 			alter := logicPlan.GetDdl().GetAlterTable()
@@ -1035,7 +1347,7 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 }
 
 func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	tableDef := mock.ctxt.tables["t1"]
 	tableDef.TblId = 272464
 	tableDef.Indexes = []*plan.IndexDef{
@@ -1061,8 +1373,7 @@ func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			require.Equal(t,
 				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464",
@@ -1092,14 +1403,13 @@ func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
 }
 
 func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
 
 	lookupErr := moerr.NewInternalErrorNoCtx("index visibility lookup failed")
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(string) (executor.Result, error) {
 			return executor.Result{}, lookupErr
 		}),
@@ -1112,13 +1422,12 @@ func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
 }
 
 func TestReconcileIndexVisibilityRejectsMissingMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
 
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(string) (executor.Result, error) {
 			result := executor.NewMemResult(
 				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
@@ -1141,12 +1450,11 @@ func TestReconcileIndexVisibilityRejectsMissingMetadata(t *testing.T) {
 }
 
 func TestReconcileIndexVisibilityOverridesStaleMarker(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(string) (executor.Result, error) {
 			result := executor.NewMemResult(
 				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
@@ -1167,12 +1475,11 @@ func TestReconcileIndexVisibilityOverridesStaleMarker(t *testing.T) {
 }
 
 func TestBuildShowCreateTableReconcilesLegacyIndexVisibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			require.Equal(t,
 				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464", sql)
@@ -1212,7 +1519,7 @@ func TestBuildShowCreateTableReconcilesLegacyIndexVisibility(t *testing.T) {
 }
 
 func TestReconcileIndexVisibilityUsesFixedVisibleSystemDatabase(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	tableDef := &TableDef{
 		TblId:  272395,
 		DbName: catalog.MOTaskDB,
@@ -1229,7 +1536,7 @@ func TestReconcileIndexVisibilityUsesFixedVisibleSystemDatabase(t *testing.T) {
 }
 
 func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	const tableID = 272465
 	mock.ctxt.tables["t1"].TblId = tableID
 	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{
@@ -1249,8 +1556,7 @@ func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			require.Equal(t,
 				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272465", sql)
@@ -1274,7 +1580,7 @@ func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
 }
 
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	tests := []struct {
 		name string
@@ -1451,7 +1757,7 @@ func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()
-	plan, err := BuildPlan(context, statements[0], false)
+	plan, err := BuildPlan(context, statements[0], false, nil)
 	if plan != nil {
 		testDeepCopy(plan)
 	}
@@ -1867,7 +2173,7 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 }
 
 func TestAlterTableAlgorithmValidation(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	t.Run("COPY with matching ALGORITHM", func(t *testing.T) {
 		sqls := []string{
@@ -2053,7 +2359,7 @@ func TestAlterTableCopyAddIndex(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			if test.hnsw {
 				tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "docs_vec_raw")]
 				tableDef.Cols[0].Typ.Id = int32(types.T_int64)
@@ -2106,7 +2412,7 @@ func TestAlterTableCopyAddIndex(t *testing.T) {
 }
 
 func TestAlterTableCopyNewUniqueIndexKeepsDedup(t *testing.T) {
-	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_b(b);`)
 	require.NoError(t, err)
 
@@ -2118,7 +2424,7 @@ func TestAlterTableCopyNewUniqueIndexKeepsDedup(t *testing.T) {
 }
 
 func TestAlterTableCopyAddIndexRejectsDuplicateName(t *testing.T) {
-	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+	_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_c(c), ADD INDEX IDX_C(c);`)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "duplicate key")
@@ -2130,7 +2436,7 @@ func TestAlterTableCopyAddIndexRejectsUnknownColumn(t *testing.T) {
 		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_missing(missing);`,
 		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD FULLTEXT INDEX ft_missing(missing);`,
 	} {
-		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.ErrorContains(t, err, "missing")
 	}
 }
@@ -2148,7 +2454,7 @@ func TestAlterTemporaryTablePlan(t *testing.T) {
 		{"RENAME TO renamed", false},
 	} {
 		t.Run(tc.option, func(t *testing.T) {
-			mock := newAutoIncrementAlterOptimizer()
+			mock := newAutoIncrementAlterOptimizer(t)
 			source := mock.ctxt.tables["auto_incr_t"]
 			source.IsTemporary = true
 			source.TableType = catalog.SystemTemporaryTable
@@ -2172,7 +2478,7 @@ func TestAlterTemporaryTablePlan(t *testing.T) {
 }
 
 func TestAlterTemporaryTableKeepsUnsupportedColumnOperationsClosed(t *testing.T) {
-	mock := newAutoIncrementAlterOptimizer()
+	mock := newAutoIncrementAlterOptimizer(t)
 	source := mock.ctxt.tables["auto_incr_t"]
 	source.IsTemporary = true
 	source.TableType = catalog.SystemTemporaryTable
@@ -2185,7 +2491,7 @@ func TestAlterTemporaryTableKeepsUnsupportedColumnOperationsClosed(t *testing.T)
 func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 	for _, temporaryDestination := range []bool{false, true} {
 		t.Run(fmt.Sprintf("temporary=%v", temporaryDestination), func(t *testing.T) {
-			mock := newAutoIncrementAlterOptimizer()
+			mock := newAutoIncrementAlterOptimizer(t)
 			source := mock.ctxt.tables["auto_incr_t"]
 			source.IsTemporary = true
 			source.TableType = catalog.SystemTemporaryTable
@@ -2202,6 +2508,181 @@ func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 				require.Equal(t, "destination", p.GetDdl().GetAlterTable().Actions[0].GetAlterName().NewName)
 				require.Empty(t, p.GetDdl().GetAlterTable().UpdateFkSqls)
 			}
+		})
+	}
+}
+
+func TestVersionedIndexMutationClassification(t *testing.T) {
+	indexedColumn := func(attributes ...tree.ColumnAttribute) *tree.ColumnTableDef {
+		return &tree.ColumnTableDef{Attributes: attributes}
+	}
+
+	tests := []struct {
+		name    string
+		options []tree.AlterTableOption
+		want    bool
+	}{
+		{name: "no options", options: nil, want: false},
+		{
+			name:    "alter index state",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterIndex{}},
+			want:    true,
+		},
+		{
+			name:    "reindex",
+			options: []tree.AlterTableOption{&tree.AlterOptionAlterReIndex{}},
+			want:    true,
+		},
+		{
+			name: "drop index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex},
+			},
+			want: true,
+		},
+		{
+			name: "drop key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropPrimaryKey},
+			},
+			want: true,
+		},
+		{
+			name: "drop indexed column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropColumn},
+			},
+			want: true,
+		},
+		{
+			name: "drop foreign key metadata",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropForeignKey},
+			},
+			want: false,
+		},
+		{
+			name: "add primary key",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.PrimaryKeyIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add secondary index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.Index{}},
+			},
+			want: true,
+		},
+		{
+			name: "add unique index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.UniqueIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add fulltext index",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: &tree.FullTextIndex{}},
+			},
+			want: true,
+		},
+		{
+			name: "add plain column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn()},
+			},
+			want: false,
+		},
+		{
+			name: "add primary-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributePrimaryKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeKey())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUnique())},
+			},
+			want: true,
+		},
+		{
+			name: "add unique-key column",
+			options: []tree.AlterTableOption{
+				&tree.AlterOptionAdd{Def: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "legacy add unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterAddCol{Column: indexedColumn(tree.NewAttributeUniqueKey())},
+			},
+			want: true,
+		},
+		{
+			name: "multi-column add contains unique column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAddColumnClause{
+					NewColumns: []*tree.ColumnTableDef{
+						indexedColumn(),
+						indexedColumn(tree.NewAttributeUnique()),
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "modify column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableModifyColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "change column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableChangeColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "rename column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableRenameColumnClause{},
+			},
+			want: true,
+		},
+		{
+			name: "alter column",
+			options: []tree.AlterTableOption{
+				&tree.AlterTableAlterColumnClause{},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, hasVersionedIndexMutation(tt.options))
 		})
 	}
 }

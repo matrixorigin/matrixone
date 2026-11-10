@@ -38,6 +38,84 @@ var (
 	}
 )
 
+func TestNumericExponentParsing(t *testing.T) {
+	ctx := context.Background()
+	for _, literal := range []string{
+		"1.5e", "1.e", ".5e", "1.5E", "1.5Efoo", "1.5e_", "1.5e数量",
+		"1.5e+", "1.5e-", "1.5e+foo", "1e+",
+	} {
+		t.Run(literal, func(t *testing.T) {
+			stmts, err := Parse(ctx, dialect.MYSQL, "select "+literal, 1)
+			for _, stmt := range stmts {
+				t.Cleanup(stmt.Free)
+			}
+			require.Error(t, err)
+			require.Empty(t, stmts)
+			positioned, ok := err.(mysql.PositionedErr)
+			require.True(t, ok, "%T: %v", err, err)
+			require.Contains(t, positioned.Near, literal)
+		})
+	}
+	for _, test := range []struct {
+		expression string
+		value      float64
+		alias      string
+		identifier bool
+	}{
+		{expression: "1.e5", value: 100000},
+		{expression: "1.5e38", value: 1.5e38},
+		{expression: "1.5e+2", value: 150},
+		{expression: ".5E-2", value: .005},
+		{expression: "1e", identifier: true},
+		{expression: "1efoo", identifier: true},
+		{expression: "1e数量", identifier: true},
+		{expression: "1.5 e", value: 1.5, alias: "e"},
+		{expression: "1.5/**/e", value: 1.5, alias: "e"},
+		{expression: "1.5 AS e", value: 1.5, alias: "e"},
+		{expression: "1.5foo", value: 1.5, alias: "foo"},
+		{expression: "1.5e1foo", value: 15, alias: "foo"},
+		{expression: "1.5 /* 1.5e */", value: 1.5},
+	} {
+		t.Run(test.expression, func(t *testing.T) {
+			stmts, err := Parse(ctx, dialect.MYSQL, "select "+test.expression, 1)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Len(t, stmts, 1)
+			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+			require.Equal(t, test.alias, expr.As.Origin())
+			if test.identifier {
+				require.IsType(t, &tree.UnresolvedName{}, expr.Expr)
+				require.Equal(t, test.expression, expr.Expr.(*tree.UnresolvedName).ColNameOrigin())
+			} else {
+				require.IsType(t, &tree.NumVal{}, expr.Expr)
+				value, ok := expr.Expr.(*tree.NumVal).Float64()
+				require.True(t, ok)
+				require.Equal(t, test.value, value)
+			}
+		})
+	}
+	t.Run("ParseOne and quoted literal", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, dialect.MYSQL, "select .5E", 1)
+		if stmt != nil {
+			t.Cleanup(stmt.Free)
+		}
+		require.Error(t, err)
+		require.Nil(t, stmt)
+		require.IsType(t, mysql.PositionedErr{}, err)
+		stmt, err = ParseOne(ctx, dialect.MYSQL, "select '1.5e'", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		require.IsType(t, &tree.NumVal{}, expr)
+		require.Equal(t, tree.P_char, expr.(*tree.NumVal).ValType)
+		require.Equal(t, "1.5e", expr.(*tree.NumVal).String())
+	})
+}
+
 func TestMysql(t *testing.T) {
 	ctx := context.TODO()
 	if debugSQL.output == "" {
@@ -71,6 +149,15 @@ func TestPostgresql(t *testing.T) {
 }
 
 func TestSplitSqlBySemicolon(t *testing.T) {
+	t.Run("qualified BEGIN before comment semicolon", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				first := "SELECT t." + name + "/* ; */ FROM t"
+				require.Equal(t, []string{first, "SELECT 2"}, SplitSqlBySemicolon(first+"; SELECT 2"))
+				require.Equal(t, []string{first, "SELECT 2"}, HandleSqlForRecord(first+"; SELECT 2"))
+			})
+		}
+	})
 	ret := SplitSqlBySemicolon("select 1;select 2;select 3;")
 	require.Equal(t, 3, len(ret))
 	require.Equal(t, "select 1", ret[0])
@@ -205,6 +292,63 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 		want    []string
 	}{
 		{
+			name: "future body contributes no statement boundaries",
+			sql:  "select 1; /*!99999 select 2; select 3 */; select 4",
+			want: []string{"select 1", "/*!99999 select 2; select 3 */", "select 4"},
+		},
+		{
+			name: "future body before matching multi-statement comment",
+			sql:  "/*!99999 select 0; */ /*!80030 select 1; select 2 */; select 3",
+			want: []string{"/*!99999 select 0; */ /*!80030 select 1 */", "/*! select 2 */", "select 3"},
+		},
+		{
+			name: "multiple statements inside versioned comment",
+			sql:  "/*!50000 select 1; select 2 */",
+			want: []string{"/*!50000 select 1 */", "/*! select 2 */"},
+		},
+		{
+			name: "ordinary prefix and outer delimiter",
+			sql:  "select 1; /*!50000 select 2; select 3 */;",
+			want: []string{"select 1", "/*!50000 select 2 */", "/*! select 3 */"},
+		},
+		{
+			name: "inner and outer final delimiters",
+			sql:  "/*!50000 select 1; select 2; */; select 3",
+			want: []string{"/*!50000 select 1 */", "/*! select 2; */", "", "select 3"},
+		},
+		{
+			name: "statement crosses both wrapper endpoints",
+			sql:  "select /*! 1; select 2 */ + 3; select 4",
+			want: []string{"select /*! 1 */", "/*! select 2 */ + 3", "select 4"},
+		},
+		{
+			name: "consecutive comments and empty inner statement",
+			sql:  "/*! select 1;; select 2 */; /*! select 3; select 4 */",
+			want: []string{"/*! select 1 */", "/*!  */", "/*! select 2 */", "/*! select 3 */", "/*! select 4 */"},
+		},
+		{
+			name: "quoted semicolon and terminator in continuation",
+			sql:  "/*! select 1; select 'x*/y;z' */",
+			want: []string{"/*! select 1 */", "/*! select 'x*/y;z' */"},
+		},
+		{
+			name: "compound statement inside executable comment",
+			sql:  "/*! begin select 1; select 2; end; select 3 */",
+			want: []string{"/*! begin select 1; select 2; end */", "/*! select 3 */"},
+		},
+		{
+			name:    "multiple statements with ANSI_QUOTES",
+			sql:     `/*! select "x*/y"; select "z" */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    []string{`/*! select "x*/y" */`, `/*! select "z" */`},
+		},
+		{
+			name:    "multiple statements with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! select 'x\'; select 'y\' */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! select 'x\' */`, `/*! select 'y\' */`},
+		},
+		{
 			name: "single versioned statement",
 			sql:  "/*!40101 use mysql_ddl_test_db_3; */",
 			want: []string{"/*!40101 use mysql_ddl_test_db_3; */"},
@@ -240,6 +384,47 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			sql:  "/*!40101 select 1; */;",
 			want: []string{"/*!40101 select 1; */", ""},
 		},
+		{
+			name: "qualified BEGIN before comma",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */"},
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! SELECT t.`begin`, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.`begin`, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "/*! SELECT t.rank FROM t; */",
+			want: []string{"/*! SELECT t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN after whitespace and line comment",
+			sql:  "/*! SELECT t. -- component\n begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t. -- component\n begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualification crosses executable comment opening",
+			sql:  "SELECT t./*! begin, t.rank FROM t; */",
+			want: []string{"SELECT t./*! begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN followed by ordinary statement",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ SELECT 2;",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "SELECT 2"},
+		},
+		{
+			name: "qualified BEGIN in consecutive executable comments",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ /*! SELECT t.begin FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin FROM t; */"},
+		},
+		{
+			name:    "qualified BEGIN with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! SELECT t.begin, 'x\', t.rank FROM t; */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! SELECT t.begin, 'x\', t.rank FROM t; */`},
+		},
 	}
 
 	for _, test := range tests {
@@ -247,11 +432,58 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			got, err := SplitSqlByStatementWithSQLMode(ctx, test.sql, test.sqlMode)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
+			fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, test.sql, test.sqlMode)
+			require.NoError(t, err)
+			var splitASTs []string
+			previousEnd := 0
+			for _, fragment := range fragments {
+				require.GreaterOrEqual(t, fragment.Start, previousEnd)
+				require.True(t, fragment.MatchesSource(test.sql))
+				previousEnd = fragment.End
+				if !FragmentHasStatement(fragment.SQL) {
+					continue
+				}
+				stmts, err := ParseWithSQLMode(ctx, dialect.MYSQL, fragment.SQL, 1, test.sqlMode)
+				require.NoError(t, err, fragment.SQL)
+				require.Len(t, stmts, 1, fragment.SQL)
+				splitASTs = append(splitASTs, tree.String(stmts[0], dialect.MYSQL))
+				stmts[0].Free()
+			}
+			stmts, err := ParseWithSQLMode(ctx, dialect.MYSQL, test.sql, 1, test.sqlMode)
+			require.NoError(t, err)
+			var fullASTs []string
+			for _, stmt := range stmts {
+				fullASTs = append(fullASTs, tree.String(stmt, dialect.MYSQL))
+				stmt.Free()
+			}
+			require.Equal(t, fullASTs, splitASTs)
 		})
 	}
 }
 
 func TestHandleSqlForRecord(t *testing.T) {
+	t.Run("qualified BEGIN before quoted comment text", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				for _, key := range []string{"secret_access_key", "access_key_id"} {
+					t.Run(key, func(t *testing.T) {
+						prefix := "SELECT t." + name + "/* 'comment */ FROM t WHERE " + key + " = "
+						input := prefix + "'recording-test-value'"
+						stmt, err := ParseOne(context.Background(), dialect.MYSQL, input, 1)
+						require.NoError(t, err)
+						defer stmt.Free()
+						require.Equal(t, []string{prefix + "'******'"}, HandleSqlForRecord(input))
+					})
+				}
+			})
+		}
+	})
+	t.Run("qualified recording context resets between fragments", func(t *testing.T) {
+		first := "SELECT t.begin/* 'comment */ FROM t WHERE secret_access_key = "
+		last := "SELECT t.begin/* 'comment */ FROM t WHERE access_key_id = "
+		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
+		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")
@@ -471,6 +703,29 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
 	}
+}
+
+func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	ctas, ok := stmts[0].(*tree.CreateTable)
+	require.True(t, ok)
+	require.NotNil(t, ctas.AsSource)
+	require.NotNil(t, ctas.AsSource.RewriteOption)
+	require.Contains(t, ctas.AsSource.RewriteOption.Rewrites, "db1.t1")
+}
+
+func TestAddRewriteHints_CreateTableWithoutSource(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": "select 1"}} */ create table db1.copy (id int)`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ctas, ok := stmts[0].(*tree.CreateTable)
+	require.True(t, ok)
+	require.Nil(t, ctas.AsSource)
 }
 
 // A read source inside a DML statement must carry the rewrite option too,

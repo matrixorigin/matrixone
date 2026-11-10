@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -144,6 +145,7 @@ type LocalDisttaeDataSource struct {
 		txnOffset   int
 		entries     []workspaceDeleteEntry
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
+		pointRows   map[objectio.Blockid][]uint64
 	}
 
 	pStateTombstoneObjects struct {
@@ -159,6 +161,8 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
+const indexWorkspaceDeleteEntriesForBlockThreshold = 128
+const maxIndexedWorkspaceDeleteRowsPerBlock = 256
 
 // Building the tombstone range index has a fixed per-scan cost. Benchmarks
 // with the QA shape (700 tombstone objects) put its break-even point below 32
@@ -182,6 +186,7 @@ func (ls *LocalDisttaeDataSource) String() string {
 
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
+	ls.desc = len(orderby) > 0 && orderby[0] != nil && orderby[0].Flag&plan.OrderBySpec_DESC != 0
 	// Ordered scans prune blocks after reading their zone maps. Prefetching the
 	// original block order can read whole objects that the scan will skip.
 	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
@@ -192,6 +197,10 @@ func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (ls *LocalDisttaeDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	if len(ls.OrderBy) == 0 || ls.OrderBy[0] == nil || ls.OrderBy[0].Expr == nil ||
+		!readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+		return
+	}
 	if !ls.filterZM.IsInited() {
 		ls.filterZM = zm.Clone()
 		return
@@ -336,7 +345,11 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		location = ls.rangeSlice.Get(i).MetaLocation()
+		block := ls.rangeSlice.Get(i)
+		if block.IsAppendable() {
+			continue
+		}
+		location = block.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, ls.fs)
 			if err != nil {
@@ -345,7 +358,12 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
+			zm := blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+				blockZMS[i] = zm
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -477,7 +495,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	ls.batchPrefetch(seqNums)
+	ls.batchPrefetch(ctx, seqNums)
 
 	for {
 		switch ls.iteratePhase {
@@ -539,11 +557,11 @@ func (ls *LocalDisttaeDataSource) handleOrderBy(ctx context.Context) error {
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
+			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			blockZMS, err := ls.getBlockZMs(ctx)
 			if err != nil {
 				return err
 			}
-			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			ls.blockZMS = blockZMS
 			ls.sortBlockList()
 			ls.sorted = true
@@ -719,29 +737,84 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
 		// Refer to genBlock and genRowid method.
 
-		// apply pk filter on workspace entries
-		if enableFilter {
-			skipMask = objectio.GetReusableBitmap()
-			put := ls.table.db.getEng().packerPool.Get(&packer)
-			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
-			put.Put()
+		// Skip whole batches whose encoded-PK envelope provably misses this
+		// filter before the per-row encode+probe pass. Without this, every
+		// point read re-encoded every workspace batch's primary keys, so
+		// single-row UPDATE statements slowed down linearly with the number
+		// of rows already modified by the transaction (issue 26796).
+		if enableFilter && entry.pkRange.inited &&
+			!ls.memPKFilter.MayMatchKeyRange(entry.pkRange.min, entry.pkRange.max) {
+			ls.wsCursor++
+			continue
 		}
 
-		// apply bf filter on workspace entries
-		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-			if skipMask.IsEmpty() {
-				skipMask = objectio.GetReusableBitmap()
-			}
-			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-			ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
-				if !exist {
-					skipMask.Add(uint64(row))
+		// Exact single-key probes answer through the per-batch key index: the
+		// definitive hit/miss avoids re-encoding the whole batch's primary
+		// keys, which kept growing single-row UPDATE statement cost with the
+		// transaction's size (issue 26796). The answer stays equivalent to
+		// the FilterVector path only while both provisos hold:
+		//
+		//   - no independent membership filter is attached to this scan: a
+		//     membership filter binds its own column (e.g. __mo_index_pri_col)
+		//     and its set can be exact, so a primary-key hit alone never
+		//     proves the row may surface;
+		//   - the filter's bound column matches the column the index was
+		//     built on, so index and filter encode the same key domain.
+		//
+		// Both fail closed to the FilterVector plus membership path below.
+		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); isExact &&
+			entry.pkRange.inited &&
+			!ls.memPKFilter.HasMemberFilter() &&
+			entry.pkCheckPos == int(pkSeqNums) {
+			index, built := ls.table.getTxn().ensureInsertKeyOffsetsLocked(&writes[ls.wsCursor])
+			if built {
+				readutil.RecordIndexProbeForTest()
+				rowOffs := index.offsets[string(exactKey)]
+				if len(rowOffs) == 0 {
+					ls.wsCursor++
+					continue
 				}
-			})
+				offsets = make([]int64, 0, len(rowOffs))
+				for _, off := range rowOffs {
+					offsets = append(offsets, int64(off))
+				}
+				// shared tail below consumes offsets and applies tombstones
+			} else {
+				offsets = nil
+			}
+		} else {
+			offsets = nil
 		}
 
-		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
-		skipMask.Release()
+		if offsets == nil {
+			func() {
+				defer func() { skipMask.Release() }()
+				// apply pk filter on workspace entries
+				if enableFilter {
+					skipMask = objectio.GetReusableBitmap()
+					func() {
+						put := ls.table.db.getEng().packerPool.Get(&packer)
+						defer put.Put()
+						ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+					}()
+				}
+
+				// apply bf filter on workspace entries
+				if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+					if !skipMask.IsValid() {
+						skipMask = objectio.GetReusableBitmap()
+					}
+					bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+					ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+						if !exist {
+							skipMask.Add(uint64(row))
+						}
+					})
+				}
+
+				offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+			}()
+		}
 
 		if len(offsets) == 0 {
 			ls.wsCursor++
@@ -812,12 +885,18 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		summaryBuf = v.(*bytes.Buffer)
 	}
 	if ls.pStateRows.insIter == nil {
-		if !ls.memPKFilter.Valid() {
-			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
-		} else {
+		switch {
+		case ls.memPKFilter.Valid():
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
 				ls.memPKFilter.Specs())
+		case ls.memPKFilter.ClusterKeyValid():
+			ls.pStateRows.insIter = ls.pState.NewClusterKeyIterWithFilters(
+				ls.memPKFilter.ClusterKeyTS(),
+				ls.memPKFilter.ClusterKeyDescriptor(),
+				ls.memPKFilter.ClusterKeySpecs())
+		default:
+			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -853,6 +932,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	)
 	if ls.memPKFilter.Valid() {
 		iterKind = "primary-key"
+	} else if ls.memPKFilter.ClusterKeyValid() {
+		iterKind = "cluster-key"
 	}
 
 	var (
@@ -911,16 +992,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-
-				var idx uint16
-				switch seqNums[i] {
-				case objectio.SEQNUM_COMMITTS:
-					// in-memory committed row batch layout:
-					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
-					idx = 1
-				default:
-					idx = 2 /*rowid and commits*/ + seqNums[i]
+				if seqNums[i] == objectio.SEQNUM_COMMITTS {
+					// Replayed rows keep commit time on RowEntry, not in the
+					// retained batch's zero-length timestamp vector.
+					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
+						return err
+					}
+					continue
 				}
+
+				idx := 2 /*rowid and commits*/ + seqNums[i]
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
@@ -954,12 +1035,21 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if deletedMask.Count() > 0 {
 			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 
 				// negative shrink requires the bat sorted already
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			} else {
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			}
 		}
 
@@ -1134,14 +1224,51 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+	// A bitmap or a multi-row scan can consume the existing batches directly.
+	pointRead := deletedRows == nil && len(leftRows) == 1
+	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(bid)
+	if pointRead {
+		offset64 := uint64(leftRows[0])
+		if offset64 >= 1<<32 {
+			return leftRows
+		}
+		offset := uint32(offset64)
+		if rows := ls.workspaceDeletes.pointRows[*bid]; rows != nil {
+			if offset64 < objectio.BlockMaxRows && rows[offset/64]&(uint64(1)<<(offset%64)) != 0 {
+				return leftRows[:0]
+			}
+			return leftRows
+		}
+		// Every block entry contains only Rowids for bid. Compare offsets
+		// directly instead of rebuilding and comparing a full Rowid per batch.
+		for _, entry := range blockEntries {
+			if len(entry.rowIds) >= 32 && entry.sorted {
+				_, found := slices.BinarySearchFunc(entry.rowIds, offset, func(rowID objectio.Rowid, target uint32) int {
+					return cmp.Compare(rowID.GetRowOffset(), target)
+				})
+				if found {
+					return leftRows[:0]
+				}
+				continue
+			}
+			for _, rowID := range entry.rowIds {
+				if rowID.GetRowOffset() == offset {
+					return leftRows[:0]
+				}
+			}
+		}
+		if offset64 < objectio.BlockMaxRows {
+			ls.indexWorkspaceDeleteBlockAfterPointMissLocked(bid, blockEntries)
+		}
+		return leftRows
+	}
+	for _, entry := range blockEntries {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
-
 	return leftRows
 }
 
@@ -1158,7 +1285,49 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
 		}
 	}
-	return ls.workspaceDeletes.byBlock[*bid]
+	blockEntries := ls.workspaceDeletes.byBlock[*bid]
+	return blockEntries
+}
+
+func (ls *LocalDisttaeDataSource) indexWorkspaceDeleteBlockAfterPointMissLocked(
+	bid *objectio.Blockid,
+	blockEntries []workspaceDeleteEntry,
+) {
+	if len(blockEntries) < indexWorkspaceDeleteEntriesForBlockThreshold {
+		return
+	}
+	_, seen := ls.workspaceDeletes.pointRows[*bid]
+	if !seen {
+		totalRows := 0
+		for _, entry := range blockEntries {
+			totalRows += len(entry.rowIds)
+			if totalRows > maxIndexedWorkspaceDeleteRowsPerBlock {
+				return
+			}
+			for _, rowID := range entry.rowIds {
+				if rowID.GetRowOffset() >= objectio.BlockMaxRows {
+					return
+				}
+			}
+		}
+		// A nil entry records one full miss without making that first read
+		// allocate and populate an index it may never use.
+		if ls.workspaceDeletes.pointRows == nil {
+			ls.workspaceDeletes.pointRows = make(map[objectio.Blockid][]uint64)
+		}
+		ls.workspaceDeletes.pointRows[*bid] = nil
+		return
+	}
+	// Two full misses establish reuse. A block has at most 8192 row offsets,
+	// so its index uses 1 KiB and is cheaper to build than sorting Rowids.
+	rows := make([]uint64, objectio.BlockMaxRows/64)
+	for _, entry := range blockEntries {
+		for _, rowID := range entry.rowIds {
+			offset := rowID.GetRowOffset()
+			rows[offset/64] |= uint64(1) << (offset % 64)
+		}
+	}
+	ls.workspaceDeletes.pointRows[*bid] = rows
 }
 
 func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
@@ -1235,6 +1404,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	ls.workspaceDeletes.txnOffset = ls.txnOffset
 	ls.workspaceDeletes.entries = entries
 	ls.workspaceDeletes.byBlock = nil
+	ls.workspaceDeletes.pointRows = nil
 	return entries
 }
 
@@ -1557,7 +1727,7 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 	return &i.current, nil
 }
 
-func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	if ls.rc.prefetchDisabled {
 		return
 	}
@@ -1571,6 +1741,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
+	policy := fileservice.GetFileServicePolicy(ctx)
 	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
 		blk := ls.rangeSlice.Get(idx)
@@ -1579,6 +1750,9 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		}
 
 		preObj = *blk.BlockID.Object()
+		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+			continue
+		}
 
 		// prefetch blk data
 		err := ioutil.Prefetch(

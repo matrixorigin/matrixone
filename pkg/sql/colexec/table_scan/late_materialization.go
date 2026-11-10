@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,7 +49,9 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_bf16,
 		types.T_array_float16,
 		types.T_array_int8,
-		types.T_array_uint8:
+		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		return typ.Width > 0 &&
@@ -208,13 +209,10 @@ func (tableScan *TableScan) applyReaderFilter(
 	defer func() {
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
-	if loadedColumns == nil {
-		// Eager fallbacks still have a complete pre-filter batch, so preserve the
-		// existing transaction data-trace boundary.
-		tableScan.traceRead(proc, bat)
-	}
 	tableScan.recordFilterInput(bat, loadedColumns)
-	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
+	// A fallback can load the entire schema through this callback. Only a
+	// proper subset leaves late-column bytes to account for after filtering.
+	tableScan.ctr.filterLateMaterialized = loadedColumns != nil && len(loadedColumns) < len(tableScan.Types)
 	return tableScan.evalFilter(proc, bat, loadedColumns)
 }
 
@@ -223,12 +221,9 @@ func (tableScan *TableScan) readBatch(
 	proc *process.Process,
 ) (bool, error) {
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
-	// Data tracing records complete pre-filter rows. Preserve that diagnostic
-	// contract by using the eager path while the feature is enabled. Reader
-	// summaries have the same pre-filter diagnostic contract.
-	traceDataEnabled := trace.GetService(proc.GetService()).Enabled(trace.FeatureTraceData)
+	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
-	if !ok || tableScan.ctr.readerFilter == nil || traceDataEnabled || readerSummaryEnabled {
+	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,

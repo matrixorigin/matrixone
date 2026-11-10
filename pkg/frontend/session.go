@@ -259,7 +259,19 @@ type Session struct {
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	ruleCacheMu sync.RWMutex      // protects ruleCache, ruleCacheVersion and rewritePolicyGeneration
+	// ruleCacheVersion is the catalog proof stamped when ruleCache was loaded.
+	// A loaded cache is reused only while a fresh proof still matches it, so a
+	// rule change committed through another CN is observed here (issue #29133).
+	// The zero version never authorizes reuse.
+	ruleCacheIdentity        rewriteRuleIdentity
+	ruleCacheVersion         any
+	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
+	ruleCacheRevision        uint64 // changes on every publication, including equal policy
+	// rewritePolicyGeneration changes whenever session policy state is
+	// invalidated. Prepared statements capture this generation at publication
+	// time so a request-frozen policy cannot be registered after a refresh.
+	rewritePolicyGeneration uint64
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -287,6 +299,8 @@ type Session struct {
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
 	rewriteEnabled atomic.Bool
+	// Result-schema evidence is opt-in and costs one atomic read when disabled.
+	campaignEvidenceEnabled atomic.Bool
 
 	mu sync.Mutex
 
@@ -351,6 +365,14 @@ type Session struct {
 	statsCache         *plan2.StatsCache
 	statsCacheVersions map[uint64]optimizerStatsCacheTag
 	seqCurValues       map[uint64]string
+	// seqObligations tracks issued values of transaction-local sequence
+	// generations (created inside explicit-transaction CLONE/snapshot
+	// restore) so statement rewinds cannot re-issue them and the pre-commit
+	// stamp can persist a safe counter position. Session-owned and shared
+	// into each statement's process via CopySeqToProc; deliberately outside
+	// the statement-level sequence snapshot/restore machinery. Consumed by
+	// the pre-commit stamp and discarded on transaction rollback.
+	seqObligations *process.SequenceObligationSet
 
 	/*
 		CORNER CASE:
@@ -403,8 +425,6 @@ type Session struct {
 	// If the connection is from proxy, client address is the real address of client.
 	clientAddr string
 	proxyAddr  string
-
-	disableTrace bool
 
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
@@ -527,6 +547,12 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 	txnHandler := ses.txnHandler
 	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+	ses.campaignEvidenceEnabled.Store(false)
+	if v := sessionVars.Get("mo_sirius_campaign_evidence"); v != nil {
+		if on, convErr := valueIsBoolTrue(v); convErr == nil {
+			ses.campaignEvidenceEnabled.Store(on)
+		}
+	}
 
 	// Initialize rewriteEnabled cache
 	if v := sessionVars.Get("enable_remap_hint"); v != nil {
@@ -645,14 +671,33 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
-	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+	previous := ses.userDefinedVars[key]
+	if previous != nil && !previous.Replayable {
 		replayable = false
+	}
+	regexpStringResult := userVariableRegexpStringResult(typ)
+	if value == nil && types.T(typ.Id) == types.T_any {
+		// MySQL retains result-category history for literal NULL, but that
+		// history must not become the current SQL conversion/parameter type.
+		regexpStringResult = true // First assignment starts as STRING_RESULT.
+		if previous != nil {
+			regexpStringResult = previous.RegexpStringResult || userVariableRegexpStringResult(previous.Type)
+			if previous.Type.Id == 0 && previous.Value != nil {
+				regexpStringResult = userVariableRegexpStringResult(inferUserDefinedVarType(previous.Value))
+			}
+		}
+		// Final SET NULL replay on a fresh session loses non-string history.
+		// Snapshot migration transports it independently and remains allowed.
+		if !regexpStringResult {
+			replayable = false
+		}
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:               value,
 		Sql:                 sql,
 		IsBin:               isBin,
 		Type:                typ,
+		RegexpStringResult:  regexpStringResult,
 		PrepareParamKind:    kind,
 		RuntimeStringDomain: runtimeDomain,
 		Replayable:          replayable,
@@ -749,7 +794,7 @@ func (ses *Session) addTempTableWithIdentity(
 ) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if ses.tempTableIdentities == nil {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
@@ -831,7 +876,7 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	val, ok := ses.tempTables[dbName+"."+alias]
+	val, ok := ses.tempTables[defines.TempTableAliasKey(dbName, alias)]
 	return val, ok
 }
 
@@ -893,7 +938,7 @@ func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if realName, ok := ses.tempTables[key]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
@@ -1212,6 +1257,13 @@ func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	*ses.seqLastValue = proc.GetSessionInfo().SeqLastValue[0]
+	// Statement-success publication point (J2): a SETVAL/restart boundary
+	// staged during this statement is made permanent exactly here, on the
+	// single statement-success funnel, so a later same-statement failure
+	// could never have cleared the obligation of the boundary it rewound.
+	// A failed statement never reaches this funnel; the statement-rollback
+	// path restores staged removals instead.
+	ses.seqObligations.ApplyStaged()
 }
 
 func (ses *Session) DeleteSeqValues(proc *process.Process) {
@@ -1243,6 +1295,35 @@ func (ses *Session) CopySeqToProc(proc *process.Process) {
 		proc.GetSessionInfo().SeqCurValues[k] = v
 	}
 	proc.GetSessionInfo().SeqLastValue[0] = *ses.seqLastValue
+	// Share the session-owned obligation store with the statement process.
+	// Pointer fields are re-seeded per statement because the process is
+	// rebuilt wholesale for each execution.
+	proc.GetSessionInfo().SeqObligations = ses.seqObligations
+}
+
+// getSequenceObligationSet exposes the session-owned store to the terminal
+// transaction hooks (pre-commit stamp, rollback cleanup).
+func (ses *Session) getSequenceObligationSet() *process.SequenceObligationSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqObligations
+}
+
+// restoreStagedSequenceObligations returns staged boundary removals to
+// enforcement after the statement that staged them failed and its workspace
+// writes were rewound.
+func (ses *Session) restoreStagedSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.RestoreStaged()
+	}
+}
+
+// clearSequenceObligations discards the transaction's issued-value records
+// after a terminal rollback outcome.
+func (ses *Session) clearSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.Clear()
+	}
 }
 
 func (ses *Session) InheritSequenceData(other *Session) {
@@ -1451,18 +1532,6 @@ func sessionDivPrecisionIncrement(ses FeSession) int32 {
 	return int32(increment)
 }
 
-func (ses *Session) sqlModeHasIgnoreSpace() bool {
-	if ses == nil {
-		return false
-	}
-	value, err := ses.GetSessionSysVar("sql_mode")
-	if err != nil {
-		return false
-	}
-	has, ok := sqlModeHasIgnoreSpaceValue(value)
-	return ok && has
-}
-
 func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
 	if ses == nil {
 		return 0
@@ -1476,43 +1545,6 @@ func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
 		return 0
 	}
 	return flags
-}
-
-// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
-// the plan or parser output changes membership. Every token the planner or
-// parser reads at bind time must be compared here: the cache is keyed by SQL
-// text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction bool, oldParserFlags mysql.SQLModeFlags, oldIgnoreSpace bool, val interface{}) {
-	ses.updateSqlModeNoAutoValueOnZero(val)
-	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
-	if !ok {
-		return
-	}
-	newOnlyFullGroupBy, ok := sqlModeHasOnlyFullGroupByValue(val)
-	if !ok {
-		return
-	}
-	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
-	if !ok {
-		return
-	}
-	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
-	if !ok {
-		return
-	}
-	newParserFlags, ok := sqlModeParserFlagsValue(val)
-	if !ok {
-		return
-	}
-	newIgnoreSpace, ok := sqlModeHasIgnoreSpaceValue(val)
-	if !ok {
-		return
-	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
-		oldParserFlags != newParserFlags || oldIgnoreSpace != newIgnoreSpace || oldNoUnsignedSubtraction != ses.sqlModeHasNoUnsignedSubtraction() {
-		ses.cleanCache()
-	}
 }
 
 func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
@@ -2041,6 +2073,9 @@ func NewSession(
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
 	ses.seqLastValue = new(string)
+	// The obligation store outlives single statements: it is bounded by the
+	// owning transaction and cleaned at every terminal transaction outcome.
+	ses.seqObligations = process.NewSequenceObligationSet()
 
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
@@ -2165,8 +2200,15 @@ func dropSessionTempTables(
 				WithRoleID(tenant.GetDefaultRoleID()),
 		)
 	}
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	var cleanupErr error
 	for _, tbl := range tempTables {
+		// Hidden indexes are destroyed by their root's DROP. Independently
+		// dropping one first (or after a failed root DROP) corrupts the root's
+		// remaining index metadata and prevents a later cleanup retry.
+		if tbl.identity.internal {
+			continue
+		}
 		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
 		res, err := exec.Exec(ctx, dropSQL, opts)
 		if err != nil {
@@ -2246,7 +2288,7 @@ func (ses *Session) Close() {
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
-	ses.respr = nil
+	ses.feSessionImpl.setResponser(nil)
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -2284,6 +2326,7 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
+	ses.seqObligations = nil
 	if ses.sqlHelper != nil {
 		ses.sqlHelper.ses = nil
 		ses.sqlHelper = nil
@@ -2481,10 +2524,46 @@ func (ses *Session) invalidateCachedPlanGeneration(
 }
 
 func (ses *Session) cleanCache() {
+	ses.invalidateCachedPlans(false)
+}
+
+// EXECUTE owns replacement and cleanup; invalidation preserves prepared
+// handles, parameters and buffers until their existing rebuild path runs.
+func (ses *Session) invalidateCachedPlans(prepared bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.clean()
+	}
+	if prepared {
+		for _, statement := range ses.prepareStmts {
+			statement.needsRebuild = true
+		}
+	}
+}
+
+// markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
+// stale without closing their handles. The session variable is read while
+// building the physical rollup plan, so EXECUTE must rebuild the plan after
+// the value changes.
+func (ses *Session) markPreparedPlansForRollupAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
+	}
+}
+
+// markPreparedPlansForWindowPartitionAlgorithmChange marks prepared plan
+// generations stale without closing their handles. The session variable is
+// read while building the logical plan, so EXECUTE must rebuild the plan and
+// any cached compile after the value changes; removing the prepared statement
+// would incorrectly turn a valid EXECUTE into an unknown-statement error.
+func (ses *Session) markPreparedPlansForWindowPartitionAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
 	}
 }
 
@@ -2546,9 +2625,109 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
 
-	// Clear rule cache with proper locking
+	// Clearing role-rule policy also invalidates every prepared handle that may
+	// contain the previous policy in its AST or plan. Keep the handles alive so
+	// an active owner can finish its normal cleanup; execution will fail closed
+	// until the client explicitly prepares a new statement.
+	ses.invalidateRewriteRuleCacheLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCache(accountID uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	// Check identity under the same lock as invalidation. A SessionManager
+	// snapshot may still contain a session that has since been closed; nil is
+	// not the sys account (ID zero). Account-local metadata cannot change
+	// another tenant's rewrite policy, even when their role IDs coincide.
+	if ses.tenant == nil || ses.tenant.GetTenantID() != accountID {
+		return
+	}
+	ses.invalidateRewriteRuleCacheLocked()
+	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
+	// session cache may be unloaded or may describe the old role state, so every
+	// existing handle must be discarded from execution until explicitly prepared
+	// again.
+	ses.invalidateAllPreparedRewriteStatementsLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCacheLocked() {
+	// Clear the rule cache and advance its generation together. A PREPARE that
+	// captured the previous request policy is rejected when it is registered
+	// after this point, even if the invalidation happened earlier in the same
+	// multi-statement request.
 	ses.ruleCacheMu.Lock()
+	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
+	ses.ruleCacheVersion = nil
+	ses.rewritePolicyGeneration++
+	ses.ruleCacheMu.Unlock()
+
+	optionalRewriteEnabled := ses.rewriteEnabled.Load()
+	for _, stmt := range ses.prepareStmts {
+		// A disabled optional rewrite switch does not disable mandatory role
+		// rules. Use the policy captured by each handle to invalidate statements
+		// that still contain a role-rule rewrite.
+		if stmt != nil && (optionalRewriteEnabled || roleRulesActive || stmt.rewritePolicyEnabled) {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) invalidateAllPreparedRewriteStatementsLocked() {
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
+	policy *rewritePolicySnapshot,
+	refreshErr error,
+) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+
+	ses.ruleCacheMu.RLock()
+	currentGeneration := ses.rewritePolicyGeneration
+	currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+	ses.ruleCacheMu.RUnlock()
+
+	if refreshErr != nil || policy == nil || policy.generation != currentGeneration {
+		ses.invalidateAllPreparedRewriteStatementsLocked()
+		return
+	}
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil && stmt.rewritePolicyCaptured &&
+			stmt.rewritePolicyGeneration != currentGeneration &&
+			(stmt.rewritePolicyEnabled || policy.enabled || currentPolicyEnabled) {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) refreshRewritePolicyAndValidatePrepared(ctx context.Context) {
+	if prior := authorizationEpochFor(ctx, ses); prior != nil {
+		prior.mu.Lock()
+		minimum := prior.minimum
+		prior.mu.Unlock()
+		if rewriteRuleSessionIdentity(ses) != prior.identity || ses.getLastCommitTS().Greater(minimum) {
+			// SET ROLE has completed its principal transition. Validate handles with
+			// a complete new policy owner; the earlier rewrite/admission cannot lend
+			// authorization to this new principal. The caller's epoch remains invalid
+			// for any further authorization and ends at its statement boundary.
+			var validation *authorizationEpoch
+			ctx, validation = beginAuthorizationEpoch(ctx, ses, nil)
+			defer validation.end()
+		}
+	}
+	policy, err := captureRewritePolicy(ctx, ses)
+	ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, err)
+}
+
+func (ses *Session) bumpRewritePolicyGeneration() {
+	ses.ruleCacheMu.Lock()
+	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 }
 
@@ -2577,7 +2756,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	be := ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
+	be := ses.InitBackExec(txnOp, ses.GetResponser().GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
 	be.(*backExec).backSes.ReplaceDerivedStmt(true)
 	return be
@@ -2592,6 +2771,8 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
+		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
+		be.internalExecution = opts[0].internalExecution
 	}
 	return be
 }
@@ -2629,7 +2810,8 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service}
+	auditEnabled := ses.tStmt != nil && ses.tStmt.HasOutfileReceipt()
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc, auditEnabled: auditEnabled}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -2659,7 +2841,27 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute &&
+		ses.proc != nil && ses.proc.Base != nil {
+		// The cursor branch below retains output batches for COM_STMT_FETCH
+		// instead of publishing them to the wire, so the statement remains
+		// eligible for a tier-2 retry after rows were captured. Replay
+		// without a discard would append the retried result behind the
+		// failed generation's stale rows (#30359 review): arm the
+		// transition-time discard that releases the stale row set, its byte
+		// reservation and any staged saved-result blocks. The per-statement
+		// SessionInfo rebuild (mysql_cmd_executor.go) reseats or clears the
+		// hook at the next statement boundary.
+		ses.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+			return discardPreparedCursorRetryOutput(execCtx)
+		}
+	}
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
+			if err := execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+		}
 		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
 			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
 				return err
@@ -2916,6 +3118,30 @@ func (ses *Session) GetTenantName() string {
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
 	name = strings.ToLower(name)
+	refreshedPolicy := false
+	refreshedPolicyGeneration := uint64(0)
+	refreshedPolicyEnabled := false
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration &&
+			!prepareStmt.rewritePolicyEnabled && !currentPolicyEnabled && cacheUnloaded {
+			// SET ROLE clears the cache before the new role's rules have been
+			// loaded. If the request snapshot was disabled, refresh only to learn
+			// whether the current role now has mandatory rules; an empty cache
+			// preserves the harmless disabled-to-disabled case.
+			policy, err := captureRewritePolicy(ctx, ses)
+			if err != nil {
+				return err
+			}
+			refreshedPolicy = true
+			refreshedPolicyGeneration = policy.generation
+			refreshedPolicyEnabled = policy.enabled
+		}
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -2929,6 +3155,25 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 
 	if prepareStmt != nil && prepareStmt.proc == nil {
 		prepareStmt.proc = ses.proc
+	}
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration {
+			invalidate := prepareStmt.rewritePolicyEnabled || currentPolicyEnabled
+			if !invalidate && cacheUnloaded {
+				// A policy refresh that no longer matches the generation at the
+				// publication boundary cannot prove the new role has no rules.
+				invalidate = !refreshedPolicy || refreshedPolicyGeneration != currentGeneration ||
+					refreshedPolicyEnabled
+			}
+			if invalidate {
+				prepareStmt.invalidateRewritePolicy()
+			}
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -2947,28 +3192,84 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, false)
+}
+
+func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
+	// Binary EXECUTE has no COM_QUERY capture. Refresh through the same
+	// policy owner before looking up a live handle; cleanup never requires I/O.
+	if !allowInvalidated {
+		stmt := ses.prepareStmts[normalizedName]
+		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() &&
+			!preparedPolicyAlreadyRefreshedLocked(ctx, ses) {
+			ses.mu.Unlock()
+			if err := refreshPreparedRewritePolicy(ctx, ses); err != nil {
+				// EXECUTE and FETCH own the error cleanup of this known handle.
+				return stmt, err
+			}
+			ses.mu.Lock()
+		}
+	}
+
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
+		if !allowInvalidated {
+			ses.ruleCacheMu.RLock()
+			if prepareStmt != nil && prepareStmt.rewritePolicyCaptured &&
+				prepareStmt.rewritePolicyGeneration != ses.rewritePolicyGeneration &&
+				(prepareStmt.rewritePolicyEnabled || ses.rewriteEnabled.Load() ||
+					ses.ruleCache == nil || len(ses.ruleCache) > 0) {
+				prepareStmt.invalidateRewritePolicy()
+			}
+			ses.ruleCacheMu.RUnlock()
+			if err := prepareStmt.checkRewritePolicy(ctx); err != nil {
+				ses.Errorf(ctx, "prepared statement '%s' needs to be re-prepared", name)
+				return prepareStmt, err
+			}
+		}
 		return prepareStmt, nil
 	}
 	var connID uint32
-	if ses.respr != nil {
-		connID = ses.respr.GetU32(CONNID)
+	if r := ses.GetResponser(); r != nil {
+		connID = r.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
-func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+func (ses *Session) getPrepareStmtAllowInvalidated(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, true)
+}
+
+func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	ses.ruleCacheMu.RLock()
+	defer ses.ruleCacheMu.RUnlock()
 	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
-	for _, st := range ses.prepareStmts {
-		ret = append(ret, st)
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil {
+			// Migration replays only SQL and cannot prove the policy of an
+			// untagged handle. Fail closed rather than exporting a handle that
+			// would bypass later generation checks.
+			if !stmt.rewritePolicyCaptured {
+				return nil, true
+			}
+			// Do not replay a stale handle while the post-invalidation policy is
+			// still unknown. A normal checked lookup can reload an empty policy
+			// and preserve the harmless disabled-to-disabled control on the source.
+			if stmt.rewritePolicyInvalidated.Load() || (stmt.rewritePolicyCaptured &&
+				stmt.rewritePolicyGeneration != ses.rewritePolicyGeneration &&
+				(stmt.rewritePolicyEnabled || ses.rewriteEnabled.Load() ||
+					ses.ruleCache == nil || len(ses.ruleCache) > 0)) {
+				return nil, true
+			}
+		}
+		ret = append(ret, stmt)
 	}
-	return ret
+	return ret, false
 }
 
 func (ses *Session) RemovePrepareStmt(name string) bool {
@@ -3000,17 +3301,6 @@ func (ses *Session) RemoveAllPrepareStmts() {
 
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
-	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
-	// 	return val, nil
-	// }
-	// if varName == "unique_check_on_autoincr" {
-	// 	ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	ses.configs[dbName+"-"+varName] = ret
-	// 	return ret, nil
-	// }
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
@@ -3981,9 +4271,11 @@ func (ses *Session) inheritPhysicalConnection(prev *Session) {
 	ses.proxyAddr = prev.proxyAddr
 }
 
-// reset resets the ses instance and copy some fields of prev, then
-// close the prev.
-func (ses *Session) reset(ctx context.Context, prev *Session) error {
+// resetWith rebuilds the candidate session from the account-global snapshot
+// and optionally lets the caller publish connection-specific state before the
+// previous generation is retired. Keeping that hook before closeForReset makes
+// a failed candidate initialization leave the live session untouched.
+func (ses *Session) resetWith(ctx context.Context, prev *Session, beforeClose func() error) error {
 	if ses == nil || prev == nil {
 		return nil
 	}
@@ -4026,6 +4318,11 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	}
 	if err != nil {
 		return err
+	}
+	if beforeClose != nil {
+		if err = beforeClose(); err != nil {
+			return err
+		}
 	}
 
 	return prev.closeForReset(ctx)
@@ -4103,34 +4400,6 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 }
 
 func commitAfterMigrate(ses *Session, err error) error {
-	//if ses == nil {
-	//	logutil.Error("session is nil")
-	//	return moerr.NewInternalErrorNoCtx("session is nil")
-	//}
-	//txnHandler := ses.GetTxnHandler()
-	//if txnHandler == nil {
-	//	logutil.Error("txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("txn handler is nil")
-	//}
-	//if txnHandler.GetSession() == nil {
-	//	logutil.Error("ses in txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("ses in txn handler is nil")
-	//}
-	//defer func() {
-	//	txnHandler.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	//	txnHandler.ClearOptionBits(OPTION_BEGIN)
-	//}()
-	//if err != nil {
-	//	if rErr := txnHandler.RollbackTxn(); rErr != nil {
-	//		logutil.Errorf("failed to rollback txn: %v", rErr)
-	//	}
-	//	return err
-	//} else {
-	//	if cErr := txnHandler.CommitTxn(); cErr != nil {
-	//		logutil.Errorf("failed to commit txn: %v", cErr)
-	//		return cErr
-	//	}
-	//}
 	return nil
 }
 
@@ -4187,15 +4456,36 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
-
+	// The exported SQL may already contain a materialized rewrite hint from
+	// the source session. The target cannot prove that hint represents its
+	// current policy, so refuse to replay it rather than stamping the old AST
+	// with a new generation. The authoritative export path rejects untagged
+	// handles; this guard protects direct replay too.
+	innerSQL, err := extractPrepareStmtSQL(ctx, p.sql, sessionSQLModeForParser(ses))
+	if err != nil {
+		return err
+	}
+	if _, ok := leadingHintContent(innerSQL); ok {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
 		inMigration:       true,
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	var migrationEpoch *authorizationEpoch
+	tempExecCtx.reqCtx, migrationEpoch = beginAuthorizationEpoch(ctx, ses, tempExecCtx)
+	defer migrationEpoch.end()
+	policy, err := captureRewritePolicy(tempExecCtx.reqCtx, ses)
+	if err != nil {
+		return err
+	}
 	defer tempExecCtx.Close()
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
+	return doComQuery(ses, tempExecCtx, &UserInput{
+		sql:           p.sql,
+		rewritePolicy: policy,
+	})
 }
 
 type migrateTempTableExec func(sql string) error
@@ -4312,6 +4602,14 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// authoritative value. Do not turn that absence into a zero on the
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	for _, prepared := range req.PrepareStmts {
+		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
+			return moerr.NewInvalidInput(ctx, "invalid prepared statement migration contract")
+		}
+		if prepared.RequiredProtocolVersion > currentProtocolVersion(ses.proc) {
+			return moerr.NewNotSupportedf(ctx, "prepared statement migration requires protocol version %d", prepared.RequiredProtocolVersion)
+		}
 	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
@@ -4451,7 +4749,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 					return moerr.AttachCause(migrationCtx, err)
 				}
 			}
-			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+			if err := ses.restoreSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
 			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
@@ -4520,7 +4818,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 
 func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
 	switch strings.ToLower(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
 	case "disable_agg_statement":
 		boolVal := InitSystemVariableBoolType("_")

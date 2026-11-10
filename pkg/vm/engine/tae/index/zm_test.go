@@ -17,6 +17,10 @@ package index
 import (
 	"bytes"
 	"math"
+	"math/big"
+	"strconv"
+
+	"golang.org/x/exp/constraints"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +30,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
+
+// zonemapLowPrecCase verifies the zonemap of one low-precision float type is maintained
+// and pruned by float VALUE, not raw bits. The negative bound is the discriminator: a
+// negative float's raw uint bits exceed a positive's, so a bit-wise zonemap would order
+// min/max backwards and prune wrongly. Values are exactly representable in all four formats.
+func zonemapLowPrecCase[T types.LowPrecFloat](t *testing.T, oid types.T, from func(float32) T, mp *mpool.MPool) {
+	// min=-3.0, max=2.0 fed in reversed order so Update must value-order them.
+	zm := NewZM(oid, 0)
+	UpdateZM(zm, types.EncodeFixed(from(2.0)))
+	UpdateZM(zm, types.EncodeFixed(from(-3.0)))
+
+	// getValue must decode by value: min = -3.0, max = 2.0.
+	require.InDelta(t, float32(-3.0), zm.GetMin().(T).ToFloat32(), 1e-6)
+	require.InDelta(t, float32(2.0), zm.GetMax().(T).ToFloat32(), 1e-6)
+
+	// Contains (via compute.Compare) is value-aware: -1.0 is inside [-3,2], the bounds
+	// are inclusive, and 6.0 is outside.
+	require.True(t, zm.Contains(from(-1.0)))
+	require.True(t, zm.Contains(from(-3.0)))
+	require.True(t, zm.Contains(from(2.0)))
+	require.False(t, zm.Contains(from(6.0)))
+
+	// SubVecIn on a value-sorted column prunes by value. Use >3 rows so SubVecIn
+	// passes its small-vector early return and reaches the per-type bound search.
+	vec := vector.NewVec(oid.ToType())
+	defer vec.Free(mp)
+	for _, f := range []float32{-3.0, -1.0, 0.5, 2.0} {
+		require.NoError(t, vector.AppendFixed(vec, from(f), false, mp))
+	}
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+
+	// AnyIn prunes by value: no value of these sorted vectors lies in [-3, 2]
+	for _, outside := range [][]float32{{3, 4, 6}, {-6, -4}, {-6, 3, 4}} {
+		out := vector.NewVec(oid.ToType())
+		for _, f := range outside {
+			require.NoError(t, vector.AppendFixed(out, from(f), false, mp))
+		}
+		require.False(t, zm.AnyIn(out), "%s %v", oid, outside)
+		out.Free(mp)
+	}
+
+	// ZMToVector materializes the bounds as a two-row vector of the column type
+	bounds, err := ZMToVector(zm, nil, mp)
+	require.NoError(t, err)
+	minVal, ok := vector.GetLowPrecisionFloatAt(bounds, 0)
+	require.True(t, ok)
+	maxVal, ok := vector.GetLowPrecisionFloatAt(bounds, 1)
+	require.True(t, ok)
+	require.Equal(t, []float32{-3, 2}, []float32{minVal, maxVal})
+	bounds.Free(mp)
+}
+
+func TestZonemapLowPrecFloat(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Run("bf16", func(t *testing.T) { zonemapLowPrecCase(t, types.T_bf16, types.BF16FromFloat32, mp) })
+	t.Run("float16", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float16, types.Float16FromFloat32, mp) })
+	t.Run("float8", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float8, types.Float8FromFloat32, mp) })
+	t.Run("float4", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float4, types.Float4FromFloat32, mp) })
+}
 
 func TestTruncatedOverlap(t *testing.T) {
 
@@ -186,7 +252,7 @@ var testCases = []*testCase{
 		arithExpects: []*testArithRes{
 			{makeZM(types.T_decimal64, 8, types.Decimal64(3001), types.Decimal64(20004)), true},
 			{makeZM(types.T_decimal64, 8, types.Decimal64(2996), types.Decimal64(19999)), true},
-			{makeZM(types.T_decimal64, 12, types.Decimal64(3), types.Decimal64(80)), true},
+			{makeZM(types.T_decimal64, 12, types.Decimal64(0), types.Decimal64(8)), true},
 		},
 		idx: 4,
 	},
@@ -200,7 +266,7 @@ func makeZM(t types.T, scale int32, minv, maxv any) ZM {
 }
 
 func runCompare(tc *testCase) [][2]bool {
-	r := make([][2]bool, 0)
+	r := make([][2]bool, 0, 7)
 
 	res, ok := tc.v1.AnyGT(tc.v2)
 	r = append(r, [2]bool{res, ok})
@@ -221,7 +287,7 @@ func runCompare(tc *testCase) [][2]bool {
 }
 
 func runArith(tc *testCase) []*testArithRes {
-	r := make([]*testArithRes, 0)
+	r := make([]*testArithRes, 0, 3)
 	res := ZMPlus(tc.v1, tc.v2, nil)
 	r = append(r, &testArithRes{res, res.IsInited()})
 	res = ZMMinus(tc.v1, tc.v2, nil)
@@ -475,7 +541,7 @@ func newSortedFloatTestVector[T ~float32 | ~float64](
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
 	if sortValues {
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(mp))
 	}
 	return vec
 }
@@ -866,4 +932,166 @@ func TestZMNarrowVectorGetValue(t *testing.T) {
 
 	u8 := []uint8{1, 128, 255}
 	check("uint8", types.T_array_uint8, types.ArrayToBytes[uint8](u8), u8)
+}
+
+func TestZMArithmeticOverflowIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		typ         types.T
+		left, right any
+		op          byte
+	}{
+		{"signed addition", types.T_int64, int64(math.MaxInt64), int64(1), '+'},
+		{"signed subtraction", types.T_int64, int64(math.MinInt64), int64(1), '-'},
+		{"signed multiplication", types.T_int64, int64(math.MinInt64), int64(-1), '*'},
+		{"unsigned addition", types.T_uint64, uint64(math.MaxUint64), uint64(1), '+'},
+		{"unsigned subtraction", types.T_uint64, uint64(0), uint64(1), '-'},
+		{"unsigned multiplication", types.T_uint64, uint64(math.MaxUint64), uint64(2), '*'},
+		{"float32 overflow", types.T_float32, float32(math.MaxFloat32), float32(2), '*'},
+		{"float64 overflow", types.T_float64, float64(math.MaxFloat64), float64(2), '*'},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := makeZM(tc.typ, 0, tc.left, tc.left)
+			right := makeZM(tc.typ, 0, tc.right, tc.right)
+			scratch := makeZM(tc.typ, 0, tc.left, tc.left)
+			var result ZM
+			switch tc.op {
+			case '+':
+				result = ZMPlus(left, right, scratch)
+			case '-':
+				result = ZMMinus(left, right, scratch)
+			case '*':
+				result = ZMMulti(left, right, scratch)
+			}
+			require.False(t, result.IsInited(), "overflow must retain the block for row evaluation")
+		})
+	}
+}
+
+// big.Int supplies an independent oracle for every integer width, including
+// multiplication's asymmetric MinInt / -1 boundary.
+func checkIntegerArithmeticOracle[T constraints.Integer](t *testing.T, values []T, minimum, maximum string) {
+	t.Helper()
+	low, _ := new(big.Int).SetString(minimum, 10)
+	high, _ := new(big.Int).SetString(maximum, 10)
+	number := func(v T) *big.Int {
+		var text string
+		if v < 0 {
+			text = strconv.FormatInt(int64(v), 10)
+		} else {
+			text = strconv.FormatUint(uint64(v), 10)
+		}
+		n, ok := new(big.Int).SetString(text, 10)
+		require.True(t, ok)
+		return n
+	}
+	for _, a := range values {
+		for _, b := range values {
+			for _, op := range []byte{'+', '-', '*'} {
+				expected := new(big.Int)
+				switch op {
+				case '+':
+					expected.Add(number(a), number(b))
+				case '-':
+					expected.Sub(number(a), number(b))
+				case '*':
+					expected.Mul(number(a), number(b))
+				}
+				result, valid := checkedIntegerArithmetic(a, b, op)
+				require.Equal(t, expected.Cmp(low) >= 0 && expected.Cmp(high) <= 0, valid, "%v %c %v", a, op, b)
+				if valid {
+					require.Equal(t, expected.String(), number(result).String(), "%v %c %v", a, op, b)
+				}
+			}
+		}
+	}
+}
+
+func TestCheckedIntegerArithmeticOracle(t *testing.T) {
+	checkIntegerArithmeticOracle(t, []int8{math.MinInt8, -65, -1, 0, 1, 64, math.MaxInt8}, "-128", "127")
+	checkIntegerArithmeticOracle(t, []int16{math.MinInt16, -16385, -1, 0, 1, 16384, math.MaxInt16}, "-32768", "32767")
+	checkIntegerArithmeticOracle(t, []int32{math.MinInt32, -1073741825, -1, 0, 1, 1073741824, math.MaxInt32}, "-2147483648", "2147483647")
+	checkIntegerArithmeticOracle(t, []int64{math.MinInt64, math.MinInt64 + 1, -4611686018427387905, -1, 0, 1, 4611686018427387904, math.MaxInt64}, "-9223372036854775808", "9223372036854775807")
+	checkIntegerArithmeticOracle(t, []uint8{0, 1, 127, 128, math.MaxUint8}, "0", "255")
+	checkIntegerArithmeticOracle(t, []uint16{0, 1, 32767, 32768, math.MaxUint16}, "0", "65535")
+	checkIntegerArithmeticOracle(t, []uint32{0, 1, 2147483647, 2147483648, math.MaxUint32}, "0", "4294967295")
+	checkIntegerArithmeticOracle(t, []uint64{0, 1, 9223372036854775807, 9223372036854775808, math.MaxUint64}, "0", "18446744073709551615")
+}
+
+func BenchmarkZMArithmetic(b *testing.B) {
+	for _, tc := range []struct {
+		name     string
+		typ      types.T
+		min, max any
+	}{
+		{"int64", types.T_int64, int64(-100), int64(100)},
+		{"float64", types.T_float64, float64(-100), float64(100)},
+	} {
+		left, right := makeZM(tc.typ, 0, tc.min, tc.max), makeZM(tc.typ, 0, tc.min, tc.max)
+		for _, op := range []struct {
+			name     string
+			evaluate func(ZM, ZM, ZM) ZM
+		}{
+			{"add", ZMPlus}, {"subtract", ZMMinus}, {"multiply", ZMMulti},
+		} {
+			b.Run(tc.name+"/"+op.name, func(b *testing.B) {
+				scratch := NewZM(tc.typ, 0)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					scratch = op.evaluate(left, right, scratch)
+				}
+				if !scratch.IsInited() {
+					b.Fatal("finite in-range arithmetic must retain usable metadata")
+				}
+			})
+		}
+	}
+}
+
+func TestZMFloatArithmeticBounds(t *testing.T) {
+	for _, typ := range []types.T{types.T_float32, types.T_float64} {
+		maximum, smallest := float64(math.MaxFloat64), math.SmallestNonzeroFloat64
+		if typ == types.T_float32 {
+			maximum, smallest = float64(math.MaxFloat32), float64(math.SmallestNonzeroFloat32)
+		}
+		for _, tc := range []struct {
+			name                             string
+			op                               byte
+			min1, max1, min2, max2, min, max float64
+			valid                            bool
+		}{
+			{"rounded addition", '+', 1e-30, 1e-30, 1, 1, 1, 1, true},
+			{"underflow remains usable", '*', smallest, smallest, 0.5, 0.5, 0, 0, true},
+			{"addition overflow", '+', maximum, maximum, maximum, maximum, 0, 0, false},
+			{"subtraction overflow", '-', -maximum, -maximum, maximum, maximum, 0, 0, false},
+			{"one unsafe endpoint", '+', -maximum, 0, -maximum, 0, 0, 0, false},
+			{"one unsafe corner", '*', -1, maximum, 0, 2, 0, 0, false},
+			{"nonfinite input", '*', math.Inf(1), math.Inf(1), 0, 0, 0, 0, false},
+			{"NaN input", '+', math.NaN(), math.NaN(), 1, 1, 0, 0, false},
+		} {
+			t.Run(typ.String()+"/"+tc.name, func(t *testing.T) {
+				makeFloatZM := func(min, max float64) ZM {
+					if typ == types.T_float32 {
+						return makeZM(typ, 0, float32(min), float32(max))
+					}
+					return makeZM(typ, 0, min, max)
+				}
+				left, right := makeFloatZM(tc.min1, tc.max1), makeFloatZM(tc.min2, tc.max2)
+				var result ZM
+				switch tc.op {
+				case '+':
+					result = ZMPlus(left, right, nil)
+				case '-':
+					result = ZMMinus(left, right, nil)
+				case '*':
+					result = ZMMulti(left, right, nil)
+				}
+				require.Equal(t, tc.valid, result.IsInited())
+				if tc.valid {
+					require.Equal(t, makeFloatZM(tc.min, tc.max), result)
+				}
+			})
+		}
+	}
 }

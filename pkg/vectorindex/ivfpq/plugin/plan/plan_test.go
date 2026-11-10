@@ -57,15 +57,16 @@ func init() {
 	}
 }
 
-// stubCompilerContext is the minimal planplugin.CompilerContext — the
-// interface is a single GetContext() method.
-type stubCompilerContext struct{ ctx context.Context }
+// stubCompilerContext supplies context and a stable, test-owned process.
+type stubCompilerContext struct {
+	ctx  context.Context
+	proc *process.Process
+}
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
 
-// GetProcess hands back a test process on the default service runtime, which carries
-// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
-func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+// GetProcess borrows the fixture process without allocating dependencies.
+func (c stubCompilerContext) GetProcess() *process.Process { return c.proc }
 
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
@@ -73,8 +74,9 @@ func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, e
 
 var _ planplugin.CompilerContext = stubCompilerContext{}
 
-func newStubCompilerContext() stubCompilerContext {
-	return stubCompilerContext{ctx: context.Background()}
+func newStubCompilerContext(t testing.TB) stubCompilerContext {
+	t.Helper()
+	return stubCompilerContext{ctx: context.Background(), proc: testutil.NewProcess(t, testutil.WithMPool(nil), testutil.WithFileService(nil))}
 }
 
 // vecColMap returns a colMap with an int64 pk column and a vecf32 vector
@@ -110,46 +112,53 @@ func TestApplyForSort_Redirects(t *testing.T) {
 	_, _, _ = Hooks{}.ApplyForSort(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 }
 
+func TestBuildLogicalSearch_Redirects(t *testing.T) {
+	defer func() {
+		require.NotNil(t, recover(), "BuildLogicalSearch must reach pb.ApplyIndicesForSortUsingIvfpq")
+	}()
+	_, _, _ = Hooks{}.BuildLogicalSearch(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
+}
+
 // --- schema.go: BuildSecondaryIndexDefs error paths ------------------------
 
 func TestBuildSecondaryIndexDefs_EmptyPkey(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_FakePkey(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_PkNotInColMap(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "missing")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "missing")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_PkNotInt64(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["id"].Typ.Id = int32(types.T_varchar)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_MultiColumn(t *testing.T) {
 	idx := indexOn("vec")
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedName(tree.NewCStr("vec2", 0))})
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_VecColNotExist(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_NotVecf32(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_int64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -158,17 +167,26 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 		IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
 		Parts:     []string{"vec"},
 	}}
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
-	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
 	require.Equal(t, catalog.Ivfpq_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Ivfpq_TblType_Storage, tblDefs[1].TableType)
+	ignored := tblDefs[2]
+	require.Equal(t, catalog.IndexIgnored_TblType, ignored.TableType)
+	require.Equal(t, catalog.IndexIgnored_TblType, idxDefs[2].IndexAlgoTableType)
+	require.Equal(t, ignored.Name, idxDefs[2].IndexTableName)
+	require.Equal(t, []string{"vec"}, idxDefs[2].Parts)
+	require.Equal(t, catalog.IndexIgnored_TblCol_Pk, ignored.Pkey.PkeyColName)
+	require.Equal(t, int32(types.T_int64), ignored.Cols[0].Typ.Id)
+	require.Equal(t, []string{catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Code, catalog.IndexIgnored_TblCol_Reason, catalog.IndexIgnored_TblCol_Ts},
+		[]string{ignored.Cols[0].Name, ignored.Cols[1].Name, ignored.Cols[2].Name, ignored.Cols[3].Name})
 	// metadata: index_id, checksum, timestamp, filesize, then nrow and build_ts appended
 	// last so a reader that predates them keeps its positional 0..3.
 	require.Len(t, tblDefs[0].Cols, 6)
@@ -196,9 +214,9 @@ func f16ColMap(pkName, vecName string) map[string]*plan.ColDef {
 
 // TestBuildSecondaryIndexDefs_F16Base: a vecf16 base column is accepted.
 func TestBuildSecondaryIndexDefs_F16Base(t *testing.T) {
-	idxDefs, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), f16ColMap("id", "vec"), nil, "id")
+	idxDefs, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), f16ColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
+	require.Len(t, idxDefs, 3)
 }
 
 // TestBuildSecondaryIndexDefs_UnsupportedBase: only vecf32 / vecf16 are valid
@@ -209,7 +227,7 @@ func TestBuildSecondaryIndexDefs_UnsupportedBase(t *testing.T) {
 	} {
 		colMap := vecColMap("id", "vec")
 		colMap["vec"].Typ.Id = int32(oid)
-		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 		require.Error(t, err, "base type %s must be rejected", oid)
 	}
 }
@@ -220,7 +238,7 @@ func TestBuildSecondaryIndexDefs_UnsupportedBase(t *testing.T) {
 // end-to-end by the GPU functional BVT, since the full def build past the
 // guard needs a richer compiler context than this stub provides.)
 func TestBuildSecondaryIndexDefs_F16UpcastRejected(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "float32"), f16ColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOnQuant("vec", "float32"), f16ColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
@@ -229,15 +247,15 @@ func TestBuildSecondaryIndexDefs_F16UpcastRejected(t *testing.T) {
 // rather than silently falling back to f32 storage — even though it passes the
 // downcast width guard (bf16 is 2 bytes). Rejected on both f32 and f16 bases.
 func TestBuildSecondaryIndexDefs_BF16QuantRejected(t *testing.T) {
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOnQuant("vec", "bf16"), vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err, "f32 base + bf16 quant must be rejected")
-	_, _, err = Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), f16ColMap("id", "vec"), nil, "id")
+	_, _, err = Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOnQuant("vec", "bf16"), f16ColMap("id", "vec"), nil, "id")
 	require.Error(t, err, "f16 base + bf16 quant must be rejected")
 }
 
 // --- schema.go: BuildFullTextIndexDefs -------------------------------------
 
 func TestBuildFullTextIndexDefs_Unsupported(t *testing.T) {
-	_, _, err := Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(), nil, nil, nil, "")
+	_, _, err := Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(t), nil, nil, nil, "")
 	require.Error(t, err)
 }

@@ -80,16 +80,8 @@ func (e *rowWindowExpressionExecutor) TypeName() string   { return "row-window-p
 func makeTestCases(t *testing.T) []valueScanTestCase {
 	return []valueScanTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &ValueScan{
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
+			proc: testutil.NewProcess(t),
+			arg:  &ValueScan{},
 		},
 	}
 }
@@ -110,25 +102,27 @@ func TestPrepare(t *testing.T) {
 
 func TestValueScan(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetBatchs(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetBatchs(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				resetBatchs(tc.arg, tc.proc.Mp())
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.Same(t, tc.arg.Batchs[0], result.Batch)
+				require.Equal(t, 2, result.Batch.RowCount())
+				require.Len(t, result.Batch.Vecs, 5)
+			}()
+		}
 	}
 }
 
 func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
 	plus, err := function.GetFunctionByName(proc.Ctx, "+", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
@@ -183,7 +177,7 @@ func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testin
 }
 
 func TestInitExprExecListCleansPartialInitialization(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
@@ -206,7 +200,7 @@ func TestInitExprExecListCleansPartialInitialization(t *testing.T) {
 }
 
 func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	const rowCount = 128
 	intType := types.T_int64.ToType()
@@ -251,7 +245,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 }
 
 func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	randFn, err := function.GetFunctionByName(proc.Ctx, "rand", nil)
@@ -302,7 +296,7 @@ func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
 }
 
 func TestValueScanDependencyCanReadConstantSourceColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
 	localCol := func(pos int32) *planpb.Expr {
@@ -401,7 +395,7 @@ func TestValueScanColumnOrder(t *testing.T) {
 }
 
 func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
@@ -475,7 +469,7 @@ func TestGenSubBatchFromOriginBatch(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			vs := &ValueScan{
 				Batchs: make([]*batch.Batch, 2),
 			}

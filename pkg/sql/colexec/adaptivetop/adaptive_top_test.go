@@ -48,7 +48,7 @@ type adaptiveFixture struct {
 
 func newAdaptiveFixture(t *testing.T, limit uint64) *adaptiveFixture {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(func() {
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -382,6 +382,7 @@ func TestAdaptiveTopSpillSelectionAndDiscard(t *testing.T) {
 				limit++
 			}
 			f := newAdaptiveFixture(t, limit)
+			f.proc.Base.Lim.SpillSize = 64 << 20
 			f.proc.Reg.MergeReceivers[0].ResetForReuse(4098, 1)
 			budget, err := f.proc.GetExecutionResourceBudget()
 			require.NoError(t, err)

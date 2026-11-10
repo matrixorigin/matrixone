@@ -50,7 +50,7 @@ func countHnswSpillFiles(t *testing.T, dir string) int {
 // reclaims. Both metadata models load here; their files must appear under spillDir, and Destroy must
 // remove them.
 func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSql, oldStreaming := runSql, runSql_streaming
@@ -60,7 +60,7 @@ func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
 
 	spillDir := t.TempDir()
 	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", mockMoIndexes(),
-		int32(types.T_array_float32), 3, spillDir)
+		int32(types.T_array_float32), 3, spillDir, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, countHnswSpillFiles(t, spillDir),
 		"both downloaded models must spill into the resolved directory, not os.TempDir()")
@@ -76,7 +76,7 @@ func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
 // Destroys a non-nil sync). Model abc-0 loads and commits its file; model abc-1's stream fails; the
 // resolved spill dir must be clean afterward.
 func TestNewHnswSyncRemovesCommittedFilesOnDownloadAllError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSql, oldStreaming := runSql, runSql_streaming
@@ -93,7 +93,7 @@ func TestNewHnswSyncRemovesCommittedFilesOnDownloadAllError(t *testing.T) {
 
 	spillDir := t.TempDir()
 	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", mockMoIndexes(),
-		int32(types.T_array_float32), 3, spillDir)
+		int32(types.T_array_float32), 3, spillDir, nil)
 	require.Error(t, err, "a failed model download must surface the error")
 	require.Equal(t, 0, countHnswSpillFiles(t, spillDir),
 		"the committed earlier model must not orphan on the DownloadAll error path")

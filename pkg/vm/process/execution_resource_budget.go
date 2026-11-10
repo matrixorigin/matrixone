@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const executionResourceMinimumReserve = uint64(4 << 30)
+const executionResourceMinimumRuntimeHeadroom = uint64(1 << 30)
 
 const (
 	executionResourceAllocationGenerationSlots = uint32(131_072)
@@ -87,7 +89,7 @@ type executionResourceBudgetMetricKey struct {
 type executionResourceBudgetObserver func(amount uint64)
 
 func newExecutionResourceBudgetObservers() map[executionResourceBudgetMetricKey]executionResourceBudgetObserver {
-	components := [...]string{"memory", "spill_disk", "spill_fd"}
+	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
 	events := [...]string{"reserve", "release", "reconcile", "reject"}
 	scopes := [...]string{"query", "cn"}
 	observers := make(map[executionResourceBudgetMetricKey]executionResourceBudgetObserver, len(components)*len(events)*len(scopes))
@@ -236,13 +238,19 @@ func (e *ExecutionResourceError) Is(target error) bool {
 // closure transitions.  This gives the operation a simple linearization point
 // and, importantly, makes a query rejection roll back its complete CN charge.
 type ExecutionResourceBudget struct {
-	mu        sync.Mutex
-	refreshMu sync.Mutex
+	mu         sync.Mutex
+	refreshMu  sync.Mutex
+	headroomMu sync.Mutex
 
 	aggregateCap  uint64
 	aggregateUsed uint64
-	queryCap      uint64
-	capProvider   func() (uint64, error)
+	// recoveryCapacityUnused is admitted progress capacity which has not yet
+	// materialized as physical allocator memory. A live headroom sample must
+	// continue to reserve it; aggregateUsed alone cannot distinguish it from
+	// bytes already visible in the sampled process working set.
+	recoveryCapacityUnused uint64
+	queryCap               uint64
+	capProvider            func() (uint64, error)
 	// cap cache fields are protected by b.mu. refreshMu serializes only cache
 	// misses/provider calls. refreshEpoch lets a failed admission avoid a second
 	// provider call when another goroutine has already refreshed.
@@ -259,6 +267,15 @@ type ExecutionResourceBudget struct {
 	closed                bool
 	spillDiskCap          uint64
 	spillDiskUsed         uint64
+	// spillDiskEpoch changes with disk ownership or cap updates. A filesystem
+	// sample may only be published against the ledger it started with.
+	spillDiskEpoch uint64
+	// spillDiskAutomatic means the shared cap was derived from the filesystem
+	// which actually owns spill files. The explicit floor is monotonic because
+	// an operator-configured limit must not be invalidated by another statement
+	// refreshing the automatic default.
+	spillDiskAutomatic     bool
+	spillDiskExplicitFloor uint64
 	// spillFDConfiguredCap is the finite logical ledger limit. spillFDCap is
 	// its current effective value after applying the process RLIMIT_NOFILE
 	// ceiling. Keeping both lets a budget recover if an administrator raises
@@ -267,9 +284,36 @@ type ExecutionResourceBudget struct {
 	spillFDConfiguredCap uint64
 	spillFDCap           uint64
 	spillFDUsed          uint64
+	// Growth participants are advisory spill decision makers across every
+	// active generation on this CN. Exact allocation admission remains in the
+	// ordinary aggregate counters above.
+	memoryGrowthParticipants  uint64
+	memoryGrowthReportedBytes uint64
+	// Physical headroom is observation, never allocation authority. Production
+	// samples the cgroup/host working-set headroom on a short shared cadence so
+	// spill decisions can react to Go heap, caches, and allocator residency that
+	// the exact query allocation ledger deliberately does not own.
+	memoryHeadroomProvider func() (uint64, bool)
+	memoryHeadroomTTL      time.Duration
+	memoryHeadroomNow      func() time.Time
+	memoryHeadroomAt       time.Time
+	memoryHeadroomBytes    uint64
+	// Only backing acquired before the physical sample may be included in its
+	// baseline. Outstanding admissions, unused recovery floors and non-MPool
+	// scratch promises must still consume the observed free space. This is an
+	// observation of existing allocation ownership, not a second cap/ledger.
+	memoryHeadroomBacking  mpool.AllocationBackingSnapshot
+	memoryHeadroomMeasured bool
+	memoryHeadroomCached   bool
+	// memoryHeadroomSafety is the free working-set margin retained while a
+	// query is already running. It is deliberately smaller than the startup
+	// reserve: current physical usage already includes the runtime, allocator,
+	// and cache footprint protected by that reserve, so subtracting the full
+	// reserve again would double-count it.
+	memoryHeadroomSafety uint64
 
 	allocationRegistryOnce sync.Once
-	allocationRegistry     *mpool.AllocationAccountRegistry
+	allocationRegistry     atomic.Pointer[mpool.AllocationAccountRegistry]
 	allocationRegistryErr  error
 }
 
@@ -304,6 +348,33 @@ func defaultSpillCap(memoryCap uint64) uint64 {
 		return maxSpill
 	}
 	return memoryCap * 8
+}
+
+func automaticSpillDiskCap(available uint64) uint64 {
+	const (
+		maxSpill        = uint64(1 << 40)
+		minimumHeadroom = uint64(16 << 30)
+	)
+	if available == 0 {
+		return 0
+	}
+	// Spill shares the LOCAL filesystem with storage, logs, and temporary work.
+	// Preserve both an absolute emergency margin and one quarter of currently
+	// available storage. Reserving half of every filesystem strands hundreds of
+	// GiB on large volumes and rejects finite analytical queries even though
+	// ample recovery space remains.
+	headroom := available / 4
+	if headroom < minimumHeadroom {
+		headroom = minimumHeadroom
+	}
+	if available <= headroom {
+		return 1
+	}
+	cap := available - headroom
+	if cap > maxSpill {
+		cap = maxSpill
+	}
+	return cap
 }
 
 func configuredSpillFDCap(memoryCap uint64) uint64 {
@@ -413,6 +484,7 @@ func (b *ExecutionResourceBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	processLimit, limitKnown := processOpenFileLimit()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	explicitDiskBytes := diskBytes
 	if diskBytes == 0 {
 		diskBytes = defaultSpillCap(b.aggregateCap)
 	}
@@ -427,8 +499,66 @@ func (b *ExecutionResourceBudget) SetSpillCaps(diskBytes, fds uint64) error {
 		return newComponentAdmissionError(ExecutionResourceComponentSpillFD, 0, b.spillFDUsed, effectiveFDCap)
 	}
 	b.spillDiskCap = diskBytes
+	b.spillDiskEpoch++
+	b.spillDiskAutomatic = false
+	b.spillDiskExplicitFloor = explicitDiskBytes
 	b.spillFDConfiguredCap = fds
 	b.spillFDCap = effectiveFDCap
+	return nil
+}
+
+// refreshAutomaticSpillDiskCap samples the filesystem that owns LOCAL/__spill.
+// Sampling must not hold mu: disk I/O must not block resource admission or
+// cleanup. Discard the sample if ownership or another cap update changed while
+// it was in flight, including a release followed by an equal-sized reservation.
+// Retain the previous finite cap on an unavailable or invalidated sample; the
+// next statement can refresh it without retrying against busy spill writers.
+//
+// Statfs already excludes live spill, so add this ledger's owned bytes back
+// before applying the headroom policy. A coherent sample may tighten an active
+// envelope for external disk use, but may not grow it until spill drains.
+// Explicit operator configuration remains a floor.
+func (b *ExecutionResourceBudget) refreshAutomaticSpillDiskCap(sampleAvailable func() uint64) error {
+	if b == nil || sampleAvailable == nil {
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid}
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	epoch := b.spillDiskEpoch
+	b.mu.Unlock()
+
+	availableBytes := sampleAvailable()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	if availableBytes == 0 || epoch != b.spillDiskEpoch {
+		return nil
+	}
+	ownedCapacity := availableBytes
+	if b.spillDiskUsed > math.MaxUint64-ownedCapacity {
+		ownedCapacity = math.MaxUint64
+	} else {
+		ownedCapacity += b.spillDiskUsed
+	}
+	diskBytes := automaticSpillDiskCap(ownedCapacity)
+	if diskBytes < b.spillDiskExplicitFloor {
+		diskBytes = b.spillDiskExplicitFloor
+	}
+	if diskBytes < b.spillDiskUsed {
+		diskBytes = b.spillDiskUsed
+	}
+	if b.spillDiskAutomatic && b.spillDiskUsed != 0 && diskBytes > b.spillDiskCap {
+		diskBytes = b.spillDiskCap
+	}
+	b.spillDiskCap = diskBytes
+	b.spillDiskEpoch++
+	b.spillDiskAutomatic = true
 	return nil
 }
 
@@ -455,6 +585,10 @@ func (b *ExecutionResourceBudget) raiseSpillDiskCapToExplicitLimit(diskBytes uin
 	if diskBytes > b.spillDiskCap {
 		b.spillDiskCap = diskBytes
 	}
+	if diskBytes > b.spillDiskExplicitFloor {
+		b.spillDiskExplicitFloor = diskBytes
+	}
+	b.spillDiskEpoch++
 	return nil
 }
 
@@ -736,12 +870,16 @@ func (b *ExecutionResourceBudget) mergeObservedCNCap(inputs ExecutionMemoryCeili
 	if inputs.FileCacheHint > b.liveCapInputs.FileCacheHint {
 		b.liveCapInputs.FileCacheHint = inputs.FileCacheHint
 	}
+	ceiling, ceilingErr := ResolveExecutionMemoryCeiling(b.liveCapInputs)
 	b.mu.Lock()
 	if cap > 0 && cap < b.aggregateCap {
 		b.aggregateCap = cap
 		if b.queryCap > cap {
 			b.queryCap = cap
 		}
+	}
+	if ceilingErr == nil {
+		b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)
 	}
 	b.mu.Unlock()
 	b.publishLiveCNCapInputs()
@@ -807,6 +945,9 @@ func (b *ExecutionResourceBudget) resolveCNCapSample(current ExecutionMemoryCeil
 	}
 	b.liveCapInputs = current
 	b.publishLiveCNCapInputs()
+	b.mu.Lock()
+	b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)
+	b.mu.Unlock()
 	return ceiling.CNMemoryCap, nil
 }
 
@@ -821,6 +962,9 @@ type ExecutionResourceGeneration struct {
 	closed                                                  bool
 	spillDiskCap, spillDiskUsed                             uint64
 	spillFDConfiguredCap, spillFDCap, spillFDUsed           uint64
+	memoryGrowthParticipants                                uint64
+	memoryGrowthReportedBytes                               uint64
+	recoveryCapacityUnused                                  uint64
 	reserveCount, rejectCount, reconcileCount, releaseCount uint64
 	peakUsed                                                uint64
 }
@@ -833,6 +977,8 @@ type ExecutionResourceGenerationSnapshot struct {
 	ReserveCount, RejectCount, ReconcileCount, ReleaseCount uint64
 	SpillDiskCap, SpillDiskUsed, SpillFDCap                 uint64
 	SpillFDUsed                                             uint64
+	MemoryGrowthParticipants                                uint64
+	MemoryGrowthReportedBytes                               uint64
 	Closed                                                  bool
 }
 
@@ -957,7 +1103,11 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 	}
 
 	if spillDiskCap == 0 {
-		spillDiskCap = defaultSpillCap(memoryCap)
+		if b.spillDiskAutomatic {
+			spillDiskCap = b.spillDiskCap
+		} else {
+			spillDiskCap = defaultSpillCap(memoryCap)
+		}
 	}
 	spillDiskCap = min(spillDiskCap, b.spillDiskCap)
 	configuredFDCap := min(
@@ -1000,6 +1150,31 @@ func (g *ExecutionResourceGeneration) Used() uint64 {
 	g.budget.mu.Lock()
 	defer g.budget.mu.Unlock()
 	return g.used
+}
+
+// AvailableMemory observes the smaller remaining query and CN allowances in
+// one snapshot. It is a planning hint, not a reservation: actual allocations
+// must still be admitted against the live budget.
+func (g *ExecutionResourceGeneration) AvailableMemory() (uint64, error) {
+	if g == nil || g.budget == nil {
+		return 0, ErrExecutionResourceInvalid
+	}
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if g.closed || b.closed {
+		return 0, ErrExecutionResourceClosed
+	}
+	if g.used > g.cap {
+		return 0, ErrExecutionResourceInvalid
+	}
+	// The live CN ceiling can shrink below already admitted allocations.
+	// This is ordinary capacity pressure; existing leases remain valid and no
+	// additional parallel admission is possible until usage falls below it.
+	if b.aggregateUsed >= b.aggregateCap {
+		return 0, nil
+	}
+	return min(g.cap-g.used, b.aggregateCap-b.aggregateUsed), nil
 }
 
 // Peak reports the maximum physically owned bytes observed by this
@@ -1058,7 +1233,9 @@ func (g *ExecutionResourceGeneration) Snapshot() ExecutionResourceGenerationSnap
 		ID: g.id, Cap: g.cap, Used: g.used, PeakUsed: g.peakUsed,
 		ReserveCount: g.reserveCount, RejectCount: g.rejectCount, ReconcileCount: g.reconcileCount, ReleaseCount: g.releaseCount,
 		SpillDiskCap: g.spillDiskCap, SpillDiskUsed: g.spillDiskUsed, SpillFDCap: g.spillFDCap, SpillFDUsed: g.spillFDUsed,
-		Closed: g.closed || g.budget.closed,
+		MemoryGrowthParticipants:  g.memoryGrowthParticipants,
+		MemoryGrowthReportedBytes: g.memoryGrowthReportedBytes,
+		Closed:                    g.closed || g.budget.closed,
 	}
 }
 
@@ -1095,13 +1272,14 @@ func (g *ExecutionResourceGeneration) AllocationAccountRegistry() (
 			return
 		}
 		allocationSlots := min(capBytes, executionResourceAllocationMetadataMaxSlots)
-		b.allocationRegistry, b.allocationRegistryErr =
-			mpool.NewAllocationAccountRegistry(
-				executionResourceAllocationGenerationSlots,
-				allocationSlots,
-			)
+		registry, err := mpool.NewAllocationAccountRegistry(
+			executionResourceAllocationGenerationSlots,
+			allocationSlots,
+		)
+		b.allocationRegistryErr = err
+		b.allocationRegistry.Store(registry)
 	})
-	return b.allocationRegistry, b.allocationRegistryErr
+	return b.allocationRegistry.Load(), b.allocationRegistryErr
 }
 
 // Close rejects future reservations for this generation while allowing all
@@ -1159,9 +1337,10 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
-// ExecutionTransientMemoryReservation owns a bounded Go-heap scratch charge.
+// ExecutionTransientMemoryReservation owns a bounded non-MPool memory charge,
+// including temporary Go buffers and explicitly retained spill page cache.
 // Physical MPool allocations continue to use AllocationAccount as their sole
-// owner; this token is only for temporary buffers that cannot carry one.
+// owner; this token is only for temporary memory that cannot carry one.
 type ExecutionTransientMemoryReservation struct {
 	budget     *ExecutionResourceBudget
 	generation *ExecutionResourceGeneration
@@ -1178,6 +1357,45 @@ func (g *ExecutionResourceGeneration) ReserveTransientMemory(
 		return &ExecutionTransientMemoryReservation{}, nil
 	}
 	if err := g.acquireMemory(size); err != nil {
+		return nil, err
+	}
+	return &ExecutionTransientMemoryReservation{
+		budget: g.budget, generation: g, size: size,
+	}, nil
+}
+
+// TransientMemoryAdmissionGuard serializes a transient-memory decision with
+// an owner's terminal state. ResolveAdmissionFailure runs with the guard held
+// and the budget unlocked; it must not acquire the guard, sample a provider,
+// or release resources. stopped is the state of done at the decision point.
+type TransientMemoryAdmissionGuard interface {
+	Lock()
+	Unlock()
+	ResolveAdmissionFailure(err error, stopped bool) error
+}
+
+func resolveTransientAdmissionFailure(guard TransientMemoryAdmissionGuard, err error, stopped bool) error {
+	if resolved := guard.ResolveAdmissionFailure(err, stopped); resolved != nil {
+		return resolved
+	}
+	// A rejection must never become an uncharged successful reservation.
+	return err
+}
+
+// ReserveTransientMemoryGuarded uses the ordinary query/CN budget while
+// ordering a final rejection against the owner's terminal state. Provider and
+// headroom sampling never run under the guard. A successful token has exactly
+// the same owner and release contract as ReserveTransientMemory.
+func (g *ExecutionResourceGeneration) ReserveTransientMemoryGuarded(
+	size uint64, done <-chan struct{}, guard TransientMemoryAdmissionGuard,
+) (*ExecutionTransientMemoryReservation, error) {
+	if guard == nil {
+		return nil, ErrExecutionResourceInvalid
+	}
+	if size == 0 {
+		return &ExecutionTransientMemoryReservation{}, nil
+	}
+	if err := g.acquireMemoryWithClass(size, false, done, guard); err != nil {
 		return nil, err
 	}
 	return &ExecutionTransientMemoryReservation{
@@ -1209,19 +1427,97 @@ func (r *ExecutionTransientMemoryReservation) Release() bool {
 // is the only owner of the charge and releases it from MPool.Free; there is no
 // parallel estimate/reservation token.
 func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
+	return g.acquireMemoryWithClass(size, false, nil, nil)
+}
+
+func (g *ExecutionResourceGeneration) acquireRecoveryCapacity(size uint64) error {
+	err := g.acquireMemoryWithClass(size, true, nil, nil)
+	if err == nil && size != 0 {
+		observeExecutionResourceBudget("recovery_memory", "reserve", "query", size)
+		observeExecutionResourceBudget("recovery_memory", "reserve", "cn", size)
+	}
+	return err
+}
+
+func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
+	size uint64,
+	recoveryReserve bool,
+	done <-chan struct{},
+	guard TransientMemoryAdmissionGuard,
+) error {
+	stopped := func() bool {
+		if guard == nil {
+			return false
+		}
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 	if g == nil || g.budget == nil {
-		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "nil execution resource generation"}
+		err := &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "nil execution resource generation"}
+		if guard == nil {
+			return err
+		}
+		guard.Lock()
+		defer guard.Unlock()
+		return resolveTransientAdmissionFailure(guard, err, stopped())
 	}
 	b := g.budget
+	lock := func() {
+		if guard != nil {
+			guard.Lock()
+		}
+		b.mu.Lock()
+	}
+	unlock := func() {
+		b.mu.Unlock()
+		if guard != nil {
+			guard.Unlock()
+		}
+	}
+	reject := func(err error, wasStopped bool) error {
+		b.mu.Unlock()
+		if guard == nil {
+			return err
+		}
+		defer guard.Unlock()
+		return resolveTransientAdmissionFailure(guard, err, wasStopped)
+	}
+	resolveRefreshError := func(err error) error {
+		if guard == nil {
+			return err
+		}
+		lock()
+		return reject(err, stopped())
+	}
 	// A closed budget/generation has a deterministic lifecycle result and does
 	// not need to touch the live provider.
-	b.mu.Lock()
+	lock()
 	if b.closed || g.closed {
+		wasStopped := stopped()
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "query", size)
 		err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
-		b.mu.Unlock()
-		return err
+		return reject(err, wasStopped)
+	}
+	if b.memoryHeadroomRefreshNeededLocked() {
+		unlock()
+		// The sampler records aggregateUsed at the same boundary; every acquire
+		// below consumes from that cached physical headroom as well as the static
+		// query/CN ceilings. Recovery-class physical allocations borrow a floor
+		// which was admitted here earlier and therefore do not pay twice.
+		_, _ = b.sampleMemoryHeadroom()
+		lock()
+		if b.closed || g.closed {
+			wasStopped := stopped()
+			g.rejectCount++
+			observeExecutionResourceBudget("memory", "reject", "query", size)
+			err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
+			return reject(err, wasStopped)
+		}
 	}
 
 	// The common cached-cap path decides whether a refresh is needed and updates
@@ -1230,14 +1526,18 @@ func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
 	_, epoch, hasProvider, cached, err := b.aggregateCapRefreshDecisionLocked(false, 0)
 	if cached {
 		if err != nil {
-			b.mu.Unlock()
-			return err
+			return reject(err, stopped())
 		}
+		wasStopped := stopped()
 		firstErr, aggregateRejected := g.acquireMemoryLocked(
 			size,
 			false,
+			recoveryReserve,
 		)
-		b.mu.Unlock()
+		if firstErr != nil && !aggregateRejected {
+			return reject(firstErr, wasStopped)
+		}
+		unlock()
 		if firstErr == nil && !aggregateRejected {
 			observeExecutionResourceBudget("memory", "reserve", "query", size)
 			observeExecutionResourceBudget("memory", "reserve", "cn", size)
@@ -1246,21 +1546,26 @@ func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
 			return firstErr
 		}
 	} else {
-		b.mu.Unlock()
+		unlock()
 		// The provider is sampled once on first use and then shared by all
 		// reservations until the TTL expires. refreshAggregateCap serializes
 		// only the sampling itself.
 		var refreshed bool
 		epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
 		if err != nil {
-			return err
+			return resolveRefreshError(err)
 		}
-		b.mu.Lock()
+		lock()
+		wasStopped := stopped()
 		firstErr, aggregateRejected := g.acquireMemoryLocked(
 			size,
 			false,
+			recoveryReserve,
 		)
-		b.mu.Unlock()
+		if firstErr != nil && !aggregateRejected {
+			return reject(firstErr, wasStopped)
+		}
+		unlock()
 		if firstErr == nil && !aggregateRejected {
 			observeExecutionResourceBudget("memory", "reserve", "query", size)
 			observeExecutionResourceBudget("memory", "reserve", "cn", size)
@@ -1278,24 +1583,24 @@ func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
 	// The epoch check turns concurrent retries into a single-flight operation.
 	if hasProvider {
 		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
-			return err
+			return resolveRefreshError(err)
 		}
 	}
 
-	b.mu.Lock()
-	err, aggregateRejected := g.acquireMemoryLocked(
+	lock()
+	wasStopped := stopped()
+	err, _ = g.acquireMemoryLocked(
 		size,
 		true,
+		recoveryReserve,
 	)
-	b.mu.Unlock()
-	if err == nil && !aggregateRejected {
-		observeExecutionResourceBudget("memory", "reserve", "query", size)
-		observeExecutionResourceBudget("memory", "reserve", "cn", size)
+	if err != nil {
+		return reject(err, wasStopped)
 	}
-	if aggregateRejected {
-		return err
-	}
-	return err
+	unlock()
+	observeExecutionResourceBudget("memory", "reserve", "query", size)
+	observeExecutionResourceBudget("memory", "reserve", "cn", size)
+	return nil
 }
 
 // acquireMemoryLocked attempts one physical-memory admission. b.mu must be
@@ -1305,12 +1610,24 @@ func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
 func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 	size uint64,
 	recordAggregateReject bool,
+	recoveryReserve bool,
 ) (error, bool) {
 	b := g.budget
 	if b.closed || g.closed {
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "query", size)
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
+	}
+	if physicalHeadroom, measured := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
+		g.rejectCount++
+		observeExecutionResourceBudget("memory", "reject", "cn", size)
+		physicalCap := b.aggregateUsed
+		if physicalHeadroom <= ^uint64(0)-physicalCap {
+			physicalCap += physicalHeadroom
+		} else {
+			physicalCap = ^uint64(0)
+		}
+		return newAdmissionError(size, b.aggregateUsed, physicalCap), false
 	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.
@@ -1330,11 +1647,94 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		return newAdmissionError(size, g.used, g.cap), false
 	}
 	g.used += size
+	if recoveryReserve {
+		g.recoveryCapacityUnused += size
+		b.recoveryCapacityUnused += size
+	}
 	g.reserveCount++
 	if g.used > g.peakUsed {
 		g.peakUsed = g.used
 	}
 	return nil, false
+}
+
+// borrowRecoveryCapacity converts a pre-admitted, non-physical recovery floor
+// into physical allocation ownership. It changes no query/CN charge: the
+// caller already admitted these bytes before retaining state that may need
+// recovery progress.
+func (g *ExecutionResourceGeneration) borrowRecoveryCapacity(size uint64) error {
+	if size == 0 {
+		return nil
+	}
+	if g == nil || g.budget == nil {
+		return ErrExecutionResourceInvalid
+	}
+	b := g.budget
+	b.mu.Lock()
+	if b.closed || g.closed {
+		b.mu.Unlock()
+		return ErrExecutionResourceClosed
+	}
+	if size > g.recoveryCapacityUnused || size > b.recoveryCapacityUnused {
+		b.mu.Unlock()
+		return ErrExecutionResourceInvalid
+	}
+	g.recoveryCapacityUnused -= size
+	b.recoveryCapacityUnused -= size
+	b.mu.Unlock()
+	observeExecutionResourceBudget("recovery_memory", "release", "query", size)
+	observeExecutionResourceBudget("recovery_memory", "release", "cn", size)
+	return nil
+}
+
+func (g *ExecutionResourceGeneration) returnRecoveryCapacity(size uint64) {
+	if size == 0 {
+		return
+	}
+	if g == nil || g.budget == nil {
+		panic("nil execution recovery generation")
+	}
+	b := g.budget
+	b.mu.Lock()
+	if g.recoveryCapacityUnused > g.used ||
+		b.recoveryCapacityUnused > b.aggregateUsed ||
+		size > g.used-g.recoveryCapacityUnused ||
+		size > b.aggregateUsed-b.recoveryCapacityUnused {
+		b.mu.Unlock()
+		panic("execution recovery capacity return overflow")
+	}
+	g.recoveryCapacityUnused += size
+	b.recoveryCapacityUnused += size
+	b.mu.Unlock()
+	observeExecutionResourceBudget("recovery_memory", "reserve", "query", size)
+	observeExecutionResourceBudget("recovery_memory", "reserve", "cn", size)
+}
+
+func (g *ExecutionResourceGeneration) releaseRecoveryCapacity(size uint64) {
+	if size == 0 {
+		return
+	}
+	if g == nil || g.budget == nil {
+		panic("nil execution recovery generation")
+	}
+	b := g.budget
+	b.mu.Lock()
+	if size > g.recoveryCapacityUnused ||
+		size > b.recoveryCapacityUnused ||
+		size > g.used || size > b.aggregateUsed {
+		b.mu.Unlock()
+		panic("execution recovery capacity release underflow")
+	}
+	g.recoveryCapacityUnused -= size
+	b.recoveryCapacityUnused -= size
+	g.used -= size
+	b.aggregateUsed -= size
+	g.releaseCount++
+	b.mu.Unlock()
+	observeExecutionResourceBudget("recovery_memory", "release", "query", size)
+	observeExecutionResourceBudget("recovery_memory", "release", "cn", size)
+	observeExecutionResourceBudget("memory", "release", "query", size)
+	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
 func newAdmissionError(requested, used, cap uint64) error {
@@ -1425,6 +1825,9 @@ func (g *ExecutionResourceGeneration) ReserveSpillDisk(size uint64) (*ExecutionS
 		return nil, newComponentAdmissionError(ExecutionResourceComponentSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
 	}
 	b.spillDiskUsed += size
+	if size != 0 {
+		b.spillDiskEpoch++
+	}
 	g.spillDiskUsed += size
 	observeExecutionResourceBudget("spill_disk", "reserve", "query", size)
 	observeExecutionResourceBudget("spill_disk", "reserve", "cn", size)
@@ -1467,6 +1870,7 @@ func (r *ExecutionSpillDiskReservation) Grow(additional uint64) error {
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
 	}
 	b.spillDiskUsed += additional
+	b.spillDiskEpoch++
 	g.spillDiskUsed += additional
 	r.core.size += additional
 	observeExecutionResourceBudget("spill_disk", "reserve", "query", additional)
@@ -1528,6 +1932,9 @@ func (r *ExecutionSpillDiskReservation) Release() bool {
 	}
 	r.generation.spillDiskUsed -= r.core.size
 	r.budget.spillDiskUsed -= r.core.size
+	if r.core.size != 0 {
+		r.budget.spillDiskEpoch++
+	}
 	observeExecutionResourceBudget("spill_disk", "release", "query", r.core.size)
 	observeExecutionResourceBudget("spill_disk", "release", "cn", r.core.size)
 	r.generation.releaseCount++
@@ -1574,6 +1981,7 @@ func (r *ExecutionSpillDiskReservation) ReconcileDown(actual uint64) (bool, erro
 		}
 		r.generation.spillDiskUsed -= delta
 		r.budget.spillDiskUsed -= delta
+		r.budget.spillDiskEpoch++
 		r.core.size = actual
 		observeExecutionResourceBudget("spill_disk", "reconcile", "query", delta)
 		observeExecutionResourceBudget("spill_disk", "reconcile", "cn", delta)
@@ -1603,6 +2011,19 @@ type ExecutionMemoryCeiling struct {
 	Reserve          uint64
 	CNMemoryCap      uint64
 	QueryCap         uint64
+}
+
+func executionMemoryHeadroomSafety(ceiling ExecutionMemoryCeiling) uint64 {
+	safety := ceiling.EffectiveCN / 20
+	if safety < executionResourceMinimumRuntimeHeadroom {
+		safety = executionResourceMinimumRuntimeHeadroom
+	}
+	// The live safety margin is part of, not additional to, the startup
+	// non-execution reserve. Small cgroups may clamp that reserve below 1 GiB.
+	if safety > ceiling.Reserve {
+		safety = ceiling.Reserve
+	}
+	return safety
 }
 
 // ResolveExecutionMemoryCeiling computes the budget ceiling without touching the OS.
@@ -1711,6 +2132,10 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 			if createErr != nil {
 				return nil
 			}
+			b.memoryHeadroomProvider = system.MemoryAvailableIncludingCache
+			b.memoryHeadroomTTL = executionResourceBudgetCapRefreshTTL
+			b.memoryHeadroomNow = time.Now
+			b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)
 			// Attach the source snapshot before publishing the candidate so
 			// another process never observes an aggregate without its stable
 			// provider.
@@ -1724,6 +2149,11 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 		err = &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "failed to initialize CN execution resource budget"}
 	}
 	if err != nil {
+		return nil, err
+	}
+	// Resolve the winning CN ledger before sampling. In particular, a losing
+	// LoadOrStore candidate must not publish a sample taken for its empty ledger.
+	if err = aggregate.refreshAutomaticSpillDiskCap(proc.automaticSpillDiskAvailable); err != nil {
 		return nil, err
 	}
 	if loaded {
@@ -1752,4 +2182,47 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	}
 	proc.Base.executionResourceBudget = generation
 	return generation, nil
+}
+
+// SetExecutionResourceBudgetForTesting installs a private, deterministic ledger
+// before operator preparation, without changing the shared CN or its live
+// headroom provider. The fixture must close the generation after its operators
+// are freed. This must only be called during setup, before query work begins.
+func (proc *Process) SetExecutionResourceBudgetForTesting(generation *ExecutionResourceGeneration) error {
+	if proc == nil || proc.Base == nil || generation == nil || generation.Closed() {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudgetMu.Lock()
+	defer proc.Base.executionResourceBudgetMu.Unlock()
+	if proc.Base.executionResourceBudget != nil {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudget = generation
+	return nil
+}
+
+type spillStorageRoot interface {
+	RootPath() string
+}
+
+func (proc *Process) automaticSpillDiskAvailable() uint64 {
+	if proc == nil || proc.Base == nil || proc.Base.FileService == nil {
+		return 0
+	}
+	local, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService,
+		defines.LocalFileServiceName,
+	)
+	if err != nil {
+		return 0
+	}
+	root, ok := local.(spillStorageRoot)
+	if !ok {
+		return 0
+	}
+	available, ok := spillDiskAvailableBytes(root.RootPath())
+	if !ok {
+		return 0
+	}
+	return available
 }

@@ -73,9 +73,17 @@ func AddVersion(
 	return nil
 }
 
+// Catalog routes advance monotonically by semantic version and offset.
+// Creation timestamps have only second precision and are not a reliable order.
+const latestVersionOrder = " order by cast(substring_index(version, '.', 1) as unsigned) desc, " +
+	"cast(substring_index(substring_index(version, '.', 2), '.', -1) as unsigned) desc, " +
+	"cast(substring_index(version, '.', -1) as unsigned) desc, version_offset desc limit 1"
+
+// LatestVersionSQL reads the newest catalog identity under the version order.
+const LatestVersionSQL = "select version, version_offset, state from " + catalog.MOVersionTable + latestVersionOrder
+
 func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(LatestVersionSQL, executor.StatementOption{})
 	if err != nil {
 		return Version{}, err
 	}
@@ -96,36 +104,11 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	return version, nil
 }
 
-func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version from %s where state != %d order by create_at desc limit 1`,
-		catalog.MOVersionTable,
-		StateReady)
-	res, err := txn.Exec(sql, executor.StatementOption{})
-	if err != nil {
-		return Version{}, err
-	}
-	defer res.Close()
-
-	var version Version
-	loaded, rows := readSingleRow(res, func(cols []*vector.Vector) {
-		version.Version = cols[0].GetStringAt(0)
-	})
-	if rows > 1 {
-		return Version{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-	}
-	if !loaded {
-		return Version{}, nil
-	}
-	return version, nil
-}
-
 func MustGetLatestReadyVersion(
 	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf(`select version from %s
-			where state = %d
-			order by create_at desc limit 1`,
+	sql := fmt.Sprintf(`select version from %s where state = %d%s`,
 		catalog.MOVersionTable,
-		StateReady)
+		StateReady, latestVersionOrder)
 
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
@@ -251,24 +234,4 @@ func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
 	}
 	// Return the status of the framework table that has not been created
 	return false, nil
-}
-
-// FetchAllTenants get all tenantIDs in mo system, including system tenants
-func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
-	ids := make([]int32, 0, 10)
-	sql := "select account_id from mo_account where account_id >= 0 order by account_id"
-	res, err := txn.Exec(sql, executor.StatementOption{})
-	if err != nil {
-		return ids, err
-	}
-
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			last := vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
-			ids = append(ids, last)
-		}
-		return true
-	})
-	res.Close()
-	return ids, nil
 }

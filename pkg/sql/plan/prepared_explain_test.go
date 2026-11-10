@@ -22,7 +22,7 @@ import (
 )
 
 func TestPrepareExplainSelectBuildsUnderlyingQuery(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name       string
 		sql        string

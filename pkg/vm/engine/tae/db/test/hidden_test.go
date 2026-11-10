@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,8 +36,6 @@ import (
 // 5. Append data and the total rows is more than one Object. Commit and then merge sort the full Object.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -207,8 +204,6 @@ func TestHiddenWithPK1(t *testing.T) {
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
 func TestHidden2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)

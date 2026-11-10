@@ -30,7 +30,7 @@ import (
 
 func TestPrimaryKeyGroupEliminationUnlocksScanLimit(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno, count(*) from constraint_test.emp group by empno limit 10",
 	)
@@ -47,7 +47,7 @@ func TestPrimaryKeyGroupEliminationUnlocksScanLimit(t *testing.T) {
 }
 
 func TestNotNullUniqueGroupEliminationUnlocksScanLimit(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 	require.NotNil(t, table)
 	var unique *planpb.IndexDef
@@ -108,7 +108,7 @@ func TestNotNullUniqueGroupEliminationFailsClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)
 			var unique *planpb.IndexDef
@@ -143,7 +143,7 @@ func TestNotNullUniqueGroupEliminationFailsClosed(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationSupportsSingleRowAggregates(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		`select empno,
 		        count(comm), sum(sal), avg(sal), min(ename), max(ename),
@@ -183,7 +183,7 @@ func TestPrimaryKeyGroupEliminationRemapsAggregateReferencesInExpressionLists(t 
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			query := logical.GetQuery()
@@ -234,7 +234,7 @@ func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			require.Equal(t, test.wantAgg, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
 		})
@@ -271,7 +271,7 @@ func TestPrimaryKeyGroupEliminationRequiresTruncationSafeExpressions(t *testing.
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			query := logical.GetQuery()
 			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
@@ -333,7 +333,7 @@ func TestPrimaryKeyGroupEliminationRequiresTruncationSafeScanPredicates(t *testi
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			query := logical.GetQuery()
 			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
@@ -395,7 +395,7 @@ func TestPrimaryKeyGroupEliminationRequiresTotalResolvedComparisons(t *testing.T
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)
 			// Keep the plan on the direct table-scan path whose predicate owner and
@@ -454,7 +454,7 @@ func TestPrimaryKeyGroupEliminationRequiresTruncationSafeHavingPredicates(t *tes
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			query := logical.GetQuery()
 			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
@@ -530,6 +530,11 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
 		{"varchar to wider char", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
 		{"char widening", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"char to same width varchar", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 10, uint32(types.CharsetUTF8)), true},
+		{"varchar widening", stringType(types.T_varchar, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), true},
+		{"char to narrower varchar", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 9, uint32(types.CharsetUTF8)), false},
+		{"char to varchar charset change", stringType(types.T_char, 10, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), false},
+		{"unknown width char to varchar", stringType(types.T_char, 0, uint32(types.CharsetUTF8)), stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), false},
 		{"varchar to narrower char", stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), stringType(types.T_char, 10, uint32(types.CharsetUTF8)), false},
 		{"unbounded varchar to char", stringType(types.T_varchar, 0, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
 		{"varchar to char charset change", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
@@ -555,7 +560,7 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 }
 
 func TestSingleRowAggregateExprRequiresWellTypedReplacement(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := &QueryBuilder{compCtx: optimizer.CurrentContext()}
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	int32Type := planpb.Type{Id: int32(types.T_int32)}
@@ -747,7 +752,7 @@ func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			query := logical.GetQuery()
 			require.False(t, reachableNodeType(query, planpb.Node_AGG))
@@ -767,7 +772,7 @@ func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare pk_group_page from 'select empno, count(*) from constraint_test.emp group by empno limit ? offset ?'",
 	)
@@ -786,7 +791,7 @@ func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
 	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
 
 	prepared, err = runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare pk_group_filter from 'select empno, count(*) from constraint_test.emp where empno in (?, ?) group by empno limit ?'",
 	)
@@ -804,7 +809,7 @@ func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationKeepsAggregateFreeLegacyPathUnbounded(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno from constraint_test.emp group by empno",
 	)
@@ -870,7 +875,7 @@ func TestPrimaryKeyGroupEliminationRemovesProvenConstantOrder(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			query := logical.GetQuery()
@@ -923,7 +928,7 @@ func TestPrimaryKeyGroupEliminationKeepsNonConstantOrObservableOrder(t *testing.
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			query := logical.GetQuery()
@@ -938,7 +943,7 @@ func TestPrimaryKeyGroupEliminationKeepsNonConstantOrObservableOrder(t *testing.
 
 func TestPrimaryKeyGroupEliminationKeepsPreparedOrderParameter(t *testing.T) {
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare pk_group_order from 'select empno, count(*) c from constraint_test.emp group by empno order by c + ? limit 10'",
 	)
@@ -954,7 +959,7 @@ func TestPrimaryKeyGroupEliminationKeepsPreparedOrderParameter(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationSupportsPreparedConstantOrderPagination(t *testing.T) {
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare pk_group_order_page from 'select empno, count(*) c from constraint_test.emp group by empno order by c limit ? offset ?'",
 	)
@@ -981,12 +986,12 @@ func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) 
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 			require.ErrorContains(t, err, "standalone INTERVAL expression in ORDER BY")
@@ -1042,7 +1047,7 @@ func TestConstantSingletonGroupSortRemovalPreservesRootAndBarriers(t *testing.T)
 
 	t.Run("unsupported constant type retains sort without panic", func(t *testing.T) {
 		builder, rewritten := newBuilder()
-		builder.compCtx = NewMockCompilerContext(false)
+		builder.compCtx = NewMockCompilerContext(false, newPlanTestProcess(t))
 		builder.qry.Nodes[3].OrderBy[0].Expr = &planpb.Expr{
 			Typ: planpb.Type{Id: int32(types.T_interval)},
 			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
@@ -1065,7 +1070,7 @@ func TestConstantSingletonGroupSortRemovalPreservesRootAndBarriers(t *testing.T)
 
 func TestPrimaryKeyGroupEliminationPreservesSQLCalcFoundRowsStream(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select sql_calc_found_rows empno, count(*) c from constraint_test.emp group by empno order by c limit 10",
 	)
@@ -1085,7 +1090,7 @@ func TestPrimaryKeyGroupEliminationPreservesSQLCalcFoundRowsStream(t *testing.T)
 
 func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		`select e.empno, count(*)
 		   from constraint_test.emp e
@@ -1099,7 +1104,7 @@ func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationDoesNotCrossSetOperation(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		`select * from (
 			select empno, count(*) c from constraint_test.emp group by empno
@@ -1161,7 +1166,7 @@ func TestPrimaryKeyGroupEliminationDoesNotCrossSemanticFilters(t *testing.T) {
 }
 
 func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	partsupp := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("tpch", "partsupp")]
 	require.NotNil(t, partsupp)
 	require.NotNil(t, partsupp.Pkey)
@@ -1224,7 +1229,7 @@ func TestPrimaryKeyGroupEliminationRequiresGroupingCompatiblePrimaryKey(t *testi
 	for _, primaryKeyType := range primaryKeyTypes {
 		for _, query := range queries {
 			t.Run(primaryKeyType.name+"/"+query.name, func(t *testing.T) {
-				optimizer := NewMockOptimizer(false)
+				optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 				table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 				require.NotNil(t, table)
 				require.NotNil(t, table.Pkey)
@@ -1343,7 +1348,7 @@ func TestOnlyFullGroupByRequiresGroupingCompatiblePrimaryKey(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)
@@ -1395,23 +1400,108 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			useLegacyGroupingSetPlan(t, optimizer)
 			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
-			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
-			require.NotNil(t, agg)
-			require.True(t, hasInactiveGroupingColumn(agg.GroupingFlag))
+			// Detail groups contain one input row per primary key; only the
+			// inactive grand-total branch needs an aggregate.
+			query := logical.GetQuery()
+			require.Equal(t, 1, reachableNodeTypeCount(query, planpb.Node_AGG))
+			foundInactive := false
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType == planpb.Node_AGG && hasInactiveGroupingColumn(node.GroupingFlag) {
+					foundInactive = true
+				}
+			}
+			require.True(t, foundInactive)
 		})
 	}
 
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno from constraint_test.emp group by empno limit 10",
 	)
 	require.NoError(t, err)
 	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyRollupCountGuardFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		"select deptno from constraint_test.emp group by rollup(deptno) limit 10",
+		"select empno,sum(sal) from constraint_test.emp group by rollup(empno) limit 10",
+		"select empno,count(comm) from constraint_test.emp group by rollup(empno) limit 10",
+		"select empno from constraint_test.emp group by rollup(empno) having empno>0 limit 10",
+		"select empno from constraint_test.emp where cast(ename as signed)>0 group by rollup(empno) limit 10",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			useLegacyGroupingSetPlan(t, optimizer)
+			logical, err := runOneStmt(optimizer, t, sql)
+			require.NoError(t, err)
+			require.Equal(t, 2, reachableNodeTypeCount(logical.GetQuery(), planpb.Node_AGG))
+		})
+	}
+}
+
+func TestPrimaryKeyRollupCountGuardMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*planpb.Node, *planpb.Node)
+		want   planpb.Node_NodeType
+	}{
+		{"valid guard", func(*planpb.Node, *planpb.Node) {}, planpb.Node_PROJECT},
+		{"inactive key", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag[0] = false }, planpb.Node_AGG},
+		{"missing flags", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag = nil }, planpb.Node_AGG},
+		{"malformed flags", func(_ *planpb.Node, agg *planpb.Node) { agg.GroupingFlag = append(agg.GroupingFlag, true) }, planpb.Node_AGG},
+		{"extra aggregate", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList = append(agg.AggList, DeepCopyExpr(agg.AggList[0]))
+		}, planpb.Node_AGG},
+		{"wrong function ID", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Func.Obj = function.EncodeOverloadID(function.COUNT, 0)
+		}, planpb.Node_AGG},
+		{"distinct count", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Func.Obj = int64(uint64(agg.AggList[0].GetF().Func.Obj) | function.Distinct)
+		}, planpb.Node_AGG},
+		{"missing count argument", func(_ *planpb.Node, agg *planpb.Node) { agg.AggList[0].GetF().Args[0] = nil }, planpb.Node_AGG},
+		{"noncanonical argument", func(_ *planpb.Node, agg *planpb.Node) {
+			agg.AggList[0].GetF().Args[0] = makePlan2Int64ConstExprWithType(2)
+		}, planpb.Node_AGG},
+		{"nullable count result", func(_ *planpb.Node, agg *planpb.Node) { agg.AggList[0].Typ.NotNullable = false }, planpb.Node_AGG},
+		{"wrong comparison ID", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList[0].GetF().Func.Obj = function.EncodeOverloadID(function.EQUAL, 0)
+		}, planpb.Node_AGG},
+		{"different threshold", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList[0].GetF().Args[1] = makePlan2Int64ConstExprWithType(1)
+		}, planpb.Node_AGG},
+		{"extra HAVING", func(filter *planpb.Node, _ *planpb.Node) {
+			filter.FilterList = append(filter.FilterList, makePlan2BoolConstExprWithType(true))
+		}, planpb.Node_AGG},
+		{"terminal filter", func(filter *planpb.Node, _ *planpb.Node) { filter.IsEnd = true }, planpb.Node_AGG},
+		{"barrier filter", func(filter *planpb.Node, _ *planpb.Node) { filter.FilterIsBarrier = true }, planpb.Node_AGG},
+		{"filter limit", func(filter *planpb.Node, _ *planpb.Node) { filter.Limit = makePlan2Uint64ConstExprWithType(1) }, planpb.Node_AGG},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, root, branches := bindEmptyRollupBranches(t,
+				"select empno from constraint_test.emp group by rollup(empno)")
+			agg := branches[0].agg
+			filter := builder.qry.Nodes[builder.qry.Nodes[branches[0].rootID].Children[0]]
+			require.Equal(t, planpb.Node_FILTER, filter.NodeType)
+			test.change(filter, agg)
+			builder.rewriteEffectlessAggToProject(root)
+			require.Equal(t, test.want, agg.NodeType)
+			require.Equal(t, planpb.Node_AGG, branches[1].agg.NodeType)
+			if test.want == planpb.Node_PROJECT {
+				require.Empty(t, filter.FilterList)
+				require.False(t, filter.RollupFilter)
+			} else {
+				require.NotEmpty(t, filter.FilterList)
+				require.True(t, filter.RollupFilter)
+			}
+		})
+	}
 }
 
 func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
@@ -1443,7 +1533,7 @@ func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
 		})
@@ -1452,7 +1542,7 @@ func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationPreservesHavingSemantics(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno, sum(sal) from constraint_test.emp group by empno having sum(sal) > 100 limit 10",
 	)
@@ -1462,7 +1552,7 @@ func TestPrimaryKeyGroupEliminationPreservesHavingSemantics(t *testing.T) {
 
 func TestPrimaryKeyGroupEliminationPreservesCombinedWhereAndHavingSemantics(t *testing.T) {
 	logical, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		`select empno, sum(sal)
 		   from constraint_test.emp

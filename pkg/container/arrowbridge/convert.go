@@ -180,6 +180,23 @@ func (p *Plan) convert(
 		stats.PinAmplificationFallbacks += columnStats.PinAmplificationFallbacks
 		stats.UnalignedFallbacks += columnStats.UnalignedFallbacks
 	}
+	// Validate logical domains only for SET columns. The existing batch defer
+	// owns both materialized and borrowed vectors on every failure.
+	for _, constraint := range p.setConstraints {
+		values := vector.GenerateFunctionFixedTypeParameter[uint64](bat.Vecs[constraint.column])
+		for row := 0; row < rows; row++ {
+			if err = checkConvertContext(ctx, row); err != nil {
+				return nil, stats, err
+			}
+			bits, isNull := values.GetValue(uint64(row))
+			if isNull {
+				continue
+			}
+			if bits&^constraint.validBitmap != 0 {
+				return nil, stats, moerr.NewInvalidInputf(ctx, "Arrow SET column %q bitmap %d exceeds domain mask %d", p.attrs[constraint.column], bits, constraint.validBitmap)
+			}
+		}
+	}
 	bat.SetRowCount(rows)
 	return bat, stats, nil
 }
@@ -944,6 +961,18 @@ func materializeConverted(
 			}
 			vec.SetNull(uint64(row))
 		}
+	case conversionMaterializeText:
+		for row := 0; row < column.Len(); row++ {
+			if err := checkConvertContext(ctx, row); err != nil {
+				return fail(err)
+			}
+			// Render the Arrow value to fresh text bytes before batch
+			// publication; borrowed Arrow buffers are never mutated, and the
+			// scan-owned staging vector is materialized by this conversion.
+			if err := appendArrowStageTextValue(ctx, vec, column, row, column.IsNull(row), mp); err != nil {
+				return fail(err)
+			}
+		}
 	default:
 		return fail(moerr.NewInternalErrorNoCtx("unknown Arrow conversion plan"))
 	}
@@ -1133,7 +1162,7 @@ func materializeDictionary(
 		return nil, ConvertStats{}, moerr.NewInvalidInput(ctx, "invalid Arrow Dictionary array")
 	}
 	values := dictionary.Dictionary()
-	valueKind, err := selectLoadConversion(values.DataType(), binding.target.Type)
+	valueKind, err := selectLoadConversion(values.DataType(), binding.target.Type, binding.target.TextStage)
 	if err != nil || valueKind == conversionMaterializeDictionary {
 		return nil, ConvertStats{}, moerr.NewInvalidInputf(ctx, "invalid Arrow Dictionary value type %s", values.DataType())
 	}
@@ -1252,6 +1281,12 @@ func appendDictionaryValue(
 			}
 		}
 		return appendLoadVarlenValue(vec, value, isNull, target, mp)
+	}
+	if valueKind == conversionMaterializeText {
+		// Rendered text staging under a dictionary encoding uses the same
+		// per-value renderer as the plain array path: the dictionary value
+		// slot replaces the row index.
+		return 0, appendArrowStageTextValue(ctx, vec, values, index, isNull, mp)
 	}
 	if isNull {
 		return 0, appendDictionaryNull(vec, target, mp)
@@ -1429,6 +1464,14 @@ func appendDictionaryNull(vec *vector.Vector, target types.Type, mp *mpool.MPool
 		return vector.AppendFixed(vec, float32(0), true, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), true, mp)
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.BF16(0), true, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.Float16(0), true, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.Float8(0), true, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.Float4(0), true, mp)
 	case types.T_year:
 		return vector.AppendFixed(vec, types.MoYear(0), true, mp)
 	case types.T_enum:

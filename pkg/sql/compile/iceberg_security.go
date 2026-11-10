@@ -118,64 +118,6 @@ func (c *Compile) icebergConfig(ctx context.Context) (api.Config, bool, error) {
 	return cfg, true, nil
 }
 
-func (c *Compile) validateIcebergRemoteFanoutPolicy(
-	ctx context.Context,
-	runtime icebergExternalScanRuntime,
-	shards []icebergDataFileScopeShard,
-) error {
-	if ctx == nil {
-		ctx = c.icebergSecurityContext()
-	}
-	if !icebergFanoutIncludesRemoteCN(shards, c.addr) {
-		return nil
-	}
-	credentialScopes := icebergRuntimeCredentialScopeCount(runtime)
-	hasObjectRef := runtime.objectIORef != ""
-	message := "Iceberg remote scan fanout is disabled until ObjectIO provider handoff is implemented"
-	if credentialScopes > 0 {
-		message = "Iceberg remote credential fanout is disabled until ObjectIO provider handoff is implemented"
-	} else if hasObjectRef {
-		message = "Iceberg remote object IO reference fanout is disabled until ObjectIO provider handoff is implemented"
-	}
-	return api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, message, map[string]string{
-		"has_object_io_ref": fmt.Sprintf("%t", hasObjectRef),
-		"credential_scopes": fmt.Sprintf("%d", credentialScopes),
-		"data_tasks":        fmt.Sprintf("%d", len(runtime.dataTasks)),
-		"remote_cns":        fmt.Sprintf("%d", icebergRemoteCNCount(shards, c.addr)),
-	}))
-}
-
-func icebergRuntimeCredentialScopeCount(runtime icebergExternalScanRuntime) int {
-	count := 0
-	for _, task := range runtime.dataTasks {
-		if task != nil && task.CredentialScope != "" {
-			count++
-		}
-	}
-	for _, task := range runtime.deleteTasks {
-		if task != nil && task.CredentialScope != "" {
-			count++
-		}
-	}
-	return count
-}
-
-func icebergFanoutIncludesRemoteCN(shards []icebergDataFileScopeShard, localAddr string) bool {
-	return icebergRemoteCNCount(shards, localAddr) > 0
-}
-
-func icebergRemoteCNCount(shards []icebergDataFileScopeShard, localAddr string) int {
-	seen := make(map[string]struct{})
-	for _, shard := range shards {
-		addr := shard.node.Addr
-		if addr == "" || addr == localAddr {
-			continue
-		}
-		seen[addr] = struct{}{}
-	}
-	return len(seen)
-}
-
 func icebergScanObjectIDs(ctx context.Context, node *plan.Node) (uint64, uint64, error) {
 	dbID := node.TableDef.GetDbId()
 	tableID := node.TableDef.GetTblId()

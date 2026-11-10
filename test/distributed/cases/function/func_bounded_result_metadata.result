@@ -13,9 +13,9 @@ from information_schema.columns
 where table_schema = 'bounded_result_metadata' and table_name = 'bounded_network_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
-v4_text  ¦  VARCHAR(31)  ¦  NO  𝄀
-network_bytes  ¦  VARBINARY(16)  ¦  YES  𝄀
-v6_text  ¦  VARCHAR(39)  ¦  YES
+v4_text  ¦  varchar(31)  ¦  NO  𝄀
+network_bytes  ¦  varbinary(16)  ¦  YES  𝄀
+v6_text  ¦  varchar(39)  ¦  YES
 select v4_text, hex(network_bytes), v6_text from bounded_network_ctas;
 ➤ v4_text[12,31,0]  ¦  hex(network_bytes)[12,32,0]  ¦  v6_text[12,39,0]  𝄀
 1.2.3.4  ¦  20010DB8000000000000000000000001  ¦  2001:db8::1
@@ -35,15 +35,15 @@ from information_schema.columns
 where table_schema = 'bounded_result_metadata' and table_name = 'bounded_string_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
-bin_v  ¦  VARCHAR(65)  ¦  NO  𝄀
-conv_v  ¦  VARCHAR(65)  ¦  YES  𝄀
-hex_num  ¦  VARCHAR(16)  ¦  NO  𝄀
-hex_text  ¦  VARCHAR(96)  ¦  NO  𝄀
-unhex_v  ¦  VARBINARY(4)  ¦  YES  𝄀
-md5_v  ¦  VARCHAR(32)  ¦  NO  𝄀
-sha1_v  ¦  VARCHAR(40)  ¦  NO  𝄀
-sha2_v  ¦  VARCHAR(128)  ¦  YES  𝄀
-uncompressed_v  ¦  BIGINT  ¦  YES
+bin_v  ¦  varchar(65)  ¦  NO  𝄀
+conv_v  ¦  varchar(65)  ¦  YES  𝄀
+hex_num  ¦  varchar(16)  ¦  NO  𝄀
+hex_text  ¦  varchar(96)  ¦  NO  𝄀
+unhex_v  ¦  varbinary(4)  ¦  YES  𝄀
+md5_v  ¦  varchar(32)  ¦  NO  𝄀
+sha1_v  ¦  varchar(40)  ¦  NO  𝄀
+sha2_v  ¦  varchar(128)  ¦  YES  𝄀
+uncompressed_v  ¦  bigint  ¦  YES
 select bin_v, conv_v, hex_num, hex_text, hex(unhex_v), md5_v, sha1_v, sha2_v, uncompressed_v
 from bounded_string_ctas;
 ➤ bin_v[12,65,0]  ¦  conv_v[12,65,0]  ¦  hex_num[12,16,0]  ¦  hex_text[12,96,0]  ¦  hex(unhex_v)[12,8,0]  ¦  md5_v[12,32,0]  ¦  sha1_v[12,40,0]  ¦  sha2_v[12,128,0]  ¦  uncompressed_v[-5,64,0]  𝄀
@@ -60,15 +60,15 @@ from information_schema.columns
 where table_schema = 'bounded_result_metadata' and table_name = 'bounded_binary_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
-compressed_v  ¦  VARBINARY(68)  ¦  YES  𝄀
-compressed_binary_v  ¦  VARBINARY(32)  ¦  YES  𝄀
-uncompressed_v  ¦  BLOB(0)  ¦  YES  𝄀
-aes_v  ¦  VARBINARY(16)  ¦  YES  𝄀
-aes_text_v  ¦  VARBINARY(64)  ¦  YES
+compressed_v  ¦  varbinary(68)  ¦  YES  𝄀
+compressed_binary_v  ¦  varbinary(32)  ¦  YES  𝄀
+uncompressed_v  ¦  longblob  ¦  YES  𝄀
+aes_v  ¦  varbinary(16)  ¦  YES  𝄀
+aes_text_v  ¦  varbinary(64)  ¦  YES
 select length(compressed_v), length(compressed_binary_v), uncompressed_v,
 length(aes_v), length(aes_text_v) from bounded_binary_ctas;
 ➤ length(compressed_v)[-5,64,0]  ¦  length(compressed_binary_v)[-5,64,0]  ¦  uncompressed_v[-4,65535,0]  ¦  length(aes_v)[-5,64,0]  ¦  length(aes_text_v)[-5,64,0]  𝄀
-21  ¦  28  ¦  hello  ¦  16  ¦  16
+22  ¦  29  ¦  hello  ¦  16  ¦  16
 select count(*) as concat_contract_failures
 from source
 where not (concat('x') <=> 'x')
@@ -145,10 +145,10 @@ select count(*) as contract_columns
 from information_schema.columns
 where table_schema = 'bounded_result_metadata'
 and table_name in ('bounded_numeric_view', 'bounded_numeric_ctas')
-and ((column_name = 'pos_v' and column_type = 'INT')
-or (column_name = 'cmp_v' and column_type = 'INT')
-or (column_name = 'chars_v' and column_type = 'BIGINT')
-or (column_name = 'crc_v' and column_type = 'BIGINT UNSIGNED'));
+and ((column_name = 'pos_v' and column_type = 'int')
+or (column_name = 'cmp_v' and column_type = 'int')
+or (column_name = 'chars_v' and column_type = 'bigint')
+or (column_name = 'crc_v' and column_type = 'bigint unsigned'));
 ➤ contract_columns[-5,64,0]  𝄀
 8
 drop database bounded_result_metadata;

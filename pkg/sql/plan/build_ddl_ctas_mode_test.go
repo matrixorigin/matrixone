@@ -120,13 +120,13 @@ func TestCTASGroupingExtensionsSurviveInternalReparse(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := mock.CurrentContext()
 			stmt, err := mysql.ParseOne(ctx.GetContext(), test.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
 
-			logicPlan, err := BuildPlan(ctx, stmt, false)
+			logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			createTable := logicPlan.GetDdl().GetCreateTable()
 			require.NotNil(t, createTable)
@@ -166,7 +166,7 @@ func TestCTASFullTextPatternSurvivesInternalReparse(t *testing.T) {
 	// the session-mode parse understood it).
 	buildWithMode := func(t *testing.T, mode string) (generated string, want string) {
 		t.Helper()
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.SetSqlModeOverride(mode)
 		ctx := mock.CurrentContext()
 		stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), sql, 1, mode)
@@ -174,7 +174,7 @@ func TestCTASFullTextPatternSurvivesInternalReparse(t *testing.T) {
 		ct, ok := stmts[0].(*tree.CreateTable)
 		require.True(t, ok)
 		want = findFullTextMatch(t, ct.AsSource.Select).Pattern.(*tree.NumVal).String()
-		logicPlan, err := BuildPlan(ctx, stmts[0], false)
+		logicPlan, err := BuildPlan(ctx, stmts[0], false, nil)
 		require.NoError(t, err)
 		createTable := logicPlan.GetDdl().GetCreateTable()
 		require.NotNil(t, createTable)
@@ -219,12 +219,12 @@ func TestCTASConflictModifiersGenerateDML(t *testing.T) {
 		{"replace", "REPLACE", "replace into"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := mock.CurrentContext()
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "CREATE TABLE t "+tc.modifier+" AS SELECT 1", 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			logicPlan, err := BuildPlan(ctx, stmt, false)
+			logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, strings.HasPrefix(logicPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), tc.prefix))
 		})

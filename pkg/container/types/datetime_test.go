@@ -25,6 +25,54 @@ import (
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
+func datetimeStringFmtOracle(dt Datetime) string {
+	if dt == ZeroDatetime {
+		return "0000-00-00 00:00:00"
+	}
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	hour, minute, second := dt.Clock()
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second)
+}
+
+func TestDatetimeStringFormatting(t *testing.T) {
+	for _, tc := range []struct {
+		dt   Datetime
+		want string
+	}{
+		{ZeroDatetime, "0000-00-00 00:00:00"},
+		{DatetimeEpoch, "0001-01-01 00:00:00"},
+		{DatetimeFromClock(99, 12, 31, 1, 2, 3, 0), "0099-12-31 01:02:03"},
+		{DatetimeFromClock(1000, 1, 1, 10, 20, 30, 0), "1000-01-01 10:20:30"},
+		{DatetimeFromClock(1900, 3, 1, 0, 0, 0, 0), "1900-03-01 00:00:00"},
+		{DatetimeFromClock(2000, 2, 29, 23, 59, 59, 999999), "2000-02-29 23:59:59"},
+		{DatetimeFromClock(2026, 1, 1, 12, 34, 56, 123456), "2026-01-01 12:34:56"},
+		{DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999), "9999-12-31 23:59:59"},
+		{DatetimeFromClock(10000, 1, 1, 0, 0, 0, 0), "10000-01-01 00:00:00"},
+	} {
+		t.Run(tc.want, func(t *testing.T) { require.Equal(t, tc.want, tc.dt.String()) })
+	}
+
+	// Preserve the old minimum-width representation for unvalidated raw values,
+	// including negative clocks and years wider than the SQL four-digit range.
+	for _, raw := range []int64{math.MinInt64, -86400000001, -86400000000, -1000001, -1000000, -999999, -2, -1, 0, 1, 999999, 1000000, 86399999999, 86400000000, math.MaxInt64} {
+		dt := Datetime(raw)
+		require.Equal(t, datetimeStringFmtOracle(dt), dt.String(), "raw value %d", raw)
+	}
+
+	// A fixed seed and bound cover both ordinary SQL values and raw int64 values.
+	// This is deterministic differential coverage, not an unbounded fuzz run.
+	state := uint64(0x5eed20261025)
+	maxValue := uint64(DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
+	for i := 0; i < 512; i++ {
+		state = state*6364136223846793005 + 1442695040888963407
+		dt := Datetime(state)
+		if i%2 == 0 {
+			dt = Datetime(state % (maxValue + 1))
+		}
+		require.Equal(t, datetimeStringFmtOracle(dt), dt.String(), "input %d, raw value %d", i, int64(dt))
+	}
+}
+
 // Calendar precedence is intentional for a successfully parsed compact date.
 // Padding a TIME to eight digits must not make an impossible calendar date.
 func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
@@ -123,6 +171,36 @@ func TestDatetime(t *testing.T) {
 	dt = Now(loc)
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
+}
+
+func TestDatetimeTemporalHelpers(t *testing.T) {
+	dt := DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000), dt.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 0), dt.TruncateToScaleWithoutRounding(-1))
+	require.Equal(t, time.Date(2024, 1, 2, 3, 4, 5, 987654000, time.UTC), dt.ConvertToGoTime(nil))
+
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	gap := DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	require.True(t, gap.IsNonexistentLocalTime(zone))
+	require.False(t, dt.IsNonexistentLocalTime(zone))
+	require.False(t, ZeroDatetime.IsNonexistentLocalTime(zone))
+	got := gap.ConvertToGoTime(zone)
+	require.Equal(t, 3, got.Hour())
+	require.Equal(t, 123456000, got.Nanosecond())
+}
+
+func TestTimeAndTimestampTruncateWithoutRounding(t *testing.T) {
+	tm := Time(1234567)
+	require.Equal(t, Time(1234000), tm.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, Time(-1234000), Time(-1234567).TruncateToScaleWithoutRounding(3))
+	require.Equal(t, tm, tm.TruncateToScaleWithoutRounding(6))
+
+	ts := Timestamp(1234567)
+	require.Equal(t, Timestamp(1234000), ts.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, ts, ts.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, ZeroTimestamp, ZeroTimestamp.TruncateToScaleWithoutRounding(3))
 }
 
 func TestAddDatetime(t *testing.T) {
@@ -768,6 +846,39 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDatetimeDSTGapUsesFirstRepresentableWallTime(t *testing.T) {
+	for _, tc := range []struct {
+		zone, input, want string
+		gap               bool
+	}{
+		{"America/New_York", "2024-03-10 02:30:00.123456", "2024-03-10 03:00:00.123456", true},
+		{"America/New_York", "2024-03-10 01:59:59.999999", "2024-03-10 01:59:59.999999", false},
+		{"America/New_York", "2024-03-10 03:00:00.123456", "2024-03-10 03:00:00.123456", false},
+		{"America/New_York", "2024-11-03 01:30:00.123456", "2024-11-03 01:30:00.123456", false},
+		{"Australia/Lord_Howe", "2024-10-06 02:15:00.123456", "2024-10-06 02:30:00.123456", true},
+		{"Pacific/Apia", "2011-12-30 12:00:00.123456", "2011-12-31 00:00:00.123456", true},
+		{"UTC", "2024-03-10 02:30:00.123456", "2024-03-10 02:30:00.123456", false},
+	} {
+		t.Run(tc.zone+"/"+tc.input, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			require.NoError(t, err)
+			dt, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			value, gap := dt.ToTimestampWithLocalTimeStatus(loc)
+			require.Equal(t, tc.gap, gap)
+			require.Equal(t, gap, dt.IsNonexistentLocalTime(loc))
+			require.Equal(t, tc.want, dt.ConvertToGoTime(loc).Format("2006-01-02 15:04:05.000000"))
+			require.Equal(t, dt.ToTimestamp(loc), value)
+			if !gap {
+				require.Equal(t, dt, value.ToDatetime(loc))
+			}
+		})
+	}
+	value, gap := ZeroDatetime.ToTimestampWithLocalTimeStatus(nil)
+	require.Equal(t, ZeroTimestamp, value)
+	require.False(t, gap)
 }
 
 // DATE and DATETIME share calendar spelling; clock fields never wrap into

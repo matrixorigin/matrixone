@@ -253,6 +253,7 @@ type BlockReadFilter struct {
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
 	CachedSearch       *ReadFilterSearch
+	CachedMembership   *ReadFilterMembership
 	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 

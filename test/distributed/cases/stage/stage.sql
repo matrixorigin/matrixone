@@ -213,10 +213,10 @@ insert into stage_table values
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 
--- write to sub stage
+-- Tenant stage metadata does not authorize a server-local write.
 select * from stage_table into outfile 'stage://sub_local_stage/stage_table5.csv';
 
--- read from stage file
+-- The denied write produced no importable data; tenant local reads are denied.
 CREATE TABLE stage_infile_table(
 R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,

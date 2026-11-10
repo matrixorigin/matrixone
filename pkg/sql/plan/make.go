@@ -972,7 +972,30 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	if types.T(targetType.Id).IsArrayRelate() {
+	return makePlan2AssignmentCastExprForColumn(ctx, expr, targetType, "")
+}
+
+// makePlan2AssignmentCastExprForColumn additionally carries the destination
+// column name, which the attributed-DECIMAL admission boundary reports in its
+// execution-time 1264 diagnostics. Callers without a name keep the legacy
+// type-label fallback.
+func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targetType Type, columnName string) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
+	if isAttributedDecimalPlanType(targetType) {
+		// Attributed DECIMAL targets persist the complete assignment boundary:
+		// the mode-resolved admission entry in front of cast_assign. DML replay
+		// re-polices BOTH layers to the statement policy (see
+		// rePoliceUnsignedDecimalAssignmentBoundary); the DDL constant
+		// validation uses a separate both-layers-strict composition. The
+		// authoring floor is enforced where the attributed type itself is
+		// declared or replayed (CREATE/ALTER/CTAS column sites and the DML
+		// assignment builders), mirroring the MEDIUMINT protocol gates.
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType, "cast_assign", columnName)
+	}
+	if types.T(targetType.Id).IsArray() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
 	}
@@ -990,6 +1013,10 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
 	return makePlan2CastExprWithName(
 		ctx,
 		expr,
@@ -1107,8 +1134,18 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 		}
 		args[idx] = argExpr
 	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args[len(args)-1] = sourceExpr
-	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
+	if types.T(sourceExpr.Typ.Id).IsInteger() {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
@@ -1150,6 +1187,16 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 		}
 		args[idx] = argExpr
 	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args[len(args)-1] = sourceExpr
 	if types.T(sourceExpr.Typ.Id).IsInteger() {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastIndexValueToIndexFun, args)
@@ -1164,24 +1211,6 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 	}
 	expr.Typ = targetType
 	return expr, nil
-}
-
-// if typ is decimal128 and decimal64 without scalar and width
-// set a default value for it.
-func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
-	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 38 // width
-	}
-	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 2
-		typ.Width = 6 // width
-	}
-	if typ.Id == int32(types.T_decimal256) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 65 // width
-	}
-	return typ
 }
 
 var MakePlan2Type = makePlan2Type
@@ -1208,35 +1237,23 @@ func makeGeneratedPlan2Type(oid types.T, width, scale int32, notNullable bool) p
 }
 
 func makePlan2Type(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
-	}
+	return typ.PlanType()
 }
 func makePlan2TypeValue(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
-	}
+	return typ.PlanType()
 }
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 var MakePlan2TypeValue = makePlan2TypeValue
 
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
-	oid := types.T(typ.Id)
-	return types.NewWithCharset(oid, typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(typ)
 }
 
 var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
-	oid := types.T(expr.Typ.Id)
-	return types.NewWithCharset(oid, expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+	return types.MustTypeFromPlan(expr.Typ)
 }
 
 func makeHiddenColTyp() Type {

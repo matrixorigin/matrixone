@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -48,6 +49,12 @@ func TestGroupingTransportDestinations(t *testing.T) {
 	require.NoError(t, requireGroupingTransportWorkers(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}))
 	client.version = defines.MORPCVersion86
 	require.Error(t, validateGroupingTransportDestinations(c.proc, p))
+
+	client.customResponse, client.sendErr = true, context.DeadlineExceeded
+	require.ErrorIs(t, requireGroupingTransportWorkers(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}), context.DeadlineExceeded)
+	require.ErrorIs(t, validateGroupingTransportDestinations(c.proc, p), context.DeadlineExceeded)
+	require.NoError(t, c.proc.Ctx.Err())
+	client.customResponse, client.sendErr = false, nil
 
 	// The execution destination is current, but its dispatch consumer is old.
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -115,6 +122,11 @@ func TestGroupingTransportStrippedDispatchAndLocalPlacement(t *testing.T) {
 	_, _, _, _, err := prepareRemoteRunSendingData("", s, c.proc, nil, uuid.Nil)
 	require.ErrorContains(t, err, "version 87")
 	require.Same(t, output, s.RootOp)
+	client.customResponse, client.sendErr = true, context.DeadlineExceeded
+	_, _, _, _, err = prepareRemoteRunSendingData("", s, c.proc, nil, uuid.Nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Same(t, output, s.RootOp)
+	client.customResponse, client.sendErr = false, nil
 	client.version = defines.MORPCVersion87
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC

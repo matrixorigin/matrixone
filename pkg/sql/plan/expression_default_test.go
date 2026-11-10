@@ -16,21 +16,108 @@ package plan
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
+func TestExpressionDefaultNullIfStringSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceType, expression, input, wantHex string
+		nullInput, nullResult, integerResult         bool
+		wantLength                                   int64
+	}{
+		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent text owner", sourceType: "varchar(16)", expression: "reverse(nullif(txt,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent binary owner", sourceType: "varbinary(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE selected text through NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE pure text LPAD", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then lpad(txt,3,'z') else _binary '' end)", input: "你a", wantHex: "61e4bda07a"},
+		{name: "CASE binary LPAD", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then lpad(txt,3,_binary 'z') else _binary '' end)", input: "你a", wantHex: "a0bde4"},
+		{name: "CASE pure text LPAD numeric DEFAULT", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then lpad(txt,3,'z') else _binary '0' end)", input: "你a", integerResult: true, wantLength: 3},
+		{name: "CASE selected text", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF selected text", sourceType: "varchar(16)", expression: "reverse(if(txt is not null,txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary ''))", input: "你a", integerResult: true, wantLength: 2},
+		{name: "CASE length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else _binary '0' end)", input: "你a", integerResult: true, wantLength: 2},
+		{name: "IF length of empty text", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", integerResult: true},
+		{name: "IF length with numeric compatible fallback", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", nullInput: true, integerResult: true, wantLength: 1},
+		{name: "IF length of binary column", sourceType: "varbinary(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE length with explicit binary peer", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE explicit binary COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' collate binary end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE explicit binary peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit binary NULL", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast(null as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE selected binary column", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then txt else '' end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", nullInput: true, nullResult: true},
+		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61e4bda0"},
+		{name: "matching value", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullResult: true},
+		{name: "NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullInput: true, nullResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(false, proc)
+			resultType, resultOID := "varbinary(64)", types.T_varbinary
+			if tc.integerResult {
+				resultType, resultOID = "bigint", types.T_int64
+			}
+			stmt, err := mysql.ParseOne(proc.Ctx, "create table t(txt "+tc.sourceType+
+				", result "+resultType+" default ("+tc.expression+"))", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			bound, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			original := DeepCopyPlan(bound)
+			require.Equal(t, bound.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr,
+				original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr)
+			encoded, err := bound.Marshal()
+			require.NoError(t, err)
+			restored := &planpb.Plan{}
+			require.NoError(t, restored.Unmarshal(encoded))
+			cols := restored.GetDdl().GetCreateTable().TableDef.Cols
+			expr := DeepCopyExpr(cols[1].Default.Expr)
+			require.Equal(t, original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr, expr)
+			require.Equal(t, int32(resultOID), expr.Typ.Id)
+			require.Equal(t, int32(64), expr.Typ.Width)
+			snapshot := DeepCopyExpr(expr)
+
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}))
+			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(tc.input), tc.nullInput, proc.Mp()))
+			input.SetRowCount(1)
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.nullResult, result.IsNull(0))
+			if !tc.nullResult {
+				if tc.integerResult {
+					require.Equal(t, tc.wantLength, vector.MustFixedColNoTypeCheck[int64](result)[0])
+				} else {
+					require.Equal(t, tc.wantHex, hex.EncodeToString(result.GetBytesAt(0)))
+				}
+			}
+			require.Equal(t, snapshot, expr, "executing a DEFAULT must not mutate its bound declaration or source proof")
+		})
+	}
+}
+
 func TestExpressionDefaultProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -39,7 +126,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		stmt, err := mysql.ParseOne(context.Background(), "create table t(a int, b int default (a+1))", 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		if version == defines.MORPCVersion60 {
 			require.NoError(t, err)
@@ -48,7 +135,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 		}
 		stmt, err = mysql.ParseOne(context.Background(), "create table t(a int default (1+1))", 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err, "constant defaults remain compatible")
 	}
@@ -56,10 +143,10 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 }
 
 func TestCTASDefaultRebindAndReplay(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(context.Background(), "create table src(a bigint, b bigint default (a+a))", 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	p, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	table := p.GetDdl().GetCreateTable().TableDef
@@ -74,7 +161,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			p, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			cols := p.GetDdl().GetCreateTable().TableDef.Cols
 			ref := expressionDefaultFindLocalCol(cols[1].Default.Expr)
@@ -93,7 +180,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 		"create table dst(a int default (1+1), b int default (a+1)) as select 10 as a", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.ErrorContains(t, err, "defined after it", "reject non-replayable physical order before publication")
 }
 
@@ -101,7 +188,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 // Only a changed operand type or an explicitly authored target DEFAULT should
 // bind under the target session's precision setting.
 func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// Keep the unrelated reverse-FK catalog lookup inside the mock.
 	mock.ctxt.tables["src"] = &planpb.TableDef{Name: "src"}
 	mock.ctxt.tables["dst"] = &planpb.TableDef{Name: "dst"}
@@ -110,7 +197,7 @@ func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
 		stmt, err := mysql.ParseOne(tb.Context(), sql, 1)
 		require.NoError(tb, err)
 		defer stmt.Free()
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(tb, err)
 		return p.GetDdl().GetCreateTable().TableDef
 	}
@@ -218,18 +305,18 @@ func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
 		stmt, err := mysql.ParseOne(t.Context(), "create table dst as select * from src", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		_, err = BuildPlan(ctx4, stmt, false)
+		_, err = BuildPlan(ctx4, stmt, false, nil)
 		require.ErrorContains(t, err, "protocol version 97")
 	})
 }
 
 func TestLoadDefaultMaterialization(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
-		ctx := NewMockCompilerContext(true)
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmt, err := mysql.ParseOne(context.Background(),
 			"create table t(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1))", 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		table := p.GetDdl().GetCreateTable().TableDef
@@ -239,14 +326,14 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 		node := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{child}}
 		load := &tree.Load{Table: &tree.TableName{}, Param: &tree.ExternParam{}}
 		supplied := map[string]int32{"b": 0, "a": 1}
-		_, err = getProjectNode(load, ctx, node, table, supplied)
+		_, err = getProjectNode(load, ctx, node, table, supplied, nil)
 		require.NoError(t, err)
 		if parallel {
 			before := node.ProjectList[2]
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
@@ -330,7 +417,7 @@ func TestExpressionDefaultBindsAgainstCompleteRowSchema(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.Len(t, cols, 4)
@@ -347,7 +434,7 @@ func TestExpressionDefaultAllowsForwardReferenceToBaseColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 2)
@@ -400,7 +487,7 @@ func TestExpressionDefaultRejectsInvalidDependencyGraph(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -443,7 +530,7 @@ func TestDefaultExprExpanderRejectsCycle(t *testing.T) {
 }
 
 func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -498,7 +585,7 @@ func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing
 }
 
 func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	childID := builder.appendNode(&planpb.Node{
@@ -537,7 +624,7 @@ func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
 }
 
 func TestMaterializedProjectionGroupsIndependentDependencyLevels(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -611,7 +698,7 @@ func TestDefaultExprExpanderHonorsAggregateExpansionBudget(t *testing.T) {
 }
 
 func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	const (
 		tableName = "expression_default_dml"
 		tableID   = uint64(29001)
@@ -619,7 +706,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 	stmt, err := mysql.ParseOne(context.Background(),
 		"create table expression_default_dml (id int primary key, a double default (rand()), b double default (a))", 1)
 	require.NoError(t, err)
-	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	stmt.Free()
 	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()
@@ -691,7 +778,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 }
 
 func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	rowIDTyp := planpb.Type{Id: int32(types.T_Rowid), Width: 16}
@@ -915,7 +1002,7 @@ func TestValidateDefaultColumnDependenciesCoversInvalidAndSharedGraphs(t *testin
 	require.NoError(t, validateDefaultColumnDependencies(ctx, nil))
 }
 
-func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
+func TestDefaultExprExpanderBoundaryCases(t *testing.T) {
 	ctx := context.Background()
 	literal := expressionDefaultInt(10)
 	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*planpb.Expr, bool) {
@@ -977,21 +1064,6 @@ func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
 	require.False(t, exprHasLocalColumnRef(outer))
 	require.True(t, exprHasLocalColumnRef(list))
 	require.False(t, exprHasLocalColumnRef(literal))
-
-	projection := []*planpb.Expr{expressionDefaultCol(0, 0), nil}
-	require.NoError(t, expandDefaultExprsInProjection(
-		ctx, projection, []int32{-1, 2, 1, 0},
-		map[int32]*planpb.Expr{0: literal},
-	))
-	require.Equal(t, int64(10), projection[0].GetLit().GetI64Val())
-
-	err = expandDefaultExprsInProjection(
-		ctx,
-		[]*planpb.Expr{expressionDefaultCol(0, 0)},
-		[]int32{0},
-		map[int32]*planpb.Expr{0: expressionDefaultCol(0, 0)},
-	)
-	require.ErrorContains(t, err, "circular dependency")
 }
 
 func TestExpandDefaultExprsInValueScanRejectsMalformedInputs(t *testing.T) {
@@ -1063,17 +1135,17 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	ctx := context.Background()
 	intTyp := expressionDefaultIntType()
 
-	_, err := getDefaultExpr(ctx, nil)
+	_, err := getDefaultExpr(ctx, nil, "")
 	require.ErrorContains(t, err, "missing column definition")
 
 	nonNullable := &planpb.ColDef{Name: "required", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true,
 	}}
-	_, err = getDefaultExpr(ctx, nonNullable)
+	_, err = getDefaultExpr(ctx, nonNullable, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	nullable := &planpb.ColDef{Name: "nullable", Typ: intTyp}
-	expr, err := getDefaultExpr(ctx, nullable)
+	expr, err := getDefaultExpr(ctx, nullable, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1081,7 +1153,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	auto := &planpb.ColDef{Name: "id", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true, AutoIncr: true,
 	}}
-	expr, err = getDefaultExpr(ctx, auto)
+	expr, err = getDefaultExpr(ctx, auto, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1093,7 +1165,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	_, err = getDefaultExpr(ctx, invalidMetadata)
+	_, err = getDefaultExpr(ctx, invalidMetadata, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	autoInvalidMetadata := &planpb.ColDef{
@@ -1103,7 +1175,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	expr, err = getDefaultExpr(ctx, autoInvalidMetadata)
+	expr, err = getDefaultExpr(ctx, autoInvalidMetadata, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1111,7 +1183,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_null",
 		Typ:     intTyp,
 		Default: &planpb.Default{NullAbility: true},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1119,7 +1191,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_value",
 		Typ:     intTyp,
 		Default: &planpb.Default{Expr: expressionDefaultInt(7)},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.Equal(t, int64(7), expr.GetLit().GetI64Val())
 }
@@ -1143,6 +1215,36 @@ func TestDefaultBinderWithColumnsUsesSourceTypeAndRejectsInvalidNames(t *testing
 
 	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
 	require.ErrorContains(t, err, "does not exist")
+}
+
+func TestDefaultBinderColumnScopes(t *testing.T) {
+	ctx := context.Background()
+	source := planpb.Type{Id: int32(types.T_int32), Width: 32}
+	target := planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	cols := []*ColDef{nil, {Name: "First", Typ: source}, {Name: "FIRST", Typ: target}}
+	binder := NewDefaultBinderWithColumns(ctx, target, cols)
+	expr, err := binder.BindColRef(tree.NewUnresolvedColName("first"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, source, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
+	require.ErrorContains(t, err, "does not exist")
+	require.Nil(t, cols[0])
+	require.Equal(t, "First", cols[1].Name)
+	require.Equal(t, source, cols[1].Typ)
+
+	for _, empty := range [][]*ColDef{nil, {}} {
+		_, err = NewDefaultBinderWithColumns(ctx, target, empty).BindColRef(
+			tree.NewUnresolvedColName("missing"), 0, true)
+		require.ErrorContains(t, err, "does not exist")
+	}
+
+	// SHOW VARIABLES and SHOW COLLATION use names with a common result type.
+	expr, err = NewDefaultBinder(ctx, nil, nil, target, []string{"name", "value"}).BindColRef(
+		tree.NewUnresolvedColName("VALUE"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, target, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
 }
 
 func TestRemapExpressionDefaultsAndReferencesAfterColumnChanges(t *testing.T) {

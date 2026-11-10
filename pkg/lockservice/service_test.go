@@ -1242,6 +1242,49 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestNewWaitSubmitsDeadlockCheckBeforeLazyTick(t *testing.T) {
+	previous := defaultLazyCheckDuration.Load().(time.Duration)
+	defer defaultLazyCheckDuration.Store(previous)
+
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1", "s2"}, 10*time.Second, func(_ *lockTableAllocator, services []*service) {
+		require.Equal(t, 30*time.Second, defaultLazyCheckDuration.Load())
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const tableID = uint64(29457)
+		row := [][]byte{{1}}
+		holder, waiting := []byte("holder"), []byte("waiting")
+		mustAddTestLock(t, ctx, s, tableID, holder, row, pb.Granularity_Row)
+
+		checked := make(chan struct{}, 1)
+		s.deadlockDetector.mu.Lock()
+		s.deadlockDetector.mu.preCheckFunc = func(_ []byte, txn pb.WaitTxn) error {
+			if string(txn.TxnID) == string(waiting) {
+				select {
+				case checked <- struct{}{}:
+				default:
+				}
+			}
+			return nil
+		}
+		s.deadlockDetector.mu.Unlock()
+
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.Lock(ctx, tableID, row, waiting, newTestRowExclusiveOptions())
+			result <- err
+		}()
+		select {
+		case <-checked:
+		case <-ctx.Done():
+			t.Fatal("new wait did not submit a deadlock check before the lazy tick")
+		}
+		require.NoError(t, s.Unlock(ctx, holder, timestamp.Timestamp{}))
+		require.NoError(t, <-result)
+		require.NoError(t, s.Unlock(ctx, waiting, timestamp.Timestamp{}))
+	}, func(*Config) { defaultLazyCheckDuration.Store(30 * time.Second) })
+}
+
 func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 	for name, runner := range runners {
 		if name == "local" {
@@ -1731,69 +1774,108 @@ func TestUnlockIgnoresCanceledCallerContextForTransactionCleanup(t *testing.T) {
 }
 
 func TestIssue4007(t *testing.T) {
-	runLockServiceTestsWithLevel(
-		t,
-		zapcore.DebugLevel,
-		[]string{"s1", "s2"},
-		time.Second*1,
-		func(alloc *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			l2 := s[1]
+	for _, keeperFirst := range []bool{false, true} {
+		name := "retry_before_keeper"
+		if keeperFirst {
+			name = "keeper_before_lock"
+		}
+		t.Run(name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			var seen atomic.Bool
+			runLockServiceTestsWithLevel(
+				t,
+				zapcore.DebugLevel,
+				[]string{"s1", "s2"},
+				time.Second*1,
+				func(_ *lockTableAllocator, s []*service) {
+					l1 := s[0]
+					l2 := s[1]
+					require.NoError(t, l1.remote.keeper.Close())
+					require.NoError(t, l2.remote.keeper.Close())
 
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				time.Second*10)
-			defer cancel()
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-			}
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					option := pb.LockOptions{
+						Granularity: pb.Granularity_Row,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+					}
 
-			_, err := l1.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn1"),
-				option)
-			require.NoError(t, err)
-			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+					_, err := l1.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+					require.NoError(t, err)
+					require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
-			b := l1.tableGroups.get(0, 0).getBind()
-			r := &remoteLockTable{bind: b}
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = r
-			l1.tableGroups.Unlock()
+					b := l1.tableGroups.get(0, 0).getBind()
+					r := &remoteLockTable{bind: b}
+					l1.tableGroups.removeWithFilter(func(_ uint64, table lockTable) bool {
+						return table.getBind().Equal(b)
+					}, closeReasonBindChanged)
+					l1.tableGroups.set(0, 0, r)
 
-			_, err = l2.Lock(
-				ctx,
-				1,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+					_, err = l2.Lock(ctx, 1, [][]byte{{1}}, []byte("txn2"), option)
+					require.NoError(t, err)
 
-			// should lock failed
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+					if keeperFirst {
+						done := make(chan error, 1)
+						go func() {
+							defer close(done)
+							_, err := l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+							done <- err
+						}()
+						defer func() {
+							releaseOnce.Do(func() { close(release) })
+							cancel()
+							for range done {
+							}
+						}()
+						select {
+						case <-started:
+						case <-ctx.Done():
+							t.Fatal(ctx.Err())
+						}
+						l2.remote.keeper.(*lockTableKeeper).doKeepRemoteLock(ctx, nil, nil)
+						releaseOnce.Do(func() { close(release) })
+						err = <-done
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+					} else {
+						_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+					}
 
-			// retry lock should be succ
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
-
-		},
-		nil,
-	)
+					// A rejected RPC can be retried until an authoritative keeper rejection
+					// fences this transaction's exact bind. A fenced txn must release its
+					// intents before a fresh txn can acquire that same allocator bind.
+					_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+					if keeperFirst {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+						_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn3"), option)
+						require.NoError(t, err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn3"), timestamp.Timestamp{}))
+					} else {
+						require.NoError(t, err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+					}
+				},
+				nil,
+				func(s *service) {
+					if !keeperFirst {
+						return
+					}
+					s.option.serverOpts = append(s.option.serverOpts, WithServerMessageFilter(func(req *pb.Request) bool {
+						if req.Method == pb.Method_Lock && req.LockTable.Table == 0 && string(req.Lock.TxnID) == "txn2" && seen.CompareAndSwap(false, true) {
+							close(started)
+							<-release
+						}
+						return true
+					}))
+				},
+			)
+		})
+	}
 }
 
 func TestIssue3654(t *testing.T) {
@@ -2849,19 +2931,55 @@ func TestLockResultWithConflictAndTxnCommitted(t *testing.T) {
 	)
 }
 
+// runRollingRestartTests retains the allocator grace period while shortening
+// heartbeat-driven state transitions in the short CI suite.
+func runRollingRestartTests(
+	t *testing.T,
+	serviceIDs []string,
+	fn func(*lockTableAllocator, []*service),
+) {
+	runLockServiceTestsWithAdjustConfig(t, serviceIDs, 10*time.Second, fn,
+		accelerateLockKeeperForShortTest)
+}
+
+func requireRollingRestartCondition(
+	t *testing.T,
+	ctx context.Context,
+	description string,
+	condition func() bool,
+) {
+	t.Helper()
+	if condition() {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", description, ctx.Err())
+		case <-ticker.C:
+			if condition() {
+				return
+			}
+		}
+	}
+}
+
 func TestRestartInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			alloc.setRestartService("s1")
-			require.Equal(t, true, alloc.canRestartService("s1"))
+			require.Equal(t, false, alloc.canRestartService("s1"),
+				"SetRestart must wait for the CN to confirm drain completion")
 		},
 	)
 }
 
 func TestUnlockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -2894,23 +3012,15 @@ func TestUnlockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.Equal(t, false, true)
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 		},
 	)
 }
 
 func TestReLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -2984,7 +3094,7 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 }
 
 func TestOldTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3082,7 +3192,7 @@ func TestIssue4017(t *testing.T) {
 }
 
 func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3134,16 +3244,9 @@ func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 			// get bind
 			_, _, err = getLockTableBindWithContext(
 				ctx,
@@ -3160,7 +3263,7 @@ func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 }
 
 func TestNewTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3187,16 +3290,9 @@ func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l.isStatus(pb.Status_ServiceLockWaiting)
+			})
 
 			// new txn
 			t2, _ := l.clock.Now()
@@ -3213,7 +3309,7 @@ func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 }
 
 func TestStatusInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3240,16 +3336,9 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l.Unlock(
@@ -3258,16 +3347,9 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 			require.Equal(t, true, l.isStatus(pb.Status_ServiceCanRestart))
 			require.Equal(t, true, alloc.canRestartService("s1"))
 		},
@@ -3275,7 +3357,7 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 }
 
 func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3303,16 +3385,9 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			// remote lock should be failed,
@@ -3330,7 +3405,7 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 }
 
 func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3368,16 +3443,9 @@ func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			// remote lock should be succ
@@ -3429,12 +3497,12 @@ func TestResumeInvalidService(t *testing.T) {
 }
 
 func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
-	runLockServiceTestsWithLevel(
+	runLockServiceRestartTests(
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1"},
 		time.Hour,
-		func(alloc *lockTableAllocator, s []*service) {
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3455,12 +3523,12 @@ func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
 			// Simulate a DN/TN pod rebuild: the allocator gets a new epoch and
 			// loses its in-memory bind map, while the CN service keeps running
 			// with the old local lock table cached.
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
 
 			require.Equal(t, staleBind, l1.tableGroups.get(0, staleTable).getBind())
 
@@ -3496,7 +3564,10 @@ func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
 			require.Equal(t, restartedVersion, refreshedBind.Version)
 			require.NoError(t, l1.Unlock(ctx, newTestTxnID(3), timestamp.Timestamp{}))
 		},
-		nil,
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
+		},
 	)
 }
 
@@ -3585,7 +3656,6 @@ func TestKeepBindFailedSkipsBindPublishedAfterSnapshot(t *testing.T) {
 	}
 	s.tableGroups.set(bind.Group, bind.Table, newRemoteLockTable(
 		s.serviceID,
-		time.Second,
 		bind,
 		nil,
 		s.handleBindChanged,
@@ -3604,10 +3674,12 @@ func TestKeepBindFailedSkipsBindPublishedAfterSnapshot(t *testing.T) {
 }
 
 func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3629,32 +3701,37 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 			l1.lastAllocatorVersion = staleBind.Version
 			l1.allocatorVersionMu.Unlock()
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-with-lower-version"
-			alloc.version = staleBind.Version - 1
+			oldVersion := staleBind.Version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-with-lower-version", oldVersion-1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
 			restartedAllocatorID := alloc.allocatorID
-			alloc.mu.Unlock()
 
 			_, err = l1.getLockTableWithCreate(context.Background(), 0, freshTable, newTestRows(2), pb.Sharding_None)
 			require.NoError(t, err)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 			freshBind := l1.tableGroups.get(0, freshTable).getBind()
 			require.Equal(t, restartedVersion, freshBind.Version)
 			require.Equal(t, restartedAllocatorID, freshBind.AllocatorID)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
 
 func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3669,26 +3746,35 @@ func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
 			l1.checkCanMoveGroupTables()
 			require.NotNil(t, l1.topGroupTables())
 
-			alloc.mu.Lock()
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
+			require.NotNil(t, alloc.registerService(l1.serviceID))
+			require.True(t, alloc.KeepLockTableBind(l1.serviceID))
 
 			l1.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
 
 			require.Nil(t, l1.topGroupTables())
 			require.Nil(t, l1.tableGroups.get(0, table))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
 
 func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
-	runLockServiceTestsWithAdjustConfig(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
 		time.Second*10,
-		func(alloc *lockTableAllocator, s []*service) {
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3733,7 +3819,6 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 				staleRemoteTable,
 				newRemoteLockTable(
 					l1.serviceID,
-					time.Second,
 					staleRemoteBind,
 					l1.remote.client,
 					l1.handleBindChanged,
@@ -3747,14 +3832,11 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			require.True(t, ok)
 			l1.tableGroups.set(0, staleProxyTable, staleProxy)
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-for-keepalive"
-			alloc.version++
-			restartedAllocatorID := alloc.allocatorID
-			restartedVersion := alloc.version
-			alloc.mu.Unlock()
+			alloc, err := restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-for-keepalive", oldVersion+1
+			})
+			require.NoError(t, err)
+			restartedAllocatorID, restartedVersion := alloc.allocatorID, alloc.version
 
 			currentProxyBind := staleRemoteBind
 			currentProxyBind.Table = currentProxyTable
@@ -3780,19 +3862,23 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			preserved := l1.tableGroups.get(0, currentProxyTable)
 			require.NotNil(t, preserved)
 			require.Equal(t, currentProxyBind, preserved.getBind())
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 		},
 		func(cfg *Config) {
 			cfg.EnableRemoteLocalProxy = true
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		})
 }
 
 func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3804,12 +3890,11 @@ func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, l1.tableGroups.get(0, table))
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-for-ok-false-fence"
-			alloc.version++
-			alloc.mu.Unlock()
+			oldVersion := alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-for-ok-false-fence", oldVersion+1
+			})
+			require.NoError(t, err)
 			require.False(t, alloc.KeepLockTableBind(l1.serviceID))
 
 			l1.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
@@ -3824,6 +3909,10 @@ func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
 			_, err = l1.Lock(ctx, table, newTestRows(2), txnID, option)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
@@ -4135,7 +4224,6 @@ func TestAllocatorObserverPurgesRemoteAndProxyLockTables(t *testing.T) {
 				remoteTable,
 				newRemoteLockTable(
 					l1.serviceID,
-					time.Second,
 					remoteBind,
 					l1.remote.client,
 					l1.handleBindChanged,
@@ -4160,10 +4248,12 @@ func TestAllocatorObserverPurgesRemoteAndProxyLockTables(t *testing.T) {
 }
 
 func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -4176,12 +4266,12 @@ func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
 			require.NoError(t, l1.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
 			require.NotNil(t, l1.tableGroups.get(0, staleTable))
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
 
 			var wg sync.WaitGroup
 			errC := make(chan error, 1)
@@ -4209,7 +4299,11 @@ func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
 			close(errC)
 			require.NoError(t, <-errC)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
@@ -4330,7 +4424,7 @@ func TestRequireRollingRestartLockEventuallySucceedsRetriesTransientRPCErrors(t 
 }
 
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4415,7 +4509,7 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4442,16 +4536,9 @@ func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l1.Unlock(
@@ -4460,23 +4547,16 @@ func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if !alloc.validLockTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "!alloc.validLockTable(0, 0)", func() bool {
+				return !alloc.validLockTable(0, 0)
+			})
 			require.False(t, alloc.validLockTable(0, 0))
 		},
 	)
 }
 
 func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4504,16 +4584,9 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l1.Unlock(
@@ -4522,16 +4595,9 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if !alloc.validLockTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "!alloc.validLockTable(0, 0)", func() bool {
+				return !alloc.validLockTable(0, 0)
+			})
 			require.False(t, alloc.validLockTable(0, 0))
 
 			// new txn should be got right lock table
@@ -4549,7 +4615,7 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4624,7 +4690,7 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestPreTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -5200,6 +5266,45 @@ func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
 					require.NoError(t, s.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
 					require.Nil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
 				})
+		})
+	}
+}
+
+func TestRowLockNoWaitConflictKeepsPartialGrantAndTxnUsable(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			runner(t, 0, func(ctx context.Context, s *service, lt *localLockTable) {
+				holderTxn := newTestTxnID(41)
+				probeTxn := newTestTxnID(42)
+				ordinary := newTestRowExclusiveOptions()
+				noWait := ordinary
+				noWait.Policy = pb.WaitPolicy_FastFail
+				noWait.NoWait = true
+
+				_, err := s.Lock(ctx, 0, newTestRows(2), holderTxn, ordinary)
+				require.NoError(t, err)
+				defer func() {
+					assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				}()
+
+				result, err := s.Lock(ctx, 0, newTestRows(1, 2), probeTxn, noWait)
+				require.ErrorIs(t, err, ErrLockConflict)
+				require.True(t, result.LockedOn.Valid,
+					"the settled partial outcome must retain its physical binding")
+				checkLock(t, lt, []byte{1}, [][]byte{probeTxn}, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+
+				// A direct lock conflict must not poison the explicit transaction or
+				// leave the FastFail policy on the service/session state.
+				_, err = s.Lock(ctx, 0, newTestRows(3), probeTxn, ordinary)
+				require.NoError(t, err)
+				checkLock(t, lt, []byte{3}, [][]byte{probeTxn}, nil, nil)
+
+				require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+				checkLock(t, lt, []byte{1}, nil, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+				checkLock(t, lt, []byte{3}, nil, nil, nil)
+			})
 		})
 	}
 }
@@ -6461,22 +6566,43 @@ func runLockServiceTestsWithLevel(
 	adjustConfig func(*Config),
 	opts ...Option,
 ) {
+	runLockServiceRestartTests(t, level, serviceIDs, lockTableBindTimeout,
+		func(allocator *lockTableAllocator, services []*service, _ func(...AllocatorOption) (*lockTableAllocator, error)) {
+			fn(allocator, services)
+		}, adjustConfig, opts...)
+}
+
+func runLockServiceRestartTests(
+	t assert.TestingT,
+	level zapcore.Level,
+	serviceIDs []string,
+	lockTableBindTimeout time.Duration,
+	fn func(*lockTableAllocator, []*service, func(...AllocatorOption) (*lockTableAllocator, error)),
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
 	runtime.RunTest(
 		"",
 		func(rt runtime.Runtime) {
 			reuse.RunReuseTests(func() {
-				RunLockServicesForTest(
+				runLockServicesForTest(
 					level,
 					serviceIDs,
 					lockTableBindTimeout,
-					func(lta LockTableAllocator, ls []LockService) {
+					func(lta LockTableAllocator, ls []LockService, restart func(...AllocatorOption) (LockTableAllocator, error)) {
 						services := make([]*service, 0, len(ls))
 						for _, s := range ls {
 							services = append(services, s.(*service))
 						}
-						fn(lta.(*lockTableAllocator), services)
+						fn(lta.(*lockTableAllocator), services, func(opts ...AllocatorOption) (*lockTableAllocator, error) {
+							allocator, err := restart(opts...)
+							if err != nil {
+								return nil, err
+							}
+							return allocator.(*lockTableAllocator), nil
+						})
 					},
 					adjustConfig,
 					opts...,
@@ -6829,7 +6955,13 @@ func TestDrainPinsAsyncRemoteWaiterIntent(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("remote waiter did not acquire after holder unlock")
 			}
+			require.False(t, owner.isStatus(pb.Status_ServiceUnLockSucc),
+				"a remote lock holder must keep the owner in drain-waiting")
 			require.NoError(t, caller.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.Eventually(t, func() bool {
+				return owner.isStatus(pb.Status_ServiceUnLockSucc)
+			}, time.Second, time.Millisecond,
+				"owner must advertise restart only after the remote waiter releases")
 		})
 }
 
@@ -7988,4 +8120,32 @@ func BenchmarkTxnClosureAdmissionSingleSource(b *testing.B) {
 		}
 		guard.release()
 	}
+}
+
+func checkLocalWaitersStatus(
+	lt *localLockTable,
+	key []byte,
+	status []waiterStatus) bool {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	lock, ok := lt.mu.store.Get(key)
+	if !ok {
+		panic("missing lock")
+	}
+
+	if lock.waiters.size() != len(status) {
+		return false
+	}
+
+	i := 0
+	statusCheckOK := true
+	lock.waiters.iter(func(w *waiter) bool {
+		if statusCheckOK {
+			statusCheckOK = w.getStatus() == status[i]
+		}
+		i++
+		return true
+	})
+	return statusCheckOK
 }

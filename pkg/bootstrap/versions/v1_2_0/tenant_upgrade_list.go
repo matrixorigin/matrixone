@@ -353,14 +353,14 @@ var upg_information_schema_views = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "VIEWS",
 	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaViewsDDL,
+	UpgSql:    sysview.InformationSchemaViewsLegacyDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "VIEWS")
 		if err != nil {
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaViewsDDL {
+		if exists && viewDef == sysview.InformationSchemaViewsLegacyDDL {
 			return true, nil
 		}
 		return false, nil
@@ -372,14 +372,14 @@ var upg_information_schema_partitions = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "PARTITIONS",
 	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaPartitionsDDL,
+	UpgSql:    sysview.InformationSchemaPartitionsRelease428DDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "PARTITIONS")
 		if err != nil {
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaPartitionsDDL {
+		if exists && viewDef == sysview.InformationSchemaPartitionsRelease428DDL {
 			return true, nil
 		}
 		return false, nil

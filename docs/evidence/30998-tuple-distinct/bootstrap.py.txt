@@ -1,0 +1,26 @@
+from harness import *
+started=time.time();path=root/'bootstrap-service.log';log=path.open('wb');c=None
+cmd=[str(root/'mo-service-baseline'),'-launch',str(root/'launch.toml'),'-debug-http','127.0.0.1:55460'];p=subprocess.Popen(cmd,cwd=work,env=env,stdout=log,stderr=subprocess.STDOUT)
+try:
+ deadline=time.monotonic()+90
+ while c is None:
+  if p.poll() is not None:raise RuntimeError('bootstrap startup exit')
+  try:c=pymysql.connect(host='127.0.0.1',port=55401,user='root',password='111',autocommit=True,read_timeout=120)
+  except pymysql.MySQLError:
+   assert time.monotonic()<deadline;time.sleep(.1)
+ records=[];schemas={};stats={}
+ with c.cursor() as s:
+  for sql in (root/'fixture-bootstrap.sql').read_text().split(';'):
+   if sql.strip():s.execute(sql);records.append({'sql':sql.strip(),'affected_rows':s.rowcount})
+  for table,want in [('qa30982_history_20261024.natural_unique5m',5000000),('qa30995.nn',1000000),('qa30995.nullable',1000000)]:
+   run(s,'SELECT COUNT(*) FROM '+table,((want,),));s.execute('SHOW CREATE TABLE '+table);schemas[table]=s.fetchall()
+   s.execute("SELECT mo_ctl('dn','flush',%s)",(table,));s.fetchall()
+   s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats(%s,'refresh','full') t",(table,));stats[table]=s.fetchall()
+  run(s,'SELECT COUNT(*),MIN(k),MAX(k),SUM(g8) FROM qa30982_history_20261024.natural_unique5m',((5000000,0,4999999,17500000),))
+ (root/'fixture-schema.json').write_text(json.dumps(schemas,indent=2));(root/'fixture-stats.json').write_text(json.dumps(stats,indent=2,default=str));(root/'fixture-load.json').write_text(json.dumps(records,indent=2))
+ print('FIXTURE_BOOTSTRAP_PASS',flush=True)
+finally:
+ if c:c.close()
+ if p.poll() is None:p.send_signal(signal.SIGTERM);p.wait(timeout=30)
+ log.close()
+(root/'bootstrap-receipt.json').write_text(json.dumps({'command':cmd,'source_head':'94faf0209b9ac3254d31906f92e34405f1988203','binary_sha256':hashlib.sha256((root/'mo-service-baseline').read_bytes()).hexdigest(),'started_epoch':started,'finished_epoch':time.time(),'exit':0,'dataset_id':'30998-isolated-94fa','runtime':str(runtime)},indent=2))

@@ -398,6 +398,14 @@ func (node *ShowIndex) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ShowIndexIgnored) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
+func (node *ShowIndexStatus) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ShowTarget) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
@@ -797,6 +805,6 @@ func isLoadDataIgnore(stmt *Load) bool {
 	if stmt == nil {
 		return false
 	}
-	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
-	return ok
+	_, ignore := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
+	return ignore
 }

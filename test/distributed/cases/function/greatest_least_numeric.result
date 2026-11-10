@@ -381,7 +381,8 @@ select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('0000
 ➤ greatest_uuid_same_oid[12,-1,0]  𝄀
 00000000-0000-0000-0000-000000000002
 select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
-invalid argument function greatest, bad value [UUID VARCHAR]
+➤ greatest(cast(00000000-0000-0000-0000-000000000001 as uuid), x)[12,36,0]  𝄀
+x
 select greatest(__mo_rowid, __mo_rowid) = __mo_rowid as greatest_rowid_same_oid from greatest_least_supported_oid;
 ➤ greatest_rowid_same_oid[-7,1,0]  𝄀
 1
@@ -394,7 +395,8 @@ select greatest(v64, v64) as greatest_vecf64_same_oid from greatest_least_suppor
 ➤ greatest_vecf64_same_oid[12,3,0]  𝄀
 [1, 2, 3]
 select greatest(v32, v64) from greatest_least_supported_oid;
-invalid argument function greatest, bad value [VECF32 VECF64]
+➤ greatest(v32, v64)[12,3,0]  𝄀
+[1, 2, 3]
 select greatest(cast('file://greatest-least-a' as datalink), cast('file://greatest-least-b' as datalink)) as greatest_datalink_same_oid;
 ➤ greatest_datalink_same_oid[12,0,0]  𝄀
 file://greatest-least-b

@@ -35,7 +35,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
-		stmt, err := conn.PrepareContext(ctx, `select hex(?),hex(char(?)),make_set(?,"a","b","c"),export_set(?,"Y","N","",4)`)
+		stmt, err := conn.PrepareContext(ctx, `select hex(?),hex(char(?)),make_set(?,"a","b","c"),export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 		require.NoError(t, err)
 		defer stmt.Close()
 		for _, tc := range []struct {
@@ -67,6 +67,36 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 					require.Equal(t, tc.want[i], got[i].String)
 				}
 			})
+		}
+	})
+	t.Run("CHAR source rounding domain", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, "prepare char_rounding from 'select hex(char(?))'")
+		require.NoError(t, err)
+		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare char_rounding") }()
+		for _, tc := range []struct{ source, want string }{
+			{"64.5e0", "40"},
+			{"cast(64.5 as decimal(3,1))", "41"},
+			{"'64.5'", "40"},
+		} {
+			_, err = conn.ExecContext(ctx, "set @char_rounding="+tc.source)
+			require.NoError(t, err)
+			var got string
+			require.NoError(t, conn.QueryRowContext(ctx, "execute char_rounding using @char_rounding").Scan(&got))
+			require.Equal(t, tc.want, got, tc.source)
+		}
+		binary, err := conn.PrepareContext(ctx, "select hex(char(?))")
+		require.NoError(t, err)
+		defer binary.Close()
+		for _, tc := range []struct {
+			value any
+			want  string
+		}{{float64(64.5), "40"}, {"64.5", "40"}} {
+			var got string
+			require.NoError(t, binary.QueryRowContext(ctx, tc.value).Scan(&got))
+			require.Equal(t, tc.want, got)
 		}
 	})
 	t.Run("SQL execute decimal and selector", func(t *testing.T) {
@@ -569,7 +599,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		defer rawDB.Close()
 		rawDB.SetMaxOpenConns(1)
 		rawDB.SetMaxIdleConns(1)
-		stmt, err := rawDB.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`)
+		stmt, err := rawDB.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 		require.NoError(t, err)
 		defer stmt.Close()
 		mu.Lock()

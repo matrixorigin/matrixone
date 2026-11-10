@@ -18,14 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -48,15 +48,26 @@ import (
 const MORPCVersionProbeTail = defines.MORPCVersion82
 
 // TableConfig locates a fulltext2 index's persistent segment store + metadata
-// table; it is the JSON const arg passed to the fulltext2_create / fulltext2_search
-// TVFs. Mirrors bm25.wand.TableConfig.
+// table; it is the JSON config of the fulltext2_create TVF and the fulltext2
+// search scan. Mirrors bm25.wand.TableConfig.
 type TableConfig struct {
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
 	IndexTable    string `json:"index"`    // chunk store (FullText2Index_TblType_Storage)
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
+	// IgnoredTable is the table of the rows the index cannot read, "" when the index has none;
+	// MaxBadRecords is the number of rows it may hold.
+	IgnoredTable  string `json:"ignored,omitempty"`
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
 	Parser        string `json:"parser,omitempty"`
+	// TokenFilters is the ordered token_filter chain (currently only "stop"),
+	// sourced from the persisted token_filter algo_param so the build (create, CDC
+	// tail, compact) and the BM25 query strip the SAME tokens. It is a bag-of-words
+	// analyzer: NL / BOOLEAN phrase queries against a token_filter index are rejected
+	// at plan time (a dropped stopword's bytes stay in the surviving positions).
+	// gojieba parser only. nil ⇒ no filters.
+	TokenFilters []string `json:"token_filter,omitempty"`
 	// Capacity is max_index_capacity: the create build splits the tag=0 base into
 	// sub-indexes of at most Capacity docs each (0 => DefaultBuildCapacity).
 	Capacity int64 `json:"capacity,omitempty"`
@@ -64,6 +75,9 @@ type TableConfig struct {
 	// this many postings (term occurrences), whichever comes first with Capacity.
 	// Bounds per-segment build memory regardless of doc size (0 => DefaultPostingCapacity).
 	PostingCapacity int64 `json:"posting_capacity,omitempty"`
+	// ThreadsBuild is the fulltext2_threads_build parallelism of the create build (0 => the
+	// effective GOMAXPROCS). The built segments are identical at any value.
+	ThreadsBuild int64 `json:"threads_build,omitempty"`
 	// PositionFree builds segments without the positional payload (bag-of-words
 	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
@@ -87,7 +101,7 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
-	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2_search operator must
+	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2 search reader must
 	// self-complete: after searching the bulk index it binds the generation it actually searched
 	// (BuildTS) and emits a table_changes(searched, snapshot] tail so no row committed after the
 	// index's generation is dropped. Set by the planner for an async json probe (current or
@@ -113,6 +127,19 @@ type TableConfig struct {
 	ProbeTailBarLogical uint32 `json:"probe_tail_bar_logical,omitempty"`
 }
 
+// MaintenanceOperands returns the relations fulltext2_create writes: the chunk store, the
+// metadata table and, when cfg has one, the ignored table.
+func MaintenanceOperands(cfg TableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.FullText2Index_TblType_Storage, Name: cfg.IndexTable},
+		{Role: catalog.FullText2Index_TblType_Metadata, Name: cfg.MetadataTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
 // mock the DB round-trips (metadata reads, base/tail chunk loads, budget gates,
 // compaction). Production points them at the real executor; tests swap them for fakes
@@ -130,7 +157,7 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // maxInsertTuples bounds the (index_id, chunk_id, data, tag) rows per INSERT (base-segment and
 // batched CDC-tail persist). Its primary job is cutting RunSql round-trips — many tiny frames become
 // a few multi-row INSERTs. It is kept MODERATE (500, well below hnsw's 2000 in
-// pkg/vectorindex/hnsw/model.go) because each row's load_file data flows into the storage engine's
+// pkg/vectorindex/hnsw/model.go) because each row's binary data flows into the storage engine's
 // ASYNC object writer (file/S3), which buffers-and-flushes and thus accumulates memory as rows are
 // pushed; fulltext2 CDC persist is a BACKGROUND op, so a smaller batch hands that writer a bounded
 // slice (<= maxInsertTuples*MaxChunkSize ≈ 32 MiB) per statement instead of a large burst. NOTE: this is only
@@ -138,45 +165,97 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // tail delta), which the per-iteration work bound (not batch size) is what actually caps.
 const maxInsertTuples = 500
 
-// ToInsertSqls serializes the segment, spills it to a temp file under the LOCAL
-// fileservice's __fulltext2 dir (load_file reads it back by path), and emits the
-// SQL to persist it: one metadata row + the bytes split into <= MaxChunkSize
-// (index_id, chunk_id, data, tag) rows read via load_file. tag=0 is a compacted
-// base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
-// SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
-// run after the SQLs execute (they read the temp file at execution).
-// ToInsertSqls persists this segment. buildTS is the base-table version the segment's content
-// reflects, recorded as metadata.build_ts; 0 means unknown.
-//
-// It is a parameter rather than something derived here because the two callers know different
-// things and the tag cannot tell them apart -- both write tag=0. A CREATE builds from the source
-// table inside this transaction, so its SnapshotTS is exactly the version captured. A MERGE
-// merges existing index segments and never reads the source table, so the compaction
-// transaction's SnapshotTS would claim coverage the content does not have; and since its inputs
-// include unversioned CDC tails there is no version to name, so it passes 0.
-func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) (sqls []string, cleanup func(), err error) {
+// Persist writes one sealed segment in the caller's existing transaction.
+// The segment owns its spill; SQL receives binary values with caller identity.
+func (s *Segment) Persist(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) error {
+	spilled, err := s.Spill(localSpillDir(sqlproc))
+	if err != nil {
+		return err
+	}
+	defer spilled.Discard()
+	return spilled.Write(sqlproc, cfg, ts, tag, buildTS)
+}
+
+// SpilledSegment is a serialized segment staged in a local file. It keeps only the fields
+// its metadata row needs, so the in-memory segment can be released before the write.
+type SpilledSegment struct {
+	Id       string
+	Recency  int64
+	N        int64
+	fp       *os.File
+	checksum string
+	size     int64
+}
+
+// Spill serializes the segment into a temp file under dir ("" = the OS temp dir). It uses
+// no SQL process or transaction, so it may run off the operator goroutine.
+func (s *Segment) Spill(dir string) (*SpilledSegment, error) {
 	buf, err := s.Serialize()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	checksum := vectorindex.CheckSumFromBuffer(buf)
-	filesize := int64(len(buf))
-
-	fp, err := createLocalSpillFile(sqlproc, "ft2build")
+	fp, err := os.CreateTemp(dir, "ft2build")
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	path := fp.Name()
-	cleanup = func() { fp.Close(); os.Remove(path) }
-	if _, err = fp.Write(buf); err != nil {
-		cleanup()
-		return nil, nil, err
+	// Unlinked at once: reads go through fp, and a crash leaves no file behind.
+	os.Remove(fp.Name())
+	if _, err = fp.Write(buf); err == nil {
+		err = fp.Sync()
 	}
-	if err = fp.Sync(); err != nil {
-		cleanup()
-		return nil, nil, err
+	if err != nil {
+		fp.Close()
+		return nil, err
 	}
+	return &SpilledSegment{
+		Id:       s.Id,
+		Recency:  s.Recency,
+		N:        s.N,
+		fp:       fp,
+		checksum: indexfile.Checksum(buf),
+		size:     int64(len(buf)),
+	}, nil
+}
 
+// Write inserts the spilled segment's metadata row and, through the index-file layer, its
+// chunk rows in sqlproc's transaction.
+func (p *SpilledSegment) Write(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) error {
+	metadata := metadataInsertSQL(sqlproc, cfg, p.Id, ts, p.checksum, p.size, p.Recency, p.N, buildTS)
+	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		run := func(sql string) error {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			return err
+		}
+		if err := run(metadata); err != nil {
+			return err
+		}
+		ref := baseRef(cfg, p.Id, p.size, "")
+		ref.Tag = int64(tag)
+		size, sum, err := writeIndexFile(sqlproc, nil, exec.Txn(), ref, io.NewSectionReader(p.fp, 0, p.size), localSpillDir(sqlproc), run)
+		if err != nil {
+			return err
+		}
+		if size != p.size || sum != p.checksum {
+			return moerr.NewInternalErrorNoCtxf("fulltext2 index %s: wrote %d bytes with checksum %s, want %d bytes with %s",
+				p.Id, size, sum, p.size, p.checksum)
+		}
+		return nil
+	})
+}
+
+// Discard closes the spill file, releasing its storage. It is idempotent.
+func (p *SpilledSegment) Discard() {
+	if p == nil || p.fp == nil {
+		return
+	}
+	p.fp.Close()
+	p.fp = nil
+}
+
+func metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ts int64, checksum string,
+	filesize, recency, n, buildTS int64) (sql string) {
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
 	// build_ts is named only when the table has it. A fulltext2 index created before the column
 	// existed keeps the narrower shape until its tenant's v4_0_7 migration runs, and that
@@ -185,93 +264,23 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	// leaves the documented 0 = unknown.
 	if sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
 		catalog.FullText2Index_TblCol_Metadata_Build_Ts) {
-		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
+		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
 			metaTbl,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 			catalog.FullText2Index_TblCol_Metadata_Build_Ts,
-			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
-			buildTS))
+			sqlquote.String(id), ts, sqlquote.String(checksum), filesize, recency, n,
+			buildTS)
 	} else {
-		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
+		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
 			metaTbl,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
+			sqlquote.String(id), ts, sqlquote.String(checksum), filesize, recency, n)
 	}
-	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
-	return sqls, cleanup, nil
-}
-
-// fileChunkRange is one contiguous [offset, offset+length) byte range of a spilled file to persist
-// as storage rows: offset 0 for a whole-file base segment, or a frame's offset within a PACKED CDC
-// spool file (many frames share one file).
-type fileChunkRange struct {
-	path   string
-	offset int64
-	length int
-}
-
-// framesInsertSqls emits the load_file storage-row tuples for a SEQUENCE of file ranges, each range
-// split into <= MaxChunkSize rows, batched at maxInsertTuples rows per INSERT statement
-// ACROSS range boundaries. chunk_ids are assigned contiguously from startChunkId in range order;
-// the next free chunk_id is returned. Batching across ranges is what keeps a burst of tiny CDC tail
-// frames to O(totalChunks/maxInsertTuples) statements instead of one INSERT per frame. Mirrors
-// bm25.wand.FileChunkInsertSqls (single-range) generalized to many ranges.
-func framesInsertSqls(cfg TableConfig, id string, startChunkId int64, ranges []fileChunkRange, tag int) (sqls []string, nextChunkId int64) {
-	prefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, catalog.FullText2Index_TblCol_Storage_Chunk_Id,
-		catalog.FullText2Index_TblCol_Storage_Data, catalog.FullText2Index_TblCol_Storage_Tag)
-	var vals []string
-	chunkID := startChunkId
-	for _, r := range ranges {
-		for off := 0; off < r.length; off += vectorindex.MaxChunkSize {
-			sz := vectorindex.MaxChunkSize
-			if off+sz > r.length {
-				sz = r.length - off
-			}
-			url := fmt.Sprintf("file://%s?offset=%d&size=%d", r.path, r.offset+int64(off), sz)
-			vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
-				sqlquote.String(id), chunkID, sqlquote.String(url), tag))
-			chunkID++
-			if len(vals) == maxInsertTuples {
-				sqls = append(sqls, prefix+strings.Join(vals, ", "))
-				vals = vals[:0]
-			}
-		}
-	}
-	if len(vals) > 0 {
-		sqls = append(sqls, prefix+strings.Join(vals, ", "))
-	}
-	return sqls, chunkID
-}
-
-// fileChunkInsertSqls splits a [baseOffset, baseOffset+dataLen) BYTE RANGE of a spilled file into
-// <= MaxChunkSize storage rows read via load_file (no hex/unhex). Single-range convenience over
-// framesInsertSqls (used by the base-segment persist).
-func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, baseOffset int64, dataLen int, tag int) []string {
-	sqls, _ := framesInsertSqls(cfg, id, startChunkId, []fileChunkRange{{path: path, offset: baseOffset, length: dataLen}}, tag)
-	return sqls
-}
-
-// TailFileInsertSqls persists ONE spilled tag=1 CDC frame (index_id=CdcTailId) that lives at
-// [offset, offset+frameLen) within a packed spool file. Its chunk rows are contiguous from
-// startChunkId, so recency (chunk_id) ordering across frames is unchanged by the packing.
-func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset int64, frameLen int) []string {
-	return fileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, offset, frameLen, int(vectorindex.Tag_CdcEvents))
-}
-
-// TailFramesInsertSqls persists ALL of an iteration's spilled tag=1 CDC frames as FEW multi-row
-// INSERTs: the per-chunk load_file tuples of every frame, batched at maxInsertTuples rows per
-// statement ACROSS frame boundaries — so N tiny frames cost ~N/maxInsertTuples statements (and
-// RunSql round-trips) instead of one INSERT per frame. chunk_ids are contiguous from startChunkId in frame
-// order (recency identical to a per-frame persist); the next free chunk_id (end of the tail range)
-// is returned.
-func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegment) (sqls []string, nextChunkId int64) {
-	return TailFramesInsertSqlsAt(nil, cfg, startChunkId, frames, 0)
+	return sql
 }
 
 // TailFrameMetaId / TailFrameMetaPrefix name a tail frame's metadata row. Defined once in
@@ -287,22 +296,6 @@ func notTailFrame() string {
 	return vectorindex.NotTailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id)
 }
 
-// TailFramesInsertSqlsAt persists the frames AND one metadata row each, recording the size of
-// the frame and the base-table version buildTS its content reflects.
-//
-// The row goes in the same statement batch as the chunks, so the two commit together: a
-// generation's recorded coverage can never disagree with the bytes actually stored. That is the
-// point of keeping it here rather than deriving it from an ISCP watermark elsewhere.
-func TailFramesInsertSqlsAt(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) (sqls []string, nextChunkId int64) {
-	ranges := make([]fileChunkRange, len(frames))
-	for i, f := range frames {
-		ranges[i] = fileChunkRange{path: f.Path, offset: f.Offset, length: f.FrameLen}
-	}
-	sqls, nextChunkId = framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
-
-	return append(sqls, tailFrameMetaSqls(sqlproc, cfg, startChunkId, frames, buildTS)...), nextChunkId
-}
-
 // tailFrameMetaSqls writes the frames' rows, BATCHED at maxInsertTuples rows per statement the
 // same way the chunk rows are. One statement per frame would undo the batching the chunk writer
 // exists to do: a flush of many small frames would cost one round trip each.
@@ -313,36 +306,18 @@ func tailFrameMetaSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkI
 	if len(frames) == 0 {
 		return nil
 	}
-	// The frame rows are written ONLY once this table has the provenance columns, and that is
-	// also what makes them safe to write at all.
-	//
-	// Two hazards, one condition. Naming build_ts on a table that lacks it fails every CDC
-	// flush with "unknown column", so the ISCP transaction never commits its watermark and the
-	// iteration retries forever -- the index silently stops advancing. And a row written
-	// WITHOUT build_ts is still a row: an un-upgraded CN reads this table with SELECT *,
-	// treats every row as a base segment, and would try to load 'cdc_tail:N' as one.
-	//
-	// The table is widened by the v4_0_7 tenant migration, which cannot start until every
-	// service reports the protocol carrying this code (RequiredProtocolVersion). So a widened
-	// table means no un-upgraded reader is left, and skipping the row until then costs only
-	// provenance: tailPeakBytes falls back to bounding the tail by its chunk count.
-	// TWO conditions, because they answer two different questions. The table's shape decides
-	// whether naming build_ts works at all; the deployment's rollout gate decides whether a row
-	// keyed 'cdc_tail:N' can be seen by a CN that would read it as a base sub-index. A wide table
-	// no longer implies the second: once activated, CREATE INDEX also produces one.
-	if !sqlexec.ClusterHasIndexProvenance(sqlproc) {
-		return nil
-	}
+	// Every frame has a metadata row: readers list the tail's frames from them. build_ts is
+	// named only when the table has it.
 	provenance := sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
 		catalog.FullText2Index_TblCol_Metadata_Build_Ts)
-	if !provenance {
-		return nil
-	}
-	cols := fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s)",
+	cols := fmt.Sprintf("(%s, %s, %s, %s, %s, %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
-		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-		catalog.FullText2Index_TblCol_Metadata_Build_Ts)
+		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow)
+	if provenance {
+		cols += ", " + catalog.FullText2Index_TblCol_Metadata_Build_Ts
+	}
+	cols += ")"
 	prefix := fmt.Sprintf("INSERT INTO %s %s VALUES ",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), cols)
 
@@ -354,10 +329,14 @@ func tailFrameMetaSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkI
 		// The frame's own CRC32, read back from the footer it was sealed with rather than
 		// recomputed -- so a tail frame is verifiable from the catalog like a base sub-index.
 		checksum := vectorindex.CdcChunkSetChecksum([]uint32{f.Checksum})
-		values = append(values, fmt.Sprintf("(%s, %d, %s, %d, %d, %d, %d)",
+		row := fmt.Sprintf("(%s, %d, %s, %d, %d, %d",
 			sqlquote.String(TailFrameMetaId(chunkId)), now, sqlquote.String(checksum),
-			int64(f.FrameLen), chunkId, 0, buildTS))
-		chunkId += int64((f.FrameLen + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
+			int64(f.FrameLen), chunkId, 0)
+		if provenance {
+			row += fmt.Sprintf(", %d", buildTS)
+		}
+		values = append(values, row+")")
+		chunkId += FrameChunkCount(f.FrameLen)
 		if len(values) == maxInsertTuples {
 			out = append(out, prefix+strings.Join(values, ", "))
 			values = values[:0]
@@ -562,9 +541,8 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 	return bases, nil
 }
 
-// LoadFromStorage reads an index id's metadata + chunks, verifies the checksum,
-// and deserializes it. Chunks stream by chunk_id offset into a temp file so the
-// mpool never holds the whole index.
+// LoadFromStorage reads an index id's metadata, opens its index file (verified against the
+// metadata checksum by the index-file layer) and maps it.
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*Segment, error) {
 	checksum, filesize, recency, found, err := readMetadata(sqlproc, cfg, id)
 	if err != nil {
@@ -577,49 +555,19 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
 	}
 
-	// Materialize the segment on the fast LOCAL (SSD) fileservice so mmap page faults
-	// come off the 2 GB/s mount, not /tmp (128 MB/s on AWS). path=="" means an
-	// anonymous SSD file (unlinked; munmap frees the inode) — the same
-	// CreateAndRemoveFile the JOIN/mergeorder spill uses.
-	fp, path, err := createLocalTempFile(sqlproc, "ft2idx")
+	f, err := openIndexFile(sqlproc, baseRef(cfg, id, filesize, checksum))
 	if err != nil {
 		return nil, err
 	}
-	cleanup := func() {
-		fp.Close()
-		if path != "" {
-			os.Remove(path)
-		}
-	}
-	if err = fp.Truncate(filesize); err != nil {
-		cleanup()
-		return nil, err
-	}
-	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
-		cleanup()
-		return nil, err
-	}
-	// mmap the file read-only (shared across queries; FST + positions are views into
-	// it, page-cache-backed). The fd is not needed once mapped.
-	data, err := mmapReadOnly(fp)
-	fp.Close()
+	data, err := mmapReadOnly(f.File())
+	release := f.Keep().Release
+	f.Close()
 	if err != nil {
-		if path != "" {
-			os.Remove(path)
-		}
+		release()
 		return nil, err
 	}
-	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
-	if vectorindex.CheckSumFromBuffer(data) != checksum {
-		_ = munmap(data)
-		if path != "" {
-			os.Remove(path)
-		}
-		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
-	}
-	// The Segment OWNS the mapping (+ path for the /tmp fallback): Free() munmaps and,
-	// if linked, deletes it.
-	m := &Segment{Id: id, mmapData: data, mmapPath: path}
+	// The Segment owns the mapping and the hold on its cache entry: Free() releases both.
+	m := &Segment{Id: id, mmapData: data, release: release}
 	if err := m.decodeSegment(data); err != nil {
 		m.Free()
 		return nil, err
@@ -630,7 +578,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 
 // ft2LocalDir is fulltext2's own subdir under the LOCAL fileservice (on the SSD
 // data-dir) for segment spill / mmap files — sibling to the JOIN spill's "__spill".
-// EVERY fulltext2 temp file (the build-side load_file spill, the CDC tail spill, and
+// EVERY fulltext2 temp file (the build-side segment spill, the CDC tail spill, and
 // the query-side mmap materialization) lives here so it lands on the fast SSD mount,
 // not /tmp (128 MB/s on AWS).
 const ft2LocalDir = "__fulltext2"
@@ -638,7 +586,7 @@ const ft2LocalDir = "__fulltext2"
 // localSpillDir returns the on-disk __fulltext2 scratch directory under the LOCAL
 // (SSD) fileservice, creating it if absent. Returns "" when no LOCAL fileservice is
 // attached (tests / one-shot tools) so callers fall back to the OS temp dir via
-// os.CreateTemp("", …)/os.MkdirTemp("", …). Used by the build-side spill (load_file
+// os.CreateTemp("", …)/os.MkdirTemp("", …). Used by the build-side spill (binary
 // needs a real path) — the query mmap path uses the anonymous createLocalTempFile.
 func localSpillDir(sqlproc *sqlexec.SqlProcess) string {
 	if sqlproc == nil || sqlproc.Proc == nil {
@@ -664,43 +612,6 @@ func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
 		return ""
 	}
 	return dir
-}
-
-// createLocalSpillFile creates a NAMED temp file (prefix) under the LOCAL fileservice's
-// __fulltext2 dir — its absolute on-disk path is what load_file reads back. Falls back
-// to the OS temp dir when no LOCAL fileservice is attached (localSpillDir=="").
-func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File, error) {
-	return os.CreateTemp(localSpillDir(sqlproc), prefix)
-}
-
-// createLocalTempFile returns a temp file for the segment's mmap. It prefers the
-// LOCAL fileservice's __fulltext2 subdir (on the SSD data-dir) via the same
-// CreateAndRemoveFile the JOIN spill uses — an ANONYMOUS file (unlinked; the fd +
-// mapping keep the inode alive, Free just munmaps, no os.Remove). Falls back to
-// os.CreateTemp (/tmp, linked → Free deletes by path) when no process/fileservice
-// is attached (tests / one-shot tools). Returns (file, path, err); path=="" for the
-// anonymous SSD file. name is the caller-chosen file-name prefix.
-func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, string, error) {
-	if sqlproc != nil && sqlproc.Proc != nil {
-		ctx := sqlproc.GetContext()
-		// LOCAL fileservice (SSD data-dir) -> ensure our __fulltext2 subdir -> a
-		// MutableFileService rooted there (mirrors process.GetSpillFileService).
-		if local, e := fileservice.Get[fileservice.MutableFileService](
-			sqlproc.Proc.Base.FileService, defines.LocalFileServiceName); e == nil {
-			if e2 := local.EnsureDir(ctx, ft2LocalDir); e2 == nil {
-				if sub, ok := fileservice.SubPath(local, ft2LocalDir).(fileservice.MutableFileService); ok {
-					if f, e3 := sub.CreateAndRemoveFile(ctx, name+"_"+uuid.NewString()); e3 == nil {
-						return f, "", nil
-					}
-				}
-			}
-		}
-	}
-	f, err := os.CreateTemp("", name)
-	if err != nil {
-		return nil, "", err
-	}
-	return f, f.Name(), nil
 }
 
 // checkTailLoadBudget fails fast when the CDC tail's stored bytes exceed the CN memory
@@ -836,9 +747,16 @@ func tailChunkCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error)
 // pre-allocation figure, both see room for one tail, and both then allocate. Subtracting the
 // arrivals ahead of this one is what makes the second refuse instead of joining the first.
 func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) error {
+	_, err := tailLoadBudget(sqlproc, cfg, reservedAhead)
+	return err
+}
+
+// tailLoadBudget is checkTailLoadBudget; it also returns how many tail chunks no frame metadata
+// row accounts for.
+func tailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) (int64, error) {
 	need, uncoveredChunks, err := tailPeakBytes(sqlproc, cfg)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	promised := max(reservedAhead, 0)
 	avail := int64(memTotalFn())*8/10 - int64(memGolangFn()) - promised
@@ -849,7 +767,7 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedA
 		// is the safe direction, and it is not permanent: compaction rewrites the tail as frames
 		// that do record their size, after which this figure is exact. Say so, or an operator
 		// reads a number they cannot reconcile with the bytes on disk.
-		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
+		return uncoveredChunks, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
 			"fulltext2 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
 				"(MemoryTotal*0.8 - Go heap - %d MB promised to loads already in flight); "+
 				"%d of its chunks predate per-frame sizes and are counted at the %d KB chunk cap, "+
@@ -858,7 +776,7 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedA
 			cfg.DbName, cfg.IndexTable, need>>20, avail>>20, promised>>20,
 			uncoveredChunks, vectorindex.MaxChunkSize>>10))
 	}
-	return nil
+	return uncoveredChunks, nil
 }
 
 // LoadTailSegments loads the tag=1 CdcTail: the SELECTed chunk rows are ordered,
@@ -874,9 +792,128 @@ func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment,
 func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) ([]*Segment, map[any]int64, error) {
 	// Fail fast if the tail can't fit in the memory budget, rather than letting it
 	// OOM-kill the CN as it decodes into the Go heap.
-	if err := checkTailLoadBudget(sqlproc, cfg, reservedAhead); err != nil {
+	uncovered, err := tailLoadBudget(sqlproc, cfg, reservedAhead)
+	if err != nil {
 		return nil, nil, err
 	}
+	frames, err := loadTailFrames(sqlproc, cfg, uncovered > 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	var segs []*Segment
+	deletes := make(map[any]int64)
+	for _, f := range frames {
+		if segs, deletes, err = addTailFrame(segs, deletes, f.ChunkId, f.Data); err != nil {
+			freeSegs(segs)
+			return nil, nil, err
+		}
+	}
+	if len(segs) == 0 && len(deletes) == 0 {
+		return nil, nil, nil
+	}
+	return segs, deletes, nil
+}
+
+// loadTailFrames returns the tail's frames in chunk order, each with its starting chunk: a
+// frame that fits in one chunk from its row, read with the others in one scan, a larger one
+// from its index file; or all from the chunk rows when some chunk has no frame metadata row
+// (legacy).
+func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, legacy bool) ([]TailFrame, error) {
+	if legacy {
+		return legacyTailFrames(sqlproc, cfg)
+	}
+	rows, err := readTailFrames(sqlproc, cfg)
+	if err != nil {
+		return nil, err
+	}
+	small, err := readSmallTailFrames(sqlproc, cfg, rows)
+	if err != nil {
+		return nil, err
+	}
+	frames := make([]TailFrame, 0, len(rows))
+	for _, r := range rows {
+		data, ok := small[r.start]
+		if !ok {
+			if data, err = readTailFrameFile(sqlproc, cfg, r); err != nil {
+				return nil, err
+			}
+		}
+		frames = append(frames, TailFrame{ChunkId: r.start, Data: data})
+	}
+	return frames, nil
+}
+
+// readSmallTailFrames reads the frames of rows that fit in one chunk from their chunk rows,
+// maxTailFramesPerRead frames per scan, checks each against its row, and returns them by
+// starting chunk.
+func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []tailFrame) (map[int64][]byte, error) {
+	var starts []string
+	for _, r := range rows {
+		if smallTailFrame(r.size) {
+			starts = append(starts, strconv.FormatInt(r.start, 10))
+		}
+	}
+	if len(starts) == 0 {
+		return nil, nil
+	}
+	chunks := make(map[int64][]byte, len(starts))
+	for len(starts) > 0 {
+		n := min(len(starts), maxTailFramesPerRead)
+		sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d AND %s IN (%s)",
+			catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
+			sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+			catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
+			catalog.FullText2Index_TblCol_Storage_Chunk_Id, strings.Join(starts[:n], ", "))
+		starts = starts[n:]
+		if err := readTailChunks(sqlproc, sql, chunks); err != nil {
+			return nil, err
+		}
+	}
+	for _, r := range rows {
+		if !smallTailFrame(r.size) {
+			continue
+		}
+		data, ok := chunks[r.start]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: missing chunk", r.start)
+		}
+		if int64(len(data)) != r.size {
+			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: %d bytes, want %d", r.start, len(data), r.size)
+		}
+		if err := indexfile.VerifyTailFrameBytes(data, r.checksum); err != nil {
+			return nil, err
+		}
+	}
+	return chunks, nil
+}
+
+// maxTailFramesPerRead bounds the frames one statement of readSmallTailFrames reads.
+const maxTailFramesPerRead = 1000
+
+// readTailChunks adds the chunk rows sql returns to chunks.
+func readTailChunks(sqlproc *sqlexec.SqlProcess, sql string, chunks map[int64][]byte) error {
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+		for i := 0; i < bat.RowCount(); i++ {
+			chunks[cids[i]] = append([]byte(nil), bat.Vecs[1].GetRawBytesAt(i)...)
+		}
+	}
+	return nil
+}
+
+// legacyTailFrames reads a tail written before every frame had a metadata row from its chunk
+// rows, finding its frames by their headers. Remove it once no such tail remains: compaction
+// and REINDEX rewrite a tail with a row for every frame.
+func legacyTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, error) {
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
@@ -884,7 +921,7 @@ func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reserv
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var chunks []TailChunk
 	for _, bat := range res.Batches {
@@ -898,160 +935,86 @@ func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reserv
 	}
 	res.Close()
 	if len(chunks) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
-
 	ordered, err := orderTailChunks(chunks)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	frames, err := reassembleFrames(ordered)
-	if err != nil {
-		return nil, nil, err
-	}
+	return reassembleFrames(ordered)
+}
 
-	var segs []*Segment
-	deletes := make(map[any]int64)
-	for _, f := range frames {
-		records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(f.Data)
-		if uerr != nil {
-			freeSegs(segs)
-			return nil, nil, uerr
+// addTailFrame decodes the frame that starts at chunk start into a segment or into deletes.
+func addTailFrame(segs []*Segment, deletes map[any]int64, start int64, data []byte) ([]*Segment, map[any]int64, error) {
+	records, _, nInserts, nDeletes, _, err := cuvscdc.UnframeCdcChunk(data)
+	if err != nil {
+		return segs, deletes, err
+	}
+	switch {
+	case nInserts > 0:
+		seg, err := Deserialize(fmt.Sprintf("tail-%d", start), bytes.NewReader(records))
+		if err != nil {
+			return segs, deletes, err
 		}
-		switch {
-		case nInserts > 0:
-			seg, derr := Deserialize(fmt.Sprintf("tail-%d", f.ChunkId), bytes.NewReader(records))
-			if derr != nil {
-				freeSegs(segs)
-				return nil, nil, derr
-			}
-			seg.Recency = f.ChunkId
-			segs = append(segs, seg)
-		case nDeletes > 0:
-			recs, derr := DecodeDeleteLog(records)
-			if derr != nil {
-				freeSegs(segs)
-				return nil, nil, derr
-			}
-			deletes = foldDeleteFrame(deletes, recs, f.ChunkId)
+		seg.Recency = start
+		segs = append(segs, seg)
+	case nDeletes > 0:
+		recs, err := DecodeDeleteLog(records)
+		if err != nil {
+			return segs, deletes, err
 		}
+		deletes = foldDeleteFrame(deletes, recs, start)
 	}
 	return segs, deletes, nil
 }
 
-// streamChunksToFile streams a tag=0 index's chunk rows, writing each at
-// chunk_id*MaxChunkSize into fp; the assembled bytes must fill filesize exactly.
-func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
-	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
-		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(id))
-	written, _, err := streamChunkRowsToFile(sqlproc, sql, 0, filesize, fp)
-	if err != nil {
-		return err
-	}
-	if written != filesize {
-		return moerr.NewInternalError(sqlproc.GetContext(),
-			fmt.Sprintf("fulltext2 index %s incomplete: wrote %d of %d bytes", id, written, filesize))
-	}
-	return nil
+// tailFrame is a CDC tail frame as its metadata row records it.
+type tailFrame struct {
+	start, size int64
+	checksum    string
 }
 
-// streamChunkRowsToFile streams the (chunk_id, data) rows of sql and writes each
-// at (chunk_id-baseChunk)*MaxChunkSize into fp, bounding the mpool to the stream
-// buffer. Returns bytes written + chunk-row count.
-func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File) (written, nchunks int64, err error) {
-	streamCh := make(chan executor.Result, 2)
-	errorCh := make(chan error, 2)
-	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-	defer cancel(nil)
+// readTailFrames lists the tail's frames in chunk order.
+func readTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]tailFrame, error) {
+	sql := fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s ORDER BY %s",
+		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Filesize,
+		catalog.FullText2Index_TblCol_Metadata_Checksum,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id),
+		catalog.FullText2Index_TblCol_Metadata_Recency)
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	var frames []tailFrame
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			frames = append(frames, tailFrame{
+				start:    vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], i),
+				size:     vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], i),
+				checksum: bat.Vecs[2].GetStringAt(i),
+			})
+		}
+	}
+	return frames, nil
+}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer func() {
-			close(streamCh)
-			wg.Done()
-		}()
-		if _, e := runStreamingSql(ctx, sqlproc, sql, streamCh, errorCh); e != nil {
-			errorCh <- e
-		}
-	}()
-
-	var loopErr error
-	closed := false
-	seen := make(map[int64]struct{}) // chunk_ids already written, to catch duplicates
-	for !closed {
-		select {
-		case res, ok := <-streamCh:
-			if !ok {
-				closed = true
-				break
-			}
-			for _, bat := range res.Batches {
-				if bat == nil || bat.RowCount() == 0 {
-					continue
-				}
-				cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-				for i, cid := range cids {
-					data := bat.Vecs[1].GetRawBytesAt(i)
-					off := (cid - baseChunk) * int64(vectorindex.MaxChunkSize)
-					if off < 0 || off+int64(len(data)) > bound {
-						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
-							fmt.Sprintf("fulltext2 chunk_id %d out of range [base %d, bound %d]", cid, baseChunk, bound))
-						break
-					}
-					// A duplicate (index_id, chunk_id) row would write its region twice and
-					// inflate `written`, letting the caller's written==filesize check pass while
-					// a DIFFERENT chunk's region is never filled (a hole the CRC only catches
-					// after a full stream+mmap). Reject the duplicate here, fail-fast.
-					if _, dup := seen[cid]; dup {
-						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
-							fmt.Sprintf("fulltext2 duplicate chunk_id %d", cid))
-						break
-					}
-					seen[cid] = struct{}{}
-					if _, e := fp.WriteAt(data, off); e != nil {
-						loopErr = e
-						break
-					}
-					written += int64(len(data))
-					nchunks++
-				}
-				if loopErr != nil {
-					break
-				}
-			}
-			res.Close()
-			if loopErr != nil {
-				closed = true
-			}
-		case e := <-errorCh:
-			loopErr = e
-			closed = true
-		case <-ctx.Done():
-			loopErr = context.Cause(ctx)
-			closed = true
-		}
+// readTailFrameFile reads a tail frame's bytes from its index file.
+func readTailFrameFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, f tailFrame) ([]byte, error) {
+	file, err := openIndexFile(sqlproc, tailRef(cfg, f.start, f.size, f.checksum))
+	if err != nil {
+		return nil, err
 	}
-	if loopErr != nil {
-		cancel(loopErr)
+	defer file.Close()
+	data := make([]byte, f.size)
+	if _, err := file.File().ReadAt(data, 0); err != nil {
+		return nil, err
 	}
-	for res := range streamCh {
-		res.Close()
-	}
-	wg.Wait()
-	if loopErr == nil {
-		select {
-		case e := <-errorCh:
-			loopErr = e
-		default:
-		}
-	}
-	if loopErr != nil {
-		return 0, 0, loopErr
-	}
-	return written, nchunks, nil
+	return data, nil
 }
 
 // NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id —

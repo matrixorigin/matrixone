@@ -16,7 +16,7 @@ show create view test_view;
 show collation like 'utf8mb4_general_ci';
 show collation like 'utf8mb4_general_ci%';
 -- issue end
-load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
+load data local infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 -- issue #7789
 update test_table set col2='xxx' where col1=1;

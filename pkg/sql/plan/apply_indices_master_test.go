@@ -27,7 +27,7 @@ import (
 )
 
 func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
-	compCtx := NewEmptyCompilerContext()
+	compCtx := NewEmptyCompilerContext(newPlanTestProcess(t))
 	compCtx.isDml = true
 	compCtx.objects["__mo_master_idx"] = &planpb.ObjectRef{SchemaName: "test", ObjName: "__mo_master_idx"}
 	compCtx.tables["__mo_master_idx"] = &planpb.TableDef{
@@ -100,7 +100,7 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 // written. Published unsorted, the consumer refuses to prune and every block is
 // scanned -- correct, but the index buys nothing.
 func TestMasterIndexPublishesSortedPrefixPayload(t *testing.T) {
-	compCtx := NewEmptyCompilerContext()
+	compCtx := NewEmptyCompilerContext(newPlanTestProcess(t))
 	compCtx.isDml = true
 	compCtx.objects["__mo_master_idx"] = &planpb.ObjectRef{SchemaName: "test", ObjName: "__mo_master_idx"}
 	compCtx.tables["__mo_master_idx"] = &planpb.TableDef{

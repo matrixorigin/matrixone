@@ -104,7 +104,9 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
 
-    memset(bf->bitmap, 0, nbytes);
+    // The legacy wire length includes bitmap[1] in sizeof(bloomfilter_t)
+    // plus nbytes. Initialize that trailing slot too, without changing the format.
+    memset(bf, 0, sizeof(bloomfilter_t) + nbytes);
     uint64_t seed = 0;
     for (int j = 0; j < 4; j++) {
         seed = (seed << 16) | (rand() & 0xFFFF);
@@ -122,7 +124,8 @@ bloomfilter_t* bloomfilter_init_with_seed(uint64_t nbits, uint32_t k, uint64_t s
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
 
-    memset(bf->bitmap, 0, nbytes);
+    // Keep the same initialized wire allocation as the unseeded constructor.
+    memset(bf, 0, sizeof(bloomfilter_t) + nbytes);
     bloomfilter_setup(bf, new_nbits, k, seed);
     return bf;
 }

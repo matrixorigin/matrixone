@@ -580,7 +580,7 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 		name   string
 		input  FunctionTestInput
 		result FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name:   "inet_ntoa dynamic selection",
@@ -614,7 +614,7 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			caseRun := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.result, tc.fn).
 				WithSelectList(selected)
-			ok, info := caseRun.Run()
+			ok, info := caseRun.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}

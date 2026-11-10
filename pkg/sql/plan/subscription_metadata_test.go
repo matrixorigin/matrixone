@@ -135,8 +135,9 @@ func (c *subscriptionMetadataTestContext) DatabaseExists(
 func (c *subscriptionMetadataTestContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if strings.EqualFold(databaseName, INFORMATION_SCHEMA) &&
 		strings.EqualFold(tableName, informationSchemaStatistics) {
 		obj, tableDef := subscriptionStatisticsTestView()
@@ -144,9 +145,9 @@ func (c *subscriptionMetadataTestContext) Resolve(
 	}
 	subscription := c.subscriptionFor(databaseName)
 	if subscription == nil {
-		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot)
+		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 	}
-	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot)
+	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot, nil)
 	if err != nil || tableDef == nil {
 		return obj, tableDef, err
 	}
@@ -197,7 +198,7 @@ type subscriptionMetadataTestOptimizer struct {
 }
 
 func (o subscriptionMetadataTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	built, err := BuildPlan(o.ctx, stmt, false)
+	built, err := BuildPlan(o.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -208,9 +209,9 @@ func (o subscriptionMetadataTestOptimizer) CurrentContext() CompilerContext {
 	return o.ctx
 }
 
-func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTestContext) {
+func newSubscriptionMetadataTestOptimizer(t testing.TB) (Optimizer, *subscriptionMetadataTestContext) {
 	ctx := &subscriptionMetadataTestContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		lowerCaseTableNames: 1,
 		subscription: &SubscriptionMeta{
 			AccountId: 0,
@@ -231,7 +232,7 @@ func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTes
 }
 
 func TestSubscriptionStatisticsRoutesCatalogScansToPublisher(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select table_schema, index_schema, table_name, index_name "+
 			"from information_schema.statistics "+
@@ -284,7 +285,7 @@ func TestSubscriptionStatisticsUsesResolvedPublisherAccountIdentity(t *testing.T
 	util.InitPredefinedTables([]string{catalog.MO_USER})
 	defer util.InitPredefinedTables(nil)
 
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{{
 		Meta: &SubscriptionMeta{
 			Name:        "publication",
@@ -334,7 +335,7 @@ func TestSubscriptionStatisticsUsesResolvedPublisherAccountIdentity(t *testing.T
 }
 
 func TestSubscriptionShowIndexRoutesCatalogScansToPublisher(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	queryPlan, err := runOneStmt(optimizer, t, "show index from sub_db.nation")
 	require.NoError(t, err)
 	require.Nil(t, ctx.GetQueryingSubscription(), "SHOW INDEX must restore the session compiler context")
@@ -357,11 +358,15 @@ func TestSubscriptionShowIndexRoutesCatalogScansToPublisher(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	for _, test := range []struct {
 		name string
 		sql  string
 	}{
+		{
+			name: "database-qualified projection",
+			sql:  "select information_schema.statistics.index_name from information_schema.statistics",
+		},
 		{
 			name: "account wide",
 			sql:  "select table_schema, index_name from information_schema.statistics where table_name = 'nation'",
@@ -404,7 +409,7 @@ func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsExpandsEachOccurrence(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 
 	nestedPlan, err := runOneStmt(optimizer, t,
 		"select s.index_name from information_schema.statistics s "+
@@ -426,14 +431,14 @@ func TestSubscriptionStatisticsExpandsEachOccurrence(t *testing.T) {
 }
 
 func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	statements, err := mysql.Parse(context.Background(),
 		"select index_name from information_schema.statistics "+
 			"where table_schema = ? and table_name = ?", 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	queryPlan, err := BuildPlan(ctx, statements[0], true)
+	queryPlan, err := BuildPlan(ctx, statements[0], true, nil)
 	require.NoError(t, err)
 	require.True(t, PreparedPlanDependsOnSubscriptionMetadata(queryPlan))
 	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
@@ -444,7 +449,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{}
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -464,7 +469,7 @@ func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *tes
 }
 
 func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(64)
 	ctx.metadata = append(ctx.metadata, nil, ctx.metadata[10])
 
@@ -481,7 +486,7 @@ func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(64)
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -504,7 +509,7 @@ func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsMetadataCacheIsSnapshotScoped(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	snapshotA := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
 	snapshotB := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 2}}
 	keyA, err := subscriptionMetadataSnapshotKey(snapshotA)
@@ -533,7 +538,7 @@ func TestSubscriptionStatisticsMetadataCacheIsSnapshotScoped(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsBudgetIgnoresRejectedAndDuplicateMetadata(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches)
 	ctx.metadata = append(ctx.metadata,
 		nil,
@@ -581,7 +586,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 	)
 
 	t.Run("case-sensitive names are distinct", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.lowerCaseTableNames = 0
 		ctx.metadata = metadata
 		statements, err := mysql.Parse(context.Background(),
@@ -590,7 +595,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount)
 		require.Nil(t, ctx.GetQueryingSubscription())
@@ -598,7 +603,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 
 	for _, mode := range []int64{1, 2} {
 		t.Run(fmt.Sprintf("case-insensitive mode %d deduplicates", mode), func(t *testing.T) {
-			optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+			optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 			ctx.lowerCaseTableNames = mode
 			ctx.metadata = metadata
 
@@ -614,7 +619,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(129)
 	statements, err := mysql.Parse(context.Background(),
 		"select count(*) from information_schema.statistics", 1)
@@ -623,7 +628,7 @@ func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
 	defer statements[0].Free()
 
 	for build := 0; build < 2; build++ {
-		queryPlan, buildErr := BuildPlan(ctx, statements[0], false)
+		queryPlan, buildErr := BuildPlan(ctx, statements[0], false, nil)
 		require.NoError(t, buildErr)
 		require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), 129)
 		require.Nil(t, ctx.GetQueryingSubscription())
@@ -635,7 +640,7 @@ func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
 func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	build := func(t *testing.T, tables, sql string) (*Plan, error, *subscriptionMetadataTestContext) {
 		t.Helper()
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget", Tables: tables,
 		}, AllTablesVisible: true}}
@@ -643,7 +648,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
-		plan, err := BuildPlan(ctx, statements[0], false)
+		plan, err := BuildPlan(ctx, statements[0], false, nil)
 		return plan, err, ctx
 	}
 
@@ -686,7 +691,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	})
 
 	t.Run("failed admission neither caches nor charges a retried snapshot", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget",
 			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries + 1),
@@ -710,7 +715,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	})
 
 	t.Run("cached admission failure does not partially consume budget", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget",
 			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries / 2),
@@ -782,7 +787,7 @@ func subscriptionMetadataTestTableList(count int) string {
 
 func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T) {
 	t.Run("single occurrence", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches + 1)
 		statements, err := mysql.Parse(context.Background(),
 			"select count(*) from information_schema.statistics where table_name = 'nation'", 1)
@@ -790,7 +795,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount,
 			"admission must reject the occurrence before binding any publisher view")
@@ -798,7 +803,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 	})
 
 	t.Run("cumulative occurrences", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(64)
 		statements, err := mysql.Parse(context.Background(),
 			"select count(*) from information_schema.statistics a "+
@@ -811,7 +816,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount,
 			"the fifth occurrence must fail admission before binding another publisher view")
@@ -823,7 +828,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 	const sql = "select count(*) from information_schema.statistics where table_name = 'nation'"
 
 	t.Run("pre-canceled", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(4)
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err)
@@ -834,7 +839,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		canceledCtx, cancel := context.WithCancelCause(context.Background())
 		cancel(wantErr)
 		ctx.SetContext(canceledCtx)
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, wantErr)
 		require.Zero(t, ctx.metadataCalls,
 			"pre-canceled planning must stop before subscription enumeration")
@@ -843,7 +848,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 	})
 
 	t.Run("during publisher binding", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(4)
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err)
@@ -855,7 +860,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		ctx.SetContext(planningCtx)
 		ctx.cancelPublisherBind = 1
 		ctx.cancelPlanning = cancel
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, 1, ctx.publisherBindCount,
 			"the loop must observe cancellation before binding the next publisher view")
@@ -886,7 +891,7 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 	for _, subscriptionCount := range []int{0, 16, 64} {
 		for _, query := range queries {
 			b.Run(fmt.Sprintf("subscriptions-%d/%s", subscriptionCount, query.name), func(b *testing.B) {
-				_, ctx := newSubscriptionMetadataTestOptimizer()
+				_, ctx := newSubscriptionMetadataTestOptimizer(b)
 				ctx.metadata = subscriptionMetadataTestSet(subscriptionCount)
 				b.ReportMetric(float64(subscriptionCount), "subscriptions")
 				b.ResetTimer()
@@ -899,7 +904,7 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 					if len(statements) != 1 {
 						b.Fatalf("expected one statement, got %d", len(statements))
 					}
-					_, err = BuildPlan(ctx, statements[0], false)
+					_, err = BuildPlan(ctx, statements[0], false, nil)
 					statements[0].Free()
 					if err != nil {
 						b.Fatal(err)
@@ -930,7 +935,7 @@ func subscriptionMetadataTestSet(count int) []*SubscriptionMetadata {
 }
 
 func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation"}, AllTablesVisible: true},
 		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation"}, AllTablesVisible: true},
@@ -968,7 +973,7 @@ func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsAppliesSubscriberRBACBeforePublisherScan(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select index_name from information_schema.statistics "+
@@ -995,7 +1000,7 @@ func TestSubscriptionStatisticsAppliesSubscriberRBACBeforePublisherScan(t *testi
 }
 
 func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: ctx.subscription},
 		{Meta: ctx.subscriptions["sub_b"], AllTablesVisible: true},
@@ -1011,7 +1016,7 @@ func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsOmitsInvalidPublicationScopes(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: &SubscriptionMeta{AccountId: 7, SubName: "missing_db", Tables: "*"}, AllTablesVisible: true},
 		{Meta: &SubscriptionMeta{AccountId: 7, DbName: "publisher_db", SubName: "missing_tables"}, AllTablesVisible: true},
@@ -1028,7 +1033,7 @@ func TestSubscriptionStatisticsOmitsInvalidPublicationScopes(t *testing.T) {
 }
 
 func TestInvalidDirectSubscriptionScopeFailsClosed(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.SetQueryingSubscription(&SubscriptionMeta{
 		AccountId: 7,
 		SubName:   "invalid_subscription",
@@ -1088,7 +1093,7 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 	}
 	require.Nil(t, subscriptionMoTablesFilter(nil))
 
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.SetQueryingSubscription(meta)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
 	directFilter, err := builder.currentSubscriptionMoTablesFilter()
@@ -1222,7 +1227,7 @@ func TestBuildSubscriptionMetadataPersistedSystemViews(t *testing.T) {
 		sysview.InformationSchemaTablesDDL,
 		sysview.InformationSchemaColumnsDDL,
 	} {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, ddl)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, ddl)
 		require.NoError(t, err)
 		require.NotNil(t, logicPlan.GetDdl())
 	}
@@ -1230,7 +1235,7 @@ func TestBuildSubscriptionMetadataPersistedSystemViews(t *testing.T) {
 
 func TestBuildSubscriptionTablesUsesOneReachableProducer(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"SELECT * FROM information_schema.TABLES",
 	)
@@ -1242,7 +1247,7 @@ func TestBuildSubscriptionTablesUsesOneReachableProducer(t *testing.T) {
 }
 
 func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := runtime.ServiceRuntime(proc.GetService())
@@ -1257,7 +1262,7 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 
 	tableFunction := &tree.TableFunction{Func: &tree.FuncExpr{}}
 	tablesCtx := NewBindContext(builder, nil)
-	tablesCtx.viewChain = []string{objectkey.Encode("information_schema", "TABLES")}
+	tablesCtx.viewPath = []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "TABLES"}}
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
 	_, err := builder.buildSubscriptionTables(tableFunction, tablesCtx, nil, nil)
@@ -1279,23 +1284,22 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.ErrorContains(t, err, "private to information_schema metadata views")
 
 	userViewCtx := NewBindContext(builder, nil)
-	userViewCtx.viewChain = []string{objectkey.Encode("app", "metadata")}
+	userViewCtx.viewPath = []*plan.ViewStep{{DatabaseName: "app", ViewName: "metadata"}}
 	_, err = builder.buildSubscriptionTables(tableFunction, userViewCtx, nil, nil)
 	require.ErrorContains(t, err, "private to information_schema metadata views")
 
 	columnsCtx := NewBindContext(builder, nil)
-	columnsCtx.viewChain = []string{
-		objectkey.Encode("app", "wrapper"),
-		objectkey.Encode("INFORMATION_SCHEMA", "columns"),
-	}
+	columnsCtx.viewPath = []*plan.ViewStep{{DatabaseName: "app", ViewName: "wrapper"}, {DatabaseName: "INFORMATION_SCHEMA", ViewName: "columns"}}
 	columnsNodeID, err := builder.buildSubscriptionColumns(tableFunction, columnsCtx, nil, nil)
 	require.NoError(t, err)
 	columnsNode := builder.qry.Nodes[columnsNodeID]
 	require.Equal(t, subscriptionColumnsFunctionName, columnsNode.TableDef.TblFunc.Name)
 	require.Equal(t, "key_priority", columnsNode.TableDef.Cols[17].Name)
 	require.Equal(t, int32(types.T_int64), columnsNode.TableDef.Cols[17].Typ.Id)
-	require.Equal(t, "table_owner", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
-	require.Equal(t, int32(types.T_uint32), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
+	// The unsigned-attribute mask column ships code-only after table_owner;
+	// no shipped view definition references it yet.
+	require.Equal(t, "att_is_unsigned", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
+	require.Equal(t, int32(types.T_int8), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
 
 	_, err = builder.buildSubscriptionTables(tableFunction, columnsCtx, nil, nil)
 	require.NoError(t, err, "COLUMNS enumerates authorized subscription View candidates before binding")

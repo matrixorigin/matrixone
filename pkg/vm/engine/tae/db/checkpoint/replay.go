@@ -486,6 +486,7 @@ func MergeCkpMeta(
 	fs fileservice.FileService,
 	cnLocation, tnLocation objectio.Location,
 	startTs, ts types.TS,
+	tableIDLocation objectio.LocationSlice,
 ) (string, error) {
 	var (
 		metaFiles []ioutil.TSRangeFile
@@ -542,7 +543,6 @@ func MergeCkpMeta(
 		bat.AddVector(colNames[i], vec)
 	}
 	last := bat.Vecs[0].Length() - 1
-	var cptLocation objectio.LocationSlice
 	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
 	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
 	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
@@ -552,7 +552,7 @@ func MergeCkpMeta(
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
-	bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(cptLocation), false)
+	bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(tableIDLocation), false)
 	name := ioutil.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {

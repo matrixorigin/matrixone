@@ -388,7 +388,7 @@ func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
 	})
 }
 
-func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T) {
+func TestCTASRepeatedDerivedStringDomainConsumesDeclaration(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
 		create table repeated_derived_string_domain as
 		select left(if(d.value is not null, d.value, _binary 'x'), 1) as sliced
@@ -399,7 +399,7 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	plan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	plan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	var visible []*planpb.ColDef
 	for _, col := range plan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
@@ -409,10 +409,35 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	}
 	require.Len(t, visible, 1)
 	require.Equal(t, int32(types.T_varbinary), visible[0].Typ.Id)
-	// The derived value is binary-shaped but can produce text at runtime. The
-	// repeated reference in IF's condition and value branch must retain that
-	// lineage; narrowing it to VARBINARY(1) would truncate a multibyte text row.
-	require.Greater(t, visible[0].Typ.Width, int32(1))
+	// IF consumes the derived conditional declaration before LEFT. Its output
+	// is one byte even for a selected multibyte text value, as in MySQL CTAS.
+	// Preserve VARBINARY rather than upgrading this bounded result to BLOB.
+	require.Equal(t, int32(1), visible[0].Typ.Width)
+}
+
+func TestCastStringDomainMatchesResultType(t *testing.T) {
+	for _, target := range []types.Type{
+		types.T_int64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal128, 24, 3),
+		types.T_varchar.ToType(), types.T_varbinary.ToType(),
+	} {
+		t.Run(target.Oid.String(), func(t *testing.T) {
+			sourceType := types.T_int32.ToType()
+			source := &planpb.Expr{Typ: makePlan2Type(&sourceType), Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{RelPos: 1, ColPos: 0},
+			}}
+			cast, err := appendCastBeforeExpr(context.Background(), source, makePlan2Type(&target))
+			require.NoError(t, err)
+			var want uint8
+			if target.Oid == types.T_varchar || target.Oid == types.T_varbinary {
+				want = possibleStringDomainText
+			}
+			domains := possibleStringDomainsForExpr(cast)
+			require.Equal(t, want, domains)
+			if domains != 0 {
+				require.NoError(t, stringDomainSourceWitness(cast, domains).ValidateStringLiteralForms())
+			}
+		})
+	}
 }
 
 func TestStringDomainSourceWitnessStaysBounded(t *testing.T) {
@@ -546,7 +571,7 @@ func TestBindPublicFunctionResultContracts(t *testing.T) {
 	require.Equal(t, int32(types.T_int32), isIPv4.Typ.Id)
 }
 
-func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
+func TestBindBitwiseAggregatePreservesBlobSubstringType(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()
 	sourceExpr := &planpb.Expr{
@@ -566,7 +591,10 @@ func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_blob), substring.Typ.Id)
 
 	for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
-		_, err = BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
-		require.Error(t, err, "%s must keep BLOB SUBSTRING outside binary aggregate support", aggregateName)
+		aggregate, err := BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
+		require.NoError(t, err, aggregateName)
+		expected := substring.Typ
+		expected.NotNullable = true // bit aggregates always materialize a neutral value.
+		require.Equal(t, expected, aggregate.Typ)
 	}
 }

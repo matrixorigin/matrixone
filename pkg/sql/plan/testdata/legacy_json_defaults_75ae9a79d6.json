@@ -1,0 +1,46 @@
+{
+  "insert_null": {
+    "sql": "create table t(a json default (json_insert('null', '$.x', 3)), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0IkESAWEgASoCCD46MgoNCgQIPhABEgUIAegBARIfKGpzb25faW5zZXJ0KCdudWxsJywgJyQueCcsIDMpKRgBmgEBYSJKCAESAWIgASoGCD0gQEADOjUKFgoGCD0gQEADEgxaB0phbnVhcnnoAQESGShtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkYAZoBAWIiIggCEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBmwEKmAEKDAoHcmVsa2luZBIBcgqHAQoNcmVsX2NyZWF0ZXNxbBJ2Y3JlYXRlIHRhYmxlIGB0YCAoYGFgIGpzb24gZGVmYXVsdCAoanNvbl9pbnNlcnQoJ251bGwnLCAnJC54JywgMykpLCBgYmAgdmFyY2hhcig2NCkgZGVmYXVsdCAobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpKbgCAw=="
+  },
+  "insert_scalar_length": {
+    "sql": "create table t(a int default (json_length(json_insert('1', '$[0]', 3))), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0ImYSAWEgASoPCBYgICj///////////8BOkoKGgoRCBYQASAgKP///////////wESBSAC6AEBEiooanNvbl9sZW5ndGgoanNvbl9pbnNlcnQoJzEnLCAnJFswXScsIDMpKSkYAZoBAWEiSggBEgFiIAEqBgg9IEBAAzo1ChYKBgg9IEBAAxIMWgdKYW51YXJ56AEBEhkobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpGAGaAQFiIiIIAhIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAaYBCqMBCgwKB3JlbGtpbmQSAXIKkgEKDXJlbF9jcmVhdGVzcWwSgAFjcmVhdGUgdGFibGUgYHRgIChgYWAgaW50IGRlZmF1bHQgKGpzb25fbGVuZ3RoKGpzb25faW5zZXJ0KCcxJywgJyRbMF0nLCAzKSkpLCBgYmAgdmFyY2hhcig2NCkgZGVmYXVsdCAobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpKbgCAw=="
+  },
+  "length_nested": {
+    "sql": "create table t(a int default (ifnull(json_length('null'), 42)), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0IsgBEgFhIAEqDwgWICAo////////////ATqrAQqDAQoRCBYQASAgKP///////////wE6bgoNIICAgIDQAkIEY2FzdBJGCgQIFxABmgECYAE6OQoNIICAgIDwCEIEY2FzZRINCgQIChABEgVgAegBARIKCgQIFxABEgIoKhINCgQIFxABEgUIAegBARIVChEIFhABICAo////////////AVoAEiEoaWZudWxsKGpzb25fbGVuZ3RoKCdudWxsJyksIDQyKSkYAZoBAWEiSggBEgFiIAEqBgg9IEBAAzo1ChYKBgg9IEBAAxIMWgdKYW51YXJ56AEBEhkobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpGAGaAQFiIiIIAhIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAZwBCpkBCgwKB3JlbGtpbmQSAXIKiAEKDXJlbF9jcmVhdGVzcWwSd2NyZWF0ZSB0YWJsZSBgdGAgKGBhYCBpbnQgZGVmYXVsdCAoaWZudWxsKGpzb25fbGVuZ3RoKCdudWxsJyksIDQyKSksIGBiYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkpuAID"
+  },
+  "length_path": {
+    "sql": "create table t(a int default (json_length('{\"a\":null}', '$.a')), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0Il4SAWEgASoPCBYgICj///////////8BOkIKGgoRCBYQASAgKP///////////wESBQgB6AEBEiIoanNvbl9sZW5ndGgoJ3siYSI6bnVsbH0nLCAnJC5hJykpGAGaAQFhIkoIARIBYiABKgYIPSBAQAM6NQoWCgYIPSBAQAMSDFoHSmFudWFyeegBARIZKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKRgBmgEBYiIiCAISEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygGdAQqaAQoMCgdyZWxraW5kEgFyCokBCg1yZWxfY3JlYXRlc3FsEnhjcmVhdGUgdGFibGUgYHRgIChgYWAgaW50IGRlZmF1bHQgKGpzb25fbGVuZ3RoKCd7ImEiOm51bGx9JywgJyQuYScpKSwgYGJgIHZhcmNoYXIoNjQpIGRlZmF1bHQgKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKSm4AgM="
+  },
+  "length_root": {
+    "sql": "create table t(a int default (json_length('null')), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0IlESAWEgASoPCBYgICj///////////8BOjUKGgoRCBYQASAgKP///////////wESBQgB6AEBEhUoanNvbl9sZW5ndGgoJ251bGwnKSkYAZoBAWEiSggBEgFiIAEqBgg9IEBAAzo1ChYKBgg9IEBAAxIMWgdKYW51YXJ56AEBEhkobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpGAGaAQFiIiIIAhIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAY8BCowBCgwKB3JlbGtpbmQSAXIKfAoNcmVsX2NyZWF0ZXNxbBJrY3JlYXRlIHRhYmxlIGB0YCAoYGFgIGludCBkZWZhdWx0IChqc29uX2xlbmd0aCgnbnVsbCcpKSwgYGJgIHZhcmNoYXIoNjQpIGRlZmF1bHQgKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKSm4AgM="
+  },
+  "missing_control": {
+    "sql": "create table t(a int default (json_length('{\"a\":1}', '$.missing')), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0ImESAWEgASoPCBYgICj///////////8BOkUKGgoRCBYQASAgKP///////////wESBQgB6AEBEiUoanNvbl9sZW5ndGgoJ3siYSI6MX0nLCAnJC5taXNzaW5nJykpGAGaAQFhIkoIARIBYiABKgYIPSBAQAM6NQoWCgYIPSBAQAMSDFoHSmFudWFyeegBARIZKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKRgBmgEBYiIiCAISEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygGgAQqdAQoMCgdyZWxraW5kEgFyCowBCg1yZWxfY3JlYXRlc3FsEntjcmVhdGUgdGFibGUgYHRgIChgYWAgaW50IGRlZmF1bHQgKGpzb25fbGVuZ3RoKCd7ImEiOjF9JywgJyQubWlzc2luZycpKSwgYGJgIHZhcmNoYXIoNjQpIGRlZmF1bHQgKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKSm4AgM="
+  },
+  "replace_null": {
+    "sql": "create table t(a json default (json_replace('null', '$.x', 3)), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0IkISAWEgASoCCD46MwoNCgQIPhABEgUIAegBARIgKGpzb25fcmVwbGFjZSgnbnVsbCcsICckLngnLCAzKSkYAZoBAWEiSggBEgFiIAEqBgg9IEBAAzo1ChYKBgg9IEBAAxIMWgdKYW51YXJ56AEBEhkobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpGAGaAQFiIiIIAhIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAZwBCpkBCgwKB3JlbGtpbmQSAXIKiAEKDXJlbF9jcmVhdGVzcWwSd2NyZWF0ZSB0YWJsZSBgdGAgKGBhYCBqc29uIGRlZmF1bHQgKGpzb25fcmVwbGFjZSgnbnVsbCcsICckLngnLCAzKSksIGBiYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkpuAID"
+  },
+  "replace_scalar_length": {
+    "sql": "create table t(a int default (json_length(json_replace('1', '$[0]', 3))), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0ImcSAWEgASoPCBYgICj///////////8BOksKGgoRCBYQASAgKP///////////wESBSAB6AEBEisoanNvbl9sZW5ndGgoanNvbl9yZXBsYWNlKCcxJywgJyRbMF0nLCAzKSkpGAGaAQFhIkoIARIBYiABKgYIPSBAQAM6NQoWCgYIPSBAQAMSDFoHSmFudWFyeegBARIZKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKRgBmgEBYiIiCAISEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygGnAQqkAQoMCgdyZWxraW5kEgFyCpMBCg1yZWxfY3JlYXRlc3FsEoEBY3JlYXRlIHRhYmxlIGB0YCAoYGFgIGludCBkZWZhdWx0IChqc29uX2xlbmd0aChqc29uX3JlcGxhY2UoJzEnLCAnJFswXScsIDMpKSksIGBiYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkpuAID"
+  },
+  "set_null": {
+    "sql": "create table t(a json default (json_set('null', '$.x', 3)), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0Ij4SAWEgASoCCD46LwoNCgQIPhABEgUIAegBARIcKGpzb25fc2V0KCdudWxsJywgJyQueCcsIDMpKRgBmgEBYSJKCAESAWIgASoGCD0gQEADOjUKFgoGCD0gQEADEgxaB0phbnVhcnnoAQESGShtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkYAZoBAWIiIggCEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBmAEKlQEKDAoHcmVsa2luZBIBcgqEAQoNcmVsX2NyZWF0ZXNxbBJzY3JlYXRlIHRhYmxlIGB0YCAoYGFgIGpzb24gZGVmYXVsdCAoanNvbl9zZXQoJ251bGwnLCAnJC54JywgMykpLCBgYmAgdmFyY2hhcig2NCkgZGVmYXVsdCAobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpKbgCAw=="
+  },
+  "set_scalar_length": {
+    "sql": "create table t(a int default (json_length(json_set('1', '$[0]', 3))), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0ImMSAWEgASoPCBYgICj///////////8BOkcKGgoRCBYQASAgKP///////////wESBSAC6AEBEicoanNvbl9sZW5ndGgoanNvbl9zZXQoJzEnLCAnJFswXScsIDMpKSkYAZoBAWEiSggBEgFiIAEqBgg9IEBAAzo1ChYKBgg9IEBAAxIMWgdKYW51YXJ56AEBEhkobW9udGhuYW1lKCcyMDI0LTAxLTAxJykpGAGaAQFiIiIIAhIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAaIBCp8BCgwKB3JlbGtpbmQSAXIKjgEKDXJlbF9jcmVhdGVzcWwSfWNyZWF0ZSB0YWJsZSBgdGAgKGBhYCBpbnQgZGVmYXVsdCAoanNvbl9sZW5ndGgoanNvbl9zZXQoJzEnLCAnJFswXScsIDMpKSksIGBiYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkpuAID"
+  },
+  "sql_null_control": {
+    "sql": "create table t(a int default (json_length(null)), b varchar(64) default (monthname('2024-01-01')))",
+    "table_def": "EgF0Ik0SAWEgASoPCBYgICj///////////8BOjEKGAoPCBYgICj///////////8BEgUIAegBARITKGpzb25fbGVuZ3RoKG51bGwpKRgBmgEBYSJKCAESAWIgASoGCD0gQEADOjUKFgoGCD0gQEADEgxaB0phbnVhcnnoAQESGShtb250aG5hbWUoJzIwMjQtMDEtMDEnKSkYAZoBAWIiIggCEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBjQEKigEKDAoHcmVsa2luZBIBcgp6Cg1yZWxfY3JlYXRlc3FsEmljcmVhdGUgdGFibGUgYHRgIChgYWAgaW50IGRlZmF1bHQgKGpzb25fbGVuZ3RoKG51bGwpKSwgYGJgIHZhcmNoYXIoNjQpIGRlZmF1bHQgKG1vbnRobmFtZSgnMjAyNC0wMS0wMScpKSm4AgM="
+  }
+}

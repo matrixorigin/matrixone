@@ -73,6 +73,10 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
+		ctr.process = processValue
+		if fill.ValueSetup != nil {
+			break
+		}
 		// the batch just for eval const value
 		b := batch.NewWithSize(1)
 		defer b.Clean(proc.Mp())
@@ -153,6 +157,16 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := fill.OpAnalyzer
 
 	ctr := &fill.ctr
+	if fill.ValueSetup != nil && ctr.valVecs == nil {
+		values, err := fill.ValueSetup(proc)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		if values == nil {
+			return vm.CallResult{Status: vm.ExecYield}, nil
+		}
+		ctr.valVecs = values
+	}
 
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
@@ -197,6 +211,14 @@ func (ctr *container) copyToOutput(
 	return err
 }
 
+// resetColRef rebinds the column references of a LINEAR fill expression to
+// the two-column endpoint batch built by linearFillValue: column 0 is the left
+// endpoint and column 1 the right endpoint. The planner binds the midpoint as
+// (agg + agg) / 2, so the endpoint identity is decided by the first function
+// whose two arguments both read a column; every reference below one of those
+// arguments inherits its side. Implicit casts, such as the integer widening
+// inserted around each operand of +, must not change which endpoint a
+// reference reads.
 func resetColRef(expr *plan.Expr, idx int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -204,15 +226,38 @@ func resetColRef(expr *plan.Expr, idx int) {
 		exprImpl.Col.ColPos = int32(idx)
 
 	case *plan.Expr_F:
-		for i, arg := range exprImpl.F.Args {
-			resetColRef(arg, i)
+		args := exprImpl.F.Args
+		if len(args) == 2 && exprHasColRef(args[0]) && exprHasColRef(args[1]) {
+			resetColRef(args[0], 0)
+			resetColRef(args[1], 1)
+			return
+		}
+		for _, arg := range args {
+			resetColRef(arg, idx)
 		}
 	}
+}
+
+func exprHasColRef(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if exprHasColRef(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+	if result.Status == vm.ExecYield && err == nil {
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -328,21 +373,24 @@ func (ctr *container) pullChild(
 	ap *Fill,
 	proc *process.Process,
 	analyzer process.Analyzer,
-) (seq int, eof bool, spilled bool, err error) {
+) (seq int, eof bool, spilled bool, yielded bool, err error) {
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+	if result.Status == vm.ExecYield && err == nil {
+		return 0, false, false, true, nil
+	}
 	if err != nil {
-		return 0, false, false, err
+		return 0, false, false, false, err
 	}
 	if result.Batch == nil {
-		return 0, true, false, nil
+		return 0, true, false, false, nil
 	}
 	dup, err := cloneFillBatch(result.Batch, proc.Mp(), ctr.retainedAllocation)
 	if err != nil {
 		if ctr.allocationAccount == nil || !mpool.IsRetryableAllocationCapacity(err) {
-			return 0, false, false, err
+			return 0, false, false, false, err
 		}
 		err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
-		return 0, false, err == nil, err
+		return 0, false, err == nil, false, err
 	}
 	if err = addOriginalNullMarkers(
 		dup, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
@@ -350,9 +398,9 @@ func (ctr *container) pullChild(
 		dup.Clean(proc.Mp())
 		if ctr.allocationAccount != nil && mpool.IsRetryableAllocationCapacity(err) {
 			err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
-			return 0, false, err == nil, err
+			return 0, false, err == nil, false, err
 		}
-		return 0, false, false, err
+		return 0, false, false, false, err
 	}
 	if analyzer != nil {
 		analyzer.Alloc(int64(dup.Size()))
@@ -361,7 +409,7 @@ func (ctr *container) pullChild(
 	ctr.appendPendingBatch(dup)
 	ctr.pendingBytes += int64(dup.Size())
 	ctr.pendingRows += int64(dup.RowCount())
-	return seq, false, false, nil
+	return seq, false, false, false, nil
 }
 
 func (ctr *container) appendPendingBatch(bat *batch.Batch) {
@@ -570,6 +618,9 @@ func (ctr *container) recomputeFlushableNext(ap *Fill) {
 func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+	if result.Status == vm.ExecYield && err == nil {
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -1185,9 +1236,13 @@ func (ctr *container) driveFill(
 	for {
 		if ctr.spill != nil {
 			if !ctr.spill.ready {
-				if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+				yielded, err := ctr.collectSpill(ap, proc, analyzer)
+				if err != nil {
 					ctr.cleanupSpill(proc)
 					return vm.NewCallResult(), err
+				}
+				if yielded {
+					return vm.CallResult{Status: vm.ExecYield}, nil
 				}
 			}
 			bat, err := ctr.spill.replayNext(ctr, ap, proc)
@@ -1222,9 +1277,12 @@ func (ctr *container) driveFill(
 			ctr.flushable = len(ctr.bats)
 			continue
 		}
-		seq, eof, spilled, err := ctr.pullChild(ap, proc, analyzer)
+		seq, eof, spilled, yielded, err := ctr.pullChild(ap, proc, analyzer)
 		if err != nil {
 			return vm.NewCallResult(), err
+		}
+		if yielded {
+			return vm.CallResult{Status: vm.ExecYield}, nil
 		}
 		if spilled {
 			continue
@@ -1268,6 +1326,9 @@ func (ctr *container) flushPendingRunsLinear(ap *Fill) {
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+	if result.Status == vm.ExecYield && err == nil {
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -1342,7 +1403,8 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8, types.T_datalink:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink:
 		err = vector.SetBytesAtFrom(v, i, w, j, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))

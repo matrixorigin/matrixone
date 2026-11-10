@@ -27,17 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -78,6 +80,7 @@ const (
 	AlterSequence
 	Replace
 	TableClone
+	AlterDatabase
 )
 
 func (m magicType) String() string {
@@ -90,6 +93,8 @@ func (m magicType) String() string {
 		return "Remote"
 	case CreateDatabase:
 		return "CreateDatabase"
+	case AlterDatabase:
+		return "AlterDatabase"
 	case CreateTable:
 		return "CreateTable"
 	case CreateView:
@@ -139,10 +144,12 @@ type Source struct {
 	FilterExpr      *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
-	node            *plan.Node
-	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
-	// Each execution folds a fresh copy into node.VectorIndexScan.
-	vectorIndexScanTemplate *plan.VectorIndexScan
+	// nil means not initialized; non-nil empty means this execution admitted no block filters.
+	remoteBlockFilters []*plan.Expr
+	node               *plan.Node
+	// indexSearchScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.IndexSearchScan.
+	indexSearchScanTemplate *plan.IndexSearchScan
 	TableDef                *plan.TableDef
 	Timestamp               timestamp.Timestamp
 	AccountId               *plan.PubInfo
@@ -225,6 +232,9 @@ type Scope struct {
 	Proc *process.Process
 
 	ScopeAnalyzer *ScopeAnalyzer
+	// roleRuleRenameAdmissionChecked certifies that a complete RENAME TABLE
+	// batch passed admission before any child rename mutates catalog state.
+	roleRuleRenameAdmissionChecked bool
 
 	// resourceExecutedLocally distinguishes a planned remote scope that fell
 	// back to MergeRun from a scope that was actually dispatched. It is
@@ -275,23 +285,38 @@ type scopeContext struct {
 	root     *scopeContext
 	parent   *scopeContext
 	children []*scopeContext
-	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 }
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	// Unprepared source metadata owners, never scheduled or run.
+	dependentSourceScopes []*Scope
+	scopes                []*Scope
+	// Shared broadcast HashBuild producers are attached after downstream placement.
+	pendingProductBuilds []*pendingProductBuild
+	// Non-owning producer regions: true marks an independent auxiliary job;
+	// false marks its result owner for original-error arbitration.
+	auxiliaryProductScopes map[*Scope]bool
 	// siriusRead is the single terminal owner for a hinted offload. It remains
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
 
-	pn *plan.Plan
+	pn                       *plan.Plan
+	indexMaintenanceSpec     *executor.IndexMaintenanceSpec
+	indexMaintenanceLiterals []string
+	indexMaintenanceNodeID   int32
 	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
 	// alone cannot recover the source type of each original parameter.
 	preparedParamValues []any
 	// Proof belongs to this bound execution and physical plan generation.
 	preparedJoinDiagnosticFree bool
+	// Validated for this execution only; never retained by a cached plan.
+	executionIntent            *plan2.ExecutionIntent
+	capturedExecutionTopology  bool
+	preflightPending           bool
+	txnOffsetPending           bool
+	preserveProcessOnPoolClear bool
 
 	execType plan2.ExecType
 
@@ -326,6 +351,8 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+	// Fixed CREATE target/declared-parent pins survive only this statement retry.
+	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.
@@ -338,7 +365,7 @@ type Compile struct {
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.
-	resultMetadataFrozen bool
+	resultMetadataFrozen atomic.Bool
 	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
 	// its logical plan, any frontend-owned prepared plan or physical topology
 	// from the previous generation must not be reused.
@@ -377,18 +404,25 @@ type Compile struct {
 
 	materializedSinkScanNodes map[int32][]int32
 	materializedSources       map[int32]*materialized.Source
-	materializedReaderIDs     map[[2]int32]int
+	// productL2IgnoredOf holds, by product_l2 join node, how it treats the rows its IVF-FLAT index
+	// cannot store.
+	productL2IgnoredOf    map[*plan.Node]*productl2.Ignored
+	materializedReaderIDs map[[2]int32]int
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
-	startAt       time.Time
+	buildPlanFunc         func(ctx context.Context) (*plan2.Plan, error)
+	buildFallbackPlanFunc func(ctx context.Context) (*plan2.Plan, error)
+	startAt               time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// prePipelineLockTableID requests normal table-lock admission for one newly
+	// created target of an internal INSERT. It is not a proof of a held lock.
+	prePipelineLockTableID uint64
 	// loadUniqueIndexPromotion is coordinator-local execution state shared only
 	// with physical retry compiles. It is never serialized into a remote scope or
 	// written back into the canonical logical plan.
@@ -404,6 +438,10 @@ type Compile struct {
 	// runtime-filter producers which were actually visited by compilePlanScope.
 	// It is statement-local and excludes physically pruned subtrees.
 	compiledLocalRuntimeFilterNodes []int32
+	// Non-owning, compileQuery-generation evidence for optional deep filters.
+	deepRuntimeFilterTags           map[int32]bool
+	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
+	localRuntimeDomains             []*runtimefilter.LocalDomain
 
 	needLockMeta bool
 	needBlock    bool
@@ -416,6 +454,12 @@ type Compile struct {
 	// owned by the SQL executor. It is intentionally separate from isInternal,
 	// which also controls routing and other execution policy.
 	temporaryDDLInExecutorTxn bool
+	// Shared by retry generations so a direct-client temporary DROP reached in
+	// an earlier attempt is published if retry setup later fails terminally.
+	temporaryDropRetryStage *temporaryDropRetireStage
+	// Run owns publication after every possible retry decision, including
+	// errors that occur after the DROP scope itself has returned successfully.
+	temporaryDropRetryActive bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
@@ -436,9 +480,13 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	disableLock              bool
+	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
+	// statement started; a retry restores it.
+	lastInsertIDBaseline      uint64
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

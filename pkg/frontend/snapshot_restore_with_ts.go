@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -465,7 +466,10 @@ func restoreDatabaseFromTS(
 
 	if isSubDb {
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v, no publication", restoreAccount, snapshotTs, dbName))
 			return
@@ -473,16 +477,16 @@ func restoreDatabaseFromTS(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db with pub: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -527,7 +531,46 @@ func restoreDatabaseFromTS(
 			return
 		}
 	}
+
 	return
+}
+
+// recreatePublicationsAfterDbRestoreTS belongs to the top-level RESTORE
+// DATABASE operation, after its tables, foreign keys and views are restored.
+// The database workers are also used by account/cluster restores: replaying
+// there would change account semantics and duplicate the cluster's final
+// publication phase, which must precede subscription/catalog identity replay.
+// Table restores retain their publications; cross-account restores must not
+// recreate publications in the unchanged source account.
+func recreatePublicationsAfterDbRestoreTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	level tree.RestoreLevel,
+	dbName string,
+	restoreAccount uint32,
+	toAccountId uint32,
+	snapshotTs int64,
+	omittedViews map[restoreObjectName]struct{},
+) (err error) {
+	if level != tree.RESTORELEVELDATABASE {
+		return nil
+	}
+	if restoreAccount != toAccountId {
+		getLogger(sid).Info(fmt.Sprintf(
+			"[%d:%d] skip recreate publications of db: %v, the restore crosses accounts %d -> %d",
+			restoreAccount, snapshotTs, dbName, restoreAccount, toAccountId))
+		return nil
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to recreate publications of db: %v",
+		restoreAccount, snapshotTs, dbName))
+	return createPubByPitr(
+		ctx, sid, bh,
+		fmt.Sprintf("snapshot restore %s, ts %d", dbName, snapshotTs),
+		dbName,
+		restoreAccount,
+		snapshotTs,
+		omittedViews)
 }
 
 func getCreateDatabaseSqlFromTS(ctx context.Context,
@@ -554,7 +597,12 @@ func getCreateDatabaseSqlFromTS(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(newCtx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(newCtx, bh, dbName, from, ts)
+	return definition, err
 }
 
 func recreateTableFromTS(
@@ -569,14 +617,19 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
+		return restoreRoutineCatalogWithCurrentSchema(
 			ctx,
 			bh,
+			tblInfo.tblName,
 			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
 			restoreAccount,
 			toAccountId,
 		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 	if isSequence(tblInfo) {
 		return restoreSequence(
@@ -605,14 +658,6 @@ func recreateTableFromTS(
 		return
 	}
 
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			return
-		}
-	}
-
 	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
@@ -620,7 +665,7 @@ func recreateTableFromTS(
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func restoreSystemDatabaseFromTS(
@@ -651,9 +696,12 @@ func restoreSystemDatabaseFromTS(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
@@ -736,7 +784,7 @@ func restoreViewsFromTS(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -744,7 +792,7 @@ func restoreViewsFromTS(
 			if err != nil {
 				return err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {

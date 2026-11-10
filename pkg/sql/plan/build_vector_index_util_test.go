@@ -155,7 +155,7 @@ func ivfTestJoinNode(builder *QueryBuilder, bindCtx *BindContext, baseTyp Type) 
 func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 	const dim = 4
 	t.Run("no-op when the entry already matches the base", func(t *testing.T) {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		base := vecType(types.T_array_float32, dim)
 		defs, refs := ivfTestIndexTables(base)
@@ -169,7 +169,7 @@ func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 	})
 
 	t.Run("float narrowing casts without reading the trained bounds", func(t *testing.T) {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		base := vecType(types.T_array_float32, dim)
 		entry := vecType(types.T_array_float16, dim)
@@ -194,7 +194,7 @@ func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 		entry types.T
 	}{{"int8", types.T_array_int8}, {"uint8", types.T_array_uint8}} {
 		t.Run("affine "+tc.name+" joins the trained bounds and trims them again", func(t *testing.T) {
-			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			bindCtx := NewBindContext(builder, nil)
 			base := vecType(types.T_array_float32, dim)
 			entry := vecType(tc.entry, dim)
@@ -228,7 +228,7 @@ func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 	}
 
 	t.Run("entries table without an entry column is an error", func(t *testing.T) {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		base := vecType(types.T_array_float32, dim)
 		defs, refs := ivfTestIndexTables(base)
@@ -245,7 +245,7 @@ func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 // if a later failure could overwrite an earlier one, or a nil could reach a binder,
 // the single check would report the wrong cause or panic.
 func TestExprChain(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	lit := makePlan2Float64ConstExprWithType
 
 	t.Run("a clean chain returns its value", func(t *testing.T) {

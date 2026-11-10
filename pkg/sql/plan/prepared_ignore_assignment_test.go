@@ -28,7 +28,7 @@ func TestPreparedIgnoreAssignmentKeepsRuntimeCast(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 			casts := queryFunctionsNamed(resolveQueryPlan(prepared).GetQuery(), "cast_ignore")
 			require.NotEmpty(t, casts, "prepared IGNORE assignment must use cast_ignore")

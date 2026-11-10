@@ -154,12 +154,15 @@ func (p *Partition) Unlock() {
 }
 
 func (p *Partition) ConsumeSnapCkps(
-	_ context.Context,
+	ctx context.Context,
 	ckps []*checkpoint.CheckpointEntry,
 	fn func(ckp *checkpoint.CheckpointEntry, state *PartitionState) error,
 ) (
 	err error,
 ) {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
 	if len(ckps) == 0 {
 		return nil
 	}
@@ -169,8 +172,14 @@ func (p *Partition) ConsumeSnapCkps(
 	start := types.MaxTs()
 	end := types.TS{}
 	for i, ckp := range ckps {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
 		if err = fn(ckp, state); err != nil {
 			return
+		}
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
 		}
 		if ckp.GetType() == checkpoint.ET_Global ||
 			(ckp.GetType() == checkpoint.ET_Compacted && i == 0) {

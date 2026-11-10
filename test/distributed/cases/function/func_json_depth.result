@@ -42,7 +42,7 @@ invalid argument json_depth, bad value invalid JSON document
 SELECT JSON_DEPTH(1) AS result;
 Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
 SELECT JSON_DEPTH(CAST('1' AS BINARY)) AS result;
-Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+Data truncation: Cannot create a JSON value from a string with CHARACTER SET 'binary'.
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 100), '1', REPEAT('}', 100))) AS result;
 ➤ result[-5,64,0]  𝄀
 101

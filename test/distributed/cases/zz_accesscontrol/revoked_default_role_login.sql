@@ -44,7 +44,7 @@ select * from revoked_default_role_db.protected;
 set role revoked_default_role_reader;
 -- @session
 
--- The separate existing-session revocation behavior is intentionally unchanged.
+-- The existing connection retains its role label, not the revoked authority.
 -- @session:id=2&user=sys:revoked_default_role_user&password=123456
 select current_role();
 select * from revoked_default_role_db.protected;

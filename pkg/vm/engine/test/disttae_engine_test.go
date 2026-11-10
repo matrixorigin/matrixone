@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -271,6 +272,11 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 	catalogWriteTs := txnop.Txn().CommitTS
 
+	// Check before later writes: compacted logtail blocks can conservatively
+	// include tables written after the requested interval.
+	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
+
 	// drop the first db
 	txnop = p.StartCNTxn()
 	require.Nil(t, p.D.Engine.Delete(p.Ctx, "todrop", txnop))
@@ -342,8 +348,6 @@ func TestLogtailBasic(t *testing.T) {
 
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
-	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	require.False(t, reader.IsDirtyOnTable(dbID, tableID-1))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
@@ -545,8 +549,6 @@ func TestAlterTableBasic(t *testing.T) {
 
 func TestColumnsTransfer(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
-	dir := testutil.MakeDefaultTestPath("partition_state", t)
-	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
@@ -598,8 +600,6 @@ func TestColumnsTransfer(t *testing.T) {
 
 func TestInProgressTransfer(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
-	dir := testutil.MakeDefaultTestPath("partition_state", t)
-	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
@@ -1167,7 +1167,7 @@ func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
 	rel := p.CreateTableInDB(txnop, "db", schema2)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, "db", "table2", rel.GetTableID(p.Ctx))
+	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, sqlquote.String("db"), sqlquote.String("table2"), rel.GetTableID(p.Ctx))
 
 	txn, _ := tae.StartTxn(nil)
 	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
@@ -1746,6 +1746,7 @@ func TestCommitKeepsCreatedIndexTableBeforeDependentWrites(t *testing.T) {
 		"primary key(table_id, name, column_name)",
 		1)
 	execSQL(txnop, moIndexesDDL)
+	execSQL(txnop, catalog.MoDatabaseDefaultsDDL)
 	execSQL(txnop, frontend.MoCatalogMoForeignKeysDDL)
 	execSQL(txnop, fmt.Sprintf("create database %s", dbName))
 	for i := 0; i < 15; i++ {

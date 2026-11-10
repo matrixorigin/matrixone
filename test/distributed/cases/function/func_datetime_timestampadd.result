@@ -139,3 +139,119 @@ null
 SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL -1000000000000 DAY) AS date_add_large_negative;
 date_add_large_negative
 null
+SELECT CAST(TIMESTAMPADD(SECOND, 1.5, CAST('2024-01-01' AS DATETIME)) AS CHAR) AS decimal_seconds,
+CAST(TIMESTAMPADD(SECOND, -1.5, CAST('2024-01-01' AS DATE)) AS CHAR) AS date_seconds,
+CAST(TIMESTAMPADD(SECOND, 0.0000009, CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS submicrosecond;
+decimal_seconds    date_seconds    submicrosecond
+2024-01-01 00:00:01.500000    2023-12-31 23:59:58.500000    2024-01-01 00:00:00.000000
+SELECT TIMESTAMPADD(SECOND, CAST(1.5 AS DOUBLE), '2024-01-01') AS double_seconds,
+TIMESTAMPADD(SECOND, '1.5', '2024-01-01') AS text_seconds,
+CAST(TIMESTAMPADD(MICROSECOND, 1.5, CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS microsecond_control;
+double_seconds    text_seconds    microsecond_control
+2024-01-01 00:00:01.500000    2024-01-01 00:00:01.500000    2024-01-01 00:00:00.000002
+DROP TABLE IF EXISTS timestampadd_fractional;
+CREATE TABLE timestampadd_fractional (
+id INT PRIMARY KEY, n DECIMAL(12,7), dt DATETIME,
+added DATETIME(6) GENERATED ALWAYS AS (TIMESTAMPADD(SECOND, n, dt)) STORED,
+txt VARCHAR(16) DEFAULT '1.5',
+text_added DATETIME(6) GENERATED ALWAYS AS (TIMESTAMPADD(SECOND,txt,dt)) STORED,
+INDEX added_idx(added)
+);
+INSERT INTO timestampadd_fractional(id,n,dt) VALUES
+(1,1.4,'2024-01-01'),(2,1.5,'2024-01-01'),(3,-1.5,'2024-01-01'),
+(4,0.000001,'2024-01-01'),(5,-0.0000009,'2024-01-01'),(6,NULL,'2024-01-01');
+SELECT id, CAST(TIMESTAMPADD(SECOND,n,dt) AS CHAR) AS computed, CAST(added AS CHAR) AS added FROM timestampadd_fractional ORDER BY id;
+id    computed    added
+1    2024-01-01 00:00:01.400000    2024-01-01 00:00:01.400000
+2    2024-01-01 00:00:01.500000    2024-01-01 00:00:01.500000
+3    2023-12-31 23:59:58.500000    2023-12-31 23:59:58.500000
+4    2024-01-01 00:00:00.000001    2024-01-01 00:00:00.000001
+5    2024-01-01 00:00:00.000000    2024-01-01 00:00:00.000000
+6    null    null
+SELECT CAST(text_added AS CHAR) AS generated_text FROM timestampadd_fractional WHERE id=1;
+generated_text
+2024-01-01 00:00:01.500000
+SELECT id FROM timestampadd_fractional FORCE INDEX(added_idx) WHERE added='2024-01-01 00:00:01.500000';
+id
+2
+SELECT id, CAST(TIMESTAMPADD(SECOND, IF(id=1,0x31,n),dt) AS CHAR) AS selected_seconds
+FROM timestampadd_fractional WHERE id<=2 ORDER BY id;
+id    selected_seconds
+1    2024-01-01 00:00:49.000000
+2    2024-01-01 00:00:01.500000
+UPDATE timestampadd_fractional SET n=-1.4 WHERE id=2;
+SELECT id, CAST(added AS CHAR) AS added FROM timestampadd_fractional FORCE INDEX(added_idx) WHERE added='2023-12-31 23:59:58.600000';
+id    added
+2    2023-12-31 23:59:58.600000
+PREPARE fractional_seconds FROM SELECT CAST(TIMESTAMPADD(SECOND, ?, CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS added;
+SET @fractional_n=CAST(1.5 AS DECIMAL(2,1));
+EXECUTE fractional_seconds USING @fractional_n;
+added
+2024-01-01 00:00:01.500000
+SET @fractional_n=CAST(-1.5 AS DECIMAL(2,1));
+EXECUTE fractional_seconds USING @fractional_n;
+added
+2023-12-31 23:59:58.500000
+SET @fractional_n=NULL;
+EXECUTE fractional_seconds USING @fractional_n;
+added
+null
+DEALLOCATE PREPARE fractional_seconds;
+DROP TABLE timestampadd_fractional;
+SELECT TIMESTAMPADD(SECOND, CAST(1e20 AS DECIMAL(30,1)), CAST('2024-01-01' AS DATETIME)) IS NULL AS interval_overflow,
+TIMESTAMPADD(SECOND, CAST(1e20 AS DECIMAL(30,1)), CAST(NULL AS DATETIME)) IS NULL AS null_base,
+CAST(IF(FALSE, TIMESTAMPADD(SECOND, CAST(1e20 AS DECIMAL(30,1)), CAST('2024-01-01' AS DATETIME)), CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS masked_overflow;
+interval_overflow    null_base    masked_overflow
+1    1    2024-01-01 00:00:00.000000
+SELECT CAST(TIMESTAMPADD(SECOND,0x31,CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS hex_seconds,
+CAST(TIMESTAMPADD(SECOND,X'31',CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS quoted_hex_seconds,
+CAST(TIMESTAMPADD(SECOND,B'110001',CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS bit_seconds,
+CAST(TIMESTAMPADD(SECOND,0x01,CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS byte_seconds,
+CAST(TIMESTAMPADD(SECOND,CAST(0x31 AS CHAR),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS text_seconds;
+hex_seconds    quoted_hex_seconds    bit_seconds    byte_seconds    text_seconds
+2024-01-01 00:00:49.000000    2024-01-01 00:00:49.000000    2024-01-01 00:00:49.000000    2024-01-01 00:00:01.000000    2024-01-01 00:00:01.000000
+PREPARE binary_seconds FROM SELECT CAST(TIMESTAMPADD(SECOND,IF(?,0x31,1.5),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS selected_seconds;
+SET @choose_hex=1;
+EXECUTE binary_seconds USING @choose_hex;
+selected_seconds
+2024-01-01 00:00:49.000000
+SET @choose_hex=0;
+EXECUTE binary_seconds USING @choose_hex;
+selected_seconds
+2024-01-01 00:00:01.500000
+DEALLOCATE PREPARE binary_seconds;
+DROP TABLE IF EXISTS timestampadd_sources;
+CREATE TABLE timestampadd_sources(id INT PRIMARY KEY,e ENUM('label','1.5'),s SET('label','1.5'),f FLOAT,dt DATETIME(6),flag BOOL,bin_value BINARY(9),varbin_value VARBINARY(9),blob_value BLOB);
+INSERT INTO timestampadd_sources VALUES (1,'label','label',1677721.625,'2024-01-01',TRUE,'000000001','000000001','000000001'),(2,'1.5','1.5',-1677721.625,'2024-01-01',FALSE,'1.5','1.5','1.5'),(3,NULL,NULL,1.000001,'2024-01-01',NULL,NULL,NULL,NULL);
+SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,e,dt)) AS enum_direct, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,s,dt)) AS set_direct, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,e,1.5),dt)) AS enum_if, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,CASE WHEN id=1 THEN 1.5 ELSE s END,dt)) AS set_case, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,NULLIF(e,'label'),dt)) AS enum_nullif, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(TRUE,CAST(e AS CHAR),1.5),dt)) AS text_control FROM timestampadd_sources ORDER BY id;
+id    enum_direct    set_direct    enum_if    set_case    enum_nullif    text_control
+1    1000000    1000000    1000000    1500000    null    0
+2    2000000    2000000    1500000    2000000    2000000    1500000
+3    null    null    null    null    null    null
+SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,f,dt)) AS float_seconds FROM timestampadd_sources ORDER BY id;
+id    float_seconds
+1    1677721625000
+2    -1677721625000
+3    1000000
+SELECT TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(TRUE,e,1.5),dt)) AS projected_enum FROM (SELECT e,dt FROM timestampadd_sources WHERE id=2) AS source;
+projected_enum
+2000000
+PREPARE source_seconds FROM SELECT TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(?,e,1.5),dt)) AS selected_seconds FROM timestampadd_sources WHERE id=1;
+SET @choose_source=1;
+EXECUTE source_seconds USING @choose_source;
+selected_seconds
+1000000
+SET @choose_source=0;
+EXECUTE source_seconds USING @choose_source;
+selected_seconds
+1500000
+DEALLOCATE PREPARE source_seconds;
+SELECT id, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,flag,1.5),dt)) AS selected_bool, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,bin_value,1.5),dt)) AS selected_binary, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,varbin_value,1.5),dt)) AS selected_varbinary, TIMESTAMPDIFF(MICROSECOND,dt,TIMESTAMPADD(SECOND,IF(id<>2,blob_value,1.5),dt)) AS selected_blob FROM timestampadd_sources ORDER BY id;
+id    selected_bool    selected_binary    selected_varbinary    selected_blob
+1    1000000    1000000    1000000    1000000
+2    1500000    1500000    1500000    1500000
+3    null    null    null    null
+DROP TABLE timestampadd_sources;
+SELECT CAST(TIMESTAMPADD(SECOND,IF(TRUE,TRUE,1.5),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS boolean_seconds, CAST(TIMESTAMPADD(SECOND,IF(TRUE,CAST('000000001' AS BINARY),'2'),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS binary_seconds, CAST(TIMESTAMPADD(SECOND,IF(TRUE,_binary '1.5',1.5),CAST('2024-01-01' AS DATETIME(6))) AS CHAR) AS introduced_text_seconds;
+boolean_seconds    binary_seconds    introduced_text_seconds
+2024-01-01 00:00:01.000000    2024-01-01 00:00:01.000000    2024-01-01 00:00:01.500000

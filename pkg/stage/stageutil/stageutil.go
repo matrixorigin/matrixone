@@ -24,9 +24,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -43,6 +45,10 @@ import (
 // because StageLoadCatalog serves repeat lookups from proc's stage cache it spins with no SQL and
 // no I/O — the CN request hangs rather than failing (#26890).
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
+	if err := ensureStageEnabled(s); err != nil {
+		return stage.StageDef{}, err
+	}
+
 	// Stage names already expanded on this chain, in order, for both the cycle test and the error
 	// message. The walk is bounded by the number of distinct stages: every hop consumes one name.
 	visited := make(map[string]struct{})
@@ -74,6 +80,13 @@ func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, er
 	return s, nil
 }
 
+func ensureStageEnabled(s stage.StageDef) error {
+	if strings.EqualFold(strings.TrimSpace(s.Status), "disabled") {
+		return moerr.NewBadConfigf(context.TODO(), "stage %s is disabled", s.Name)
+	}
+	return nil
+}
+
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -101,13 +114,20 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 
 func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef, err error) {
 
+	// Stage grammar ident.Compare() always folds names, independently of the
+	// database/table case policy. Use that same owner for URI/cache identity.
+	stagename = tree.NewCStr(stagename, 1).Compare()
+
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
-		return s, nil
+		if err = ensureStageEnabled(s); err != nil {
+			return stage.StageDef{}, err
+		}
+		return cloneStageDef(s), nil
 	}
 
-	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
+	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = %s;", "mo_catalog", "mo_stages", sqlquote.String(stagename))
 	res, err := runSql(proc, getAllStagesSql)
 	if err != nil {
 		return stage.StageDef{}, err
@@ -150,8 +170,24 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
-	cache.Set(stagename, reslist[0])
-	return reslist[0], nil
+	if err = ensureStageEnabled(reslist[0]); err != nil {
+		return stage.StageDef{}, err
+	}
+
+	// StageDef contains a pointer to url.URL. Keep the cached definition private
+	// from URL path joins performed during stage resolution and export filename
+	// expansion. A cached URL is shared by value copies of StageDef otherwise.
+	cached := cloneStageDef(reslist[0])
+	cache.Set(stagename, cached)
+	return cloneStageDef(cached), nil
+}
+
+func cloneStageDef(s stage.StageDef) stage.StageDef {
+	if s.Url != nil {
+		u := *s.Url
+		s.Url = &u
+	}
+	return s
 }
 
 func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {
@@ -170,6 +206,12 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 	if err != nil {
 		return stage.StageDef{}, err
 	}
+	return UrlToStageDefFromURL(aurl, proc)
+}
+
+// UrlToStageDefFromURL borrows an already parsed URL. Neither the input URL nor
+// cached stage definitions are modified by resolution.
+func UrlToStageDefFromURL(aurl *url.URL, proc *process.Process) (s stage.StageDef, err error) {
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
@@ -202,14 +244,37 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDef, err error) {
 	// Use double URL-encoding for % to avoid issues with printf-style format specifiers
 	// like %d, %05d. After url.Parse decodes once, %2525 becomes %25, which is correct.
-	escapedUrl := strings.ReplaceAll(furl, "%", "%2525")
-
+	// Protect only the filename/prefix portion; the encoded logical Stage name
+	// must be decoded exactly once by ParseStageUrl.
+	schemeEnd := strings.Index(furl, "://")
+	if schemeEnd < 0 || !strings.EqualFold(furl[:schemeEnd], stage.STAGE_PROTOCOL) {
+		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
+	}
+	nameEnd := schemeEnd + 3
+	if strings.HasPrefix(furl[nameEnd:], "/") {
+		nameEnd++
+	}
+	if end := strings.IndexAny(furl[nameEnd:], "/?#"); end >= 0 {
+		nameEnd += end
+	} else {
+		nameEnd = len(furl)
+	}
+	pathEnd := len(furl)
+	if end := strings.IndexAny(furl[nameEnd:], "?#"); end >= 0 {
+		pathEnd = nameEnd + end
+	}
+	escapedUrl := furl[:nameEnd] + strings.ReplaceAll(furl[nameEnd:pathEnd], "%", "%2525") + furl[pathEnd:]
 	aurl, err := url.Parse(escapedUrl)
 	if err != nil {
 		return stage.StageDef{}, err
 	}
-	// After parsing, %2525 becomes %25, we need to decode it to %
-	aurl.Path = strings.ReplaceAll(aurl.Path, "%25", "%")
+	decodedName, decodedPrefix, query, err := stage.ParseStageUrl(aurl)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+	decodedPrefix = strings.ReplaceAll(decodedPrefix, "%25", "%")
+	// Resolve through the same common Stage path owner without changing names.
+	aurl = &url.URL{Scheme: stage.STAGE_PROTOCOL, Host: decodedName, Path: decodedPrefix, RawQuery: query}
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
@@ -242,8 +307,16 @@ func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDe
 	return s, nil
 }
 
-func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
+// closeOwnedETLFS closes the file service GetForETL built for p: one for a local path or a path
+// with service arguments, which no other caller shares.
+func closeOwnedETLFS(ctx context.Context, p string, etlfs fileservice.ETLFileService) {
+	if parsed, err := fileservice.ParsePath(p); err == nil && (parsed.Service == "" || len(parsed.ServiceArguments) > 0) {
+		etlfs.Close(ctx)
+	}
+}
+
+func stageListWithWildcard(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
+	const wildcards = "*?["
 	const sep = "/"
 	fs := proc.GetFileService()
 
@@ -263,22 +336,22 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 	}
 
 	l := list.New()
-	l2 := list.New()
 	if pathDir[0] == "" {
-		l.PushBack(sep)
+		l.PushBack(fileservice.DirEntry{Name: sep, IsDir: true})
 	} else {
-		l.PushBack(pathDir[0])
+		l.PushBack(fileservice.DirEntry{Name: pathDir[0], IsDir: true})
 	}
 
 	for i := 1; i < len(pathDir); i++ {
 		length := l.Len()
 		for j := 0; j < length; j++ {
-			prefix := l.Front().Value.(string)
+			prefix := l.Front().Value.(fileservice.DirEntry).Name
 			p := fileservice.JoinPath(service, prefix)
-			etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+			etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 			if err != nil {
 				return nil, err
 			}
+			defer closeOwnedETLFS(proc.Ctx, p, etlfs)
 			for entry, err := range etlfs.List(proc.Ctx, readpath) {
 				if err != nil {
 					return nil, err
@@ -296,59 +369,84 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 				if !matched {
 					continue
 				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
-				if !entry.IsDir {
-					l2.PushBack(entry.Size)
-				}
+				l.PushBack(fileservice.DirEntry{Name: path.Join(prefix, entry.Name), IsDir: entry.IsDir, Size: entry.Size})
 			}
 			l.Remove(l.Front())
 		}
 	}
-	length := l.Len()
-
-	for j := 0; j < length; j++ {
-		fileList = append(fileList, l.Front().Value.(string))
-		l.Remove(l.Front())
-		//fileSize = append(fileSize, l2.Front().Value.(int64))
-		l2.Remove(l2.Front())
+	for e := l.Front(); e != nil; e = e.Next() {
+		entries = append(entries, e.Value.(fileservice.DirEntry))
 	}
-
-	return fileList, nil
+	return entries, nil
 }
 
-func stageListWithoutWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
+func stageListWithoutWildcard(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
 
 	fs := proc.GetFileService()
 	p := fileservice.JoinPath(service, pattern)
-	etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+	etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
 	if err != nil {
 		return nil, err
 	}
+	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
 	for entry, err := range etlfs.List(proc.Ctx, readpath) {
 		if err != nil {
 			return nil, err
 		}
-		fileList = append(fileList, path.Join(pattern, entry.Name))
+		entries = append(entries, fileservice.DirEntry{Name: path.Join(pattern, entry.Name), IsDir: entry.IsDir, Size: entry.Size})
 	}
 
-	return fileList, nil
+	return entries, nil
+}
+
+// StageListEntriesWithPattern returns the entries of the files pattern names, each named by its
+// full path.
+func StageListEntriesWithPattern(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
+	const wildcards = "*?["
+	provider, err := fileservice.ParseETLService(fileservice.JoinPath(service, pattern))
+	if err != nil {
+		return nil, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
+		return nil, err
+	}
+
+	if !strings.ContainsAny(pattern, wildcards) {
+		return stageListWithoutWildcard(service, pattern, proc)
+	}
+	return stageListWithWildcard(service, pattern, proc)
+}
+
+// StageStatFile returns the entry of the file at pattern, which has no wildcard, named by its
+// full path.
+func StageStatFile(service string, pattern string, proc *process.Process) (*fileservice.DirEntry, error) {
+	p := fileservice.JoinPath(service, pattern)
+	provider, err := fileservice.ParseETLService(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
+		return nil, err
+	}
+	etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), proc.GetFileService(), p)
+	if err != nil {
+		return nil, err
+	}
+	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
+	entry, err := etlfs.StatFile(proc.Ctx, readpath)
+	if err != nil {
+		return nil, err
+	}
+	return &fileservice.DirEntry{Name: pattern, IsDir: entry.IsDir, Size: entry.Size}, nil
 }
 
 func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
-	const wildcards = "*?"
-
-	idx := strings.IndexAny(pattern, wildcards)
-	if idx == -1 {
-		// no wildcard in pattern
-		fileList, err = stageListWithoutWildcard(service, pattern, proc)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		fileList, err = stageListWithWildcard(service, pattern, proc)
-		if err != nil {
-			return nil, err
-		}
+	entries, err := StageListEntriesWithPattern(service, pattern, proc)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		fileList = append(fileList, entry.Name)
 	}
 	return fileList, nil
 }
@@ -358,6 +456,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
 
+	ctx = process.SQLFileAccessContext(ctx, proc)
 	procCtx := *proc
 	procCtx.Ctx = ctx
 
@@ -368,6 +467,13 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 
 	fspath, query, err := s.ToPath()
 	if err != nil {
+		return 0, err
+	}
+	provider, err := fileservice.ParseETLService(fspath)
+	if err != nil {
+		return 0, err
+	}
+	if err := process.AuthorizeSQLFileAccessPath(proc, provider); err != nil {
 		return 0, err
 	}
 	if query != "" {
@@ -386,7 +492,7 @@ func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath stri
 	if filePattern == "/" {
 		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
 	}
-	if strings.ContainsAny(filePattern, "*?") {
+	if strings.ContainsAny(filePattern, "*?[") {
 		fileList, err := StageListWithPattern(service, filePattern, &procCtx)
 		if err != nil {
 			return 0, err

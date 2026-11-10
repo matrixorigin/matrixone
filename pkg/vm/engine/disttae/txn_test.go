@@ -1019,6 +1019,7 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn := &Transaction{
 		op:              op,
 		proc:            proc,
+		tablesInVain:    map[uint64]int{42: 1, 43: 0},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
@@ -1035,8 +1036,12 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
 	txn.statementID = 1
 	txn.offsets = []int{1}
+	require.True(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.False(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 	require.Len(t, txn.writes, 1)
 	require.Same(t, committed, txn.writes[0].bat)
 	require.Equal(t, uint64(committed.Size()), txn.workspaceSize)
@@ -1108,6 +1113,10 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	}
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	// Merge no longer self-compacts (failure-atomic admission, issue
+	// #25590): the statement callers run this right after the fallible
+	// dump; here nothing is dumped.
+	txn.compactNilWorkspaceSlotsLocked()
 	require.Len(t, txn.writes, 1)
 	require.Equal(t, 30, txn.writes[0].bat.RowCount())
 	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
@@ -1272,21 +1281,21 @@ func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 }
 
 func newTxnOperatorForTestWithWorkspace(
-	t *testing.T,
+	t testing.TB,
 	workspace client.Workspace,
 ) *mock_frontend.MockTxnOperator {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
-	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
 }
 
 func newTransactionWithActivePKTableForTest(
-	t *testing.T,
+	t testing.TB,
 	pkName string,
 ) *Transaction {
 	t.Helper()
@@ -2073,7 +2082,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 			require.False(t, dup.HasNull(), "filtered vector should have no NULLs")
 
 			// InplaceSort on the copy should not corrupt original
-			dup.InplaceSort()
+			require.NoError(t, dup.InplaceSort(mp))
 		}()
 	}
 
@@ -2417,4 +2426,17 @@ func TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe(t *testing.T) {
 		})
 	})
 	require.Equal(t, 1, seen)
+}
+
+func TestTableCreationViewExpiresWithStatementRollback(t *testing.T) {
+	txn := &Transaction{tableOps: newTableOps()}
+	require.False(t, txn.IsTableCreatedInTxn(11))
+	txn.tableOps.addCreatedInTxn(11, 1)
+	txn.tableOps.addCreatedInTxn(12, 2)
+	require.True(t, txn.IsTableCreatedInTxn(12))
+	txn.tableOps.rollbackLastStatement(2)
+	require.False(t, txn.IsTableCreatedInTxn(12), "aborted generation loses its certificate")
+	require.True(t, txn.IsTableCreatedInTxn(11), "earlier logical generation remains owned")
+	txn.tableOps.rollbackLastStatement(1)
+	require.False(t, txn.IsTableCreatedInTxn(11))
 }

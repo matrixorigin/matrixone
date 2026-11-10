@@ -45,14 +45,27 @@ func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
 }
 
 func (n *nodeList[T]) CreateNode(id uint64) *nameNode[T] {
+	return n.createOrderedNode(id, 0, nil)
+}
+
+// Table bindings use a DB-owned admission ticket; database bindings keep zero.
+func (n *nodeList[T]) createOrderedNode(id, order uint64, before func(*nameNode[T])) *nameNode[T] {
 	nn := newNameNode(id, n.getter)
+	nn.order = order
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
+	if before != nil {
+		before(nn)
+	}
 	n.Insert(nn)
 	return nn
 }
 
 func (n *nodeList[T]) DeleteNode(id uint64) (deleted *nameNode[T], empty bool) {
+	return n.deleteNode(id, nil, nil)
+}
+
+func (n *nodeList[T]) deleteNode(id uint64, exact *nameNode[T], before func(*nameNode[T])) (deleted *nameNode[T], empty bool) {
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	var prev common.ISSLLNode
@@ -61,12 +74,18 @@ func (n *nodeList[T]) DeleteNode(id uint64) (deleted *nameNode[T], empty bool) {
 	depth := 0
 	for curr != nil {
 		nid := curr.(*nameNode[T]).id
-		if id == nid {
+		if id == nid && (exact == nil || exact == curr) {
+			if before != nil {
+				before(curr.(*nameNode[T]))
+			}
 			prev.ReleaseNextNode()
 			deleted = curr.(*nameNode[T])
 			next := curr.GetNext()
 			if next == nil && depth == 0 {
 				empty = true
+			}
+			if before != nil || exact != nil {
+				deleted.SetNext(nil)
 			}
 			break
 		}
@@ -75,6 +94,28 @@ func (n *nodeList[T]) DeleteNode(id uint64) (deleted *nameNode[T], empty bool) {
 		depth++
 	}
 	return
+}
+
+// Restore the original identity behind any newer admission, even if other
+// tables detached their bindings and their rollback callbacks run out of order.
+func (n *nodeList[T]) restoreNode(nn *nameNode[T]) error {
+	n.rwlocker.Lock()
+	defer n.rwlocker.Unlock()
+	var prev common.ISSLLNode = n
+	for curr := n.GetNext(); curr != nil; curr = curr.GetNext() {
+		binding := curr.(*nameNode[T])
+		if binding == nn {
+			return nil
+		}
+		if binding.id == nn.id {
+			return moerr.NewInternalErrorNoCtx("duplicate table binding during rename undo")
+		}
+		if binding.order > nn.order {
+			prev = curr
+		}
+	}
+	prev.Insert(nn)
+	return nil
 }
 
 func (n *nodeList[T]) ForEachNodes(fn func(*nameNode[T]) bool) {
@@ -185,6 +226,7 @@ type nameNode[T any] struct {
 	common.SSLLNode
 	getter func(uint64) *common.GenericDLNode[T]
 	id     uint64
+	order  uint64 // runtime admission order; never serialized
 }
 
 func newNameNode[T any](id uint64,

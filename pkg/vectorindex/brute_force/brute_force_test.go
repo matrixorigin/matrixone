@@ -39,7 +39,7 @@ const (
 func TestBruteForce(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -63,7 +63,7 @@ func TestBruteForce(t *testing.T) {
 func TestGoBruteForce(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -87,7 +87,7 @@ func TestGoBruteForce(t *testing.T) {
 func runBruteForceConcurrent(t *testing.T, is_usearch bool) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	dimension := uint(128)
 	ncpu := uint(4)
@@ -168,7 +168,7 @@ func TestUsearchBruteForceConcurrent(t *testing.T) {
 
 func TestSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dimension := uint(16)
@@ -229,7 +229,7 @@ func TestSearchFloat32(t *testing.T) {
 
 func TestNewUsearchBruteForceIndexFlattened(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dimension := uint(3)
@@ -258,7 +258,7 @@ func TestNewUsearchBruteForceIndexFlattened(t *testing.T) {
 // config needed, which is why every case below passes an empty RuntimeConfig.
 func TestUsearchBruteForceDistanceConvention(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	query := [][]float32{{1, 2, 3}}
@@ -340,7 +340,7 @@ func TestGetUsearchQuantizationFromType(t *testing.T) {
 
 func TestUsearchBruteForceSearchFlattenedQuery(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -361,7 +361,7 @@ func TestUsearchBruteForceSearchFlattenedQuery(t *testing.T) {
 
 func TestUsearchBruteForceSearchEmptyQuery(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -378,7 +378,7 @@ func TestUsearchBruteForceSearchEmptyQuery(t *testing.T) {
 
 func TestUsearchBruteForceSearchBadType(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}}
@@ -392,7 +392,7 @@ func TestUsearchBruteForceSearchBadType(t *testing.T) {
 
 func TestGoBruteForceSearchFloat32_BadType(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}}
@@ -406,7 +406,7 @@ func TestGoBruteForceSearchFloat32_BadType(t *testing.T) {
 
 func TestGoBruteForceSearch_LimitZero(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}}
@@ -471,7 +471,7 @@ func TestGoBruteForceHeapLogic(t *testing.T) {
 	}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	elemsz := uint(4)
 

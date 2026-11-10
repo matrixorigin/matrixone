@@ -1,0 +1,128 @@
+drop database if exists procedure_hnsw_ddl;
+create database procedure_hnsw_ddl;
+use procedure_hnsw_ddl;
+set @saved_hnsw = @@experimental_hnsw_index;
+set @saved_ivf = @@experimental_ivf_index;
+set experimental_hnsw_index = 1;
+set experimental_ivf_index = 1;
+create table vectors(id bigint primary key, v vecf32(4));
+insert into vectors values (1, '[1,0,0,0]'), (2, '[0,1,0,0]');
+create index ix using hnsw on vectors(v) op_type "vector_l2_ops" m=4 ef_construction=16 ef_search=16;
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"ef_construction":"16","ef_search":"16","m":"4","op_type":"vector_l2_ops"}
+drop index ix on vectors;
+create procedure p_create() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" m=4 ef_construction=16 ef_search=16; end';
+create procedure p_drop() 'begin drop index ix on vectors; end';
+set experimental_hnsw_index = 0;
+call p_create();
+internal error: experimental_hnsw_index is not enabled
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+set experimental_hnsw_index = 1;
+call p_create();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"ef_construction":"16","ef_search":"16","m":"4","op_type":"vector_l2_ops"}
+call p_create();
+duplicate key name 'ix'
+select count(distinct name) as logical_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ logical_indexes[-5,64,0]  𝄀
+1
+call p_drop();
+call p_create();
+call p_drop();
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_l2sq() 'begin create index ix using hnsw on vectors(v) op_type ''vector_l2sq_ops'' m=2 ef_construction=1 ef_search=1; end';
+call p_l2sq();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"ef_construction":"1","ef_search":"1","m":"2","op_type":"vector_l2sq_ops"}
+call p_drop();
+create procedure p_ip() 'begin create index ix using hnsw on vectors(v) op_type ''vector_ip_ops''; end';
+call p_ip();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"op_type":"vector_ip_ops"}
+call p_drop();
+create procedure p_cosine() 'begin create index ix using hnsw on vectors(v) op_type "vector_cosine_ops"; end';
+call p_cosine();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"op_type":"vector_cosine_ops"}
+call p_drop();
+create procedure p_defaults() 'begin create index ix using hnsw on vectors(v); end';
+call p_defaults();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  hnsw  ¦  {"op_type":"vector_l2_ops"}
+call p_drop();
+create index ix using hnsw on vectors(v) op_type 'VECTOR_L2SQ_OPS' m=2 ef_construction=1 ef_search=1;
+internal error: Invalid op_type
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_upper() 'begin create index ix using hnsw on vectors(v) op_type ''VECTOR_L2SQ_OPS'' m=2 ef_construction=1 ef_search=1; end';
+call p_upper();
+internal error: Invalid op_type
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create index ix using hnsw on vectors(v) op_type 'vector_l2_ops' m=1;
+Connectivity must be at least 2, otherwise the index degenerates into ropes
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_connectivity() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" m=1; end';
+call p_connectivity();
+Connectivity must be at least 2, otherwise the index degenerates into ropes
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_invalid() 'begin create index ix using hnsw on vectors(v) op_type "invalid_operator"; end';
+call p_invalid();
+invalid input: invalid op_type. 'invalid_operator'
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_quote() 'begin create index ix using hnsw on vectors(v) op_type "bad''operator"; end';
+call p_quote();
+invalid input: invalid op_type. 'bad'operator'
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+create procedure p_zero_m() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" m=0; end';
+call p_zero_m();
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. M should be greater than 0 at line 1 column 81 near "0; end";
+create procedure p_zero_construction() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" ef_construction=0; end';
+call p_zero_construction();
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. EF_CONSTRUCTION should be greater than 0 at line 1 column 95 near "0; end";
+create procedure p_zero_search() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" ef_search=0; end';
+call p_zero_search();
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. EF_SEARCH should be greater than 0 at line 1 column 89 near "0; end";
+create procedure p_negative() 'begin create index ix using hnsw on vectors(v) op_type "vector_l2_ops" m=-1; end';
+call p_negative();
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 81 near "-1; end";
+select count(*) as remaining_indexes from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ remaining_indexes[-5,64,0]  𝄀
+0
+select count(*) as session_usable from vectors;
+➤ session_usable[-5,64,0]  𝄀
+2
+call p_create();
+call p_drop();
+create procedure p_ivf() 'begin create index ix using ivfflat on vectors(v) lists=1 op_type ''vector_l2_ops''; end';
+call p_ivf();
+select distinct name, algo, algo_params from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'procedure_hnsw_ddl' and relname = 'vectors') and name = 'ix';
+➤ name[12,64,0]  ¦  algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
+ix  ¦  ivfflat  ¦  {"lists":"1","op_type":"vector_l2_ops"}
+call p_drop();
+set experimental_hnsw_index = @saved_hnsw;
+set experimental_ivf_index = @saved_ivf;
+drop database procedure_hnsw_ddl;
+select count(*) as remaining_databases from mo_catalog.mo_database where datname = 'procedure_hnsw_ddl';
+➤ remaining_databases[-5,64,0]  𝄀
+0

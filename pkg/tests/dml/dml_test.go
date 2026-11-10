@@ -203,7 +203,7 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 			remaining, execErr := internalExec.Exec(ctx,
 				"select a from "+deleteTable+" order by a", deleteOpts)
 			require.NoError(t, execErr)
-			var remainingKeys []string
+			remainingKeys := make([]string, 0, len(remaining.Batches))
 			for _, batch := range remaining.Batches {
 				remainingKeys = append(remainingKeys, executor.GetStringRows(batch.Vecs[0])...)
 			}
@@ -235,8 +235,8 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 func TestDataBranchDiffAsFile(t *testing.T) {
 	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
-			defer cancel()
+			setupCtx, cancelSetup := context.WithTimeout(t.Context(), 240*time.Second)
+			defer cancelSetup()
 
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -250,8 +250,9 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 
 			dbName := testutils.GetDatabaseName(t)
 			defer cleanupTestDatabases(t, sqlDB, dbName)
-			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
-			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
+			execSQLDB(t, setupCtx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLDB(t, setupCtx, sqlDB, fmt.Sprintf("use `%s`", dbName))
+			cancelSetup()
 
 			cases := []struct {
 				name string
@@ -303,8 +304,10 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 						require.NoError(t, openErr)
 						defer subDB.Close()
 						subDB.SetMaxOpenConns(1)
-						subCtx, subCancel := context.WithTimeout(ctx, time.Second*240)
-						defer subCancel()
+						// Waiting for an execution slot must not spend this case's
+						// SQL budget or inherit an expired setup/sibling deadline.
+						subCtx, subCancel := dataBranchDiffScenarioContext(t)
+						defer subCancel() // Cancel active work before closing subDB.
 						execSQLDB(t, subCtx, subDB, fmt.Sprintf("use `%s`", dbName))
 						tc.run(t, subCtx, subDB, dbName)
 					})
@@ -566,8 +569,10 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 	require.NoError(t, err)
 	defer removeForceFlush()
 
-	execSQLDB(t, ctx, db, "insert into src select result, result * 10, concat('seed_', cast(result as char)) from generate_series(1,5000) g")
-	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
+	// ForceFlush bypasses the volume threshold; two rows in one object suffice
+	// to detect source loss or corruption after clone rollback.
+	execSQLDB(t, ctx, db, "insert into src values (1,10,'seed_1'),(100,1000,'seed_100')")
+	require.Equal(t, 2, queryRowCount(t, ctx, db, "select count(*) from src"))
 
 	removeCommitFailure, err := objectio.SimpleInject(objectio.FJ_CNCommitAfterWorkspaceDumpFailed)
 	require.NoError(t, err)
@@ -575,12 +580,7 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
-	connClosed := false
-	defer func() {
-		if !connClosed {
-			_ = conn.Close()
-		}
-	}()
+	defer conn.Close()
 
 	_, err = conn.ExecContext(ctx, fmt.Sprintf("use `%s`", dbName))
 	require.NoError(t, err)
@@ -593,15 +593,14 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 	_, err = conn.ExecContext(ctx, "commit")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected commit failure after workspace dump")
-	_ = conn.Close()
-	connClosed = true
+	require.NoError(t, conn.Close())
 
 	removeCommitFailure()
 
 	require.Equal(t, 0, queryRowCount(t, ctx, db,
 		fmt.Sprintf("select count(*) from information_schema.tables where table_schema = '%s' and table_name = 'clone_t'", dbName)))
-	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
-	require.Equal(t, 50, queryRowCount(t, ctx, db, "select count(*) from src where id mod 100 = 0"))
+	require.Equal(t, [][]string{{"1", "10", "seed_1"}, {"100", "1000", "seed_100"}},
+		queryStringRows(t, ctx, db, "select id, value, note from src order by id"))
 }
 
 func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
@@ -1660,12 +1659,12 @@ func assertTablesEqual(t *testing.T, ctx context.Context, db *sql.DB, schema, le
 	check := func(query string) {
 		rows, err := db.QueryContext(ctx, query)
 		require.NoErrorf(t, err, "sql: %s", query)
-		require.NoErrorf(t, rows.Err(), "sql: %s", query)
 		defer rows.Close()
 		rowCount := 0
 		for rows.Next() {
 			rowCount++
 		}
+		require.NoErrorf(t, rows.Err(), "sql: %s", query)
 		require.Equalf(t, 0, rowCount, "expected no rows for query %s", query)
 	}
 

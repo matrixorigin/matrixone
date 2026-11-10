@@ -42,7 +42,12 @@ func NewOndupUpdateBinder(
 	}
 	b.sysCtx = sysCtx
 	b.builder = builder
-	b.ctx = ctx
+	// The conflict row is a lexical owner. Nested subqueries capture this
+	// assignment image, rather than the incoming INSERT projection.
+	b.ctx = NewBindContext(builder, ctx)
+	b.ctx.binder = b
+	b.ctx.bindingByTag[scanTag] = &Binding{tag: scanTag}
+	b.ctx.bindingByTag[selectTag] = &Binding{tag: selectTag}
 	b.impl = b
 
 	return b
@@ -75,6 +80,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			if !ok {
 				return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", col.ColNameOrigin())
 			}
+			if depth > 0 {
+				return &plan.Expr{Typ: b.tableDef.Cols[idx].Typ,
+					Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: b.selectTag, ColPos: idx, Depth: depth}}}, nil
+			}
 
 			return &plan.Expr{
 				Typ: b.tableDef.Cols[idx].Typ,
@@ -93,7 +102,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
-	if !isNumericAssignmentTarget(target) {
+	if !useNumericAssignmentContext(target, b.builder.isInsertIgnore) {
+		return b.BindExpr(astExpr, 0, true)
+	}
+	if isPreparedAssignmentParam(b.builder, astExpr) {
 		return b.BindExpr(astExpr, 0, true)
 	}
 	if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
@@ -119,10 +131,18 @@ func scalarSubqueryExpr(astExpr tree.Expr) (*tree.Subquery, bool) {
 }
 
 func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if err := validateInsertColumnQualifiers(b.GetContext(), []*tree.UnresolvedName{astExpr},
+		b.targetDBName, b.targetTableName, b.lowerCaseTableNames); err != nil {
+		return nil, err
+	}
 	colName := astExpr.ColName()
 	idx, ok := b.tableDef.Name2ColIndex[colName]
 	if !ok {
 		return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+	}
+	if depth > 0 {
+		return &plan.Expr{Typ: b.tableDef.Cols[idx].Typ,
+			Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: b.scanTag, ColPos: idx, Depth: depth}}}, nil
 	}
 
 	return &plan.Expr{

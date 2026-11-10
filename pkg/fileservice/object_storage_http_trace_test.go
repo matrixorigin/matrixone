@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"net/http/httptrace"
 	"strings"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestObjectStorageHTTPTraceWriteMultipartParallel(t *testing.T) {
 	err := wrapped.WriteMultipartParallel(context.Background(), "key", strings.NewReader("data"), nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.ctx)
-	require.NotNil(t, httptrace.ContextClientTrace(upstream.ctx))
+	require.Equal(t, true, upstream.ctx.Value(httpTraceKey{}))
 	require.Equal(t, "key", upstream.key)
 }
 
@@ -71,7 +70,7 @@ func TestObjectStorageHTTPTraceDelegates(t *testing.T) {
 
 	require.Len(t, upstream.calls, 6)
 	for _, ctx := range upstream.ctxs {
-		require.NotNil(t, httptrace.ContextClientTrace(ctx))
+		require.Equal(t, true, ctx.Value(httpTraceKey{}))
 	}
 	require.ElementsMatch(t, []string{"delete", "exists", "list", "read", "stat", "write"}, upstream.calls)
 	require.Equal(t, []string{"one"}, listed)

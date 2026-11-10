@@ -24,7 +24,7 @@ import (
 )
 
 func TestAdaptiveTopPreservesCandidateProjection(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(b, nil)
 	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10}}}
 	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "+", []*plan.Expr{col, makePlan2Int64ConstExprWithType(100)})
@@ -38,14 +38,14 @@ func TestAdaptiveTopPreservesCandidateProjection(t *testing.T) {
 }
 
 func TestAdaptiveTopRejectsVolatileReplayAndCopiesForceMode(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(b, nil)
 	randExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "rand", nil)
 	require.NoError(t, err)
 	scan := b.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ctx)
 	projectNode := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, ProjectList: []*plan.Expr{randExpr}}
 	project := b.appendNode(projectNode, ctx)
-	require.False(t, b.adaptiveIvfReplaySafe(project))
+	require.False(t, b.adaptiveVectorReplaySafe(project))
 
 	original := &plan.RankOption{Mode: "auto"}
 	v := &vectorSortContext{

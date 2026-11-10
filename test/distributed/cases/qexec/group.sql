@@ -9,6 +9,8 @@ create table t (a int, b boolean, b2 tinyint, b3 smallint, b4 int, b5 bigint,
                 u uuid, 
                 j json, bin varbinary); 
 
+-- Keep AP, range-shuffle, modulo classes and partial vector batches with
+-- fewer rows. Exact statistics below preserve the original execution paths.
 insert into t select
     result, 
     result % 2 = 0, result % 10, result % 100, result % 1000, result,
@@ -20,11 +22,14 @@ insert into t select
     '11111111-1111-1111-1111-111111111111',
     concat('{"foo": "bar", "zoo": [1, 2, ', result, ']}'),
     cast(result as varbinary)
- from generate_series(1, 1000000) gt;
+ from generate_series(1, 256000) gt;
 
 select count(*) from t;
 
 insert into t select * from t;
+-- Keep cardinality and NDV independent of implicit memtable flush timing.
+-- @ignore:7,8,10
+analyze table t(a,b,c) fullscan;
 
 select count(*) from t;
 
@@ -110,12 +115,12 @@ select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
 ) tmpt;
 
+-- Preserve the caller's session settings and force byte-budget spilling.
+set @group_saved_dop = @@max_dop;
+set @group_saved_spill_mem = @@agg_spill_mem;
 -- force dop to 1, so it is easier to trigger spill
-select 'set max_dop to 1 ... ';
 set @@max_dop = 1;
--- this will set agg_spill_mem to min allowed (1MB)
-select 'set agg_spill_mem to 50MB ... ';
-set @@agg_spill_mem = 60000000; 
+set @@agg_spill_mem = 16777216;
 -- rerun queries
 
 select count(*) from (select a, b, c from t group by a, b, c) tmptt;
@@ -129,12 +134,22 @@ select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
 ) tmptt;
 
--- A much better way is to run explain analyze, but these all depends on issue 22721
+-- Require observable spilling, not just a low configured threshold.
 
--- @bvt:issue#22721
-explain analyze select a, b, c from t group by a, b, c;
-explain analyze select a, c, avg(d) d, avg(f) f from t group by a, c;
-explain analyze select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
--- @bvt:issue
+-- @regex("Group Key:.*shuffle: range[(]t[.]a[)]", true)
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+explain (analyze true) select a, b, c from t group by a, b, c;
+-- @regex("Group Key:.*shuffle: range[(]t[.]a[)]", true)
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+explain (analyze true) select a, c, avg(d) d, avg(f) f from t group by a, c;
+-- The filtered DISTINCT control has fewer groups; give it its own byte budget.
+set @@agg_spill_mem = 2097152;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+explain (analyze true) select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
 
+set @@max_dop = @group_saved_dop;
+set @@agg_spill_mem = @group_saved_spill_mem;
 drop database qetest;

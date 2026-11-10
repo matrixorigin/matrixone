@@ -1,0 +1,680 @@
+{
+  "generated_at": "2026-10-24T15:09:43.041219+08:00",
+  "issue": 29441,
+  "scope": "部分交付：可复现基准/历史测试适配/现有 regexp 容器惰性分配。不是 S6 验收，不关闭 issue，不决定 S7/S8。",
+  "validation_base": "3878a13ef00fc85b1bced8a58a4f7d17df848806",
+  "final_parent": "d93d5d66c83d2927c233de17f21fe7f513bc7d32",
+  "reuse": "最终同步仅新增 #31018 窗口文档/BVT；Go/native/go.mod 不变，Go diff 同步前后逐字节一致。",
+  "go": "go1.27.1",
+  "platform": "Darwin arm64 / Apple M1 Pro / 10 logical CPUs / 16 GiB RAM / SSD / single CN+TN",
+  "env": {
+    "GOMAXPROCS": 8,
+    "GOGC": 100,
+    "GOMEMLIMIT": "off",
+    "MO_VIEW_BENCH_COUNTS": "0 (普通对照/profile)"
+  },
+  "source_sha256": {
+    "pkg/frontend/view_metadata_benchmark_consumers_test.go": "7fc1a3675df9fca97f18b568b876a17db03ed170d1206f317e9f90502d160f7a",
+    "pkg/frontend/view_metadata_benchmark_profile_test.go": "14f5dcdbb492ec0ab07b93777a89d1254155a13b6e7a20c2910d284604dc3d43",
+    "pkg/frontend/view_metadata_benchmark_stream_test.go": "057c1b39b0096362809f1914fa813deb69d38b9058d82fa3dcf5fd1a39e4fc33",
+    "pkg/frontend/view_metadata_benchmark_test.go": "68a2abf996bd26c618232a85478f2bec4fdfb09877a7bfc19beb5c8e8a7698d0",
+    "pkg/frontend/view_schema_native_test.go": "3f175c6c9b65b85ac98b6b959d4b4f18cd344c92e8a067a7ce74a8f4e042a675",
+    "pkg/sql/colexec/regexp_reset_test.go": "9196d52a52c07d50a2c6728513bf5d5e658d5ceee8df449fab05fd830b043d6e",
+    "pkg/sql/plan/function/func_builtin_regexp.go": "c573abff1503dd84ae3ed19c6728957cb9a51385ed7407c88df17acad037aae7",
+    "pkg/sql/plan/function/func_builtin_regexp_test.go": "1e48cbf5ce145f6e811eb1d4da1b36cd6e6fcdb00f53214e777058d0507edfa5",
+    "pkg/sql/plan/function/regexp_cache_allocation_test.go": "7558e4332628b2448764de8dfe34a13b40dcb9994e1d49379f4b1e60f9a36586",
+    "pkg/sql/plan/query_builder.go": "331bda922fe6841c0277a2ddf14ec238513e68d680bb187c682e57652b9cd308",
+    "pkg/sql/plan/view_schema_benchmark.go": "6cbf06588d3715cfe7ccb4758249949250418db9fd3b663103c1ad947f67de15",
+    "pkg/sql/plan/view_schema_benchmark_disabled.go": "00932a1f060bbe6dea6a5c069675d1baf02091e4d155a529b02b389e0c50479e",
+    "pkg/sql/plan/view_schema_benchmark_test.go": "af0514513fcad4f13b7c02311fd82ca2729fb9a89a87e404fce574790fb3bfec",
+    "pkg/sql/plan/view_schema_inference.go": "c62a466cabb5d817bb416fccc1c3fb9347a7b96cb73fdb3bae7c92b7b6db3613",
+    "pkg/sql/plan/view_schema_request.go": "7617b2259b2f3078981d717cc75c95312b09b8999883361906cea70827643122"
+  },
+  "go_diff_sha256": "523aef9c17cf7e8ca6767c6b4cb9039721c3b3f98543a3e09d8b507354e9b1f6",
+  "checks": {
+    "compile_function_before": {
+      "exit": 0,
+      "log_sha256": "7db2db6e9e02b2ca191697b81ea32a20c4e32bb137e97a5e32d2eb2b784c9505"
+    },
+    "compile_frontend_before": {
+      "exit": 0,
+      "log_sha256": "70082cc0d24e96b3e75fe4f10404c8fd4c937c046bf4b734b2897d4507b65795"
+    },
+    "compile_function_after": {
+      "exit": 0,
+      "log_sha256": "7db2db6e9e02b2ca191697b81ea32a20c4e32bb137e97a5e32d2eb2b784c9505"
+    },
+    "compile_frontend_after": {
+      "exit": 0,
+      "log_sha256": "70082cc0d24e96b3e75fe4f10404c8fd4c937c046bf4b734b2897d4507b65795"
+    },
+    "function_focused": {
+      "exit": 0,
+      "log_sha256": "e6ac29ea84a975c7b2d713aa62cc96ced0f7ea6e24ed568559c5bd41fc624992"
+    },
+    "reset_focused": {
+      "exit": 0,
+      "log_sha256": "f379f159cd21be0ba1f53c1ca8346701c629530dc1966d44e06b261a2a5740e0"
+    },
+    "function_coverage": {
+      "exit": 0,
+      "log_sha256": "481493ebb0ed73b7be72f628ff580c2493492b5975c100df60f27ca54aeeb77c"
+    },
+    "plan_coverage": {
+      "exit": 0,
+      "log_sha256": "8d391fef5f4c64fa1c26eb72efa836d00bc282aa8a2a622d14e6389d5deeff72"
+    },
+    "owning_normal": {
+      "exit": 0,
+      "log_sha256": "198cc00cc7a80a34016b0bec0b47a74930604ad3d5853ae5c704af013fc4bc01"
+    },
+    "native_contract": {
+      "exit": 0,
+      "log_sha256": "eaf0d701a710b552d4046fdb745afbb626f9486f1a06c2b68dcdf331e0c23e1e"
+    },
+    "race_owning": {
+      "exit": 0,
+      "log_sha256": "5c93bcba2c9e254fc0fbd51eeb173b76416297ba4f299465ec8bc9d270d35a27"
+    },
+    "race_plan_once": {
+      "exit": 0,
+      "log_sha256": "646795259a6b1c577cebf097949ac148dd17e6cb2dec6b14e4e3e86e2666f6a9"
+    },
+    "race_stream_once": {
+      "exit": 0,
+      "log_sha256": "e34bfa1a5a68c944733470dbeb27b987a00faea068473b1a72d38020d2855e2c"
+    },
+    "race_native_once": {
+      "exit": 0,
+      "log_sha256": "73a797f8decd597d54544cfb923322c341714921f5f9cb02024c4b524ecaa9d9"
+    },
+    "race_plan_stress": {
+      "exit": 0,
+      "log_sha256": "e893517a250f58e0312e3f554796e078a253bb002b8a087d71a14eaac3b89e66"
+    },
+    "race_stream_stress": {
+      "exit": 0,
+      "log_sha256": "6900058bbe646205f5917e9772340e79fb79c9261bece251e7ba408ef869bcb0"
+    },
+    "race_native_stress": {
+      "exit": 0,
+      "log_sha256": "8353ebe49c977be8981f63e311425958a901e7d2773a4c162d59769780720de7"
+    },
+    "vet_normal": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet_tagged": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint_normal": {
+      "exit": 0,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "lint_tagged": {
+      "exit": 0,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "cold_before": {
+      "exit": 0,
+      "log_sha256": "42fc5e4f48ebece52b58a8b48d461c726df76e2ad8ea8e20b7938a76263fc9bf"
+    },
+    "cold_after": {
+      "exit": 0,
+      "log_sha256": "26f2c2418ea7fc0fbb971912be5afc60bf806077ebb1825d6b02c896d173d461"
+    },
+    "gofmt": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "diff_check": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lazy_negative": {
+      "exit": 1,
+      "classification": "预期反例，不是正向测试失败",
+      "log_sha256": "3f63ee5f3a49fd0172845070ba92b0b27d7f02599774f2f711fa4f48dbbe702c"
+    },
+    "key_ownership_negative": {
+      "exit": 1,
+      "classification": "预期反例，不是正向测试失败",
+      "log_sha256": "3a641db48a907138ec533b8c2712b1d859ca82bd1464a90694d51b37dd072bc9"
+    }
+  },
+  "changed_coverage": {
+    "covered": 39,
+    "total": 51,
+    "percent": 76.47058823529412,
+    "method": "与新增生产行相交的 Go coverage statement blocks；字段/空方法没有可执行块；测试文件排除",
+    "blocks": [
+      {
+        "file": "pkg/sql/plan/function/func_builtin_regexp.go",
+        "start": 52,
+        "end": 53,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/function/func_builtin_regexp.go",
+        "start": 2079,
+        "end": 2079,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/function/func_builtin_regexp.go",
+        "start": 2080,
+        "end": 2081,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/query_builder.go",
+        "start": 12627,
+        "end": 12627,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 40,
+        "end": 40,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 41,
+        "end": 42,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 45,
+        "end": 45,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 46,
+        "end": 47,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 50,
+        "end": 50,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 51,
+        "end": 52,
+        "statements": 1,
+        "covered": false
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 58,
+        "end": 58,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 60,
+        "end": 60,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 60,
+        "end": 60,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 62,
+        "end": 62,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 64,
+        "end": 64,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 65,
+        "end": 66,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 67,
+        "end": 67,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 68,
+        "end": 69,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 70,
+        "end": 72,
+        "statements": 3,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 78,
+        "end": 78,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 80,
+        "end": 80,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 80,
+        "end": 80,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 82,
+        "end": 82,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 84,
+        "end": 88,
+        "statements": 1,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 92,
+        "end": 93,
+        "statements": 1,
+        "covered": false
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_benchmark.go",
+        "start": 96,
+        "end": 97,
+        "statements": 1,
+        "covered": false
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 140,
+        "end": 142,
+        "statements": 3,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 155,
+        "end": 157,
+        "statements": 3,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 166,
+        "end": 170,
+        "statements": 3,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 190,
+        "end": 192,
+        "statements": 3,
+        "covered": false
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 382,
+        "end": 386,
+        "statements": 5,
+        "covered": true
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 488,
+        "end": 490,
+        "statements": 3,
+        "covered": false
+      },
+      {
+        "file": "pkg/sql/plan/view_schema_inference.go",
+        "start": 502,
+        "end": 504,
+        "statements": 3,
+        "covered": false
+      }
+    ]
+  },
+  "cold_operator": {
+    "classification": "新操作器构造，不是服务冷启动",
+    "iterations": 1000,
+    "repetitions": 3,
+    "results": {
+      "before": [
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t      1458 ns/op\t    9976 B/op\t       9 allocs/op",
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t       887.9 ns/op\t    9976 B/op\t       9 allocs/op",
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t       746.8 ns/op\t    9976 B/op\t       9 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      3743 ns/op\t   17610 B/op\t      50 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      4456 ns/op\t   17610 B/op\t      50 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      4316 ns/op\t   17610 B/op\t      50 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      8900 ns/op\t   26072 B/op\t     173 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      7868 ns/op\t   26072 B/op\t     173 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      7626 ns/op\t   26072 B/op\t     173 allocs/op"
+      ],
+      "after": [
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t       158.8 ns/op\t     168 B/op\t       3 allocs/op",
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t       149.8 ns/op\t     168 B/op\t       3 allocs/op",
+        "BenchmarkRegexpOperatorCold/like_prefix-8         \t    1000\t       170.6 ns/op\t     168 B/op\t       3 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      2978 ns/op\t   12753 B/op\t      48 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      2430 ns/op\t   12753 B/op\t      48 allocs/op",
+        "BenchmarkRegexpOperatorCold/re2-8                 \t    1000\t      2752 ns/op\t   12753 B/op\t      48 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      7787 ns/op\t   21216 B/op\t     171 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      8800 ns/op\t   21216 B/op\t     171 allocs/op",
+        "BenchmarkRegexpOperatorCold/icu-8                 \t    1000\t      8238 ns/op\t   21216 B/op\t     171 allocs/op"
+      ]
+    }
+  },
+  "profile_pair": {
+    "classification": "profile 归因；含背景及采样误差，不作延迟验收/精确请求账本",
+    "requests": 800,
+    "results": {
+      "before": {
+        "base": "3878a13ef00fc85b1bced8a58a4f7d17df848806",
+        "binary_sha256": "7774474093e267c9fbec155a95c481f98462f2d8396a27edacab569f7f58f6d0",
+        "inputs": {
+          "pkg/sql/plan/function/func_builtin_regexp.go": "ea176b34832eac669df943405b9c02ef87c3e3b896db370327c0a8558d103770",
+          "pkg/sql/plan/function/regexp_cache_allocation_test.go": "7558e4332628b2448764de8dfe34a13b40dcb9994e1d49379f4b1e60f9a36586",
+          "cgo/.mo-native-provenance": "ff9aa93fc870b908a3bb0c65d5bb5d24035327405eeb2a4e485162567ba6315c",
+          "cgo/libmo.dylib": "42305cbda1787b8f813fc86240af539b4fe036f8504e48d6283903b1d6df0ad3"
+        },
+        "metrics": [
+          "100\t  22065118 ns/op\t    159577 charged-peak-B\t 135152667 max-ns/op\t         0 memo-hits/op\t  18455750 p50-ns/op\t  36688417 p95-ns/op\t  53336125 p99-ns/op\t         0 relation-resolves/op\t        45.32 requests/s\t         0 view-binds/op\t12181500 B/op\t  123434 allocs/op",
+          "100\t  17465350 ns/op\t    161372 charged-peak-B\t  24730792 max-ns/op\t         0 memo-hits/op\t  16641041 p50-ns/op\t  21218083 p95-ns/op\t  22948042 p99-ns/op\t         0 relation-resolves/op\t        57.26 requests/s\t         0 view-binds/op\t11957034 B/op\t  121817 allocs/op",
+          "100\t  19837739 ns/op\t         0 charged-peak-B\t  75404292 max-ns/op\t         0 memo-hits/op\t  17963500 p50-ns/op\t  27698000 p95-ns/op\t  41861959 p99-ns/op\t         0 relation-resolves/op\t        50.41 requests/s\t         0 view-binds/op\t11823188 B/op\t  120883 allocs/op",
+          "100\t  20763246 ns/op\t         0 charged-peak-B\t  60563291 max-ns/op\t         0 memo-hits/op\t  18956000 p50-ns/op\t  29812417 p95-ns/op\t  37026666 p99-ns/op\t         0 relation-resolves/op\t        48.16 requests/s\t         0 view-binds/op\t11824691 B/op\t  120884 allocs/op"
+        ],
+        "samples_file_sha256": "dd2b5dbbb1c9af54fd50de65b43898d880db066f6e9bc5550b80c58184958636",
+        "monitor_file_sha256": "3c5733ef32c1f0bbd5e41212b2ab6fe405a5e141e57f0a1d81954b4270574b8e"
+      },
+      "after": {
+        "base": "3878a13ef00fc85b1bced8a58a4f7d17df848806",
+        "binary_sha256": "70467eee5a6adbb1fbb348fcc6e66f93bfb751a2bb198f1ec763d7d11c90887c",
+        "inputs": {
+          "pkg/sql/plan/function/func_builtin_regexp.go": "c573abff1503dd84ae3ed19c6728957cb9a51385ed7407c88df17acad037aae7",
+          "pkg/sql/plan/function/regexp_cache_allocation_test.go": "7558e4332628b2448764de8dfe34a13b40dcb9994e1d49379f4b1e60f9a36586",
+          "cgo/.mo-native-provenance": "ff9aa93fc870b908a3bb0c65d5bb5d24035327405eeb2a4e485162567ba6315c",
+          "cgo/libmo.dylib": "42305cbda1787b8f813fc86240af539b4fe036f8504e48d6283903b1d6df0ad3"
+        },
+        "metrics": [
+          "100\t  23410920 ns/op\t    159577 charged-peak-B\t 159464875 max-ns/op\t         0 memo-hits/op\t  19623291 p50-ns/op\t  39547708 p95-ns/op\t  63765250 p99-ns/op\t         0 relation-resolves/op\t        42.72 requests/s\t         0 view-binds/op\t11738448 B/op\t  123370 allocs/op",
+          "100\t  22288072 ns/op\t    161372 charged-peak-B\t  53870667 max-ns/op\t         0 memo-hits/op\t  20397042 p50-ns/op\t  35279458 p95-ns/op\t  48612583 p99-ns/op\t         0 relation-resolves/op\t        44.87 requests/s\t         0 view-binds/op\t11526128 B/op\t  121846 allocs/op",
+          "100\t  25730606 ns/op\t         0 charged-peak-B\t 145076625 max-ns/op\t         0 memo-hits/op\t  22054750 p50-ns/op\t  44012417 p95-ns/op\t  53262625 p99-ns/op\t         0 relation-resolves/op\t        38.86 requests/s\t         0 view-binds/op\t11425335 B/op\t  121124 allocs/op",
+          "100\t  20377717 ns/op\t         0 charged-peak-B\t  36221958 max-ns/op\t         0 memo-hits/op\t  19231917 p50-ns/op\t  26608917 p95-ns/op\t  33602333 p99-ns/op\t         0 relation-resolves/op\t        49.07 requests/s\t         0 view-binds/op\t11368336 B/op\t  120757 allocs/op"
+        ],
+        "samples_file_sha256": "4dd386ad4b388468aed4ff807dc1a9a50e9a4582806b35b2d8945c33bd4272bd",
+        "monitor_file_sha256": "788ca615a8880ab16a2d58f21f28fdb05f9d2830b939154f008688a96b399f5d"
+      }
+    }
+  },
+  "normal_pair": {
+    "classification": "预声明 AB/BA/AB 普通诊断；未经正式稳定背景窗口筛选，不作 S6 验收",
+    "requests": 12000,
+    "mode": "cache_off",
+    "concurrency": 1,
+    "count_per_shape": 1000,
+    "results": [
+      {
+        "round": 1,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 19245000,
+        "p95_ns": 38190750,
+        "p99_ns": 52642250,
+        "max_ns": 138160000,
+        "bytes_per_op": 12014734,
+        "allocs_per_op": 122277,
+        "full_metrics_line": "1000\t  22234755 ns/op\t    159577 charged-peak-B\t 138160000 max-ns/op\t         0 memo-hits/op\t  19245000 p50-ns/op\t  38190750 p95-ns/op\t  52642250 p99-ns/op\t         0 relation-resolves/op\t        44.97 requests/s\t         0 view-binds/op\t12014734 B/op\t  122277 allocs/op",
+        "samples_file_sha256": "c629c9828c5e727fa0c1109b9126262dc081250b4c102143b7cce9d50ec6baf0",
+        "monitor_file_sha256": "e7d1e2ea78e8607edc44f1e1553670ae165a021563a0e5d22f619658f945e354",
+        "invocation_exit": 0
+      },
+      {
+        "round": 1,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 21155334,
+        "p95_ns": 43803625,
+        "p99_ns": 67537709,
+        "max_ns": 189073542,
+        "bytes_per_op": 11899716,
+        "allocs_per_op": 121616,
+        "full_metrics_line": "1000\t  24795443 ns/op\t         0 charged-peak-B\t 189073542 max-ns/op\t         0 memo-hits/op\t  21155334 p50-ns/op\t  43803625 p95-ns/op\t  67537709 p99-ns/op\t         0 relation-resolves/op\t        40.33 requests/s\t         0 view-binds/op\t11899716 B/op\t  121616 allocs/op",
+        "samples_file_sha256": "c629c9828c5e727fa0c1109b9126262dc081250b4c102143b7cce9d50ec6baf0",
+        "monitor_file_sha256": "e7d1e2ea78e8607edc44f1e1553670ae165a021563a0e5d22f619658f945e354",
+        "invocation_exit": 0
+      },
+      {
+        "round": 1,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 17957792,
+        "p95_ns": 36683958,
+        "p99_ns": 72210166,
+        "max_ns": 151411291,
+        "bytes_per_op": 11531227,
+        "allocs_per_op": 121952,
+        "full_metrics_line": "1000\t  21792917 ns/op\t    159577 charged-peak-B\t 151411291 max-ns/op\t         0 memo-hits/op\t  17957792 p50-ns/op\t  36683958 p95-ns/op\t  72210166 p99-ns/op\t         0 relation-resolves/op\t        45.89 requests/s\t         0 view-binds/op\t11531227 B/op\t  121952 allocs/op",
+        "samples_file_sha256": "168c9b91ed72746dc09da80cfed0f1297d40e2585ca200301127120a7117dc16",
+        "monitor_file_sha256": "b2d5a039cf043d088dae0fe1b10231345320873715d53b10db0727524ee14763",
+        "invocation_exit": 0
+      },
+      {
+        "round": 1,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 16970500,
+        "p95_ns": 25235209,
+        "p99_ns": 32460708,
+        "max_ns": 64976083,
+        "bytes_per_op": 11334413,
+        "allocs_per_op": 120456,
+        "full_metrics_line": "1000\t  18540506 ns/op\t         0 charged-peak-B\t  64976083 max-ns/op\t         0 memo-hits/op\t  16970500 p50-ns/op\t  25235209 p95-ns/op\t  32460708 p99-ns/op\t         0 relation-resolves/op\t        53.94 requests/s\t         0 view-binds/op\t11334413 B/op\t  120456 allocs/op",
+        "samples_file_sha256": "168c9b91ed72746dc09da80cfed0f1297d40e2585ca200301127120a7117dc16",
+        "monitor_file_sha256": "b2d5a039cf043d088dae0fe1b10231345320873715d53b10db0727524ee14763",
+        "invocation_exit": 0
+      },
+      {
+        "round": 2,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 16889917,
+        "p95_ns": 23958708,
+        "p99_ns": 29305541,
+        "max_ns": 68406000,
+        "bytes_per_op": 11480184,
+        "allocs_per_op": 121478,
+        "full_metrics_line": "1000\t  18287824 ns/op\t    159577 charged-peak-B\t  68406000 max-ns/op\t         0 memo-hits/op\t  16889917 p50-ns/op\t  23958708 p95-ns/op\t  29305541 p99-ns/op\t         0 relation-resolves/op\t        54.68 requests/s\t         0 view-binds/op\t11480184 B/op\t  121478 allocs/op",
+        "samples_file_sha256": "b895899a32160cd2aa1622292631c8fa3a5ad551ba37b8ec6b53fa1399759855",
+        "monitor_file_sha256": "e05e6e53e7307a1b9b250878c0acea16a8214c303adb69eb9397bde80c0d6a99",
+        "invocation_exit": 0
+      },
+      {
+        "round": 2,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 16838333,
+        "p95_ns": 23897542,
+        "p99_ns": 27767875,
+        "max_ns": 35958917,
+        "bytes_per_op": 11304699,
+        "allocs_per_op": 120216,
+        "full_metrics_line": "1000\t  18103852 ns/op\t         0 charged-peak-B\t  35958917 max-ns/op\t         0 memo-hits/op\t  16838333 p50-ns/op\t  23897542 p95-ns/op\t  27767875 p99-ns/op\t         0 relation-resolves/op\t        55.24 requests/s\t         0 view-binds/op\t11304699 B/op\t  120216 allocs/op",
+        "samples_file_sha256": "b895899a32160cd2aa1622292631c8fa3a5ad551ba37b8ec6b53fa1399759855",
+        "monitor_file_sha256": "e05e6e53e7307a1b9b250878c0acea16a8214c303adb69eb9397bde80c0d6a99",
+        "invocation_exit": 0
+      },
+      {
+        "round": 2,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 17326000,
+        "p95_ns": 24793125,
+        "p99_ns": 30090750,
+        "max_ns": 125077541,
+        "bytes_per_op": 12007596,
+        "allocs_per_op": 122216,
+        "full_metrics_line": "1000\t  18740495 ns/op\t    159577 charged-peak-B\t 125077541 max-ns/op\t         0 memo-hits/op\t  17326000 p50-ns/op\t  24793125 p95-ns/op\t  30090750 p99-ns/op\t         0 relation-resolves/op\t        53.36 requests/s\t         0 view-binds/op\t12007596 B/op\t  122216 allocs/op",
+        "samples_file_sha256": "f7838eb301f1ba5bc2e191a71dfc849ba92936349ef441579f247124e9a48da3",
+        "monitor_file_sha256": "05c7242f9dc77458d9ce1d09a0e21a2985e7df08c1154eac4780d02e8af39849",
+        "invocation_exit": 0
+      },
+      {
+        "round": 2,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 17160583,
+        "p95_ns": 24995250,
+        "p99_ns": 31265042,
+        "max_ns": 100146125,
+        "bytes_per_op": 11818494,
+        "allocs_per_op": 120910,
+        "full_metrics_line": "1000\t  18776815 ns/op\t         0 charged-peak-B\t 100146125 max-ns/op\t         0 memo-hits/op\t  17160583 p50-ns/op\t  24995250 p95-ns/op\t  31265042 p99-ns/op\t         0 relation-resolves/op\t        53.26 requests/s\t         0 view-binds/op\t11818494 B/op\t  120910 allocs/op",
+        "samples_file_sha256": "f7838eb301f1ba5bc2e191a71dfc849ba92936349ef441579f247124e9a48da3",
+        "monitor_file_sha256": "05c7242f9dc77458d9ce1d09a0e21a2985e7df08c1154eac4780d02e8af39849",
+        "invocation_exit": 0
+      },
+      {
+        "round": 3,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 21914666,
+        "p95_ns": 49165125,
+        "p99_ns": 137894792,
+        "max_ns": 441772167,
+        "bytes_per_op": 12126975,
+        "allocs_per_op": 123186,
+        "full_metrics_line": "1000\t  27919924 ns/op\t    159577 charged-peak-B\t 441772167 max-ns/op\t         0 memo-hits/op\t  21914666 p50-ns/op\t  49165125 p95-ns/op\t 137894792 p99-ns/op\t         0 relation-resolves/op\t        35.82 requests/s\t         0 view-binds/op\t12126975 B/op\t  123186 allocs/op",
+        "samples_file_sha256": "ea9e6ea7a99090496ca45cd1ce8c9eb7c98c38a6a654239a18446a14716f713e",
+        "monitor_file_sha256": "c8d06c8328f6581f386c75c58db7e10956c1c951a697d968b6a8ecf791006962",
+        "invocation_exit": 0
+      },
+      {
+        "round": 3,
+        "stage": "before",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 20992291,
+        "p95_ns": 41667625,
+        "p99_ns": 85962625,
+        "max_ns": 598000958,
+        "bytes_per_op": 11872677,
+        "allocs_per_op": 121346,
+        "full_metrics_line": "1000\t  24859706 ns/op\t         0 charged-peak-B\t 598000958 max-ns/op\t         0 memo-hits/op\t  20992291 p50-ns/op\t  41667625 p95-ns/op\t  85962625 p99-ns/op\t         0 relation-resolves/op\t        40.23 requests/s\t         0 view-binds/op\t11872677 B/op\t  121346 allocs/op",
+        "samples_file_sha256": "ea9e6ea7a99090496ca45cd1ce8c9eb7c98c38a6a654239a18446a14716f713e",
+        "monitor_file_sha256": "c8d06c8328f6581f386c75c58db7e10956c1c951a697d968b6a8ecf791006962",
+        "invocation_exit": 0
+      },
+      {
+        "round": 3,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 18996084,
+        "p95_ns": 36147500,
+        "p99_ns": 54839542,
+        "max_ns": 223333792,
+        "bytes_per_op": 11583317,
+        "allocs_per_op": 122297,
+        "full_metrics_line": "1000\t  21716905 ns/op\t    159577 charged-peak-B\t 223333792 max-ns/op\t         0 memo-hits/op\t  18996084 p50-ns/op\t  36147500 p95-ns/op\t  54839542 p99-ns/op\t         0 relation-resolves/op\t        46.05 requests/s\t         0 view-binds/op\t11583317 B/op\t  122297 allocs/op",
+        "samples_file_sha256": "97f4939b45c8fa999bc3d5e9cef3be4b6caf542de878570e4b879d017e8953aa",
+        "monitor_file_sha256": "6619eb839afebf7169539d5a9c379ea05ec31f9ff5e18f3563357dfe4b3bedfc",
+        "invocation_exit": 0
+      },
+      {
+        "round": 3,
+        "stage": "after",
+        "benchmark": "BenchmarkNativeViewMetadata/table_single/cache_off/concurrency=1/counts=false",
+        "samples": 1000,
+        "p50_ns": 19957375,
+        "p95_ns": 48045916,
+        "p99_ns": 88378416,
+        "max_ns": 290343958,
+        "bytes_per_op": 11406378,
+        "allocs_per_op": 121074,
+        "full_metrics_line": "1000\t  24291440 ns/op\t         0 charged-peak-B\t 290343958 max-ns/op\t         0 memo-hits/op\t  19957375 p50-ns/op\t  48045916 p95-ns/op\t  88378416 p99-ns/op\t         0 relation-resolves/op\t        41.17 requests/s\t         0 view-binds/op\t11406378 B/op\t  121074 allocs/op",
+        "samples_file_sha256": "97f4939b45c8fa999bc3d5e9cef3be4b6caf542de878570e4b879d017e8953aa",
+        "monitor_file_sha256": "6619eb839afebf7169539d5a9c379ea05ec31f9ff5e18f3563357dfe4b3bedfc",
+        "invocation_exit": 0
+      }
+    ],
+    "limitations": "不是 B0/cache-off/memo 正式三轮；没有 10000 无关 View；保留全部轮次，不汇池分位数、不择快样本；没有延迟无回退结论"
+  },
+  "b0": {
+    "base": "d99187d7b3bfda8744088b3ae8cf16739b690aa0",
+    "source_sha256": {
+      "pkg/frontend/view_metadata_s6_b0_benchmark_test.go": "91369131c6f799f77efed24a19cf7ac546b9cdf77f9cc21de708af14bc0603c9",
+      "pkg/frontend/view_metadata_s6_b0_contract_test.go": "8fb952066e9c2741f7e89a5c7d5b303ac621e1c0112f04cf52535046b9787e54",
+      "pkg/frontend/view_metadata_s6_b0_lifecycle_test.go": "63cb375c3f22dbbafe56bc7cfc8c6d01c84d5e49e226133e4a1f025ccc7aa83b",
+      "pkg/frontend/view_metadata_s6_b0_profile_test.go": "14f5dcdbb492ec0ab07b93777a89d1254155a13b6e7a20c2910d284604dc3d43",
+      "pkg/frontend/view_metadata_s6_b0_support_test.go": "f1e7646f99559f848540542df4010834dfcbbc8a9d844185b8cb288df0c73892"
+    },
+    "patch_sha256": "76970049679727c40f2e020788d83b32e13275bc03116ddb6b034b183166bd18",
+    "reverse_apply_check": 0,
+    "tracked_production_clean": true
+  },
+  "raw_evidence": "所有日志、样本、失败、profile、CPU/RSS/电源/thermal/swap 记录均保存在本地 CLAUDE_validation；不发布含其它任务命令的原始进程列表。此 receipt 给出输入/输出摘要和散列，不冒称上传了完整原始证据。",
+  "remaining_s6": [
+    "正式完整三轮及全 workload",
+    "至少5次独立冷重启",
+    "DDL/稀疏权限/订阅规模",
+    "阶段性取消≤1s",
+    "CPU/目录工作/heap与mpool峰值归因",
+    "逐预算判定与S7决策"
+  ]
+}

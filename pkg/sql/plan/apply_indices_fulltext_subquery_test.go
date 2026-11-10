@@ -44,7 +44,7 @@ func matchScanWithFulltextIndex(builder *QueryBuilder, ctx *BindContext) (int32,
 // The AGG sits under a 2-input JOIN, so the project-anchored path stops short of
 // it; only the standalone AGG anchor serves the MATCH.
 func TestFullTextUncorrelatedScalarSubqueryAggAnchor(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -85,7 +85,7 @@ func TestFullTextUncorrelatedScalarSubqueryAggAnchor(t *testing.T) {
 // [outer, SCAN(match)]. The MATCH scan is the inner child of a LEFT join, which
 // applyFullTextFiltersForJoinChildren previously skipped (INNER/SEMI only).
 func TestFullTextCorrelatedScalarSubqueryJoinChild(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	outerDef := makeFullTextJoinTestTableDef("outer", false)
@@ -125,7 +125,7 @@ func TestFullTextCorrelatedScalarSubqueryJoinChild(t *testing.T) {
 // (smaller outer input becomes the RIGHT build side). JoinType=RIGHT, MATCH scan at child 0
 // (the null-extending side for a RIGHT join).
 func TestFullTextCorrelatedScalarSubqueryLeftToRightSwapped(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -158,7 +158,7 @@ func TestFullTextCorrelatedScalarSubqueryLeftToRightSwapped(t *testing.T) {
 // side for a right-swapped SINGLE); the old hard-coded "child 1 only" inspected the wrong
 // relation and left the match unrewritten.
 func TestFullTextCorrelatedScalarSubqueryRightSwappedSingle(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -196,7 +196,7 @@ func TestFullTextCorrelatedScalarSubqueryRightSwappedSingle(t *testing.T) {
 // TestFullTextNotExistsAntiJoinPreservedChild: `docs WHERE match(...) AND NOT EXISTS(q)` flattens
 // to docs(match) ANTI JOIN q, with the match on the preserved child 0.
 func TestFullTextNotExistsAntiJoinPreservedChild(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -227,7 +227,7 @@ func TestFullTextNotExistsAntiJoinPreservedChild(t *testing.T) {
 // TestFullTextCorrelatedExistsMarkJoinPreservedChild: `docs WHERE match(...) AND EXISTS(q WHERE
 // q.n < docs.id)` flattens to docs(match) MARK JOIN q, with the match on the preserved child 0.
 func TestFullTextCorrelatedExistsMarkJoinPreservedChild(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -259,7 +259,7 @@ func TestFullTextCorrelatedExistsMarkJoinPreservedChild(t *testing.T) {
 // (IsRightJoin=true) moves the preserved side to child 1; eligibility must follow IsRightJoin, not
 // a hard-coded index.
 func TestFullTextAntiRightSwappedPreservesChild1(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	qDef := makeFullTextJoinTestTableDef("q", false)
@@ -296,7 +296,7 @@ func TestFullTextAntiRightSwappedPreservesChild1(t *testing.T) {
 // served by that subquery's own scan-level rewrite instead -- this test guards against a future
 // change that naively marks both ANTI/MARK children eligible.
 func TestFullTextAntiProbeSideNotDriven(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	outerDef := makeFullTextJoinTestTableDef("outer", false)

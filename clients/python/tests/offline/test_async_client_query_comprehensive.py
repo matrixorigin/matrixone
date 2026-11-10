@@ -29,60 +29,10 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Store original modules to restore later
 _original_modules = {}
-
-
-def setup_sqlalchemy_mocks():
-    """Setup SQLAlchemy mocks for this test class"""
-    global _original_modules
-    _original_modules['pymysql'] = sys.modules.get('pymysql')
-    _original_modules['aiomysql'] = sys.modules.get('aiomysql')
-    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
-    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
-    _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
-    _original_modules['sqlalchemy.ext'] = sys.modules.get('sqlalchemy.ext')
-    _original_modules['sqlalchemy.ext.asyncio'] = sys.modules.get('sqlalchemy.ext.asyncio')
-
-    # Mock the external dependencies
-    sys.modules['pymysql'] = Mock()
-    sys.modules['aiomysql'] = Mock()
-
-    # Create a more sophisticated SQLAlchemy mock that supports submodules
-    sqlalchemy_mock = Mock()
-    sqlalchemy_mock.create_engine = Mock()
-    sqlalchemy_mock.text = Mock()
-    sqlalchemy_mock.Column = Mock()
-    sqlalchemy_mock.Integer = Mock()
-    sqlalchemy_mock.String = Mock()
-    sqlalchemy_mock.DateTime = Mock()
-
-    sys.modules['sqlalchemy'] = sqlalchemy_mock
-    sys.modules['sqlalchemy.engine'] = Mock()
-    sys.modules['sqlalchemy.engine'].Engine = Mock()
-    sys.modules['sqlalchemy.orm'] = Mock()
-    sys.modules['sqlalchemy.orm'].sessionmaker = Mock()
-    sys.modules['sqlalchemy.orm'].declarative_base = Mock()
-
-    # Mock SQLAlchemy async engine
-    sys.modules['sqlalchemy.ext'] = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'] = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].create_async_engine = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].AsyncEngine = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].AsyncSession = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].async_sessionmaker = Mock()
-
-
-def teardown_sqlalchemy_mocks():
-    """Restore original modules"""
-    global _original_modules
-    for module_name, original_module in _original_modules.items():
-        if original_module is not None:
-            sys.modules[module_name] = original_module
-        elif module_name in sys.modules:
-            del sys.modules[module_name]
 
 
 # Add the matrixone package to the path
@@ -106,12 +56,12 @@ class TestAsyncResultSet(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def test_async_result_set(self):
         """Test AsyncResultSet basic functionality"""
@@ -137,12 +87,12 @@ class TestAsyncClientBasic(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -213,12 +163,12 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -247,6 +197,11 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
         class MockEngine:
             def __init__(self, connection):
                 self.connection = connection
+                from sqlalchemy.ext.asyncio import create_async_engine
+
+                self.native_engine = create_async_engine('mysql+aiomysql://unused@127.0.0.1:1/unused')
+                self.sync_engine = self.native_engine.sync_engine
+                self.dialect = self.native_engine.dialect
 
             def begin(self):
                 return MockBeginContext(self.connection)
@@ -259,11 +214,14 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
 
         # Create mock engine instance
         mock_engine = MockEngine(mock_connection)
+        self.addAsyncCleanup(mock_engine.native_engine.dispose)
 
         # Mock create_async_engine to return our mock engine
         mock_create_async_engine.return_value = mock_engine
 
-        await self.client.connect(host="localhost", port=6001, user="root", password="111", database="test", on_connect=[])
+        await self.client.connect(
+            host="localhost", port=6001, user="root", password="111", database="test", on_connect=[]
+        )
 
         # Verify create_async_engine was called
         mock_create_async_engine.assert_called_once()
@@ -303,12 +261,12 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -471,9 +429,6 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
 
         mock_connection.execute = Mock(side_effect=mock_execute)
 
-        # Mock the text function
-        sys.modules['sqlalchemy'].text = Mock(return_value="SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}")
-
         # Create mock engine instance
         mock_engine = MockEngine(mock_connection)
 
@@ -481,9 +436,9 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
 
         result = await self.client.query("users", snapshot="test_snapshot").select("id", "name").execute()
 
-        expected_sql = "SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "SELECT id, name FROM users{snapshot = 'test_snapshot'}"
         # Check that exec_driver_sql or execute was called
-        assert mock_connection.exec_driver_sql.called or mock_connection.execute.called
+        mock_connection.exec_driver_sql.assert_called_once_with(expected_sql)
         self.assertIsInstance(result, AsyncResultSet)
 
 
@@ -493,12 +448,12 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -507,45 +462,226 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_cluster_snapshot(self):
         """Test creating cluster snapshot"""
-        self.mock_client.execute.return_value = AsyncResultSet([], [])
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'cluster', 'sys', None, None)],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create("test_snap", SnapshotLevel.CLUSTER)
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR CLUSTER")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR CLUSTER")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.CLUSTER)
 
     async def test_create_database_snapshot(self):
         """Test creating database snapshot"""
-        # Mock the result to include database information
-        mock_result = AsyncResultSet([], [])
-        mock_result.database = "test_db"
-        self.mock_client.execute.return_value = mock_result
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'database', 'sys', 'test_db', None)],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create("test_snap", SnapshotLevel.DATABASE, database="test_db")
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR DATABASE test_db")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR DATABASE test_db")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.DATABASE)
         self.assertEqual(snapshot.database, "test_db")
 
     async def test_create_table_snapshot(self):
         """Test creating table snapshot"""
-        # Mock the result to include database and table information
-        mock_result = AsyncResultSet([], [])
-        mock_result.database = "test_db"
-        mock_result.table = "test_table"
-        self.mock_client.execute.return_value = mock_result
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'table', 'sys', 'test_db', 'test_table')],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create(
             "test_snap", SnapshotLevel.TABLE, database="test_db", table="test_table"
         )
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR TABLE test_db test_table")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR TABLE test_db test_table")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.database, "test_db")
         self.assertEqual(snapshot.table, "test_table")
+
+    async def test_create_returns_persisted_snapshot_metadata(self):
+        """Creation should return the metadata persisted by MatrixOne."""
+        created_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        timestamp_ns = 1735787045000000000
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('persisted_snap', timestamp_ns, 'database', 'sys', 'persisted_db', None)],
+            ),
+        ]
+
+        snapshot = await self.snapshot_manager.create(
+            "persisted_snap",
+            SnapshotLevel.DATABASE,
+            database="persisted_db",
+            description="client-side description",
+        )
+
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT persisted_snap FOR DATABASE persisted_db")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
+        lookup_call = self.mock_client.execute.await_args_list[1]
+        self.assertIn("WHERE sname = LOWER(?)", lookup_call.args[0])
+        self.assertEqual(lookup_call.args[1], ("persisted_snap",))
+        self.assertEqual(snapshot.created_at, created_at)
+        self.assertIsNone(snapshot.description)
+        self.assertEqual(snapshot.database, "persisted_db")
+
+    async def test_create_uses_real_async_client_parameter_binding(self):
+        """Snapshot lookup parameters should cross the real async execution boundary."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+        rows = [('review_snap', timestamp_ns, 'database', 'sys', 'review_db', None)]
+
+        class MockResult:
+            def __init__(self, returns_rows=False):
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+
+            def fetchall(self):
+                return rows
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self):
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                return MockResult(returns_rows=sql.lstrip().startswith("SELECT"))
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        client = AsyncClient()
+        connection = MockConnection()
+        client._engine = MockEngine(connection)
+
+        snapshot = await client.snapshots.create("review_snap", SnapshotLevel.DATABASE, database="review_db")
+
+        self.assertEqual(len(connection.statements), 2)
+        self.assertEqual(connection.statements[0], "CREATE SNAPSHOT review_snap FOR DATABASE review_db")
+        self.assertIn("WHERE sname = LOWER('review_snap')", connection.statements[1])
+        self.assertNotIn(":name", connection.statements[1])
+        self.assertEqual(snapshot.name, "review_snap")
+        self.assertEqual(snapshot.database, "review_db")
+
+    async def test_create_canonicalizes_snapshot_name_for_lookup(self):
+        """Creation should query the catalog with MatrixOne's canonical identifier."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+
+        class MockResult:
+            def __init__(self, rows, returns_rows=False):
+                self.rows = rows
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+
+            def fetchall(self):
+                return self.rows
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self, lookup_name, canonical_name):
+                self.lookup_name = lookup_name
+                self.canonical_name = canonical_name
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                is_select = sql.lstrip().startswith("SELECT")
+                escaped_lookup = self.lookup_name.replace("'", "''")
+                matched = is_select and f"WHERE sname = LOWER('{escaped_lookup}')" in sql
+                rows = []
+                if matched:
+                    rows = [(self.canonical_name, timestamp_ns, 'cluster', 'sys', None, None)]
+                return MockResult(rows, returns_rows=is_select)
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        cases = (
+            ("ReviewSnap", "ReviewSnap", "reviewsnap"),
+            ("`ReviewSnap`", "ReviewSnap", "reviewsnap"),
+            ("`Review``Snap`", "Review`Snap", "review`snap"),
+            ("`Review'Snap`", "Review'Snap", "review'snap"),
+            ('"ReviewSnap"', "ReviewSnap", "reviewsnap"),
+            ('"Review""Snap"', 'Review"Snap', 'review"snap'),
+            ("İSnap", "İSnap", "isnap"),
+            ("ΟΣ", "ΟΣ", "οσ"),
+            ("\u1c89Snap", "\u1c89Snap", "\u1c8asnap"),
+        )
+        for supplied_name, lookup_name, canonical_name in cases:
+            with self.subTest(
+                name=supplied_name,
+                lookup=lookup_name,
+                canonical=canonical_name,
+            ):
+                client = AsyncClient()
+                connection = MockConnection(lookup_name, canonical_name)
+                client._engine = MockEngine(connection)
+
+                snapshot = await client.snapshots.create(supplied_name, SnapshotLevel.CLUSTER)
+
+                self.assertEqual(len(connection.statements), 2)
+                escaped_lookup = lookup_name.replace("'", "''")
+                self.assertIn(
+                    f"WHERE sname = LOWER('{escaped_lookup}')",
+                    connection.statements[1],
+                )
+                self.assertEqual(snapshot.name, canonical_name)
 
     async def test_get_snapshot(self):
         """Test getting snapshot"""
@@ -606,10 +742,14 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         # Test not exists
         from matrixone.exceptions import SnapshotError
 
-        self.mock_client.execute.side_effect = SnapshotError("Snapshot 'nonexistent' not found")
+        self.mock_client.execute.return_value = AsyncResultSet([], [])
 
         exists = await self.snapshot_manager.exists("nonexistent")
         self.assertFalse(exists)
+
+        self.mock_client.execute.side_effect = SnapshotError('lookup permission denied')
+        with self.assertRaisesRegex(SnapshotError, 'permission denied'):
+            await self.snapshot_manager.exists('unreadable')
 
 
 class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
@@ -618,17 +758,36 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = AsyncMock()
+        self.mock_client.query_timeout = 300
         self.clone_manager = AsyncCloneManager(self.mock_client)
+
+        async def execute(sql):
+            if sql.startswith('SHOW CREATE'):
+                return AsyncResultSet(['name', 'ddl'], [('target', 'CREATE target')])
+            return AsyncResultSet([], [])
+
+        self.mock_client.execute.side_effect = execute
+        self.mock_client.snapshots.exists = AsyncMock(return_value=True)
+
+    def assert_clone_calls(self, expected):
+        from unittest.mock import call
+
+        kind = 'DATABASE' if expected.startswith('CREATE DATABASE') else 'TABLE'
+        target = 'target_db' if kind == 'DATABASE' else 'target_table'
+        calls = [call(expected.replace('IF NOT EXISTS ', '')), call('SHOW CREATE ' + kind + ' ' + target)]
+        if 'IF NOT EXISTS ' in expected:
+            calls.insert(0, call(self.clone_manager._existence_sql(kind, target)))
+        self.assertEqual(self.mock_client.execute.await_args_list, calls)
 
     async def test_clone_database(self):
         """Test cloning database"""
@@ -636,7 +795,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_database("target_db", "source_db")
 
-        self.mock_client.execute.assert_called_once_with("CREATE DATABASE target_db CLONE source_db")
+        self.assert_clone_calls("CREATE DATABASE target_db CLONE source_db")
 
     async def test_clone_database_with_snapshot(self):
         """Test cloning database with snapshot"""
@@ -644,9 +803,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_database_with_snapshot("target_db", "source_db", "test_snapshot")
 
-        self.mock_client.execute.assert_called_once_with(
-            'CREATE DATABASE target_db CLONE source_db {snapshot = "test_snapshot"}'
-        )
+        self.assert_clone_calls("CREATE DATABASE target_db CLONE source_db {snapshot = 'test_snapshot'}")
 
     async def test_clone_database_if_not_exists(self):
         """Test cloning database with if not exists"""
@@ -654,7 +811,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_database("target_db", "source_db", if_not_exists=True)
 
-        self.mock_client.execute.assert_called_once_with("CREATE DATABASE IF NOT EXISTS target_db CLONE source_db")
+        self.assert_clone_calls("CREATE DATABASE IF NOT EXISTS target_db CLONE source_db")
 
     async def test_clone_database_with_snapshot_and_if_not_exists(self):
         """Test cloning database with both grammar options"""
@@ -664,9 +821,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
             "target_db", "source_db", snapshot_name="test_snapshot", if_not_exists=True
         )
 
-        self.mock_client.execute.assert_called_once_with(
-            'CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {snapshot = "test_snapshot"}'
-        )
+        self.assert_clone_calls("CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {snapshot = 'test_snapshot'}")
 
     async def test_clone_table(self):
         """Test cloning table"""
@@ -674,7 +829,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_table("target_table", "source_table")
 
-        self.mock_client.execute.assert_called_once_with("CREATE TABLE target_table CLONE source_table")
+        self.assert_clone_calls("CREATE TABLE target_table CLONE source_table")
 
     async def test_clone_table_with_snapshot(self):
         """Test cloning table with snapshot"""
@@ -682,9 +837,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_table_with_snapshot("target_table", "source_table", "test_snapshot")
 
-        self.mock_client.execute.assert_called_once_with(
-            'CREATE TABLE target_table CLONE source_table {snapshot = "test_snapshot"}'
-        )
+        self.assert_clone_calls("CREATE TABLE target_table CLONE source_table {snapshot = 'test_snapshot'}")
 
     async def test_clone_table_if_not_exists(self):
         """Test cloning table with if not exists"""
@@ -692,7 +845,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_table("target_table", "source_table", if_not_exists=True)
 
-        self.mock_client.execute.assert_called_once_with("CREATE TABLE IF NOT EXISTS target_table CLONE source_table")
+        self.assert_clone_calls("CREATE TABLE IF NOT EXISTS target_table CLONE source_table")
 
     async def test_clone_table_with_snapshot_and_if_not_exists(self):
         """Test cloning table with both grammar options"""
@@ -702,8 +855,8 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
             "target_table", "source_table", snapshot_name="test_snapshot", if_not_exists=True
         )
 
-        self.mock_client.execute.assert_called_once_with(
-            'CREATE TABLE IF NOT EXISTS target_table CLONE source_table {snapshot = "test_snapshot"}'
+        self.assert_clone_calls(
+            "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {snapshot = 'test_snapshot'}"
         )
 
 
@@ -713,12 +866,12 @@ class TestAsyncMoCtlManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -781,12 +934,12 @@ class TestAsyncSQLAlchemyIntegration(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""

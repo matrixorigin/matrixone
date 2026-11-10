@@ -15,9 +15,12 @@
 package search
 
 import (
+	"strconv"
+
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,11 +29,61 @@ type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ParallelHooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
+var _ searchplugin.MembershipHooks = Hooks{}
+var _ searchplugin.ProbeKnobsHooks = Hooks{}
+var _ searchplugin.IndexFilterHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
 
-func (Hooks) NewReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+// SupportsMembership reports true: the reader applies Request.MembershipFilter
+// to the entries scan.
+func (Hooks) SupportsMembership() bool { return true }
+
+// SupportsProbeKnobs reports true: the search probes centroid lists.
+func (Hooks) SupportsProbeKnobs() bool { return true }
+
+// SupportsIndexFilter reports true: the search applies the INCLUDE and
+// primary-key predicates of its filter inside the index search.
+func (Hooks) SupportsIndexFilter() bool { return true }
+
+// StartRound returns the first round of the ivfflat widening policy.
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return ivfflat.IterativeSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound returns the round after prev of the ivfflat widening policy.
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return ivfflat.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
+}
+
+func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)
 }
 
-func (Hooks) NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
+// CanParallelize reports whether spec searches in one round; a multi-round
+// search expands buckets from the merged result of the previous round.
+func (Hooks) CanParallelize(spec *plan.IndexSearchScan) (bool, error) {
+	multiRound, err := ivfflatplan.MultiRound(spec)
+	return !multiRound, err
+}
+
+func (Hooks) NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
 	return ivfflat.NewPlanReaders(proc, spec, req, parallelism)
+}
+
+// ExplainSettings keeps compact text stable and exposes all static search
+// settings for detailed diagnostics.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
+	opts, err := ivfflatplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	settings := []string{"NProbe: " + strconv.FormatUint(uint64(opts.InitialProbeCount), 10)}
+	if detailed {
+		settings = append(settings,
+			"BucketExpandStep: "+strconv.FormatUint(uint64(opts.BucketExpandStep), 10),
+			"ThreadsSearch: "+strconv.FormatInt(opts.ThreadsSearch, 10),
+		)
+	}
+	return settings, nil
 }

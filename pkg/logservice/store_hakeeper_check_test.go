@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -889,33 +890,30 @@ func TestRestoreIDWatermarksFromNonLeader(t *testing.T) {
 
 func TestGetCheckerStateFromLeader(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*10))
-		defer cancel()
+		// Wait for election readiness, not for the getter's assertions to pass.
+		require.Eventually(t, func() bool {
+			isLeader, _, err := store.isLeaderHAKeeper()
+			return err == nil && isLeader
+		}, 10*time.Second, 20*time.Millisecond)
 
-		for {
-			select {
-			case <-ctx.Done():
-				t.Error("test deadline reached")
-				return
+		state, leaderTerm := store.getCheckerStateFromLeader()
+		require.NotNil(t, state)
+		require.Equal(t, pb.HAKeeperCreated, state.State)
+		require.Positive(t, leaderTerm)
 
-			default:
-				isLeader, termA, err := store.isLeaderHAKeeper()
-				state, termB := store.getCheckerStateFromLeader()
-				require.NoError(t, err)
-				assert.Equal(t, termB, termA)
-
-				if !isLeader {
-					assert.Equal(t, (*pb.CheckerState)(nil), state)
-				} else {
-					assert.NotEqual(t, (*pb.CheckerState)(nil), state)
-					return
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
-		}
+		// Fence the local identity while keeping the real Raft state readable.
+		// Independent leadership observations need not have equal terms.
+		replicaID := atomic.SwapUint64(&store.haKeeperReplicaID, 0)
+		defer atomic.StoreUint64(&store.haKeeperReplicaID, replicaID)
+		isLeader, _, err := store.isLeaderHAKeeper()
+		require.NoError(t, err)
+		require.False(t, isLeader)
+		state, term := store.getCheckerStateFromLeader()
+		require.Nil(t, state)
+		require.GreaterOrEqual(t, term, leaderTerm)
 	}
 
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestGetCheckerState(t *testing.T) {
@@ -945,6 +943,8 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.True(t, applied)
+		require.Len(t, store.hakeeperCheckWakeup, 1)
+		<-store.hakeeperCheckWakeup
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -961,6 +961,7 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.False(t, applied)
+		require.Empty(t, store.hakeeperCheckWakeup)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -1044,6 +1045,36 @@ func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
 		actual, err := s.getCheckerState()
 		require.NoError(t, err)
 		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, actual.State)
+		projected, err := s.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		require.Equal(t, &pb.CheckerState{State: actual.State}, projected)
+		// Cancellation before admission must reject both full and projected reads.
+		// Keep this deadline valid independently of the earlier heartbeat/read
+		// budget, including a pause before either cancellation assertion.
+		cancelDeadline := time.Now().Add(24 * time.Hour)
+		if deadline, ok := t.Deadline(); ok {
+			cancelDeadline = deadline.Add(time.Minute)
+		}
+		canceled, stop := context.WithDeadline(context.Background(), cancelDeadline)
+		defer stop()
+		stop()
+		withoutDeadline, cancelWithoutDeadline := context.WithCancel(context.Background())
+		cancelWithoutDeadline()
+		expired, expire := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+		defer expire()
+		for _, query := range []*hakeeper.StateQuery{{}, {StateOnly: true}} {
+			state, readErr := s.readCheckerState(canceled, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrCanceled)
+			require.Equal(t, &pb.CheckerState{}, state)
+			state, readErr = s.readCheckerState(withoutDeadline, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrDeadlineNotSet)
+			require.Equal(t, &pb.CheckerState{}, state)
+			// Deadline validation precedes Raft admission and is deterministic.
+			state, readErr = s.readCheckerState(expired, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrInvalidDeadline)
+			require.Equal(t, &pb.CheckerState{}, state)
+		}
+
 	})
 }
 
@@ -1225,7 +1256,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 				_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
 					UUID: "remote-recovery-coordinator",
 					ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-						walRecoveryStatusConfigKey: {
+						pb.WALRecoveryStatusConfigKey: {
 							CurrentValue: walRecoveryStatusPending,
 						},
 					}},
@@ -1251,7 +1282,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 					_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
 						UUID: "remote-recovery-coordinator",
 						ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-							walRecoveryStatusConfigKey: {
+							pb.WALRecoveryStatusConfigKey: {
 								CurrentValue: walRecoveryStatusComplete,
 							},
 						}},

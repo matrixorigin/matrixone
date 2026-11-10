@@ -46,7 +46,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -250,7 +249,173 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	//Stats only stats the committed data of the table.
+	published, err := tbl.getPublishedStats(ctx, sync)
+	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
+		return published, err
+	}
+	if published != nil && len(published.ByteRangeMap) > 0 && (tbl.db.op.IsSnapOp() || !tbl.getTxn().Readonly()) {
+		published = transientTableStats(published, published.TableCnt)
+	}
+	if tbl.remoteWorkspace {
+		if plan2.StatsInfoUsableForCache(published) && tbl.getTxn().Readonly() {
+			return published, nil
+		}
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	workspaceRows := tbl.workspaceInsertRowEstimate()
+	if workspaceRows == 0 && plan2.StatsInfoUsable(published) {
+		return published, nil
+	}
+	if tbl.getTxn().tableOps.existCreatedInTxn(tbl.tableId) {
+		if workspaceRows == 0 {
+			return published, nil
+		}
+		return transientTableStats(published, workspaceRows), nil
+	}
+	if workspaceRows >= float64(^uint64(0)) {
+		return transientTableStats(published, workspaceRows), nil
+	}
+
+	part, ready, err := tbl.getLatestPartitionState(ctx)
+	if err != nil || !ready || part == nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		// Optional statistics must neither replay historical checkpoints nor
+		// replace unavailable metadata with a new, misleadingly small estimate.
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	rows, err := partitionRowEstimate(part, types.TimestampToTS(tbl.db.op.SnapshotTS()))
+	if err != nil {
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	if plan2.StatsInfoUsable(published) {
+		rows = math.Max(rows, published.TableCnt)
+	}
+	rows = math.Min(rows+workspaceRows, float64(^uint64(0)))
+	if rows == 0 {
+		return published, nil
+	}
+	return transientTableStats(published, rows), nil
+}
+
+// transientTableStats borrows immutable published maps without modifying their
+// generation. An anonymous estimate must be refreshed at statement admission.
+func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
+	var stats pb.StatsInfo
+	if published != nil {
+		stats = *published
+		validCounts := published.TableCnt > 0 && !math.IsInf(published.TableCnt, 0) &&
+			!math.IsNaN(published.TableCnt) && rows > 0 && !math.IsInf(rows, 0) && !math.IsNaN(rows)
+		if len(published.SizeMap) != 0 && (rows > published.TableCnt || !validCounts) {
+			// SizeMap contains total bytes, so a changed row denominator must
+			// retain the observed average width. Only transient growth copies
+			// this map; completed read-only statistics keep their fast owner.
+			stats.SizeMap = nil
+			if validCounts {
+				sizes := make(map[string]uint64, len(published.SizeMap))
+				var sum uint64
+				for name, total := range published.SizeMap {
+					width := float64(total) / published.TableCnt
+					scaled := math.Ceil(width * rows)
+					if scaled >= float64(math.MaxUint64) || math.IsNaN(scaled) {
+						// An unrepresentable total must use the existing incomplete
+						// width model, rather than expose a partial/shrunken map.
+						sizes = nil
+						break
+					}
+					bytes := uint64(scaled)
+					if float64(bytes)/rows < width || bytes > math.MaxUint64-sum {
+						sizes = nil
+						break
+					}
+					sum += bytes
+					sizes[name] = bytes
+				}
+				stats.SizeMap = sizes
+			}
+		}
+	}
+	stats.ByteRangeMap = nil
+	stats.TableName = ""
+	stats.TableCnt = rows
+	return &stats
+}
+
+func partitionRowEstimate(part *logtailreplay.PartitionState, snapshot types.TS) (float64, error) {
+	rows := float64(part.ApproxInMemRows())
+	if part.ApproxDataObjectsNum() == 0 {
+		return rows, nil
+	}
+	iter, err := part.NewObjectsIter(snapshot, true, false)
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+	for iter.Next() {
+		obj := iter.Entry()
+		objectRows := obj.Rows()
+		if (obj.GetAppendable() && obj.DeleteTime.IsEmpty()) || objectRows == 0 {
+			// Deleted appendable objects are sealed; their recorded rows bound
+			// historical snapshots. Only growing/incomplete objects need the
+			// structural uint32 capacity instead of a zero/partial bound.
+			objectRows = math.MaxUint32
+		}
+		rows += float64(objectRows)
+	}
+	return math.Min(rows, float64(^uint64(0))), nil
+}
+
+// workspaceInsertRowEstimate bounds all existing writes using only metadata.
+// Execution visibility is still owned by the statement prefix, advanced after
+// planning; including the log tail conservatively avoids missing prior writes.
+// TryLock also permits internal SQL while a dump owns the workspace mutex;
+// unavailable observations fail closed, without waiting.
+func (tbl *txnTable) workspaceInsertRowEstimate() float64 {
+	txn := tbl.getTxn()
+	if txn.Readonly() {
+		return 0
+	}
+	if !txn.TryLock() {
+		return float64(^uint64(0))
+	}
+	defer txn.Unlock()
+	var rows float64
+	for i := range txn.writes {
+		entry := &txn.writes[i]
+		if entry.typ != INSERT || entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId || entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		if entry.fileName == "" {
+			rows += float64(entry.bat.RowCount())
+			continue
+		}
+		idx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+		if idx < 0 || idx >= len(entry.bat.Vecs) || entry.bat.Vecs[idx] == nil || entry.bat.Vecs[idx].GetType().Oid != types.T_varchar {
+			return float64(^uint64(0))
+		}
+		vec := entry.bat.Vecs[idx]
+		if vec.Length() != entry.bat.RowCount() {
+			return float64(^uint64(0))
+		}
+		for j := 0; j < vec.Length(); j++ {
+			data := vec.GetBytesAt(j)
+			if vec.IsNull(uint64(j)) || len(data) != objectio.ObjectStatsLen {
+				return float64(^uint64(0))
+			}
+			var stats objectio.ObjectStats
+			stats.UnMarshal(data)
+			if stats.Rows() == 0 {
+				return float64(^uint64(0))
+			}
+			rows += float64(stats.Rows())
+		}
+	}
+	return math.Min(rows, float64(^uint64(0)))
+}
+
+func (tbl *txnTable) getPublishedStats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	// Published statistics retain their original committed-data contract.
 	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
@@ -283,6 +448,26 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	}
 
 	return v + rows, nil
+}
+
+func replayRowColumnSize(entry *logtailreplay.RowEntry, neededCols map[string]*plan.ColDef) uint64 {
+	var size uint64
+	for i, name := range entry.Batch.Attrs {
+		if _, ok := neededCols[name]; !ok {
+			continue
+		}
+		vec := entry.Batch.Vecs[i]
+		if vec.Length() == 0 {
+			// Replayed rows keep the physical RowID on RowEntry rather than
+			// duplicating it in the retained batch. Size("*") includes it.
+			if name == catalog.Row_ID {
+				size += types.RowidSize
+			}
+			continue
+		}
+		size += uint64(vec.Size() / vec.Length())
+	}
+	return size
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
@@ -338,14 +523,10 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			continue
 		}
 
-		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
-			}
-		}
+		szInPart += replayRowColumnSize(entry, neededCols)
 	}
 
-	s, _ := tbl.Stats(ctx, true)
+	s, _ := tbl.getPublishedStats(ctx, true)
 	if s == nil {
 		return szInPart, nil
 	}
@@ -528,12 +709,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(zms[idx], zm.GetMaxBuf())
-				index.UpdateZM(zms[idx], zm.GetMinBuf())
+				index.MergeZM(zms[idx], zm)
 			}
 		} else {
 			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap().Clone()
 				tableTypes[idx] = uint8(cols[idx].Typ.Id)
 			}
 			inited = true
@@ -1126,9 +1306,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 }
 
 func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
-	sid := tbl.proc.Load().GetService()
 	start := time.Now()
-	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
@@ -1137,14 +1315,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0 {
 		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
-
-	trace.GetService(sid).AddTxnDurationAction(
-		tbl.db.op,
-		client.RangesEvent,
-		seq,
-		tbl.tableId,
-		0,
-		nil)
 
 	defer func() {
 		cost := time.Since(start)
@@ -1198,23 +1368,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.Error(err),
 			)
 		}
-
-		trace.GetService(sid).AddTxnAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			int64(blocks.Len()),
-			"blocks",
-			err)
-
-		trace.GetService(sid).AddTxnDurationAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			cost,
-			err)
 
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 		if err != nil {
@@ -1325,10 +1478,17 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
-	hasFoldExpr := plan2.HasFoldExprForList(rangesParam.BlockFilters)
-	if hasFoldExpr {
-		rangesParam.BlockFilters = nil
+	// Fold is a materialized statement value, not a reason to discard every
+	// predicate. Only standalone unavailable values have no metadata proof.
+	// Use a private slice so the caller's reusable filter list stays intact.
+	filters := make([]*plan.Expr, 0, len(rangesParam.BlockFilters))
+	for _, expr := range rangesParam.BlockFilters {
+		if folded, ok := expr.Expr.(*plan.Expr_Fold); ok && (folded.Fold == nil || folded.Fold.Data == nil) {
+			continue
+		}
+		filters = append(filters, expr)
 	}
+	rangesParam.BlockFilters = filters
 
 	var (
 		objMeta    objectio.ObjectMeta
@@ -1592,14 +1752,16 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tbl.tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:  attr.Attr.EnumVlaues,
-						Charset:     uint32(attr.Attr.Type.Charset),
+						Id:                int32(attr.Attr.Type.Oid),
+						Width:             attr.Attr.Type.Width,
+						Scale:             attr.Attr.Type.Scale,
+						AutoIncr:          attr.Attr.AutoIncrement,
+						Table:             tbl.tableName,
+						NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:        attr.Attr.EnumVlaues,
+						Charset:           uint32(attr.Attr.Type.Charset),
+						CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+						NumericAttributes: uint32(attr.Attr.NumericAttributes),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1662,7 +1824,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 				}
 			}
 		}
@@ -1732,6 +1894,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
+			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
 	}
 	return tbl.tableDef
@@ -1775,6 +1939,10 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func (tbl *txnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	return tbl.isCreatedInTxn(ctx)
+}
+
 func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	if uint64(current)+resets > math.MaxUint32 {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
@@ -1790,6 +1958,8 @@ func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplace
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+	tbl.getTxn().beginCatalogMutation()
+	defer tbl.getTxn().endCatalogMutation()
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
@@ -1811,6 +1981,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName
+	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
@@ -1819,6 +1990,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	oldChecks := api.CloneExtra(&api.SchemaExtra{Checks: tbl.extraInfo.Checks}).Checks
+	oldDefaultCharset := tbl.extraInfo.DefaultCharset
+	oldCollationVersion := tbl.extraInfo.CollationVersion
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1837,8 +2010,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+				tbl.createSql = oldCreateSQL
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_ReplaceDef:
-				// Rollback for ReplaceDef is handled by restoring defs
+				tbl.extraInfo.Checks = oldChecks
+				tbl.extraInfo.DefaultCharset = oldDefaultCharset
+				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
 				tbl.extraInfo.Checks = oldChecks
@@ -1874,10 +2051,39 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
-			tbl.tableName = req.GetRenameTable().NewName
+			rename := req.GetRenameTable()
+			structuredChecks := false
+			for _, check := range tbl.extraInfo.Checks {
+				structuredChecks = structuredChecks || check != nil
+			}
+			if !structuredChecks && (tbl.relKind == "" || tbl.relKind == catalog.SystemOrdinaryRel) {
+				createSQL, err := plan2.RenameLegacyCheckConstraintNames(ctx, tbl.createSql, rename.OldName, rename.NewName)
+				if err != nil {
+					return err
+				}
+				if createSQL != tbl.createSql {
+					tbl.createSql = createSQL
+					// createWithID consumes properties, while GetTableDef reads
+					// createSql. Publish the same fallback identity through both.
+					appendDef = append(appendDef, &engine.PropertiesDef{Properties: []engine.Property{{
+						Key: catalog.SystemRelAttr_CreateSQL, Value: createSQL,
+					}}})
+				}
+			}
+			tbl.tableName = rename.NewName
+			// Generated CHECK names (<table>_chk_<n>) follow the table they were
+			// generated for. Without this the renamed table keeps owning the old
+			// table's generated names, and recreating a table under the old name
+			// trips ER_CHECK_CONSTRAINT_DUP_NAME (3822).
+			tbl.extraInfo.Checks = plan2.RenameGeneratedCheckConstraintNames(
+				tbl.extraInfo.Checks, rename.OldName, rename.NewName,
+			)
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req
+			// ReplaceDef precedes composed rename actions. Publish its CHECKs
+			// here so later requests retain their final names and expressions.
+			tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: req.GetReplaceDef().GetDef().GetChecks()}).Checks
 		case api.AlterKind_RenameColumn:
 			hasReplaceDef = true
 			re := req.GetRenameCol()
@@ -1909,7 +2115,16 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if hasReplaceDef {
 		// When ReplaceDef exists, replace the entire table definition
 		replaceDef := replaceDefReq.GetReplaceDef()
-		baseDefs, _, _ = engine.PlanDefsToExeDefs(replaceDef.Def)
+		var replacementExtra *api.SchemaExtra
+		baseDefs, replacementExtra, err = engine.PlanDefsToExeDefs(replaceDef.Def)
+		if err != nil {
+			return err
+		}
+		// Catalog regeneration uses extraInfo independently of the property
+		// factory in baseDefs. CHECKs already follow the ordered requests above;
+		// publishing the replacement again would discard composed renames.
+		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
+		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 	} else {
 		baseDefs = append([]engine.TableDef{}, tbl.defs...)
@@ -1982,30 +2197,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		// 3. adjust writes for the table
 		txn.Lock()
 		defer txn.Unlock()
-		for i, n := 0, len(txn.writes); i < n; i++ {
-			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
-					continue
-				}
-				transferred := cur
-				transferred.tableName = tbl.tableName // in case renaming
-				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
-				transferred.accountedSize = 0
-				if err != nil {
-					return err
-				}
-				if len(renameColMap) > 0 {
-					for i, attr := range transferred.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transferred.bat.Attrs[i] = newName
-						}
-					}
-				}
-				txn.appendWorkspaceEntryLocked(transferred)
-				txn.selectAllBatchRowsLocked(cur.bat)
-
-			}
-		}
+		return txn.transferWorkspaceWritesForAlterLocked(tbl.tableId, tbl.tableName, renameColMap)
 	}
 
 	return nil
@@ -2107,38 +2299,67 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
+// rewriteObjectByDeletion rewrites obj's surviving rows — every block
+// minus its pending deleted offsets — into a fresh storage object and
+// returns the replacement's metadata batch, its file name, the names of
+// the objects the rewrite persisted (or may have persisted through a
+// commit-ambiguous Sync error; the snapshot is taken BEFORE the writer's
+// close drops its tracked references), and any error. The writer carries
+// this transaction's per-object capacity option, so a persisted
+// replacement object reserves one in-flight unit under the admission
+// bound BEFORE it goes durable and a saturated ledger refuses the spill
+// with nothing half-persisted behind it; the parent that called the
+// rewrite records the result, and only a recorded result retires the
+// original — a refused or failed rewrite's persisted names are the
+// caller's to retain for asynchronous cleanup (issue #25590 round-19
+// review, finding 1).
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
+) (bat *batch.Batch, fileName string, persisted []string, err error) {
 
 	proc := tbl.proc.Load()
 
-	var (
-		err error
-		fs  fileservice.FileService
-	)
-
+	var fs fileservice.FileService
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
 		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
-	)
-
-	defer func() { s3Writer.Close() }()
-
-	var (
-		bat      *batch.Batch
-		stats    []objectio.ObjectStats
-		fileName string
+		tbl.getTxn().SinkerCapacityOption(),
 	)
 
 	defer func() {
-		if bat != nil {
-			bat.Clean(proc.Mp())
+		// The ownership snapshot of this rewrite's objects is taken before
+		// the close drops the sinker's tracked references — done by the
+		// deferred epilogue because every return path takes it, and
+		// handed out so a caller whose record never lands can transfer
+		// the physical objects to its asynchronous cleanup owner
+		// instead of dropping the last reference to persisted files
+		// (issue #25590 round-19 review).
+		persisted = s3Writer.AbandonAndRetainableNames()
+		if closeErr := s3Writer.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	var stats []objectio.ObjectStats
+	var infoBat *batch.Batch
+	var rowsBat *batch.Batch
+
+	defer func() {
+		// The rows batch is the rewrite's scratch — its surviving rows
+		// stream block by block into the writer — and the fill batch
+		// feeds the caller's copy, so every interrupted path and the
+		// successful return settle both here while only the duplicated
+		// result leaves the function.
+		if rowsBat != nil {
+			rowsBat.Clean(proc.Mp())
+		}
+		if infoBat != nil {
+			infoBat.Clean(proc.Mp())
 		}
 	}()
 
@@ -2148,10 +2369,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
 			slices.Sort(deletes)
-			if bat == nil {
-				bat = batch.NewWithSize(len(tbl.seqnums))
+			if rowsBat == nil {
+				rowsBat = batch.NewWithSize(len(tbl.seqnums))
 			}
-			bat.CleanOnlyData()
+			rowsBat.CleanOnlyData()
 
 			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
@@ -2159,18 +2380,18 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				deletes,
 				tbl.seqnums,
 				tbl.typs,
-				bat,
+				rowsBat,
 				tbl.getTxn().engine.fs,
 				tbl.getTxn().proc.GetMPool(),
 			); err != nil {
 				return false
 			}
 
-			if bat.RowCount() == 0 {
+			if rowsBat.RowCount() == 0 {
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, bat); err != nil {
+			if err = s3Writer.Write(ctx, rowsBat); err != nil {
 				return false
 			}
 
@@ -2180,24 +2401,37 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
+	if infoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		return nil, fileName, persisted, err
 	}
 
-	if len(stats) != 0 {
-		fileName = stats[0].ObjectLocation().String()
+	// A rewrite whose deletions removed the object's every row persists
+	// no replacement object (round-32 review, finding 1): an empty
+	// metadata batch would stage and publish an EMPTY workspace entry —
+	// merges skip its rows, but only nil slots ever compact (issue
+	// #25590 invariant I1), so repeated same-PK mutations spilling
+	// between statements would leave one inert entry per fully
+	// superseded object and rebuild the history-bound rescans the fix
+	// retired. The fully deleted rewrite is therefore NO replacement
+	// record: the caller stages nothing, and the original entry retires
+	// through the pass's own loop below while the original object GCs
+	// with it. The temporary info batch releases through the deferred
+	// epilogue, so no temporary batch outlives the call.
+	if len(stats) == 0 {
+		return nil, "", persisted, nil
 	}
 
-	ret, err := bat.Dup(proc.Mp())
+	fileName = stats[0].ObjectLocation().String()
+	bat, err = infoBat.Dup(proc.Mp())
 
-	return ret, fileName, err
+	return bat, fileName, persisted, err
 }
 
 func (tbl *txnTable) Delete(
@@ -2217,30 +2451,13 @@ func (tbl *txnTable) Delete(
 		deletionTyp = bat.Attrs[0]
 	)
 
-	// this should not happen, just in case slice out of bound
-	//if len(bat.Attrs) == 0 {
-	//	logutil.Info("deletion bat has empty attr",
-	//		zap.String("name", name),
-	//		zap.String("bat", common.MoBatchToString(bat, 20)))
-	//
-	//	if objectio.IsPhysicalAddr(name) {
-	//		deletionTyp = name
-	//	} else {
-	//		typStr := string(name[len(name)-1])
-	//		typ, err := strconv.ParseInt(typStr, 10, 64)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		if typ == deletion.FlushDeltaLoc {
-	//			deletionTyp = catalog.ObjectMeta_ObjectStats
-	//		}
-	//	}
-	//}
-
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		var err error
+		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -2635,84 +2852,40 @@ func (tbl *txnTable) BuildShardingReaders(
 	panic("Not Support")
 }
 
-func (tbl *txnTable) getPartitionState(
-	ctx context.Context,
-) (ps *logtailreplay.PartitionState, err error) {
-	// defer func() {
-	// 	if tbl.tableId == catalog.MO_COLUMNS_ID {
-	// 		logutil.Info("open partition state for mo_columns",
-	// 			zap.String("txn", tbl.db.op.Txn().DebugString()),
-	// 			zap.String("desc", ps.Desc(true)),
-	// 			zap.String("pointer", fmt.Sprintf("%p", ps)))
-	// 	}
-	// }()
-
-	var (
-		eng          = tbl.eng.(*Engine)
-		createdInTxn bool
-		pending      bool
-	)
-
-	createdInTxn, err = tbl.isCreatedInTxn(ctx)
+// getLatestPartitionState owns subscription and the pending-logtail fence.
+// Statistics reuse this admission without triggering historical checkpoint I/O.
+func (tbl *txnTable) getLatestPartitionState(ctx context.Context) (*logtailreplay.PartitionState, bool, error) {
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
 	if err != nil {
+		return nil, false, err
+	}
+	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
+		ps := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
+		return ps, true, nil
+	}
+	eng := tbl.eng.(*Engine)
+	var pending bool
+	ps, err := eng.PushClient().toSubscribeTable(ctx, uint64(tbl.accountId), tbl.tableId, tbl.tableName,
+		tbl.db.databaseId, tbl.db.databaseName, &pending)
+	if err != nil {
+		logutil.Error("Txn-Table-ToSubscribeTable-Failed",
+			zap.String("db-name", tbl.db.databaseName), zap.Uint64("db-id", tbl.db.databaseId),
+			zap.String("tbl-name", tbl.tableName), zap.Uint64("tbl-id", tbl.tableId),
+			zap.String("txn-info", tbl.db.op.Txn().DebugString()), zap.Bool("is-snapshot-op", tbl.db.op.IsSnapOp()), zap.Error(err))
+		return ps, false, err
+	}
+	return eng.PushClient().waitCanServeTableSnapshot(ctx, uint64(tbl.accountId), tbl.db.databaseId,
+		tbl.tableId, ps, pending, tbl.db.op.SnapshotTS())
+}
+
+func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	var ready bool
+	ps, ready, err = tbl.getLatestPartitionState(ctx)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil, err
 	}
-
-	// no need to subscribe a view
-	// for issue #19192
-	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
-		//return an empty partition state.
-		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
-			ctx,
-			uint64(tbl.accountId),
-			tbl.db.databaseId,
-			tbl.tableId).Snapshot()
-		return
-	}
-
-	// Subscribe a latest partition state
-	if ps, err = eng.PushClient().toSubscribeTable(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName,
-		&pending,
-	); err != nil {
-		logutil.Error(
-			"Txn-Table-ToSubscribeTable-Failed",
-			zap.String("db-name", tbl.db.databaseName),
-			zap.Uint64("db-id", tbl.db.databaseId),
-			zap.String("tbl-name", tbl.tableName),
-			zap.Uint64("tbl-id", tbl.tableId),
-			zap.String("txn-info", tbl.db.op.Txn().DebugString()),
-			zap.Bool("is-snapshot-op", tbl.db.op.IsSnapOp()),
-			zap.Error(err),
-		)
-
-		// if the table not exists, try snapshot read
-		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return nil, err
-		}
-
-	} else {
-		var ok bool
-		ps, ok, err = eng.PushClient().waitCanServeTableSnapshot(
-			ctx,
-			uint64(tbl.accountId),
-			tbl.db.databaseId,
-			tbl.tableId,
-			ps,
-			pending,
-			tbl.db.op.SnapshotTS(),
-		)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return
-		}
+	if ready {
+		return ps, nil
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.
@@ -2806,6 +2979,64 @@ func pkCommitTSMatchedInRange(
 	return false, true
 }
 
+// pkCheckZoneMapUsable rejects absent or incompatible bounds. AnyIn returns
+// false for an uninitialized ZM; that is not proof that a PK is absent.
+func pkCheckZoneMapUsable(zm objectio.ZoneMap, typ *types.Type) bool {
+	scale := typ.Scale
+	if typ.Oid.IsInteger() && scale == -1 {
+		// SQL integer types use -1 for unspecified scale. ZoneMap.SetScale
+		// stores six bits, so the same type reads back as 63 in persisted ZMs.
+		scale = int32(uint8(scale) & 0x3f)
+	}
+	return len(zm) == index.ZMSize && zm.IsInited() &&
+		zm.GetType() == typ.Oid && zm.GetScale() == scale
+}
+
+// collectPKCheckObjects only inspects snapshot metadata. Complete this phase
+// before any file reads so a large unknown working set still bails out cheaply.
+// keys is sorted and NULL-free. A fake PK's sort-key ZM may describe another
+// column, so only real PK stats can prove an object irrelevant.
+func collectPKCheckObjects(
+	ctx context.Context,
+	p *logtailreplay.PartitionState,
+	created, deleted map[objectio.ObjectNameShort]struct{},
+	keys *vector.Vector,
+	isFakePK bool,
+) ([]objectio.ObjectEntry, bool, error) {
+	candidates := make([]objectio.ObjectEntry, 0, maxChangedObjectsForIO)
+	for i, objects := range []map[objectio.ObjectNameShort]struct{}{created, deleted} {
+		for name := range objects {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			if i == 1 {
+				if _, counted := created[name]; counted {
+					continue
+				}
+			}
+			obj, ok := p.GetObject(name)
+			if !ok {
+				return nil, true, nil
+			}
+			if !isFakePK {
+				zm := obj.SortKeyZoneMap()
+				if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+					continue
+				}
+			}
+			// Count both created and deleted objects that can require I/O. Do
+			// not let unrelated, metadata-proven negatives force a SQL retry.
+			if pkCheckBailoutOnChangedObjects(len(candidates) + 1) {
+				return nil, true, nil
+			}
+			candidates = append(candidates, obj)
+		}
+	}
+	return candidates, false, ctx.Err()
+}
+
+// PKPersistedBetween may sort keys in place; the public PK-check entry point
+// supplies an owned, NULL-free copy of the caller's vector.
 func (tbl *txnTable) PKPersistedBetween(
 	ctx context.Context,
 	p *logtailreplay.PartitionState,
@@ -2814,6 +3045,21 @@ func (tbl *txnTable) PKPersistedBetween(
 	keys *vector.Vector,
 	checkTombstone bool,
 ) (changed bool, err error) {
+	// A generated component of a composite primary key is not the stored
+	// primary-key vector. Keep the existing conservative policy until that
+	// caller can identify the component across the sharding boundary.
+	if !checkTombstone {
+		def := tbl.GetTableDef(ctx)
+		if def != nil && def.Pkey != nil &&
+			def.Pkey.PkeyColName != catalog.CPrimaryKeyColName &&
+			def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			tbl.primaryIdx >= 0 && tbl.primaryIdx < len(def.Cols) &&
+			def.Cols[tbl.primaryIdx] != nil &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id).IsInteger() &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id) == keys.GetType().Oid {
+			return tbl.pkUpsertPersistedBetween(ctx, p, from, to, keys)
+		}
+	}
 
 	start := time.Now()
 	reason := ""
@@ -2860,6 +3106,11 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
+	// AnyIn/SubVecIn binary-search NULL-free vectors. Establish ordering
+	// before even the snapshot-only pruning, not just before row filtering.
+	if err := keys.InplaceSort(tbl.proc.Load().GetMPool()); err != nil {
+		return false, err
+	}
 
 	var (
 		meta objectio.ObjectDataMeta
@@ -2873,92 +3124,95 @@ func (tbl *txnTable) PKPersistedBetween(
 	// from.Next(), weakening the PK-conflict check at that exact boundary.
 	delObjs, cObjs = p.GetChangedObjsBetween(from, types.MaxTs())
 
-	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
-		reason = "changed_objects_bailout"
+	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
+	objects, unknown, err := collectPKCheckObjects(ctx, p, cObjs, delObjs, keys, isFakePK)
+	if err != nil {
+		return false, err
+	}
+	if unknown {
+		reason = "data_objects_bailout"
 		return true, nil
 	}
 
-	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
-	if err := ForeachCommittedObjects(cObjs, delObjs, p,
-		func(obj objectio.ObjectEntry) (err2 error) {
-			if err2 = ctx.Err(); err2 != nil {
-				return
-			}
-			var zmCkecked bool
-			if !isFakePK {
-				// if the object info contains a pk zonemap, fast-check with the zonemap
-				if !obj.ZMIsEmpty() {
-					if !obj.SortKeyZoneMap().AnyIn(keys) {
-						return
-					}
-					zmCkecked = true
-				}
-			}
+	checkObject := func(obj objectio.ObjectEntry) (err2 error) {
+		if err2 = ctx.Err(); err2 != nil {
+			return
+		}
+		var objMeta objectio.ObjectMeta
+		location := obj.Location()
 
-			var objMeta objectio.ObjectMeta
-			location := obj.Location()
+		// load object metadata
+		if objMeta, err2 = objectio.FastLoadObjectMeta(
+			ctx, &location, false, fs,
+		); err2 != nil {
+			return
+		}
 
-			// load object metadata
-			if objMeta, err2 = objectio.FastLoadObjectMeta(
-				ctx, &location, false, fs,
+		// reset bloom filter to nil for each object
+		meta = objMeta.MustDataMeta()
+
+		zm := meta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
+		if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+			return
+		}
+
+		bf = nil
+		//fake pk has no bf
+		if !isFakePK {
+			if bf, err2 = objectio.LoadBFWithMeta(
+				ctx, meta, location, fs,
 			); err2 != nil {
 				return
 			}
+		}
 
-			// reset bloom filter to nil for each object
-			meta = objMeta.MustDataMeta()
-
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
-					return
+		objectio.ForeachBlkInObjStatsList(false, meta,
+			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				var blockZM objectio.ZoneMap
+				if !blkMeta.IsEmpty() {
+					blockZM = blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
 				}
-			}
-
-			bf = nil
-			//fake pk has no bf
-			if !isFakePK {
-				if bf, err2 = objectio.LoadBFWithMeta(
-					ctx, meta, location, fs,
-				); err2 != nil {
-					return
+				usableZM := pkCheckZoneMapUsable(blockZM, keys.GetType())
+				if usableZM && !blockZM.AnyIn(keys) {
+					return true
 				}
-			}
-
-			objectio.ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-					if !blkMeta.IsEmpty() &&
-						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+				//fake pk has no bf
+				if !isFakePK {
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBloomFilter()
+					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+						return false
+					}
+					var exist bool
+					lowerBound, upperBound := 0, keys.Length()
+					if usableZM {
+						lowerBound, upperBound = blockZM.SubVecIn(keys)
+					}
+					if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
 						return true
 					}
-					//fake pk has no bf
-					if !isFakePK {
-						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-						blkBfIdx := index.NewEmptyBloomFilter()
-						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-							return false
-						}
-						var exist bool
-						lowerBound, upperBound := blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().SubVecIn(keys)
-						if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
-							return true
-						}
-					}
+				}
 
-					blk.SetFlagByObjStats(&obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-					candidateBlks[blk.BlockID] = &blk
-					return true
-				}, obj.ObjectStats)
+				candidateBlks[blk.BlockID] = &blk
+				return true
+			}, obj.ObjectStats)
 
-			return
-		}); err != nil {
-		reason = "data_object_check_error"
-		return true, err
+		return
+	}
+	// At most 64 objects can reach metadata/BF I/O, including deleted objects.
+	for _, obj := range objects {
+		if err := checkObject(obj); err != nil {
+			if !checkTombstone && pkCheckObsoleteObjectMissing(obj, to, err) {
+				reason = "data_history_unavailable"
+				return true, moerr.NewTxnNeedRetry(ctx)
+			}
+			reason = "data_object_check_error"
+			return true, err
+		}
 	}
 
-	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
@@ -3066,6 +3320,12 @@ func (tbl *txnTable) PKPersistedBetween(
 			if err != nil {
 				releasePKCheckSemaphore()
 				reason = "data_block_read_error"
+				if !checkTombstone {
+					obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
+					if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
+						return true, moerr.NewTxnNeedRetry(ctx)
+					}
+				}
 				return true, err
 			}
 			if !usable || matched {
@@ -3246,6 +3506,15 @@ func tombstonePKExistsInRange(
 	return false, "", nil
 }
 
+// A missing source already obsolete at the caller's snapshot is unavailable
+// history, not proof of no conflict. Missing currently visible data stays fatal.
+func pkCheckObsoleteObjectMissing(obj objectio.ObjectEntry, to types.TS, err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+		!obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&to)
+}
+
+// PrimaryKeysMayBeUpserted returns ErrTxnNeedRetry for unavailable history. The
+// generated-ID caller must refresh its allocation before retrying that signal.
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
@@ -3253,6 +3522,9 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	batch *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false, false)
 }
@@ -3376,6 +3648,16 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	checkTombstone bool,
 	requireSubscribed bool,
 ) (bool, error) {
+	return tbl.primaryKeysMayBeChangedWithHistory(ctx, from, to, keysVector, checkTombstone, requireSubscribed, false)
+}
+
+// requireHistory protects optimistic writes whose older dependency snapshot can
+// outlive the operator's advanced RC read snapshot. A truncated interval is
+// unknown, never evidence that those writes had no competitors.
+func (tbl *txnTable) primaryKeysMayBeChangedWithHistory(
+	ctx context.Context, from, to types.TS, keysVector *vector.Vector,
+	checkTombstone, requireSubscribed, requireHistory bool,
+) (bool, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnPKMayBeChangedDurationHistogram.Observe(time.Since(start).Seconds())
@@ -3399,6 +3681,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
+	}
+
+	if !requireSubscribed && from.GE(&to) {
+		return false, nil
 	}
 
 	var snap *logtailreplay.PartitionState
@@ -3429,6 +3715,27 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 			return false, err
 		}
 		snap = part.Snapshot()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if requireHistory && !snap.CanServe(from) {
+		return true, nil
+	}
+
+	historyStart, _ := snap.GetDuration()
+	// Only generated-ID probes recover their allocation window. Ordinary
+	// modification probes retain their existing row/object checks. An empty
+	// partition's MaxTs start is a sentinel, not a history-GC lower bound.
+	if !requireSubscribed && !snap.IsEmpty() && from.LT(&historyStart) {
+		created, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !created {
+			return true, moerr.NewTxnNeedRetry(ctx)
+		}
 	}
 
 	var packer *types.Packer
@@ -3508,7 +3815,7 @@ func (tbl *txnTable) getCommittedRows(
 		}
 		rows++
 	}
-	s, _ := tbl.Stats(ctx, true)
+	s, _ := tbl.getPublishedStats(ctx, true)
 	if s == nil {
 		return rows, nil
 	}

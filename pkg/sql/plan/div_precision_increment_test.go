@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +41,15 @@ import (
 type divPrecisionCompilerContext struct {
 	CompilerContext
 	increment int64
+}
+
+func (c divPrecisionCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
 }
 
 func (c divPrecisionCompilerContext) ResolveVariable(name string, system, global bool) (any, error) {
@@ -71,7 +82,7 @@ func TestQueryBuilderCarriesDivPrecisionIncrementIntoBinding(t *testing.T) {
 	} {
 		t.Run(test.want.String(), func(t *testing.T) {
 			compiler := divPrecisionCompilerContext{
-				CompilerContext: NewMockCompilerContext(true),
+				CompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 				increment:       test.increment,
 			}
 			builder := NewQueryBuilder(planpb.Query_SELECT, compiler, false, true)
@@ -84,9 +95,9 @@ func TestQueryBuilderCarriesDivPrecisionIncrementIntoBinding(t *testing.T) {
 }
 
 func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
-	compiler := NewMockCompilerContext(false)
-	// The mock has no internal SQL executor for FK reverse lookups. An existing
-	// table entry keeps that unrelated catalog query out of this binding test.
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	// An existing table entry keeps unrelated FK reverse-catalog queries out
+	// of this binding test.
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	proc := compiler.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -114,7 +125,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 	defer stmt.Free()
 	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 10}
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion96)
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "protocol version 97")
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion97)
 
@@ -148,7 +159,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("increment_%d", tc.increment), func(t *testing.T) {
 			ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: tc.increment}
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			table := built.GetDdl().GetCreateTable().GetTableDef()
 			require.NotNil(t, table)
@@ -186,7 +197,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 				build := func(increment int64) *planpb.TableDef {
 					planned, buildErr := BuildPlan(divPrecisionCompilerContext{
 						CompilerContext: compiler, increment: increment,
-					}, stmt, false)
+					}, stmt, false, nil)
 					require.NoError(t, buildErr)
 					return planned.GetDdl().GetCreateTable().GetTableDef()
 				}
@@ -223,7 +234,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		at := func(increment int64) *planpb.TableDef {
 			p, buildErr := BuildPlan(divPrecisionCompilerContext{
 				CompilerContext: compiler, increment: increment,
-			}, mixedStmt, false)
+			}, mixedStmt, false, nil)
 			require.NoError(t, buildErr)
 			return p.GetDdl().GetCreateTable().GetTableDef()
 		}
@@ -270,7 +281,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		defer stmt.Free()
 		built, buildErr := BuildPlan(divPrecisionCompilerContext{
 			CompilerContext: compiler, increment: 10,
-		}, stmt, false)
+		}, stmt, false, nil)
 		require.NoError(t, buildErr)
 		definition := built.GetDdl().GetCreateTable().GetTableDef()
 		nested := DeepCopyTableDef(definition, true)
@@ -306,7 +317,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 }
 
 func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
-	compiler := NewMockCompilerContext(false)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(b))
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	rt := moruntime.ServiceRuntime(compiler.GetProcess().GetService())
 	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -335,7 +346,7 @@ func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
 			stmt, err := mysql.ParseOne(b.Context(), sql.String(), 1)
 			require.NoError(b, err)
 			b.Cleanup(stmt.Free)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(b, err)
 			def := built.GetDdl().GetCreateTable().GetTableDef()
 			b.ReportAllocs()
@@ -351,7 +362,7 @@ func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
 }
 
 func TestPreparedDivisionSpecializationUsesPrecisionIncrementContext(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare div_precision from 'select ? / 2 as q'`)
 	require.NoError(t, err)
 
@@ -511,13 +522,13 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, nil)
 			mock.GetProcessFunc = func() *process.Process { return proc }
 			ctx := divPrecisionCompilerContext{CompilerContext: mock, increment: test.increment}
 			statement, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
 			defer statement.Free()
-			plan, err := BuildPlan(ctx, statement, false)
+			plan, err := BuildPlan(ctx, statement, false, nil)
 			require.NoError(t, err)
 			query := plan.GetQuery()
 			expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
@@ -537,6 +548,31 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			} else {
 				require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[types.Decimal256](result)[0].Format(test.scale))
 			}
+		})
+	}
+}
+
+func TestResolveDivPrecisionIncrementFallback(t *testing.T) {
+	readErr := errors.New("read session variable")
+	for _, tc := range []struct {
+		name  string
+		value any
+		err   error
+		want  int32
+	}{
+		{name: "session value", value: int64(10), want: 10},
+		{name: "read error", err: readErr, want: function.DefaultDivPrecisionIncrement},
+		{name: "wrong runtime type", value: int(10), want: function.DefaultDivPrecisionIncrement},
+		{name: "unset value", want: function.DefaultDivPrecisionIncrement},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &MockCompilerContext{ResolveVariableFunc: func(name string, system, global bool) (any, error) {
+				require.Equal(t, "div_precision_increment", name)
+				require.True(t, system)
+				require.False(t, global)
+				return tc.value, tc.err
+			}}
+			require.Equal(t, tc.want, resolveDivPrecisionIncrement(ctx))
 		})
 	}
 }

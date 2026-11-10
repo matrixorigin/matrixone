@@ -17,11 +17,32 @@ select length(a) from t1;
 16383
 drop table t1;
 select space(5),concat_ws('*',space(5),'*');
-➤ space(5)[12,65535,0]  ¦  concat_ws(*, space(5), *)[-1,16383,0]  𝄀
+➤ space(5)[-1,536870911,0]  ¦  concat_ws(*, space(5), *)[-1,16383,0]  𝄀
        ¦       **
-SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535));
-➤ LENGTH(SPACE(8001))[-5,64,0]  ¦  LENGTH(SPACE(10000))[-5,64,0]  ¦  LENGTH(SPACE(65535))[-5,64,0]  𝄀
-8001  ¦  10000  ¦  65535
+SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535)), LENGTH(SPACE(65536)), LENGTH(SPACE(100000));
+➤ LENGTH(SPACE(8001))[-5,64,0]  ¦  LENGTH(SPACE(10000))[-5,64,0]  ¦  LENGTH(SPACE(65535))[-5,64,0]  ¦  LENGTH(SPACE(65536))[-5,64,0]  ¦  LENGTH(SPACE(100000))[-5,64,0]  𝄀
+8001  ¦  10000  ¦  65535  ¦  65536  ¦  100000
+DROP TABLE IF EXISTS space_large_counts;
+CREATE TABLE space_large_counts (id INT, n BIGINT);
+INSERT INTO space_large_counts VALUES (1, 65535), (2, 65536), (3, 100000), (4, -1), (5, NULL);
+SELECT id, LENGTH(SPACE(n)) FROM space_large_counts ORDER BY id;
+➤ id[4,32,0]  ¦  LENGTH(SPACE(n))[-5,64,0]  𝄀
+1  ¦  65535  𝄀
+2  ¦  65536  𝄀
+3  ¦  100000  𝄀
+4  ¦  0  𝄀
+5  ¦  null
+DROP TABLE space_large_counts;
+PREPARE space_large_stmt FROM 'SELECT LENGTH(SPACE(?))';
+SET @space_large_n = 65536;
+EXECUTE space_large_stmt USING @space_large_n;
+➤ LENGTH(SPACE(?))[-5,64,0]  𝄀
+65536
+SET @space_large_n = 100000;
+EXECUTE space_large_stmt USING @space_large_n;
+➤ LENGTH(SPACE(?))[-5,64,0]  𝄀
+100000
+DEALLOCATE PREPARE space_large_stmt;
 SELECT LENGTH(SPACE(CAST(1.4 AS DECIMAL(4,1)))),
 LENGTH(SPACE(CAST(1.5 AS DECIMAL(4,1)))),
 LENGTH(SPACE(CAST(1.9 AS DECIMAL(4,1)))),
@@ -29,23 +50,23 @@ LENGTH(SPACE(CAST(-1.5 AS DECIMAL(4,1))));
 ➤ LENGTH(SPACE(cast(1.4 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(1.5 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(1.9 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(-1.5 as decimal(4, 1))))[-5,64,0]  𝄀
 1  ¦  2  ¦  2  ¦  0
 select space(-1);
-➤ space(-1)[12,65535,0]  𝄀
+➤ space(-1)[-1,536870911,0]  𝄀
 
 select space(-4294967295);
-➤ space(-4294967295)[12,65535,0]  𝄀
+➤ space(-4294967295)[-1,536870911,0]  𝄀
 
 select space(4294967295);
-invalid input: the space count is greater than max allowed value 65535
+invalid input: the space count is greater than max allowed value 67108864
 select space(-4294967296);
-➤ space(-4294967296)[12,65535,0]  𝄀
+➤ space(-4294967296)[-1,536870911,0]  𝄀
 
 select space(4294967296);
-invalid input: the space count is greater than max allowed value 65535
+invalid input: the space count is greater than max allowed value 67108864
 select space(-4294967297);
-➤ space(-4294967297)[12,65535,0]  𝄀
+➤ space(-4294967297)[-1,536870911,0]  𝄀
 
 select space(4294967297);
-invalid input: the space count is greater than max allowed value 65535
+invalid input: the space count is greater than max allowed value 67108864
 select space(-18446744073709551615);
 Data truncation: data out of range: data type int64, integer argument
 select space(18446744073709551615);
@@ -63,7 +84,7 @@ Data truncation: data out of range: data type int64, integer argument
 SELECT length(space(9223372036854775809));
 Data truncation: data out of range: data type int64, integer argument
 SELECT SPACE(NULL);
-➤ SPACE(null)[12,65535,0]  𝄀
+➤ SPACE(null)[-1,536870911,0]  𝄀
 null
 SELECT SPACE(12)+"123";
 ➤ SPACE(12) + 123[-1,16383,0]  𝄀
@@ -83,7 +104,7 @@ SELECT space(i) FROM t;
 Data truncation: data out of range: data type int64, integer argument
 DROP TABLE t;
 SELECT space(1073741824);
-invalid input: the space count is greater than max allowed value 65535
+invalid input: the space count is greater than max allowed value 67108864
 SELECT TO_DATE(SPACE(2),'1');
 ➤ TO_DATE(SPACE(2), 1)[93,19,0]  𝄀
 null

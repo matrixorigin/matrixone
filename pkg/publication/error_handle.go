@@ -20,13 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/backoff"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -473,11 +473,25 @@ type ErrorClassifier interface {
 	IsRetryable(error) bool
 }
 
+// retryAllErrorsClassifier makes the retry-all contract explicit for callers
+// that do not classify individual operation failures. A nil classifier means
+// no retry in Policy.Do, so leaving this policy implicit would silently turn
+// retry options into a single attempt.
+type retryAllErrorsClassifier struct{}
+
+func (retryAllErrorsClassifier) IsRetryable(err error) bool {
+	return err != nil
+}
+
 // Policy controls the retry behaviour for an operation.
 type Policy struct {
 	// MaxAttempts defines how many times the operation should be attempted in total.
 	// Must be >= 1.
 	MaxAttempts int
+
+	// MaxDuration limits the total time spent retrying. A non-positive value
+	// disables the limit.
+	MaxDuration time.Duration
 
 	// Backoff decides how long to wait between attempts. Optional; zero value means no backoff.
 	Backoff BackoffStrategy
@@ -503,8 +517,21 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 	backoff := p.Backoff
 
 	var lastErr error
+	var startTime time.Time
+	if p.MaxDuration > 0 {
+		startTime = time.Now()
+	}
 
 	for attempt := 1; attempt <= p.MaxAttempts; attempt++ {
+		if attempt > 1 && p.MaxDuration > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if time.Since(startTime) >= p.MaxDuration {
+				return ErrNonRetryable
+			}
+		}
+
 		lastErr = op()
 		if lastErr == nil {
 			return nil
@@ -531,6 +558,18 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 		wait := backoff.Next(attempt)
 		if wait <= 0 {
 			continue
+		}
+		if p.MaxDuration > 0 {
+			remaining := p.MaxDuration - time.Since(startTime)
+			if remaining <= 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return ErrNonRetryable
+			}
+			if wait > remaining {
+				wait = remaining
+			}
 		}
 
 		timer := time.NewTimer(wait)
@@ -565,39 +604,7 @@ type ExponentialBackoff struct {
 
 // Next implements BackoffStrategy.
 func (b ExponentialBackoff) Next(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-
-	base := b.Base
-	if base <= 0 {
-		base = time.Millisecond * 100
-	}
-
-	factor := b.Factor
-	if factor <= 1 {
-		factor = 2
-	}
-
-	delay := float64(base) * math.Pow(factor, float64(attempt-1))
-	result := time.Duration(delay)
-	if b.Max > 0 && result > b.Max {
-		result = b.Max
-	}
-
-	if b.Jitter > 0 {
-		randFn := b.randFn
-		if randFn == nil {
-			randFn = func(max time.Duration) time.Duration {
-				if max <= 0 {
-					return 0
-				}
-				return time.Duration(time.Now().UnixNano() % int64(max))
-			}
-		}
-		result += randFn(b.Jitter)
-	}
-	return result
+	return backoff.Exponential(attempt, b.Base, b.Factor, b.Max, b.Jitter, b.randFn)
 }
 
 // MultiClassifier chains multiple classifiers; returns true if any classifier deems the error retryable.

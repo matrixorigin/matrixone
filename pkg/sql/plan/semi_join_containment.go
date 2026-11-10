@@ -431,6 +431,6 @@ func (equalities *semiContainmentEqualities) equivalent(left, right *planpb.Expr
 // allow the same VARCHAR key carried by two different base tables.
 func sameSemiContainmentType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.Width == right.Width &&
-		left.Scale == right.Scale && left.Charset == right.Charset &&
+		left.Scale == right.Scale && left.SameCollation(right) &&
 		left.Enumvalues == right.Enumvalues && left.PadSpace == right.PadSpace
 }

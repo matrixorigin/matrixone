@@ -17,7 +17,6 @@
 package cagra
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -83,7 +82,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 // same chunks.
 func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	tblcfg := testTblcfg()
@@ -111,7 +110,7 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 // TestLoadCdcEventsFromDB_Empty: zero rows is a valid empty result.
 func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql
@@ -198,7 +197,7 @@ func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 //     (delete_id replay was applied to the loaded cuvs index).
 func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -236,12 +235,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 
 	// Inject mocks. Streaming returns the model tar; runSql dispatches on
 	// the SQL's tag.
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "cdc-deltas", tarPath)
 
 	origRunSql := runSql
 	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {

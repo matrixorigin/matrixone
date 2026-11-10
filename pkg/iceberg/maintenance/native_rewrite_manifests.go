@@ -74,7 +74,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
 	now := maintenanceNow(p.Now)
 	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
 	sequenceNumber := nextMaintenanceSequenceNumber(meta)
@@ -90,9 +90,9 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 		return nil, err
 	}
 	summary := map[string]string{
-		"operation":           string(OperationRewriteManifests),
+		"operation":           "replace",
 		"engine":              "matrixone",
-		"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		"idempotency-key":     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
 		"rewritten-manifests": strconv.FormatUint(materialized.RewrittenManifestCount, 10),
 	}
@@ -119,7 +119,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 			Updates:        updates,
 			ManifestFiles:  append([]api.ManifestFile(nil), materialized.Manifests...),
 			Summary:        summary,
-			IdempotencyKey: firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			IdempotencyKey: api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			BaseSnapshotID: snapshot.SnapshotID,
 			TargetRef:      targetRef,
 			TargetRefType:  req.TargetRefType,
@@ -184,9 +184,9 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	// The result retains a second manifest slice, ObjectWrite headers and orphan
 	// path headers alongside the decoded source list. Reserve those capacities
 	// before allocating them; payload capacities are charged as they are encoded.
-	resultCapacityMemory := saturatingMaintenanceAdd(
+	resultCapacityMemory := api.SaturatingNonnegativeAdd(
 		metadata.ManifestListMemoryWeight(0, manifests),
-		saturatingMaintenanceMul(saturatingMaintenanceAdd(int64(len(manifests)), 1), 128),
+		api.SaturatingMemoryMul(api.SaturatingNonnegativeAdd(int64(len(manifests)), 1), 128),
 	)
 	if err := reserveMaintenanceMemory(&memoryUsed, resultCapacityMemory, memoryLimit); err != nil {
 		return nil, err
@@ -225,14 +225,17 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 			return nil, err
 		}
 		memoryUsed += entryMemory
-		entries = liveRewriteManifestEntries(entries, manifest)
+		entries, err = liveRewriteManifestEntries(entries, manifest)
+		if err != nil {
+			return nil, err
+		}
 		if len(entries) == 0 {
 			// Deleted entries describe historical changes, not live files. A
 			// rewrite may drop a manifest that contains no live entries.
 			result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 			continue
 		}
-		rewritePath := joinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
+		rewritePath := api.JoinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
 		content := manifest.Content
 		if content == "" {
 			content = api.ManifestContentData
@@ -274,7 +277,7 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 		result.Objects = append(result.Objects, ObjectWrite{Location: rewritePath, Payload: rewriteData})
 		result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 	}
-	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
+	manifestListPath := api.JoinObjectPath(basePath, "manifest-list.avro")
 	parentSnapshotID := req.Snapshot.SnapshotID
 	encoderScratch := metadata.ManifestListMemoryWeight(0, result.Manifests)
 	if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
@@ -305,22 +308,21 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	return result, nil
 }
 
-func liveRewriteManifestEntries(entries []api.ManifestEntry, manifest api.ManifestFile) []api.ManifestEntry {
+func liveRewriteManifestEntries(entries []api.ManifestEntry, manifest api.ManifestFile) ([]api.ManifestEntry, error) {
 	out := make([]api.ManifestEntry, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Status == api.ManifestEntryDeleted {
 			continue
 		}
+		var err error
+		entry, err = metadata.NormalizeManifestEntry(entry, manifest)
+		if err != nil {
+			return nil, err
+		}
 		entry.Status = api.ManifestEntryExisting
-		entry.SnapshotID = firstNonZeroMaintenanceInt64(entry.SnapshotID, manifest.AddedSnapshotID)
-		entry.SequenceNumber = firstNonZeroMaintenanceInt64(entry.SequenceNumber, manifest.SequenceNumber)
-		entry.FileSequence = firstNonZeroMaintenanceInt64(entry.FileSequence, manifest.SequenceNumber)
-		entry.DataFile.SpecID = manifest.PartitionSpecID
-		entry.DataFile.SequenceNumber = entry.SequenceNumber
-		entry.DataFile.FileSequenceNumber = entry.FileSequence
 		out = append(out, entry)
 	}
-	return out
+	return out, nil
 }
 
 func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, original api.ManifestFile, entries []api.ManifestEntry) (api.ManifestFile, error) {
@@ -374,19 +376,10 @@ func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, origin
 	return manifest, nil
 }
 
-func firstNonZeroMaintenanceInt64(values ...int64) int64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
-}
-
 func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMaterializeRequest) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(m.PathPrefix), "/")
 	if base == "" && req.Metadata != nil && strings.TrimSpace(req.Metadata.Location) != "" {
-		base = joinObjectPath(req.Metadata.Location, "metadata")
+		base = api.JoinObjectPath(req.Metadata.Location, "metadata")
 	}
 	if base == "" {
 		base = objectDir(req.Snapshot.ManifestList)
@@ -396,31 +389,15 @@ func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMateri
 			"snapshot_id": strconv.FormatInt(req.Snapshot.SnapshotID, 10),
 		})
 	}
-	return joinObjectPath(base, "mo-rewrite-manifests", rewriteManifestsID(req)), nil
+	return api.JoinObjectPath(base, "mo-rewrite-manifests", rewriteManifestsID(req)), nil
 }
 
 func rewriteManifestsID(req RewriteManifestsMaterializeRequest) string {
-	raw := firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10))
+	raw := api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10))
 	if raw == "" {
 		raw = "rewrite-manifests"
 	}
 	return "rw-" + api.PathHash(raw)
-}
-
-func joinObjectPath(base string, parts ...string) string {
-	out := strings.TrimRight(strings.TrimSpace(base), "/")
-	for _, part := range parts {
-		part = strings.Trim(strings.TrimSpace(part), "/")
-		if part == "" {
-			continue
-		}
-		if out == "" {
-			out = part
-		} else {
-			out += "/" + part
-		}
-	}
-	return out
 }
 
 func objectDir(location string) string {

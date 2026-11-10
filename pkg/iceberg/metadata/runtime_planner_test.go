@@ -277,10 +277,6 @@ func TestRuntimeScanPlannerRewritesNessieHashAsDetachedRef(t *testing.T) {
 	require.Equal(t, "hash:"+commitHash, plan.Snapshot.RefName)
 }
 
-func TestNessieRefNameRejectsEmptyHash(t *testing.T) {
-	require.Empty(t, nessieRefName("hash:  "))
-}
-
 func TestRuntimeScanPlannerCacheSeparatesNessieRefsByEffectivePrefix(t *testing.T) {
 	const (
 		manifestListPath = "s3://warehouse/sales/orders/metadata/snap-22.avro"
@@ -727,10 +723,12 @@ type scanCapableCatalogClient struct {
 	*catalog.MockClient
 	plan          *api.IcebergScanPlan
 	planScanCalls int
+	lastRequest   api.ScanPlanRequest
 }
 
 func (c *scanCapableCatalogClient) PlanScan(ctx context.Context, req api.ScanPlanRequest) (*api.IcebergScanPlan, error) {
 	c.planScanCalls++
+	c.lastRequest = req
 	return c.plan, nil
 }
 

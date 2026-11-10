@@ -364,6 +364,14 @@ uint64_t gpu_device_memory_reserved(int device_id);
 void* gpu_alloc_pinned(uint64_t size, void* errmsg);
 void gpu_free_pinned(void* ptr, void* errmsg);
 
+// The filter masks of a search, from gpu_cagra_prepare_bitset,
+// gpu_ivf_pq_prepare_bitset or gpu_brute_force_prepare_bitset, for the
+// *_search_quantize_with_bitset calls of the same index. A search holds the
+// masks it uses, so gpu_bitset_free does not affect a running search.
+typedef void* gpu_bitset_c;
+// gpu_bitset_free frees a bitset; NULL is a no-op.
+void gpu_bitset_free(gpu_bitset_c bitset);
+
 #ifdef __cplusplus
 }
 #endif

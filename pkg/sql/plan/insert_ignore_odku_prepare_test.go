@@ -40,7 +40,7 @@ func TestPreparedNoKeyODKUParameters(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(modifier+tc.name, func(t *testing.T) {
-				mock := NewMockOptimizer(true)
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				sql := fmt.Sprintf(
 					"prepare s from insert %sinto insert_fk_no_key_c values (?, ?) on duplicate key update pid = %s",
 					modifier,
@@ -53,4 +53,19 @@ func TestPreparedNoKeyODKUParameters(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestNoKeyODKUUsesLegacyStatementID(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "insert_fk_no_key_c")]
+	require.NotNil(t, table)
+	table.Cols[0].Typ.AutoIncr = true
+	p, err := runOneStmt(mock, t, "insert into constraint_test.insert_fk_no_key_c(id, pid) values (NULL, 1) on duplicate key update pid = values(pid)")
+	require.NoError(t, err)
+	require.False(t, p.GetQuery().HasODKUResultTracking())
+	var hasAllocator bool
+	for _, node := range p.GetQuery().Nodes {
+		hasAllocator = hasAllocator || node.GetPreInsertCtx().GetHasAutoCol()
+	}
+	require.True(t, hasAllocator, "legacy PRE_INSERT must still generate the user ID")
 }

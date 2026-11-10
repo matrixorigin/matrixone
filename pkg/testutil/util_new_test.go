@@ -65,6 +65,7 @@ func TestSetupAutoIncrServiceIsIdempotent(t *testing.T) {
 
 func TestNewBatch(t *testing.T) {
 	m := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
 	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0)}, true, Rows, m)
 	bat.Clean(m)
 	require.Equal(t, int64(0), m.CurrNB())
@@ -72,6 +73,7 @@ func TestNewBatch(t *testing.T) {
 
 func TestVector(t *testing.T) {
 	m := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
 	{
 		vec := NewVector(Rows, types.New(types.T_bool, 0, 0), m, true, nil)
 		vec.Free(m)

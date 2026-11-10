@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -98,6 +99,9 @@ type Service struct {
 
 	// dataSync is used to sync data to other modules.
 	dataSync DataSync
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewService(
@@ -120,6 +124,17 @@ func NewService(
 		heartbeatC:  make(chan struct{}, 1),
 		shutdownC:   shutdownC,
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if err := service.Close(); err != nil {
+				logutil.GetGlobalLogger().Error(
+					"failed to close log service construction",
+					zap.Error(err),
+				)
+			}
+		}
+	}()
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -138,9 +153,9 @@ func NewService(
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
+	service.store = store
 	store.bootstrapCommandsAdded = service.requestHeartbeat
 	if err := store.loadMetadata(); err != nil {
-		_ = store.close()
 		return nil, err
 	}
 	startCtx, cancelStart := context.WithCancel(context.Background())
@@ -157,7 +172,6 @@ func NewService(
 	}
 	defer cancelStart()
 	if err := store.startReplicas(startCtx); err != nil {
-		_ = store.close()
 		return nil, err
 	}
 	pool := &sync.Pool{}
@@ -192,13 +206,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
-		if closeErr := store.close(); closeErr != nil {
-			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
-		}
 		return nil, err
 	}
 
-	service.store = store
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
@@ -216,9 +226,6 @@ func NewService(
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
 		service.runtime.SubLogger(runtime.SystemInit).Error("failed to start the server", zap.Error(err))
-		if err := store.close(); err != nil {
-			service.runtime.SubLogger(runtime.SystemInit).Error("failed to close the store", zap.Error(err))
-		}
 		return nil, err
 	}
 	// start the heartbeat worker
@@ -236,6 +243,7 @@ func NewService(
 	}
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
+	constructed = true
 	return service, nil
 }
 
@@ -265,24 +273,30 @@ func (s *Service) Start() error {
 }
 
 func (s *Service) Close() (err error) {
-	s.stopper.Stop()
-	if s.haClient != nil {
-		err = firstError(err, s.haClient.Close())
-	}
-	err = firstError(err, s.server.Close())
-	if s.store != nil {
-		err = firstError(err, s.store.close())
-	}
-	s.task.RLock()
-	ts := s.task.holder
-	s.task.RUnlock()
-	if ts != nil {
-		err = firstError(err, ts.Close())
-	}
-	if s.dataSync != nil {
-		err = firstError(err, s.dataSync.Close())
-	}
-	return err
+	s.closeOnce.Do(func() {
+		s.stopper.Stop()
+		if s.haClient != nil {
+			s.closeErr = firstError(s.closeErr, s.haClient.Close())
+		}
+		if s.server != nil {
+			s.closeErr = firstError(s.closeErr, s.server.Close())
+		}
+		if s.store != nil {
+			s.closeErr = firstError(s.closeErr, s.store.close())
+		}
+		s.task.RLock()
+		ts := s.task.holder
+		s.task.RUnlock()
+		if ts != nil {
+			s.closeErr = firstError(s.closeErr, ts.Close())
+		}
+		// Log RPC handlers append to dataSync. Close the RPC ingress before
+		// retiring that consumer so no accepted request can use it after close.
+		if s.dataSync != nil {
+			s.closeErr = firstError(s.closeErr, s.dataSync.Close())
+		}
+	})
+	return s.closeErr
 }
 
 func (s *Service) ID() string {
@@ -323,11 +337,15 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 	case pb.TSO_UPDATE:
 		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}
 	case pb.APPEND:
-		return s.handleAppend(ctx, req, payload), pb.LogRecordResponse{}
+		return s.handleAppend(ctx, req, payload, false), pb.LogRecordResponse{}
+	case pb.APPEND_WAL:
+		return s.handleAppend(ctx, req, payload, true), pb.LogRecordResponse{}
 	case pb.READ:
 		return s.handleRead(ctx, req)
 	case pb.TRUNCATE:
 		return s.handleTruncate(ctx, req), pb.LogRecordResponse{}
+	case pb.TRUNCATE_WAL:
+		return s.handleTruncateWAL(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_TRUNCATE:
 		return s.handleGetTruncatedIndex(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_LEASEHOLDER_ID:
@@ -370,6 +388,10 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetLatestLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.SET_REQUIRED_LSN:
 		return s.handleSetRequiredLsn(ctx, req), pb.LogRecordResponse{}
+	case pb.SET_REQUIRED_LSN_IF_CURRENT:
+		return s.handleSetRequiredLsnIfCurrent(ctx, req), pb.LogRecordResponse{}
+	case pb.CLAIM_REQUIRED_LSN:
+		return s.handleClaimRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_REQUIRED_LSN:
 		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_LEADER_ID:
@@ -507,10 +529,11 @@ func (s *Service) handleConnectRO(ctx context.Context, req pb.Request) pb.Respon
 	return resp
 }
 
-func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []byte) pb.Response {
+func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []byte, walRequest ...bool) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.append(ctx, r.ShardID, payload)
+	wal := len(walRequest) != 0 && walRequest[0]
+	lsn, err := s.store.append(ctx, r.ShardID, payload, wal)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
@@ -559,14 +582,24 @@ func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Respons
 	return resp
 }
 
+func (s *Service) handleTruncateWAL(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.truncateWAL(ctx, r.ShardID, r.Lsn, r.CheckpointedDSN); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
 func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.getTruncatedLsn(ctx, r.ShardID)
+	state, err := s.store.getWALTruncate(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Lsn = lsn
+		resp.LogResponse.Lsn = state.psn
+		resp.LogResponse.CheckpointedDSN = state.dsn
 	}
 	return resp
 }
@@ -737,14 +770,37 @@ func (s *Service) handleSetRequiredLsn(ctx context.Context, req pb.Request) pb.R
 	return resp
 }
 
+func (s *Service) handleSetRequiredLsnIfCurrent(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.setRequiredLsnIfCurrent(ctx, r.ShardID, r.Lsn,
+		r.ExpectedRequiredLsn, r.RequiredLsnRevision, r.RequiredLsnOwner); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
+func (s *Service) handleClaimRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.claimRequiredLsn(ctx, r.ShardID, r.ExpectedRequiredLsn,
+		r.RequiredLsnRevision, r.RequiredLsnOwner,
+		r.RequiredLsnLeaderTerm, r.RequiredLsnLeaderID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
 func (s *Service) handleGetRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.getRequiredLsn(ctx, r.ShardID)
+	state, err := s.store.getRequiredLsnState(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Lsn = lsn
+		resp.LogResponse.Lsn = state.lsn
+		resp.LogResponse.RequiredLsnRevision = state.revision
+		resp.LogResponse.RequiredLsnOwner = state.owner
 	}
 	return resp
 }
@@ -752,11 +808,12 @@ func (s *Service) handleGetRequiredLsn(ctx context.Context, req pb.Request) pb.R
 func (s *Service) handleGetLeaderID(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	leaderID, err := s.store.leaderID(r.ShardID)
+	leaderID, term, err := s.store.leaderState(r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.LogResponse.LeaderID = leaderID
+		resp.LogResponse.LeaderTerm = term
 	}
 	return resp
 }

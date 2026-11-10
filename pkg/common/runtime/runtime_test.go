@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -37,4 +38,39 @@ func TestRuntime(t *testing.T) {
 	assert.True(t, rt.CompareAndDeleteGlobalVariables(k, v))
 	_, ok = rt.GetGlobalVariables(k)
 	assert.False(t, ok)
+}
+
+func TestServiceRuntimeRetirement(t *testing.T) {
+	sid := t.Name()
+	old, next := DefaultRuntime(), DefaultRuntime()
+	defaultRuntime := ServiceRuntime("")
+	t.Cleanup(func() {
+		CompareAndDeleteServiceBasedRuntime(sid, old)
+		CompareAndDeleteServiceBasedRuntime(sid, next)
+	})
+	assert.False(t, CompareAndDeleteServiceBasedRuntime(sid, old))
+	SetupServiceBasedRuntime(sid, old)
+	assert.False(t, CompareAndDeleteServiceBasedRuntime(sid, next))
+	assert.Same(t, old, ServiceRuntime(sid))
+	assert.True(t, CompareAndDeleteServiceBasedRuntime(sid, old))
+	assert.Nil(t, ServiceRuntime(sid))
+	assert.False(t, CompareAndDeleteServiceBasedRuntime(sid, old))
+
+	SetupServiceBasedRuntime(sid, old)
+	SetupServiceBasedRuntime(sid, next)
+	assert.False(t, CompareAndDeleteServiceBasedRuntime(sid, old))
+	assert.Same(t, next, ServiceRuntime(sid))
+	assert.True(t, CompareAndDeleteServiceBasedRuntime(sid, next))
+
+	// Whichever operation linearizes first, retiring old must preserve next.
+	SetupServiceBasedRuntime(sid, old)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); <-start; SetupServiceBasedRuntime(sid, next) }()
+	go func() { defer wg.Done(); <-start; CompareAndDeleteServiceBasedRuntime(sid, old) }()
+	close(start)
+	wg.Wait()
+	assert.Same(t, next, ServiceRuntime(sid))
+	assert.Same(t, defaultRuntime, ServiceRuntime(""))
 }

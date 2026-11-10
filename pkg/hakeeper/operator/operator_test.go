@@ -22,6 +22,7 @@ package operator
 
 import (
 	"testing"
+	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
@@ -89,4 +90,26 @@ func TestCheck(t *testing.T) {
 	assert.Equal(t, SUCCESS, op.Status())
 
 	assert.Equal(t, nil, op.Check(pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+}
+
+func TestTNStartLifetimeUsesReportedProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		step    OpStep
+		expired bool
+	}{
+		{"tn_start", AddTnReplica{StoreID: "tn", ShardID: 2, ReplicaID: 10}, false},
+		{"log_start", StartLogService{Replica: Replica{UUID: "log", ShardID: 1, ReplicaID: 10}}, true},
+		{"tn_remove", RemoveTnReplica{StoreID: "tn", ShardID: 2, ReplicaID: 10}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := NewOperator("", 2, NoopEpoch, tc.step)
+			op.status.reachTimes[STARTED] = time.Now().Add(-2 * ExpireTime)
+			assert.Equal(t, tc.expired, op.CheckExpired())
+			if !tc.expired {
+				assert.Equal(t, tc.step, op.Check(pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+				assert.False(t, op.IsEnd())
+			}
+		})
+	}
 }

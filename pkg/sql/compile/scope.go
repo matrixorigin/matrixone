@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -47,11 +49,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -167,7 +172,7 @@ func (s *Scope) freeOperatorsWithOwnProcess() {
 		return
 	}
 	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		op.Free(s.Proc, false, nil)
+		vm.Free(op, s.Proc, false, nil)
 		return nil
 	})
 }
@@ -302,6 +307,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst {
 		s.DataSource.R = nil
+		s.DataSource.remoteBlockFilters = nil
 	}
 
 	// The previous execution's cleanup delivered terminal signals into this
@@ -336,8 +342,8 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		return c.compileVectorIndexScanDataSource(s)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return c.compileIndexSearchScanDataSource(s)
 	}
 	return c.compileTableScanDataSource(s)
 }
@@ -359,6 +365,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err = resolveSenderPipelineError(s, err)
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -385,6 +393,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.TableDef != nil {
 			id = s.DataSource.TableDef.TblId
 		}
+		if id == 0 {
+			id = uint64(s.DataSource.node.GetObjRef().GetObj())
+		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
@@ -395,7 +406,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
-				readers, err := s.buildReaders(c)
+				readers, _, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
@@ -410,12 +421,22 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if len(s.DataSource.RecvMsgList) > 0 {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
+			if ts, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+				ts.ReadPolicy = scanReadPolicy(s.DataSource.node)
+			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	return err
+}
+
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	if node.GetNarrowScan() {
+		return fileservice.NarrowRead
+	}
+	return 0
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
@@ -424,7 +445,7 @@ func (s *Scope) FreeOperator(c *Compile) {
 	}
 
 	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-		op.Free(c.proc, false, nil)
+		vm.Free(op, c.proc, false, nil)
 		return nil
 	})
 }
@@ -494,23 +515,14 @@ type sequentialBranchLifecycle interface {
 	DeferFirstBranch() bool
 }
 
-type receiverWaitStartFailureDisabler interface {
-	DisableReceiverWaitForStartFailure(*process.Process)
-}
-
-func cleanLazyScopeStartFailure(s *Scope, c *Compile, err error) {
-	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		if disabler, ok := op.(receiverWaitStartFailureDisabler); ok {
-			disabler.DisableReceiverWaitForStartFailure(s.Proc)
-		}
-		return nil
-	})
-	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
-}
-
 func installSequentialBranchStarter(root vm.Operator, start, wait func(int) error) (func(), bool, error) {
 	var target sequentialBranchStarter
 	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		// Parallel inputs and flattened unions retain pass-through UNION ALL
+		// markers for projection/analysis. They do not own pre-scope activation.
+		if u, ok := op.(*unionall.UnionAll); ok && u.SequentialBranches <= 1 {
+			return nil
+		}
 		candidate, ok := op.(sequentialBranchStarter)
 		if !ok {
 			return nil
@@ -598,7 +610,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			// the unsubmitted scope through the ordinary start-failure cleanup so
 			// that receiver has a terminal signal to drain.
 			claimedPreScopes[i] = true
-			cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
+			cause = cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
 			if completions != nil {
 				completions[i].finish(newScopeRunResult(cause, scope))
 			}
@@ -612,7 +624,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// Ordinary branches were initialized serially by Compile.Run. Repeating
 		// initialization here would rebuild DOP clones' filters concurrently.
 		if initErr := s.initLazyPreScope(scope, c); initErr != nil {
-			cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
+			initErr = cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
 			s.cancelMergeSiblingsOnError(initErr)
 			publishPreScopeResult(i, newScopeRunResult(initErr, scope))
 			return initErr
@@ -633,7 +645,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = scope.RemoteRun(c)
 				default:
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
+					err = cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
 				publishPreScopeResult(i, newScopeRunResult(err, scope))
@@ -642,7 +654,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
+			submitPreScope = cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			publishPreScopeResult(i, newScopeRunResult(submitPreScope, scope))
 		}
@@ -653,12 +665,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.LazyPreScopes {
 		if len(s.PreScopes) < 2 || len(s.RemoteReceivRegInfos) != 0 {
 			err = moerr.NewInternalErrorNoCtx("invalid lazy union all scope topology")
-			cleanLazyScopeStartFailure(s, c, err)
+			err = cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 			return err
 		}
 		clearStarter, deferFirst, installErr := installSequentialBranchStarter(s.RootOp, startPreScope, waitPreScope)
 		if installErr != nil {
-			cleanLazyScopeStartFailure(s, c, installErr)
+			installErr = cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
 			return installErr
 		}
 		defer clearStarter()
@@ -670,7 +682,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			for i := range claimedPreScopes {
 				if !claimedPreScopes[i] {
 					claimedPreScopes[i] = true
-					cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					cleanupErr := cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					if err == nil && cleanupErr != nil && !process.IsPipelineCancellationError(cleanupErr) {
+						err = cleanupErr
+					}
 				}
 			}
 		}()
@@ -693,14 +708,31 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 
 	// step 3.
+	var cleanupCtx context.Context
+	var cleanupCancel context.CancelFunc
+	cleanupContext := func() context.Context {
+		if cleanupCtx == nil {
+			cleanupCtx, cleanupCancel = newRemoteCleanupContext(s.Proc)
+		}
+		return cleanupCtx
+	}
 	defer func() {
+		defer func() {
+			if cleanupCancel != nil {
+				cleanupCancel()
+			}
+		}()
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
-		err = collectMergeRunResults(
+		if len(notifyMessageResultReceiveChan) > 0 {
+			cleanupContext()
+		}
+		err = c.collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			newScopeRunResult(err, s),
 			preScopeResultReceiveChan,
-			notifyMessageResultReceiveChan)
+			notifyMessageResultReceiveChan,
+			cleanupCtx)
 	}()
 
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
@@ -718,7 +750,6 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
 			result := <-preScopeResultReceiveChan
-			result, _ = result.resolveCancelCause()
 			if err = result.err; err != nil {
 				return err
 			}
@@ -729,7 +760,6 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	for {
 		select {
 		case result := <-preScopeResultReceiveChan:
-			result, _ = result.resolveCancelCause()
 			err := result.err
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
@@ -737,7 +767,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			result.clean(s.Proc)
+			result.clean(s.Proc, cleanupContext())
 			if result.err != nil {
 				return s.cancelMergeSiblingsOnError(result.err)
 			}
@@ -754,21 +784,21 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 // early. A terminal-signal delivery fallback from the merge pipeline is
 // secondary when a producer or remote notifier reports the execution error
 // that caused cleanup to race a full pipeline channel.
-func collectMergeRunResults(
+func (c *Compile) collectMergeRunResults(
 	proc *process.Process,
 	current scopeRunResult,
 	preScopeResults <-chan scopeRunResult,
 	notifyResults <-chan notifyMessageResult,
+	cleanupCtx context.Context,
 ) error {
 	for len(preScopeResults) > 0 {
-		current = preferPrimaryScopeResult(current, <-preScopeResults)
+		current = c.preferPrimaryScopeResult(current, <-preScopeResults)
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
-		result.clean(proc)
+		current = c.preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		result.clean(proc, cleanupCtx)
 	}
-	current, _ = current.resolveCancelCause()
 	return current.err
 }
 
@@ -804,33 +834,106 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 	assign(scope)
 }
 
-// cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
-func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
-	p := pipeline.New(0, nil, sp.RootOp)
-	p.Cleanup(sp.Proc, true, isPrepare, fail)
-}
-
 // cleanScopeTreeWithStartFail retires a scope tree that was never submitted.
-// Children must publish their terminal signals before a parent Merge cleanup
-// waits on them. This also releases materialized readers owned by lazy UNION
-// ALL branches that an early LIMIT never starts.
-func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
+// Its input producers (including DOP clones and remote notifiers) may never
+// exist. Disable input waits, but still reset every operator to release owned
+// resources and publish the actual outcome to the containing scope's consumers.
+func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) error {
 	if sp == nil {
-		return
+		return fail
 	}
-	for _, preScope := range sp.PreScopes {
-		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
-	}
-	// A never-submitted remote merge has no notify goroutine to publish terminal
-	// signals into its local receivers. Publish them here before Merge cleanup;
-	// otherwise cleanup waits the full timeout for a producer that never existed.
-	for i := range sp.RemoteReceivRegInfos {
-		idx := sp.RemoteReceivRegInfos[i].Idx
-		if idx >= 0 && idx < len(sp.Proc.Reg.MergeReceivers) {
-			sendRemoteNotifyCleanupTerminal(sp.Proc, sp.Proc.Reg.MergeReceivers[idx], fail)
+	if fail == process.ErrPipelineStopped {
+		fail = nil
+		if sp.Proc != nil && sp.Proc.Base != nil {
+			fail = sp.Proc.GetQueryContextError()
 		}
 	}
-	cleanPipelineWitchStartFail(sp, fail, isPrepare)
+	result := fail
+	for _, preScope := range sp.PreScopes {
+		childErr := cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+		if result == nil && childErr != nil && !process.IsPipelineCancellationError(childErr) {
+			result = childErr
+		}
+	}
+	fail = resolveSenderPipelineError(sp, result)
+	_ = vm.HandleAllOp(sp.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if m, ok := op.(*merge.Merge); ok {
+			m.DisableReceiverWaitForStartFailure(sp.Proc)
+		}
+		return nil
+	})
+	if fail == nil {
+		sp.publishUnstartedOutputEnds()
+	}
+	p := pipeline.New(0, nil, sp.RootOp)
+	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
+	return fail
+}
+
+// An owned local exchange sits immediately below its Dispatch. Resolve its
+// pool outcome before the sender publishes a terminal signal and before the
+// scope result is collected. Query-level cancellation remains authoritative.
+func resolveSenderPipelineError(s *Scope, err error) error {
+	if s == nil || s.Proc == nil || s.Proc.Base == nil {
+		return err
+	}
+	sender, ok := s.RootOp.(*dispatch.Dispatch)
+	if !ok || sender.GetOperatorBase().NumChildren() != 1 {
+		return err
+	}
+	router, ok := sender.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	if !ok || !router.OwnedOutput {
+		return err
+	}
+	if s.Proc.GetQueryContextError() != nil {
+		return err
+	}
+	return router.ResolvePipelineError(err)
+}
+
+// The original sender's Reset publishes one End. Before DOP workers exist,
+// their remaining output obligations still belong to this scope. Retire only
+// its share: a shared edge may also contain live siblings, while ordered gathers
+// and remote handoffs expose just one output even with a larger scan DOP.
+func (s *Scope) publishUnstartedOutputEnds() {
+	if s.NodeInfo.Mcpu <= 1 {
+		return
+	}
+	publish := func(reg *process.WaitRegister) {
+		if reg == nil {
+			return
+		}
+		count := min(s.NodeInfo.Mcpu, max(1, reg.NilBatchCnt))
+		for i := 1; i < count; i++ {
+			reg.PublishTerminal(process.NewEndSignal())
+		}
+	}
+	switch root := s.RootOp.(type) {
+	case *connector.Connector:
+		publish(root.Reg)
+	case *dispatch.Dispatch:
+		if root.MaterializedSource == nil {
+			for _, reg := range root.LocalRegs {
+				publish(reg)
+			}
+		}
+	}
+}
+
+// finalizeRemoteResult retains late producer failures after local terminals have
+// been published. A remote Merge may itself wait for those terminals during
+// cleanup, so waiting before releasing local consumers creates a wait cycle.
+// MergeRun joins these results before the statement can report success.
+func finalizeRemoteResult(err error, sender *messageSenderOnClient) error {
+	if err != nil {
+		return err
+	}
+	if sender != nil {
+		if terminalErr := sender.waitingTheStopResponse(context.Background()); terminalErr != nil {
+			return process.MarkPipelineFailure(terminalErr)
+		}
+	}
+	return nil
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -864,43 +967,21 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	queryCtx := scopeRunQueryContext(s.Proc)
-	var terminalErr error
-	if sender != nil && isScopeCancellationError(err) {
-		// An internal cancellation can win the receive select just before the
-		// remote execution publishes its terminal response. Stop the producer
-		// through the existing cleanup handshake and retain its terminal for
-		// arbitration after resolving the cancellation's primary cause.
-		terminalErr = sender.waitingTheStopResponse()
-	}
-
-	runErr, _ := normalizeScopeRunError(
-		err,
-		s.Proc.Ctx,
-		queryCtx,
-	)
-	if runErr == nil && terminalErr != nil {
-		// A query-owned terminal or substantive pipeline cancellation cause is
-		// primary. StopSending supplies the result only when the original
-		// cancellation was secondary; this still makes a terminal-less handshake
-		// fail closed without allowing teardown fallout to hide execution failure.
-		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
-	}
-	// The retained local root is the hand-off boundary from RemoteRun to its
-	// consumer. Publish its durable Error terminal before canceling this scope;
-	// otherwise the consumer can observe cancellation first and finish without
-	// the remote execution error that caused it.
+	runErr, _ := process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	// Publish the immediate outcome before waiting for remote cleanup or
+	// canceling this scope. Consumers can participate in that cleanup; late
+	// failures remain in the joined scope result below.
 	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
+	runErr = finalizeRemoteResult(runErr, sender)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
-		if runErr == nil {
-			sender.prepareForLocalCleanup()
-		}
-		sender.close()
+		cleanupCtx, cancel := newRemoteCleanupContext(s.Proc)
+		defer cancel()
+		sender.close(cleanupCtx)
 	}
 	return runErr
 }
@@ -909,8 +990,7 @@ func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
 	if c != nil && c.proc != nil && c.proc.Cancel != nil {
 		c.proc.Cancel(err)
 	}
-	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
-	return err
+	return cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 }
 
 func validateRemoteRunAddress(scopeAddr, localAddr string) error {
@@ -1022,13 +1102,17 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			rawErr := err
 			queryCtx := scopeRunQueryContext(s.Proc)
 			var normalized bool
-			err, normalized = normalizeScopeRunError(
+			err, normalized = process.NormalizePipelineRunError(
 				err,
 				s.Proc.Ctx,
 				queryCtx,
 			)
-			if isScopeCancellationError(rawErr) {
+			err = resolveSenderPipelineError(s, err)
+			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			}
+			if err == nil {
+				s.publishUnstartedOutputEnds()
 			}
 			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
@@ -1097,48 +1181,60 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 // this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
 // return true if this was just one scan but not mergeScan.
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	// unexpected case.
-	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
-	}
-
+	// Each local or remote reader orders only its own blocks. Its paired Top
+	// publishes a local threshold; MergeTop still decides the global result.
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {
 		stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 	}()
-	readers, err := s.buildReaders(c)
+	readers, cutoffDataSupported, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
+	}
+	orderedReaders := cutoffDataSupported && len(readers) != 0 && len(s.DataSource.RecvMsgList) == 1 && len(s.DataSource.OrderBy) == 1
+	for _, reader := range readers {
+		reader.SetOrderBy(s.DataSource.OrderBy)
+		reader.SetIndexParam(s.DataSource.IndexReaderParam)
+		if orderedReaders && !readutil.SupportsScanCutoff(reader) {
+			orderedReaders = false
+		}
+	}
+	var cutoffTag int32
+	if orderedReaders {
+		cutoffTag = initScanCutoff(s)
+	} else {
+		clearScanCutoffs(s.RootOp)
 	}
 	// only one scan reader, it can just run without any merge.
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
 
 	ms, ss := newParallelScope(s)
+	if cutoffTag != 0 {
+		// The clones now own the only execution references. The source tree is
+		// retained for reuse/analysis and must not retain a prior generation.
+		clearScanCutoffs(s.RootOp)
+	}
 	for i := range ss {
 		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
 		for j := range recvMsgList {
-			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) && recvMsgList[j].MsgTag != cutoffTag {
 				recvMsgList[j].MsgTag += int32(i) << 16
 			}
 		}
 
-		readers[i].SetOrderBy(s.DataSource.OrderBy)
-		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
-
 		ss[i].DataSource = &Source{
-			R:            readers[i],
-			SchemaName:   s.DataSource.SchemaName,
-			RelationName: s.DataSource.RelationName,
-			Attributes:   s.DataSource.Attributes,
-			AccountId:    s.DataSource.AccountId,
-			node:         s.DataSource.node,
-			RecvMsgList:  recvMsgList,
+			R:                  readers[i],
+			SchemaName:         s.DataSource.SchemaName,
+			RelationName:       s.DataSource.RelationName,
+			Attributes:         s.DataSource.Attributes,
+			AccountId:          s.DataSource.AccountId,
+			node:               s.DataSource.node,
+			remoteBlockFilters: s.DataSource.remoteBlockFilters,
+			RecvMsgList:        recvMsgList,
 		}
 	}
 	if err := c.attachRuntimeAllocationOwners([]*Scope{ms}); err != nil {
@@ -1248,11 +1344,16 @@ func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
 type receivedRuntimeFilter struct {
 	spec *plan.RuntimeFilterSpec
 	expr *plan.Expr
-	data []byte
+	data *keycodec.KeyPayload
 }
 
-func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool, error) {
+func (s *Scope) waitForRuntimeFilters(c *Compile) (out []receivedRuntimeFilter, empty bool, retErr error) {
 	var runtimeFilters []receivedRuntimeFilter
+	defer func() {
+		if retErr != nil || empty || out == nil {
+			releaseRuntimeKeyFilters(runtimeFilters)
+		}
+	}()
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -1277,8 +1378,16 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
+				var keyGuard *keycodec.KeyPayload
+				if msg.Typ == message.RuntimeFilter_UNIQUEJOINKEYS && msg.Keys != nil {
+					if !msg.Keys.Retain() {
+						return nil, false, moerr.NewInvalidStateNoCtx("runtime keys were released before receipt")
+					}
+					keyGuard = msg.Keys
+				}
 				if spec.MustApply && spec.UseMembershipFilter {
 					if err := validateRequiredVectorMembership(spec, msg); err != nil {
+						keyGuard.Release()
 						return nil, false, err
 					}
 				}
@@ -1297,19 +1406,24 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 					requiredSatisfied = true
 				case message.RuntimeFilter_UNIQUEJOINKEYS:
 					if spec.UseMembershipFilter {
-						if spec.MustApply && len(msg.Data) == 0 {
+						if spec.MustApply && msg.Keys == nil {
 							return nil, false, moerr.NewInternalErrorf(
 								c.proc.Ctx, "required runtime filter %d has an empty key payload", spec.Tag)
 						}
+						if msg.Keys == nil {
+							continue
+						}
 						runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{
 							spec: spec,
-							data: append([]byte(nil), msg.Data...),
+							data: msg.Keys,
 						})
 						requiredSatisfied = true
+						keyGuard = nil // ownership transferred to runtimeFilters
 					}
 
 					// TODO: implement BETWEEN expression
 				}
+				keyGuard.Release()
 			}
 			if spec.MustApply && !requiredSatisfied {
 				return nil, false, moerr.NewInternalErrorf(
@@ -1329,15 +1443,22 @@ func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.
 	if msg.Typ != message.RuntimeFilter_UNIQUEJOINKEYS || msg.Card <= 0 || spec.Expr == nil {
 		return moerr.NewInvalidStateNoCtx("required vector membership is unavailable or malformed")
 	}
-	var keys vector.Vector
-	defer keys.Free(nil)
-	if err := keys.UnmarshalBinary(msg.Data); err != nil {
-		return err
-	}
-	if keys.Length() != int(msg.Card) || keys.HasNull() || keys.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+	if msg.Keys == nil || msg.Keys.Rows() != uint64(msg.Card) ||
+		!types.MembershipKeyTypeCompatible(msg.Keys.Type().Oid, types.T(spec.Expr.Typ.Id)) {
 		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
 	}
-	return nil
+	return msg.Keys.Visit(context.Background(), func(v *vector.Vector) error {
+		if v.HasNull() {
+			return moerr.NewInvalidStateNoCtx("required vector membership contains NULL")
+		}
+		return nil
+	})
+}
+
+func releaseRuntimeKeyFilters(filters []receivedRuntimeFilter) {
+	for _, filter := range filters {
+		filter.data.Release()
+	}
 }
 
 func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
@@ -1566,11 +1687,6 @@ type notifyMessageResult struct {
 	err    error
 }
 
-const (
-	notifyMessageRetryInitialInterval = 100 * time.Millisecond
-	notifyMessageRetryMaxInterval     = time.Second
-)
-
 type notifyMessageSenderFactory func(
 	ctx context.Context,
 	sid string,
@@ -1579,13 +1695,21 @@ type notifyMessageSenderFactory func(
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error)
 
-// clean do final work for a notifyMessageResult.
-func (r *notifyMessageResult) clean(proc *process.Process) {
+// newRemoteCleanupContext bounds optional teardown by the original query.
+func newRemoteCleanupContext(proc *process.Process) (context.Context, context.CancelFunc) {
+	queryCtx := scopeRunQueryContext(proc)
+	if queryCtx == nil && proc != nil {
+		queryCtx = proc.Ctx
+	}
+	if queryCtx == nil {
+		queryCtx = context.Background()
+	}
+	return context.WithTimeout(queryCtx, pipelineStreamFinishClientTimeout)
+}
+
+func (r *notifyMessageResult) clean(proc *process.Process, cleanupCtx context.Context) {
 	if r.sender != nil {
-		if r.err == nil {
-			r.sender.prepareForLocalCleanup()
-		}
-		r.sender.close()
+		r.sender.close(cleanupCtx)
 	}
 	if r.err != nil {
 		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
@@ -1603,70 +1727,13 @@ func (s *Scope) sendNotifyMessageWithFactory(
 	resultChan chan notifyMessageResult,
 	newSender notifyMessageSenderFactory,
 ) {
-	s.sendNotifyMessageWithFactoryAndWait(
-		wg,
-		resultChan,
-		newSender,
-		waitRemoteDispatchRetry,
-	)
-}
-
-type notifyMessageRetryWait func(context.Context, int, uuid.UUID) error
-
-func waitRemoteDispatchRetry(
-	ctx context.Context,
-	attempt int,
-	uid uuid.UUID,
-) error {
-	delay := notifyMessageRetryDelay(attempt, uid)
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return remoteRegistrationContextError(ctx)
-	case <-timer.C:
-		return nil
-	}
-}
-
-func notifyMessageRetryDelay(attempt int, uid uuid.UUID) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	delay := notifyMessageRetryInitialInterval
-	for i := 0; i < attempt && delay < notifyMessageRetryMaxInterval; i++ {
-		delay *= 2
-	}
-	if delay > notifyMessageRetryMaxInterval {
-		delay = notifyMessageRetryMaxInterval
-	}
-
-	// Stable per-receiver jitter avoids synchronizing thousands of legacy-peer
-	// compatibility retries while keeping tests and behavior deterministic.
-	seed := uint32(uid[12])<<24 |
-		uint32(uid[13])<<16 |
-		uint32(uid[14])<<8 |
-		uint32(uid[15])
-	seed ^= uint32(attempt+1) * 0x9e3779b9
-	jitterPercent := int(seed%41) - 20 // [-20%, +20%]
-	return delay + time.Duration(int64(delay)*int64(jitterPercent)/100)
-}
-
-func (s *Scope) sendNotifyMessageWithFactoryAndWait(
-	wg *sync.WaitGroup,
-	resultChan chan notifyMessageResult,
-	newSender notifyMessageSenderFactory,
-	waitRetry notifyMessageRetryWait,
-) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(
-			err,
-			s.Proc.Ctx,
-			scopeRunQueryContext(s.Proc),
-		)
-		s.cancelMergeSiblingsOnError(err)
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
+		err = finalizeRemoteResult(err, sender)
+		s.cancelMergeSiblingsOnError(err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
@@ -1686,50 +1753,33 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 
 		errSubmit := ants.Submit(
 			func() {
-				attempt := 0
-				for {
-					sender, err := newSender(
-						s.Proc.Ctx,
-						s.Proc.GetService(),
-						fromAddr,
-						s.Proc.Mp(),
-						nil,
-					)
-					if err != nil {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-						return
-					}
-					message := cnclient.AcquireMessage()
-					message.SetID(sender.streamSender.ID())
-					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					sender.requestStreamProtocols(message)
-					message.NeedNotReply = false
-					message.Uuid = uuid
-
-					sender.markReportingRequestStarted()
-					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-						return
-					}
-					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
-
-					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
-					if !isRemoteDispatchNotRegisteredYetError(err) {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-						return
-					}
-					// "not registered yet" is an expected retry response. The
-					// negotiated terminal response proves the old attempt can use
-					// FIN/ACK after its server cleanup barrier.
-					sender.prepareForLocalCleanup()
-					sender.close()
-					metricv2.PipelineRemoteNotifyRetryCounter.Inc()
-					if err = waitRetry(s.Proc.Ctx, attempt, op.Uuid); err != nil {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-						return
-					}
-					attempt++
+				sender, err := newSender(
+					s.Proc.Ctx,
+					s.Proc.GetService(),
+					fromAddr,
+					s.Proc.Mp(),
+					nil,
+				)
+				if err != nil {
+					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+					return
 				}
+				message := cnclient.AcquireMessage()
+				message.SetID(sender.streamSender.ID())
+				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+				sender.requestStreamProtocols(message)
+				message.NeedNotReply = false
+				message.Uuid = uuid
+
+				sender.markReportingRequestStarted()
+				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+					return
+				}
+				sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
+
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
@@ -1741,57 +1791,19 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 
 func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitRegister, err error) bool {
 	terminalSignal := process.BuildCleanupSignal(false, err)
-	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-	defer signalCancel()
-
-	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
+	if _, ok := reg.PublishTerminal(terminalSignal); ok {
 		return true
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		terminalSignal,
-		"remote_notify_cleanup_send_terminal_signal",
-		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		err)
-
-	if terminalSignal.EventType != process.EventEnd {
-		return false
-	}
-
-	fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-	fallbackSignal := process.NewAbortSignal(fallbackErr)
-	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
-		return false
-	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		fallbackSignal,
-		"remote_notify_cleanup_send_fallback_abort_signal",
-		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		fallbackErr)
-	return false
-}
-
-func logRemoteNotifyCleanupSendFailure(
-	proc *process.Process,
-	reg *process.WaitRegister,
-	signal process.PipelineSignal,
-	key string,
-	format string,
-	err error,
-) {
 	chLen, chCap := process.WaitRegisterChannelState(reg)
 	process.WarnPipelineCleanupf(
 		proc,
-		key,
-		format,
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
+		"remote_notify_cleanup_send_terminal_signal",
+		"remote notify cleanup could not publish terminal %s signal: channel_len=%d channel_cap=%d err=%v",
+		terminalSignal.EventType.String(),
 		chLen,
 		chCap,
 		err)
+	return false
 }
 
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.WaitRegister) error {
@@ -1966,15 +1978,11 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 	return nil
 }
 
-func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSupported bool, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
-		for i := range readers {
-			readers[i] = new(readutil.EmptyReader)
-		}
-		return readers, nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
 	}
 
 	// receive runtime filter and optimize the datasource.
@@ -1982,14 +1990,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	var blockFilterList []*plan.Expr
 	var emptyScan bool
 	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
+	defer releaseRuntimeKeyFilters(runtimeFilterList)
 	if err != nil {
 		return
 	}
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
-			return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
-		}
-		return s.buildVectorIndexReaders(runtimeFilterList)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		readers, err = s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
+		return
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -1997,15 +2004,26 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			break
 		}
 	}
-	if !emptyScan {
-		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
-		if err != nil {
-			return
-		}
-		err = s.getRelData(c, blockFilterList)
-		if err != nil {
-			return
-		}
+	if emptyScan {
+		// DROP and constant-false predicates prove that this scan has no rows.
+		// Skipping only range collection still lets relation readers scan memory.
+		s.NodeInfo.Data = nil // No reader owns the assigned ranges or tombstones.
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
+	}
+	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
+	if err != nil {
+		return
+	}
+	err = s.getRelData(c, blockFilterList)
+	if err != nil {
+		return
+	}
+	// Classify the actual ranges before readers take ownership and Data is
+	// cleared. Unknown and composite implementations have no proven ordering
+	// contract; calling their GetType can itself be unsupported.
+	switch s.NodeInfo.Data.(type) {
+	case *readutil.BlockListRelData, *readutil.ObjListRelData:
+		cutoffDataSupported = true
 	}
 
 	switch {
@@ -2117,25 +2135,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 
-		// todo:
-		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
-		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		{
-			n := s.DataSource.node
-			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() == nil {
-						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-						c.proc.SetCloneTxnOperator(txnOp)
-					}
-
-					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-					}
-				}
-			}
-		}
+		ctx, _ = scanSnapshotContext(ctx, c.proc.GetTxnOperator(), s.DataSource.node.ScanSnapshot)
 
 		var mainRds []engine.Reader
 
@@ -2195,9 +2195,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	return
 }
 
-func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+// buildVectorIndexReaders builds the readers of an index search scan; dropped
+// means a runtime filter proved the scan empty.
+func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, dropped bool) ([]engine.Reader, error) {
 	node := s.DataSource.node
-	spec := node.GetVectorIndexScan()
+	spec := node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
 	}
@@ -2227,8 +2229,17 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	if !hasQuery {
-		return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
+	if err := vectorscan.ApplySearchKnobs(&req, spec, s.Proc.GetResolveVariableFunc()); err != nil {
+		return nil, err
+	}
+	req.MembershipFilterPassed = !hasMembership && hasMembershipFilterSpec(s.DataSource.RuntimeFilterSpecs)
+	if dropped || !hasQuery {
+		if hooks, ok := searcher.Search().(searchplugin.EmptyScanHooks); ok {
+			if err := hooks.EmptyScan(s.Proc, spec, req); err != nil {
+				return nil, err
+			}
+		}
+		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
 		readers, err := factory.NewReaders(s.Proc, spec, req, max(1, s.NodeInfo.Mcpu))
@@ -2243,7 +2254,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 			}
 			return nil, moerr.NewInvalidStateNoCtx("vector plugin returned an invalid reader count")
 		}
-		return readers, nil
+		return searchplugin.RetainReaderKeys(readers, membership)
 	}
 	if s.NodeInfo.Mcpu > 1 {
 		return nil, moerr.NewNotSupportedNoCtx("vector plugin has no local parallel-reader capability")
@@ -2252,10 +2263,20 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	return []engine.Reader{reader}, nil
+	return searchplugin.RetainReaderKeys([]engine.Reader{reader}, membership)
 }
 
-func emptyVectorScanReaders(count int) []engine.Reader {
+// hasMembershipFilterSpec reports whether specs plan a membership runtime filter.
+func hasMembershipFilterSpec(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.UseMembershipFilter {
+			return true
+		}
+	}
+	return false
+}
+
+func emptyScanReaders(count int) []engine.Reader {
 	readers := make([]engine.Reader, max(1, count))
 	for i := range readers {
 		readers[i] = new(readutil.EmptyReader)
@@ -2263,21 +2284,11 @@ func emptyVectorScanReaders(count int) []engine.Reader {
 	return readers
 }
 
-func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool, bool) {
-	for _, runtimeFilter := range runtimeFilters {
-		hasMembership := runtimeFilter.spec != nil && runtimeFilter.spec.UseMembershipFilter
-		membershipRequired := runtimeFilter.spec != nil && runtimeFilter.spec.MustApply
-		if len(runtimeFilter.data) > 0 {
-			return append([]byte(nil), runtimeFilter.data...), hasMembership, membershipRequired
+func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) (*keycodec.KeyPayload, bool, bool) {
+	for _, filter := range runtimeFilters {
+		if filter.spec != nil && filter.spec.UseMembershipFilter {
+			return filter.data, true, filter.spec.MustApply
 		}
-		fn := runtimeFilter.expr.GetF()
-		if fn == nil || len(fn.Args) != 2 || fn.Args[1].GetVec() == nil {
-			if hasMembership {
-				return nil, true, membershipRequired
-			}
-			continue
-		}
-		return append([]byte(nil), fn.Args[1].GetVec().GetData()...), hasMembership, membershipRequired
 	}
 	return nil, false, false
 }

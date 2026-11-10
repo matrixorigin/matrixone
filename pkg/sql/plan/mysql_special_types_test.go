@@ -49,26 +49,30 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"}
+	emptyEnum := plan.Type{Id: int32(types.T_enum)}
+	emptySet := plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}
 	yearType := plan.Type{Id: int32(types.T_year)}
 
 	for _, tc := range []struct {
-		name     string
-		target   plan.Type
-		value    *tree.NumVal
-		wantEnum uint32
-		wantSet  uint64
-		handled  bool
+		name    string
+		target  plan.Type
+		value   *tree.NumVal
+		handled bool
 	}{
-		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), 2, 0, true},
-		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), 0, 0, true},
-		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), 1, 0, true},
-		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), 0, 0, true},
-		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), 0, 1, true},
-		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), 0, 3, true},
-		{"set negative numeric becomes empty", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), 0, 0, true},
-		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), 0, 0, true},
-		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), 0, 0, false},
-		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), 0, 0, false},
+		{"empty enum label", emptyEnum, tree.NewNumVal("", "", false, tree.P_char), false},
+		{"empty enum overflow", emptyEnum, tree.NewNumVal(uint64(65537), "65537", false, tree.P_uint64), false},
+		{"empty set bitmap", emptySet, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), false},
+		{"plain uint64", plan.Type{Id: int32(types.T_uint64)}, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), false},
+		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), false},
+		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), false},
+		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), false},
+		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), false},
+		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), false},
+		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), false},
+		{"set negative numeric keeps declared bits", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), false},
+		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), true},
+		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), false},
+		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tc.value, tc.target)
@@ -79,20 +83,13 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 				return
 			}
 			require.NotNil(t, expr)
-			if tc.target.Id == int32(types.T_enum) {
-				require.Equal(t, tc.wantEnum, expr.GetLit().GetEnumVal())
-			}
-			if tc.target.Id == int32(types.T_uint64) {
-				require.Equal(t, tc.wantSet, expr.GetLit().GetU64Val())
-			}
+			require.Equal(t, int32(types.T_year), expr.Typ.Id)
 		})
 	}
 
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal(int64(2024), "2024", false, tree.P_int64)))
 	require.False(t, mysqlYearLiteralIsValid(tree.NewNumVal(uint64(^uint64(0)), "18446744073709551615", false, tree.P_uint64)))
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal("ignored", "ignored", false, tree.P_hexnum)))
-	require.Equal(t, uint64(7), mysqlSetValidBitmap("x,y,z"))
-	require.Equal(t, ^uint64(0), mysqlSetValidBitmap(strings.Repeat("x,", types.MaxSetMembers-1)+"x"))
 }
 
 func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
@@ -114,15 +111,58 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	require.True(t, mysqlSpecialNumericTypeReversible(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
 	require.False(t, mysqlSpecialNumericTypeReversible(ambiguousSet))
+	singletonSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}
+	require.True(t, setTypeHasEmptyMember(singletonSet))
+	require.False(t, mysqlSpecialOrderTypeReversible(singletonSet))
+	require.False(t, mysqlSpecialNumericTypeReversible(&plan.Type{Id: int32(types.T_enum)}))
 	require.True(t, setTypeHasEmptyMember(emptyFirstSet))
 	require.True(t, setTypeHasEmptyMember(emptyMiddleSet))
 	require.True(t, setTypeHasEmptyMember(ambiguousSet))
 	require.False(t, setTypeHasEmptyMember(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
-	require.Equal(t, enumFoldKey("K"), enumFoldKey("K"))
 	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
 	require.False(t, mysqlSpecialOrderTypesCompatible(enum, set))
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
+}
+
+func TestFuncCastForTypedArrayMediumIntKeepsBoundsValidation(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		typeName  string
+		sourceTyp plan.Type
+		wantCast  bool
+	}{
+		{
+			name:      "JSON source to MEDIUMINT array",
+			typeName:  "array(mediumint)",
+			sourceTyp: plan.Type{Id: int32(types.T_json)},
+			wantCast:  true,
+		},
+		{
+			name:      "same MEDIUMINT array type still validates legacy values",
+			typeName:  "array(mediumint unsigned)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(mediumint unsigned)"},
+			wantCast:  true,
+		},
+		{
+			name:      "same ordinary INT array keeps existing elision",
+			typeName:  "array(int)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(int)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := plan.Type{Id: int32(types.T_json), Enumvalues: tc.typeName}
+			source := &plan.Expr{Typ: tc.sourceTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			got, err := funcCastForTypedArrayType(ctx, source, target)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantCast, got.GetF() != nil)
+			if tc.wantCast {
+				require.Equal(t, moJsonCastToArrayFun, got.GetF().GetFunc().GetObjName())
+				require.Equal(t, tc.typeName, got.Typ.GetEnumvalues())
+			}
+		})
+	}
 }
 
 func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
@@ -150,26 +190,95 @@ func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBitwiseAggregateSetBindingUsesStoredBitmap(t *testing.T) {
+func TestSumAvgRawSetBindingUsesDoubleDomain(t *testing.T) {
 	ctx := context.Background()
-	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}
-	bitmap := &plan.Expr{
-		Typ:  setType,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	for _, name := range []string{"sum", "avg"} {
+		for _, members := range []string{"z,a,m", ""} {
+			label := "raw SET"
+			if members == "" {
+				label = "ordinary UINT64"
+			}
+			t.Run(name+"/"+label, func(t *testing.T) {
+				source := &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: members},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				original := DeepCopyExpr(source)
+				args, err := (*baseBinder)(nil).useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+					ctx, name, []*plan.Expr{source})
+				require.NoError(t, err)
+				require.Len(t, args, 1)
+				require.True(t, proto.Equal(original, source), "binding must not mutate caller-owned SET identity")
+				bitmap := args[0]
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bitmap.Typ.Id)
+					require.True(t, isCastOverload(bitmap, 0))
+					bitmap = bitmap.GetF().Args[0]
+					require.NotSame(t, source, bitmap)
+				} else {
+					require.Same(t, source, bitmap)
+				}
+				require.Equal(t, int32(types.T_uint64), bitmap.Typ.Id)
+				require.Empty(t, bitmap.Typ.Enumvalues)
+				require.Equal(t, source.GetCol(), bitmap.GetCol())
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				require.NoError(t, err)
+				if members != "" {
+					require.Equal(t, int32(types.T_float64), bound.Typ.Id)
+				} else {
+					require.NotEqual(t, int32(types.T_float64), bound.Typ.Id)
+				}
+			})
+		}
 	}
-	display, err := makeEnumOrSetDisplayValue(ctx, bitmap)
-	require.NoError(t, err)
+}
 
-	bound, err := BindFuncExprImplByPlanExpr(ctx, "bit_and", []*plan.Expr{display})
-	require.NoError(t, err)
-	fn := bound.GetF()
-	require.NotNil(t, fn)
-	require.Len(t, fn.Args, 1)
-	require.Equal(t, int32(types.T_uint64), fn.Args[0].Typ.Id)
-	require.Empty(t, fn.Args[0].Typ.Enumvalues)
-	require.NotNil(t, fn.Args[0].GetCol())
-	require.Equal(t, int32(1), fn.Args[0].GetCol().RelPos)
-	require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
+func TestBitwiseAggregateBindingUsesStoredValues(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bit_and", "bit_or", "bit_xor"} {
+		for _, tc := range []struct {
+			name    string
+			typ     types.T
+			display bool
+		}{
+			{"set display", types.T_uint64, true},
+			{"enum display", types.T_enum, true},
+			{"raw enum", types.T_enum, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				storage := &plan.Expr{
+					Typ:  plan.Type{Id: int32(tc.typ), Enumvalues: "z,a,m"},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+				}
+				arg := storage
+				if tc.display {
+					var err error
+					arg, err = makeEnumOrSetDisplayValue(ctx, storage)
+					require.NoError(t, err)
+				}
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_uint64), bound.Typ.Id)
+				fn := bound.GetF()
+				require.NotNil(t, fn)
+				require.Len(t, fn.Args, 1)
+				require.Empty(t, fn.Args[0].Typ.Enumvalues)
+				require.False(t, isBitwiseAggregatePrivateCast(fn.Args[0]))
+				raw := fn.Args[0]
+				if tc.typ == types.T_enum {
+					require.Equal(t, int32(types.T_uint16), raw.Typ.Id)
+					require.True(t, isCastOverload(raw, 0))
+					raw = raw.GetF().Args[0]
+					require.Equal(t, int32(types.T_enum), raw.Typ.Id)
+				} else {
+					require.Equal(t, int32(types.T_uint64), raw.Typ.Id)
+				}
+				require.NotNil(t, raw.GetCol())
+				require.Equal(t, int32(1), raw.GetCol().RelPos)
+				require.Equal(t, int32(0), raw.GetCol().ColPos)
+			})
+		}
+	}
 }
 
 func TestFindInSetRewriteHelpersRejectInvalidProvenance(t *testing.T) {
@@ -272,7 +381,7 @@ func TestFindInSetInternalArityIsPlannerOnly(t *testing.T) {
 	_, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs)
 	require.Error(t, err)
 
-	bound, err := bindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs, true, nil, nil, true)
+	bound, err := bindFuncExprImplByPlanExpr(ctx, nil, "find_in_set", internalArgs, true, nil, nil, true)
 	require.NoError(t, err)
 	require.Len(t, bound.GetF().GetArgs(), 3)
 
@@ -301,7 +410,7 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			findInSet := findPlanFunctionExpr(logicPlan, "find_in_set")
 			require.NotNil(t, findInSet, logicPlan.String())
@@ -433,7 +542,7 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	prepared, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
 	fn := findPlanFunctionExpr(prepared, "st_srid")
@@ -443,8 +552,6 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.True(t, hasParam)
 	_, defined := decodeGeometrySRIDWidth(fn.Typ.Width)
 	require.False(t, defined)
-	require.Equal(t, []int32{0}, PreparedPlanGeometrySRIDParamPositions(prepared))
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepared))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, prepared,
 		[]any{ParamValue{Value: int64(4326), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}})
@@ -456,46 +563,6 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.True(t, defined)
 	require.Equal(t, uint32(4326), srid)
 
-	key := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: int64(4326), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	otherKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: int64(3857), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	require.NotEmpty(t, key)
-	require.NotEqual(t, key, otherKey)
-	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	sentinelKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: "<null>", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	require.NotEqual(t, nullKey, sentinelKey,
-		"a typed NULL must not alias a user value equal to the old NULL sentinel")
-}
-
-func TestPreparedGeometrySRIDSemanticKeyTracksFixedSRIDSource(t *testing.T) {
-	ctx := context.Background()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select st_geomfromwkb(?, 4326)", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-
-	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
-	require.NoError(t, err)
-	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
-	require.Empty(t, PreparedPlanGeometrySRIDParamPositions(prepared),
-		"the fixed SRID literal is not itself a runtime parameter")
-
-	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
-	})
-	valueKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: "wkb", RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
-	})
-	require.NotEmpty(t, nullKey)
-	require.NotEqual(t, nullKey, valueKey,
-		"a fixed SRID still needs source NULL state in the runtime cache key")
 }
 
 // TestFuncCastForGeometrySRID verifies that SRID compatibility is enforced at
@@ -713,7 +780,7 @@ func TestFuncCastForGeometryTypeNull(t *testing.T) {
 
 func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefined bool) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {
@@ -724,7 +791,7 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, true)
+	p, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
 	return p
@@ -732,7 +799,7 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 
 func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {
@@ -743,7 +810,7 @@ func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, true)
+	p, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
 	return p

@@ -58,6 +58,16 @@ func (alloc *IdAllocator) SetStart(start uint64) {
 	alloc.id.Store(start)
 }
 
+// AdvanceTo includes a recovered ID without allowing concurrent replay workers
+// to lower the allocation watermark. SetStart remains an absolute reset.
+func (alloc *IdAllocator) AdvanceTo(id uint64) {
+	for current := alloc.id.Load(); current < id; current = alloc.id.Load() {
+		if alloc.id.CompareAndSwap(current, id) {
+			return
+		}
+	}
+}
+
 type TxnIDAllocator struct {
 }
 

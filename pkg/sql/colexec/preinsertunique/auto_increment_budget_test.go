@@ -31,7 +31,7 @@ import (
 func TestInsertIgnoreFinalKeysRespectMemoryBudgetAndReuse(t *testing.T) {
 	mp, err := mpool.NewMPool("ignore-budget", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	const rows = 1024
 	ids, keys := make([]int32, rows), make([]int32, rows)
 	flags, generated := make([]bool, rows), make([]bool, rows)
@@ -84,7 +84,7 @@ func TestInsertIgnoreAllocationFailureDoesNotPublishAndCanReset(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			mp, err := mpool.NewMPool("ignore-failure-"+phase, 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			proc.SetStatementLastInsertID(700)
 			input := makeInsertIgnoreAutoIncrementBatch(t, proc,
 				[]int32{1}, []int32{10}, []bool{false}, []bool{false}, []bool{true})
@@ -161,7 +161,7 @@ func TestInsertIgnoreResetAfterCancellationClearsFinalKeysAndFence(t *testing.T)
 func TestInsertIgnoreRejectedCandidateRunsRespectMemoryBudget(t *testing.T) {
 	mp, err := mpool.NewMPool("ignore-rejected-budget", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	input := makeInsertIgnoreAutoIncrementBatch(t, proc,
 		[]int32{1}, []int32{10}, []bool{false}, []bool{true}, []bool{true})
 	defer input.Clean(mp)

@@ -1,0 +1,118 @@
+drop database if exists func_synonyms;
+create database func_synonyms;
+use func_synonyms;
+create table s1 (id int primary key, v varchar(20), c char(8), t text);
+insert into s1 values (1, 'Hello World', 'AbC', 'MiXeD Text'), (2, 'ÀÉÎ ñ', 'Ñandú', 'Ünïcödé'), (3, '', '', ''), (4, null, null, null), (5, 'trail  ', 'pad', '  lead');
+select lcase('AbC'), ucase('aBc'), lcase(null), ucase(null), lcase(''), ucase('');
+➤ lcase(AbC)[12,3,0]  ¦  ucase(aBc)[12,3,0]  ¦  lcase(null)[12,65535,0]  ¦  ucase(null)[12,65535,0]  ¦  lcase()[12,536870911,0]  ¦  ucase()[12,536870911,0]  𝄀
+abc  ¦  ABC  ¦  null  ¦  null  ¦    ¦  
+select lcase('ÀÉÎ ñ'), ucase('àéî ñ'), lcase(123), ucase(12.5);
+➤ lcase(ÀÉÎ ñ)[12,5,0]  ¦  ucase(àéî ñ)[12,5,0]  ¦  lcase(123)[12,20,0]  ¦  ucase(12.5)[12,5,0]  𝄀
+àéî ñ  ¦  ÀÉÎ Ñ  ¦  123  ¦  12.5
+select id, lcase(v), ucase(v), lcase(c), ucase(c), lcase(t), ucase(t) from s1 order by id;
+➤ id[4,32,0]  ¦  lcase(v)[12,20,0]  ¦  ucase(v)[12,20,0]  ¦  lcase(c)[12,8,0]  ¦  ucase(c)[12,8,0]  ¦  lcase(t)[-1,16383,0]  ¦  ucase(t)[-1,16383,0]  𝄀
+1  ¦  hello world  ¦  HELLO WORLD  ¦  abc  ¦  ABC  ¦  mixed text  ¦  MIXED TEXT  𝄀
+2  ¦  àéî ñ  ¦  ÀÉÎ Ñ  ¦  ñandú  ¦  ÑANDÚ  ¦  ünïcödé  ¦  ÜNÏCÖDÉ  𝄀
+3  ¦    ¦    ¦    ¦    ¦    ¦    𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  trail    ¦  TRAIL    ¦  pad  ¦  PAD  ¦    lead  ¦    LEAD
+select count(*) from s1 where lcase(v) = lower(v) and ucase(v) = upper(v) and lcase(t) = lower(t) and ucase(c) = upper(c);
+➤ count(*)[-5,64,0]  𝄀
+4
+select id from s1 where ucase(v) = 'HELLO WORLD';
+➤ id[4,32,0]  𝄀
+1
+select lcase(ucase(v)) = lower(v) from s1 order by id;
+➤ lcase(ucase(v)) = lower(v)[-6,8,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
+null  𝄀
+1
+select lcase(c) as k, count(*) from s1 group by lcase(c) order by k;
+➤ k[12,8,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  𝄀
+  ¦  1  𝄀
+abc  ¦  1  𝄀
+pad  ¦  1  𝄀
+ñandú  ¦  1
+select character_length('héllo'), char_length('héllo'), length('héllo');
+➤ character_length(héllo)[-5,64,0]  ¦  char_length(héllo)[-5,64,0]  ¦  length(héllo)[-5,64,0]  𝄀
+5  ¦  5  ¦  6
+select character_length(null), character_length(''), character_length('中文字符'), character_length(12345);
+➤ character_length(null)[-5,64,0]  ¦  character_length()[-5,64,0]  ¦  character_length(中文字符)[-5,64,0]  ¦  character_length(12345)[-5,64,0]  𝄀
+null  ¦  0  ¦  4  ¦  5
+select id, character_length(v), char_length(v), length(v), character_length(c), character_length(t) from s1 order by id;
+➤ id[4,32,0]  ¦  character_length(v)[-5,64,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  character_length(c)[-5,64,0]  ¦  character_length(t)[-5,64,0]  𝄀
+1  ¦  11  ¦  11  ¦  11  ¦  3  ¦  10  𝄀
+2  ¦  5  ¦  5  ¦  9  ¦  5  ¦  7  𝄀
+3  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  7  ¦  7  ¦  7  ¦  3  ¦  6
+select count(*) from s1 where character_length(v) = char_length(v);
+➤ count(*)[-5,64,0]  𝄀
+4
+select schema(), database(), schema() = database();
+➤ schema()[12,65535,0]  ¦  database()[12,65535,0]  ¦  schema() = database()[-6,8,0]  𝄀
+func_synonyms  ¦  func_synonyms  ¦  1
+select count(*) from information_schema.tables where table_schema = schema() and table_name = 's1';
+➤ count(*)[-5,64,0]  𝄀
+1
+select session_user() = user(), system_user() = user(), session_user() = system_user();
+➤ session_user() = user()[-6,8,0]  ¦  system_user() = user()[-6,8,0]  ¦  session_user() = system_user()[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select current_user = current_user(), current_user() is not null;
+➤ current_user() = current_user()[-6,8,0]  ¦  current_user() is not null[-6,8,0]  𝄀
+1  ¦  1
+select localtime = now(), localtime() = now(), localtimestamp = now(), localtimestamp() = now();
+➤ localtime() = now()[-6,8,0]  ¦  localtime() = now()[-6,8,0]  ¦  localtimestamp() = now()[-6,8,0]  ¦  localtimestamp() = now()[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select length(localtime()), length(localtime(3)), length(localtimestamp(6)), length(localtimestamp(0));
+➤ length(localtime())[-5,64,0]  ¦  length(localtime(3))[-5,64,0]  ¦  length(localtimestamp(6))[-5,64,0]  ¦  length(localtimestamp(0))[-5,64,0]  𝄀
+19  ¦  23  ¦  26  ¦  19
+select localtime(6) = now(6), localtimestamp(3) = now(3);
+➤ localtime(6) = now(6)[-6,8,0]  ¦  localtimestamp(3) = now(3)[-6,8,0]  𝄀
+1  ¦  1
+select uuid_short() is not null, uuid_short() > 0, uuid_short() <> uuid_short();
+➤ uuid_short() is not null[-6,8,0]  ¦  uuid_short() > 0[-6,8,0]  ¦  uuid_short() != uuid_short()[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select count(distinct uuid_short()) from s1;
+➤ count(distinct uuid_short())[-5,64,0]  𝄀
+5
+select connection_id() > 0, connection_id() = connection_id();
+➤ connection_id() > 0[-6,8,0]  ¦  connection_id() = connection_id()[-6,8,0]  𝄀
+1  ¦  1
+select 1 xor 1, 1 xor 0, 0 xor 1, 0 xor 0;
+➤ 1 xor 1[-6,8,0]  ¦  1 xor 0[-6,8,0]  ¦  0 xor 1[-6,8,0]  ¦  0 xor 0[-6,8,0]  𝄀
+0  ¦  1  ¦  1  ¦  0
+select null xor 1, 1 xor null, null xor 0, null xor null;
+➤ null xor 1[-6,8,0]  ¦  1 xor null[-6,8,0]  ¦  null xor 0[-6,8,0]  ¦  null xor null[-6,8,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select 1 xor 1 xor 1, 1 xor 1 xor 0, 2 xor 3, -1 xor 0, 0.5e0 xor 0, '1' xor 0;
+➤ 1 xor 1 xor 1[-6,8,0]  ¦  1 xor 1 xor 0[-6,8,0]  ¦  2 xor 3[-6,8,0]  ¦  -1 xor 0[-6,8,0]  ¦  0.5e0 xor 0[-6,8,0]  ¦  1 xor 0[-6,8,0]  𝄀
+1  ¦  0  ¦  0  ¦  1  ¦  1  ¦  1
+select (1 xor 0) = ((1 and not 0) or (not 1 and 0));
+➤ (1 xor 0) = ((1 and not 0) or (not 1 and 0))[-6,8,0]  𝄀
+1
+create table x1 (a int, b int);
+insert into x1 values (0,0),(0,1),(1,0),(1,1),(null,0),(0,null),(null,null),(5,0),(5,7);
+select a, b, a xor b, not (a xor b) from x1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a xor b[-6,8,0]  ¦  not (a xor b)[-6,8,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  0  ¦  null  ¦  null  𝄀
+0  ¦  null  ¦  null  ¦  null  𝄀
+0  ¦  0  ¦  0  ¦  1  𝄀
+0  ¦  1  ¦  1  ¦  0  𝄀
+1  ¦  0  ¦  1  ¦  0  𝄀
+1  ¦  1  ¦  0  ¦  1  𝄀
+5  ¦  0  ¦  1  ¦  0  𝄀
+5  ¦  7  ¦  0  ¦  1
+select count(*) from x1 where a xor b;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from x1 where not (a xor b);
+➤ count(*)[-5,64,0]  𝄀
+3
+drop table x1;
+drop table s1;
+drop database func_synonyms;

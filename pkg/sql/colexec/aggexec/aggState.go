@@ -1556,7 +1556,7 @@ func (ag *aggState) readStateWithAllocation(
 
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
-			if err := vec.UnmarshalWithReader(reader, mp); err != nil {
+			if err := unmarshalAggregateVector(vec, reader, mp); err != nil {
 				return 0, err
 			}
 			if vec.Length() != int(cnt) {
@@ -2778,13 +2778,14 @@ func (ae *aggExec) getXY(u uint64) (int, uint16) {
 	return int(u >> aggBatchSizeShift), uint16(u & aggBatchSizeMask)
 }
 
-func chunkArr[T any](v *vector.Vector) *[AggBatchSize]T {
-	return (*[AggBatchSize]T)(vector.MustFixedColAsSlice[T](v, AggBatchSize))
+// State rows need not have a full physical chunk: small window outputs reserve
+// only their known group count. Never fabricate a fixed-capacity array view.
+func chunkArr[T any](v *vector.Vector) []T {
+	return vector.MustFixedColAsSlice[T](v, v.Length())
 }
 
-// chunkRows returns only the logical state rows. Spill decode deliberately
-// gives source chunks exact capacity, so merge paths must not impose the
-// destination's fixed-capacity array contract on their immutable source.
+// chunkRows reads logical rows from immutable merge sources, including
+// exact-capacity decoded spill chunks.
 func chunkRows[T any](v *vector.Vector) []T {
 	return vector.MustFixedColNoTypeCheck[T](v)
 }
@@ -2810,7 +2811,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 			ae.state = nil
 			return err
 		}
-		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		// Keep normal Group's existing chunk-sized physical reservation.
 		for _, vec := range ae.state[0].vecs {
 			if vec != nil && vec.Capacity() < AggBatchSize {
 				if err := vec.PreExtend(AggBatchSize, ae.mp); err != nil {
@@ -3278,7 +3279,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 		if _, err := ae.state[0].readStateWithAllocation(mp, reader, &ae.aggInfo, ae.allocation); err != nil {
 			return err
 		}
-		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		// Keep normal Group's existing chunk-sized physical reservation.
 		for _, vec := range ae.state[0].vecs {
 			if vec != nil && vec.Capacity() < AggBatchSize {
 				if err := vec.PreExtend(AggBatchSize-vec.Length(), mp); err != nil {
@@ -3560,7 +3561,7 @@ func distinctArgumentRowsEqual(
 		return distinctFloat64KeyBits(values[left], legacy) ==
 			distinctFloat64KeyBits(values[right], legacy)
 	case types.T_json, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return keycodec.CanonicalValuesEqual(
 			typ, vec.GetRawBytesAt(left), vec.GetRawBytesAt(right))
 	default:
@@ -4044,53 +4045,4 @@ func (ae *aggExec) batchMergeArgs(next *aggExec, offset int, groups []uint64, di
 		}
 	}
 	return nil
-}
-
-func (ag *aggState) checkArgsSkl() {
-	if ag.argSkl == nil {
-		return
-	}
-	if ag.distinctFixedDeferred {
-		for i := range ag.length {
-			if ag.argCnt[i] == 0 {
-				continue
-			}
-			var count uint32
-			if err := ag.distinctIndex.forEach(uint16(i), func(uint64) error {
-				count++
-				return nil
-			}); err != nil {
-				panic(err)
-			}
-			if count != ag.argCnt[i] {
-				panic(moerr.NewInternalErrorNoCtxf(
-					"invalid fixed distinct count: %d for y: %d, expected: %d",
-					count, i, ag.argCnt[i]))
-			}
-		}
-		return
-	}
-
-	it := ag.argSkl.NewIter(nil, nil)
-	xcnt := make([]uint32, ag.length)
-	for ok, k, _ := it.First(); ok; ok, k, _ = it.Next() {
-		y := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
-		if y >= uint16(len(xcnt)) {
-			panic(moerr.NewInternalErrorNoCtxf("invalid y: %d", y))
-		}
-		xcnt[y]++
-	}
-	it.Close()
-
-	for i, cnt := range xcnt {
-		if cnt != ag.argCnt[i] {
-			panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", cnt, i, ag.argCnt[i]))
-		}
-	}
-}
-
-func (ae *aggExec) checkArgsSkl() {
-	for _, state := range ae.state {
-		state.checkArgsSkl()
-	}
 }

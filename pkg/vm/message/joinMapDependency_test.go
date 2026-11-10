@@ -77,10 +77,9 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 			wantCode:     moerr.ErrQueryTimeout,
 		},
 		{
-			name:         "query interrupted moerr",
-			buildErr:     moerr.NewQueryInterrupted(context.Background()),
-			wantCanceled: true,
-			wantCode:     moerr.ErrQueryInterrupted,
+			name:     "query interrupted moerr",
+			buildErr: moerr.NewQueryInterrupted(context.Background()),
+			wantCode: moerr.ErrQueryInterrupted,
 		},
 		{
 			name:         "query timeout moerr",
@@ -98,7 +97,6 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 		{
 			name:         "joined moerr cancellation and deadline",
 			buildErr:     errors.Join(moerr.NewQueryInterrupted(context.Background()), context.DeadlineExceeded),
-			wantCanceled: true,
 			wantDeadline: true,
 			wantCode:     moerr.ErrQueryTimeout,
 		},
@@ -131,7 +129,29 @@ type emptyWrappedError struct{}
 func (emptyWrappedError) Error() string { return "empty wrapped error" }
 func (emptyWrappedError) Unwrap() error { return nil }
 
+type stopShapeError struct{ stopped bool }
+
+func (e stopShapeError) Error() string           { return "pipeline consumer finished" }
+func (e stopShapeError) IsPipelineStopped() bool { return e.stopped }
+
+type stopShapeWrapper struct{ error }
+
+func (e stopShapeWrapper) IsPipelineStopped() bool { return true }
+func (e stopShapeWrapper) Unwrap() error           { return e.error }
+
 func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
+	t.Run("only a marked control leaf is cancellation", func(t *testing.T) {
+		for _, source := range []error{
+			stopShapeError{stopped: false},
+			errors.New("pipeline consumer finished"),
+			stopShapeWrapper{error: errors.New("storage failed")},
+		} {
+			got := NewJoinMapBuildError(source).AsError()
+			require.True(t, moerr.IsMoErrCode(got, moerr.ErrInternal))
+			require.NotErrorIs(t, got, context.Canceled)
+		}
+		require.ErrorIs(t, NewJoinMapBuildError(stopShapeError{stopped: true}).AsError(), context.Canceled)
+	})
 	t.Run("nil receiver", func(t *testing.T) {
 		var buildErr *JoinMapBuildError
 		require.Equal(t, "hash build failed", buildErr.Error())
@@ -190,7 +210,8 @@ func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
 		queryInterrupted.SetDetail("canceled by sibling target")
 		buildErr := NewJoinMapBuildError(queryInterrupted)
 
-		require.ErrorIs(t, buildErr.AsError(), context.Canceled)
+		require.NotErrorIs(t, buildErr.AsError(), context.Canceled)
+		require.True(t, buildErr.IsPipelineFailure())
 		require.Equal(t, queryInterrupted.Detail(), buildErr.Detail())
 		copyErr := buildErr.AsMoErr()
 		require.Equal(t, queryInterrupted.Detail(), copyErr.Detail())

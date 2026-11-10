@@ -18,6 +18,8 @@ package aggexec
 // Eliminates interface boxing, type switches, and per-add overflow checks.
 
 import (
+	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -135,7 +137,23 @@ func newSumDecimal64LegacyStateExec(
 }
 
 func (exec *sumDecimal64FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	sums[y] = sums[y].Add128Unchecked(value)
+	vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	return nil
 }
 
 func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -196,14 +214,22 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if vectors[0].IsConst() && vectors[0].IsConstNull() {
+		return nil
+	}
+	// Keep the original general-path frame unchanged. Small admitted states
+	// can use their dense group IDs as direct local accumulator indices.
+	if len(exec.state) == 1 && exec.state[0].length > 0 && exec.state[0].length <= 256 {
+		return exec.batchFillDenseGroups(offset, groups, vectors)
+	}
 	return exec.batchFill(offset, groups, vectors)
 }
 
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	vec := vectors[0]
-	if vec.IsConstNull() {
-		return nil
+	if len(exec.state) == 1 && exec.state[0].length <= 256 {
+		return exec.batchFillDense(offset, groups, vectors[0])
 	}
+	vec := vectors[0]
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	constMask := -min(1, len(vals)-1)
 	hasNull := vec.HasNull()
@@ -218,11 +244,11 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	var localCnts [maxSlots]int64
 	var localGrps [maxSlots]uint64
 	nSlots := 0
-	for i := range slotOf {
-		slotOf[i] = 0xFF
+	for i := 0; i < len(slotOf); i += 8 {
+		binary.LittleEndian.PutUint64(slotOf[i:i+8], ^uint64(0))
 	}
 	fallbackLastX := -1
-	var fallbackSums *[AggBatchSize]types.Decimal128
+	var fallbackSums []types.Decimal128
 	var fallbackCnts []int64
 
 	for i, grp := range groups {
@@ -271,7 +297,7 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]types.Decimal128
+	var sums []types.Decimal128
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -288,6 +314,49 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	return nil
 }
 
+func (exec *sumDecimal64FastExec) batchFillDenseGroups(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
+	constMask := -min(1, len(vals)-1)
+	var np *bitmap.Bitmap
+	if vec.HasNull() {
+		np = vec.GetNulls().GetBitmap()
+	}
+
+	var localSums [256]types.Decimal128
+	var localCnts [256]int64
+	var touched [256]uint8
+	nTouched := 0
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+		idx := i + offset
+		if np != nil && np.Contains(uint64(idx)) {
+			continue
+		}
+		g := grp - 1
+		raw := vals[idx&constMask]
+		value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+		if localCnts[g] == 0 {
+			touched[nTouched] = uint8(g)
+			nTouched++
+			localSums[g] = value
+		} else {
+			localSums[g] = localSums[g].Add128Unchecked(value)
+		}
+		localCnts[g]++
+	}
+
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+	for _, g := range touched[:nTouched] {
+		sums[g] = sums[g].Add128Unchecked(localSums[g])
+		cnts[g] += localCnts[g]
+	}
+	return nil
+}
+
 func (exec *sumDecimal64FastExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
@@ -299,7 +368,7 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 	}
 
 	lastX1, lastX2 := -1, -1
-	var sums1 *[AggBatchSize]types.Decimal128
+	var sums1 []types.Decimal128
 	var sums2 []types.Decimal128
 	var cnts1, cnts2 []int64
 	for i, grp := range groups {
@@ -522,7 +591,29 @@ func newSumDecimal128LegacyStateExec(
 }
 
 func (exec *sumDecimal128FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	if exec.overflowCheck {
+		var err error
+		if sums[y], err = sums[y].Add128(value); err != nil {
+			return err
+		}
+	} else {
+		sums[y] = sums[y].Add128Unchecked(value)
+	}
+	vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	return nil
 }
 
 func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -676,7 +767,7 @@ func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vector
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]types.Decimal128
+	var sums []types.Decimal128
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]

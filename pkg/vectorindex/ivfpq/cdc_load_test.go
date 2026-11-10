@@ -17,7 +17,6 @@
 package ivfpq
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -74,7 +73,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 
 func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	tblcfg := testTblcfg()
@@ -101,7 +100,7 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 
 func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql
@@ -174,7 +173,7 @@ func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 // for the architectural commentary.
 func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -207,12 +206,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 		}, nil)
 	eventChunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "cdc-deltas", tarPath)
 
 	origRunSql := runSql
 	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {

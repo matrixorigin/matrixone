@@ -117,10 +117,6 @@ type GenericPage struct {
 	inputMode   string // "", "search", "filter"
 	inputBuffer string
 	inputCursor int // Cursor position in input buffer
-
-	// Screen size
-	width  int
-	height int
 }
 
 // NewGenericPage creates a page with config
@@ -140,8 +136,6 @@ func NewGenericPage(config PageConfig, provider DataProvider, handler ActionHand
 		provider: provider,
 		handler:  handler,
 		list:     NewGenericList(listOpts),
-		width:    120,
-		height:   30,
 	}
 
 	// Set row number label if provided
@@ -169,8 +163,6 @@ func (p *GenericPage) Refresh() {
 
 // SetSize sets terminal size
 func (p *GenericPage) SetSize(w, h int) {
-	p.width = w
-	p.height = h
 	// Reserve: title(1) + overview(1) + separator(1) + hints(2) + status(1) = 6
 	p.list.SetScreenHeight(h - 6)
 	p.list.SetScreenWidth(w)

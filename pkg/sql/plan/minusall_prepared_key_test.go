@@ -69,7 +69,7 @@ func TestPreparedMinusAllRefreshesPhysicalKeysAcrossDomains(t *testing.T) {
 			original, err := prepare.Plan.Marshal()
 			require.NoError(t, err)
 
-			staticPlan, err := runOneStmt(NewMockOptimizer(false), t,
+			staticPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				query("cast(X'02' as varbinary(1))"))
 			require.NoError(t, err)
 			staticSet := findMinusAll(staticPlan)

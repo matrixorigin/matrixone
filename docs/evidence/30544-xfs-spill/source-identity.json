@@ -1,0 +1,31 @@
+{
+  "reviewed_pr_head": "ef10036960a7d75edaa53bd5496502d2ddb64a21",
+  "sql_before_revision": "65bcea5d24610dde1a21bb9f4dea1efd82a8ce50",
+  "pr_base_revision": "309f618995af4ee23e3b9149365f4af77264090d",
+  "sql_after": "sql_before_revision plus the three production files from reviewed_pr_head; identical diagnostic fixture",
+  "pr_source_sha256": {
+    "pkg/sql/colexec/hashbuild/spill.go": "173aab744798d4c3d816c4141d768c936fd10efdc10470ce6d860d2af3479238",
+    "pkg/sql/colexec/spillutil/join_spill.go": "eaeb3c19604501e8d9d2c5462fa516676f38828eee5367da55c9f4002047de74",
+    "pkg/sql/colexec/spillio/append.go": "a1f15e9fbfb66755c72943f44e55d8605e8f5300487909821cca24a83921259a",
+    "pkg/sql/colexec/spillio/append_linux_test.go": "815d086fa7224c55a70762de3908ed8af389c11c431513f7713cb8846d2f6a6f",
+    "pkg/sql/colexec/spillio/append_test.go": "bd6519059800295ed15cfbb79cad63ffaa3be803ce3d97a51d70090525a844b7"
+  },
+  "copied_from_retained_task_relative_paths": {
+    "after-192MiB-pass.log.txt": "xfs-evidence/after-192MiB-pass.log",
+    "after-roomy-sql-1.log.txt": "xfs-evidence/after-roomy-sql-1.log",
+    "after-roomy-sql-2.log.txt": "xfs-evidence/after-roomy-sql-2.log",
+    "before-192MiB-pass.log.txt": "xfs-evidence/before-192MiB-pass.log",
+    "before-roomy-sql-1.log.txt": "xfs-evidence/before-roomy-sql-1.log",
+    "before-roomy-sql-2.log.txt": "xfs-evidence/before-roomy-sql-2.log",
+    "run-xfs-roomy.sh.txt": "xfs-evidence/run-xfs-roomy.sh",
+    "run-xfs.sh.txt": "xfs-evidence/run-xfs.sh",
+    "xfs-writer-tests.log.txt": "xfs-evidence/xfs-writer-tests.log",
+    "issue30544_xfs_diagnostic_test.go.txt": "issue30544_xfs_diagnostic_test.go",
+    "issue30544_diagnostic.go.txt": "issue30544_diagnostic.go",
+    "append_bench_test.go.txt": "append_bench_test.go"
+  },
+  "native_and_existing_writer_equivalence": {
+    "command": "git diff --exit-code 65bcea5d24610dde1a21bb9f4dea1efd82a8ce50 309f618995af4ee23e3b9149365f4af77264090d -- Makefile cgo thirdparties pkg/sql/colexec/hashbuild/spill.go pkg/sql/colexec/spillutil/join_spill.go pkg/sql/colexec/spillio",
+    "exit_code": 0
+  }
+}

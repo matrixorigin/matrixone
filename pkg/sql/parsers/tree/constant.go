@@ -192,10 +192,23 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 		switch node.ValType {
 		case P_char:
 			if strings.Contains(node.origString, "\\") {
+				if ctx.viewDefinition {
+					// Keep the text literal's value and inferred character width
+					// without a CAST's default width or declared-size limit.
+					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", []byte(node.origString))
+					return
+				}
 				fmt.Fprintf(ctx, "cast(0x%x as varchar)", []byte(node.origString))
 				return
 			}
 		case P_ScoreBinary:
+			if node.origString == "" {
+				// A bare 0x is tokenized as an identifier. Keep the empty
+				// binary literal executable when mode-independent formatting is
+				// used for persisted SQL such as a view definition.
+				ctx.WriteString("_binary ''")
+				return
+			}
 			fmt.Fprintf(ctx, "_binary 0x%x", []byte(node.origString))
 			return
 		case P_ScoreBinaryHexnum:

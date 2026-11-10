@@ -1082,6 +1082,8 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 					ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
 				case "jsondata":
 					ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
+				case "json_binary":
+					ctx.WriteString("'json_binary'='" + node.Param.Option[i+1] + "'")
 				}
 				if i != len(node.Param.Option)-2 {
 					ctx.WriteString(", ")
@@ -2116,11 +2118,14 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxBadRecords            int64
+	MaxBadRecordsSet         bool  // whether MAX_BAD_RECORDS was specified, so that 0 can be set
 	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
 	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
 	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
+	TokenFilters             []string // fulltext2: token_filter analyzer chain (e.g. ["stop"])
 }
 
 // Must follow the following sequence when test
@@ -2135,10 +2140,10 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
+		node.MaxIndexCapacity != 0 || node.MaxBadRecordsSet || node.MaxPostingsCapacity != 0 ||
 		node.QuantizerTrainLimit != 0 || node.PositionFree ||
 		node.Merge || node.ForceSync ||
-		len(node.IncludeColumns) != 0 {
+		len(node.IncludeColumns) != 0 || len(node.TokenFilters) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2178,7 +2183,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.AlgoParamVectorOpType != "" {
 		ctx.WriteString("OP_TYPE ")
-		ctx.WriteString(node.AlgoParamVectorOpType)
+		// OP_TYPE requires a STRING token regardless of the context's quoting
+		// options, including SQL reserialized for procedure execution.
+		value := node.AlgoParamVectorOpType
+		if !ctx.NoBackslashEscape() {
+			value = FormatString(value)
+		}
+		ctx.WriteByte('\'')
+		ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+		ctx.WriteByte('\'')
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
@@ -2256,6 +2269,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
 		ctx.WriteByte(' ')
 	}
+	if node.MaxBadRecordsSet {
+		ctx.WriteString("MAX_BAD_RECORDS ")
+		ctx.WriteString(strconv.FormatInt(node.MaxBadRecords, 10))
+		ctx.WriteByte(' ')
+	}
 	if node.MaxPostingsCapacity != 0 {
 		ctx.WriteString("MAX_POSTINGS_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxPostingsCapacity, 10))
@@ -2268,6 +2286,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.PositionFree {
 		ctx.WriteString("POSITION_FREE=TRUE ")
+	}
+	if len(node.TokenFilters) != 0 {
+		ctx.WriteString("TOKEN_FILTER = '")
+		ctx.WriteString(strings.Join(node.TokenFilters, ","))
+		ctx.WriteString("' ")
 	}
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString("INCLUDE (")
@@ -2859,11 +2882,25 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	Collate string
+	// Convert changes existing character columns/data, not only the default.
+	Convert bool
+	// NonCharsetSyntax distinguishes historical ALTER no-op placeholders
+	// (FORCE, KEYS, TABLESPACE, VALIDATION) from actual charset requests.
+	NonCharsetSyntax bool
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
-	ctx.WriteString("charset = ")
+	if node.Convert {
+		ctx.WriteString("convert to character set ")
+	} else {
+		ctx.WriteString("charset = ")
+	}
 	ctx.WriteString(node.Charset)
+	if node.Collate != "" {
+		ctx.WriteString(" collate = ")
+		ctx.WriteString(node.Collate)
+	}
 }
 
 func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }

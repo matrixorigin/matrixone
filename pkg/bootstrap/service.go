@@ -31,15 +31,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -122,15 +123,12 @@ func init() {
 	sql = predefine.GenInitPublicationTaskSQL()
 	initSQLs = append(initSQLs, sql)
 
-	initSQLs = append(initSQLs, trace.InitSQLs...)
-
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)
 
 	initSQLs = append(initSQLs, partitionservice.InitSQLs...)
 }
 
 type service struct {
-	sid     string
 	logger  *log.MOLogger
 	lock    Locker
 	clock   clock.Clock
@@ -145,16 +143,15 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch                      int
-		checkUpgradeDuration                    time.Duration
-		checkUpgradeTenantDuration              time.Duration
-		upgradeTenantTasks                      int
-		finalVersionCompleted                   atomic.Bool
-		orphanPrivilegeMaintenanceWorkerRunning atomic.Bool
-		orphanPrivilegeMaintenanceRunning       atomic.Bool
-		orphanPrivilegeMaintenanceState         orphanPrivilegeMaintenanceState
-		orphanPrivilegeMaintenanceStart         func() string
-		kek                                     string
+		upgradeTenantBatch         int
+		catalogObjectLimit         uint64
+		decisionFileService        fileservice.FileService
+		checkUpgradeDuration       time.Duration
+		checkUpgradeTenantDuration time.Duration
+		upgradeTenantTasks         int
+		finalVersionCompleted      atomic.Bool
+		failure                    atomic.Pointer[upgradeFailure]
+		kek                        string
 	}
 }
 
@@ -168,7 +165,6 @@ func NewService(
 	opts ...Option,
 ) Service {
 	s := &service{
-		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,
@@ -177,7 +173,6 @@ func NewService(
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
-	s.upgrade.orphanPrivilegeMaintenanceState.restartSeed = newOrphanPrivilegeMaintenanceRestartSeed()
 	s.initUpgrade()
 
 	for _, opt := range opts {
@@ -187,6 +182,7 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
+	ctx = executor.WithLocalExecution(ctx)
 	s.logger.Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {
@@ -246,7 +242,7 @@ func (s *service) execBootstrapWithRetry(ctx context.Context) error {
 		// The transaction body returned before Commit was attempted. Retrying the
 		// complete transaction is safe and retains the already-acquired owner
 		// privilege.
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -285,7 +281,7 @@ func (s *service) reconcileUncertainBootstrapTxn(ctx context.Context) error {
 			s.completeBootstrap()
 			return nil
 		}
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -297,14 +293,14 @@ func (s *service) checkAlreadyBootstrappedWithRetry(ctx context.Context) (bool, 
 		if err == nil || !isBootstrapRetryableError(err) {
 			return ok, err
 		}
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return false, err
 		}
 	}
 }
 
-func waitBootstrapRetry(ctx context.Context) error {
-	timer := time.NewTimer(bootstrapRetryInterval)
+func waitBootstrapRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -386,7 +382,6 @@ func (s *service) checkBootstrapVersionTable(ctx context.Context) (bool, error) 
 func (s *service) execBootstrap(ctx context.Context) (bool, error) {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
-		WithDisableTrace().
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local).
 		WithAccountID(catalog.System_Account)
@@ -472,13 +467,38 @@ func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor, finalVersi
 // ingress opens. Reconciliation on every startup also repairs a crash between
 // the prerequisite commit and this phase, without a separate completion marker.
 func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
-	opts := executor.Options{}.WithDisableTrace().WithWaitCommittedLogApplied().
-		WithTimeZone(time.Local).WithAccountID(catalog.System_Account)
+	// Replacing a published view crosses the lineage lifecycle writer barrier.
+	// Own that transaction explicitly; do not change the cluster's user default.
+	opts := executor.Options{}.WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local).WithAccountID(catalog.System_Account).
+		WithTxnMode(txn.TxnMode_Pessimistic).WithTxnIsolation(txn.TxnIsolation_RC)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			// Publish the v118 TABLES consumer only after admission, atomically
+			// with the derived-schema completion views. A retry after an uncertain
+			// commit can safely reconcile both definitions again.
+			entry := versions.InformationSchemaTablesUpgradeEntry()
+			if err := entry.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+			views := versions.InformationSchemaViewsUpgradeEntry()
+			if err := views.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
+			// Same-version refresh rail for PARTITIONS: a cluster already at
+			// the current version keeps its persisted definition until this
+			// reconciliation replaces it; the definition check makes the
+			// converged state an idempotent no-op. Crossing tenants keep
+			// using the v4_0_7 tenant upgrade entry.
+			partitions := versions.InformationSchemaPartitionsUpgradeEntry()
+			if err := partitions.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {
@@ -486,7 +506,7 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 		}
 		// An uncertain commit is safe to reconcile: the next transaction reads the
 		// actual object set before issuing any idempotent CREATE IF NOT EXISTS.
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -521,7 +541,20 @@ func SystemViewsExist(ctx context.Context, exec executor.SQLExecutor) (bool, err
 	err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		var err error
 		complete, err = motrace.SchemaViewsExistWithTxn(ctx, txn)
-		return err
-	}, executor.Options{}.WithDisableTrace().WithAccountID(catalog.System_Account))
+		if err != nil || !complete {
+			return err
+		}
+		for _, entry := range []versions.UpgradeEntry{
+			versions.InformationSchemaTablesUpgradeEntry(),
+			versions.InformationSchemaViewsUpgradeEntry(),
+			versions.InformationSchemaPartitionsUpgradeEntry(),
+		} {
+			complete, err = entry.CheckFunc(txn, catalog.System_Account)
+			if err != nil || !complete {
+				return err
+			}
+		}
+		return nil
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
 	return complete, err
 }

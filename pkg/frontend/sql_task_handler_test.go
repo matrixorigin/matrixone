@@ -22,7 +22,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -35,6 +37,59 @@ import (
 )
 
 type sqlTaskContextKey struct{}
+
+func TestGetSQLTaskServicePublication(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	pu := &config.ParameterUnit{}
+	setPu(service, pu)
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	ctx := context.Background()
+
+	got, err := getSQLTaskService(ctx, ses)
+	require.Nil(t, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.EqualError(t, err, "internal error: task service not ready yet, please try again later.")
+
+	ts := &testTaskService{}
+	start := make(chan struct{})
+	published := make(chan struct{})
+	go func() {
+		<-start
+		pu.SetTaskService(ts)
+		close(published)
+	}()
+	defer func() { <-published }()
+
+	// The publisher and this frontend read have no ordering until the join.
+	// Either readiness result is valid; both accesses must use the same lock.
+	close(start)
+	got, err = getSQLTaskService(ctx, ses)
+	if got == nil {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	} else {
+		require.NoError(t, err)
+		require.Same(t, ts, got)
+	}
+
+	<-published
+	got, err = getSQLTaskService(ctx, ses)
+	require.NoError(t, err)
+	require.Same(t, ts, got)
+}
+
+// Observe the public handler's completion/fence ordering using the existing
+// task store and query-client fixtures.
+type sqlTaskFenceQueryClient struct {
+	*mockQueryClient
+	beforeSend func(context.Context)
+}
+
+func (c *sqlTaskFenceQueryClient) SendMessage(ctx context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
+	c.beforeSend(ctx)
+	return c.mockQueryClient.SendMessage(ctx, address, req)
+}
 
 func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -130,6 +185,85 @@ func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	require.Empty(t, children)
 
 	require.NoError(t, ts.Close())
+}
+
+func TestHandleCreateSQLTaskRequiresDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ctx := context.Background()
+
+	require.NoError(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{
+		Name:    tree.Identifier("task_existing"),
+		SQLBody: "select 1",
+	}))
+	before := mustGetTestSQLTasksForFrontend(t, store)
+	require.Len(t, before, 1)
+	require.Equal(t, "testdb", before[0].DatabaseName)
+	ses.SetDatabaseName("")
+
+	checkNoDatabase := func(t *testing.T, stmt *tree.CreateSQLTask) {
+		t.Helper()
+		err := handleCreateSQLTask(ctx, ses, stmt)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB), "got %v", err)
+		var dbErr *moerr.Error
+		require.ErrorAs(t, err, &dbErr)
+		require.Equal(t, uint16(1046), dbErr.MySQLCode())
+		require.Equal(t, "3D000", dbErr.SqlState())
+		require.EqualError(t, err, "No database selected")
+		require.Equal(t, before, mustGetTestSQLTasksForFrontend(t, store))
+		runs, err := store.QuerySQLTaskRun(ctx)
+		require.NoError(t, err)
+		require.Empty(t, runs)
+	}
+
+	for _, tc := range []struct {
+		name string
+		stmt tree.CreateSQLTask
+	}{
+		{
+			name: "unqualified body",
+			stmt: tree.CreateSQLTask{Name: "task_unqualified", SQLBody: "insert into tmk values (1)"},
+		},
+		{
+			name: "qualified body",
+			stmt: tree.CreateSQLTask{Name: "task_qualified", SQLBody: "insert into testdb.tmk values (1)"},
+		},
+		{
+			name: "constant body",
+			stmt: tree.CreateSQLTask{Name: "task_constant", SQLBody: "select 1"},
+		},
+		{
+			name: "scheduled task with gate",
+			stmt: tree.CreateSQLTask{
+				Name: "task_scheduled", CronExpr: "0 0 0 1 1 *", Timezone: "UTC",
+				GateCondition: "1", SQLBody: "select 1",
+			},
+		},
+		{
+			name: "existing task",
+			stmt: tree.CreateSQLTask{Name: "task_existing", SQLBody: "select 2"},
+		},
+		{
+			name: "existing task with if not exists",
+			stmt: tree.CreateSQLTask{Name: "task_existing", IfNotExists: true, SQLBody: "select 2"},
+		},
+		{
+			name: "invalid timeout",
+			stmt: tree.CreateSQLTask{Name: "task_bad_timeout", Timeout: "-1s", SQLBody: "select 1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkNoDatabase(t, &tc.stmt)
+		})
+	}
+
+	t.Run("task service not published", func(t *testing.T) {
+		pu := getPu(ses.GetService())
+		pu.SetTaskService(nil)
+		t.Cleanup(func() { pu.SetTaskService(ts) })
+		checkNoDatabase(t, &tree.CreateSQLTask{Name: "task_not_ready", SQLBody: "select 1"})
+	})
 }
 
 func TestHandleSQLTaskDefaultsTimezoneToUTC(t *testing.T) {
@@ -405,7 +539,7 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
 	defer ses.Close()
 	defer func() {
 		require.NoError(t, ts.Close())
@@ -454,6 +588,45 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	require.Equal(t, ts2, mockTC.syncCalledWith)
 	require.Equal(t, 3, mockQC.sendCalls)
 	require.Equal(t, 3, mockQC.releaseCalls)
+	// A body parse failure still commits the run's terminal state before the
+	// handler returns. Its error must survive the same cross-CN fence.
+	task, err := getSQLTaskByName(ctx, store, "task_sync_commit", ses.GetAccountId())
+	require.NoError(t, err)
+	task.SQLBody = "select ("
+	_, err = store.UpdateSQLTask(ctx, []taskservice.SQLTask{task}, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, err)
+	mockTC.syncCalled = false
+	mockQC.sendCalls = 0
+	mockQC.releaseCalls = 0
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer cancelRequest()
+	ses.proc.Base.QueryClient = &sqlTaskFenceQueryClient{
+		mockQueryClient: mockQC,
+		beforeSend: func(rpcCtx context.Context) {
+			runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+			require.NoError(t, queryErr)
+			require.Len(t, runs, 2)
+			require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+			// Cancel after completion: the already-owned execution still needs
+			// a live, bounded visibility RPC to publish its final metadata.
+			cancelRequest()
+			require.NoError(t, rpcCtx.Err())
+			_, bounded := rpcCtx.Deadline()
+			require.True(t, bounded)
+		},
+	}
+	err = handleExecuteSQLTask(requestCtx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "syntax")
+	runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, queryErr)
+	require.Len(t, runs, 2)
+	require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
+
 }
 
 func TestExecInFrontendSQLTaskStatements(t *testing.T) {

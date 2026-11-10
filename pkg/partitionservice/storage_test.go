@@ -255,3 +255,31 @@ func TestGetPartitionTableCreateSQL(t *testing.T) {
 	)
 	require.Equal(t, "create table `test_p1` (`a` int)", str)
 }
+
+func TestRowIDPartitionMetadataShiftsEveryColumn(t *testing.T) {
+	col := func(pos int32) *plan.Expr { return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}} }
+	for _, reverse := range []bool{false, true} {
+		direct := col(0)
+		nested := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{col(0), col(2)}}}}
+		args := []*plan.Expr{direct, nested}
+		if reverse {
+			args[0], args[1] = args[1], args[0]
+		}
+		expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: args}}}
+		data, err := expr.Marshal()
+		require.NoError(t, err)
+		shifted := getExprWithRowID(data)
+		require.Equal(t, int32(0), direct.GetCol().ColPos, "source metadata must remain immutable")
+		actualDirect, actualNested := shifted.GetF().Args[0], shifted.GetF().Args[1]
+		if reverse {
+			actualDirect, actualNested = actualNested, actualDirect
+		}
+		require.Equal(t, int32(1), actualDirect.GetCol().ColPos)
+		require.Equal(t, int32(1), actualNested.GetF().Args[0].GetCol().ColPos)
+		require.Equal(t, int32(3), actualNested.GetF().Args[1].GetCol().ColPos)
+	}
+	root := col(2)
+	data, err := root.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, int32(3), getExprWithRowID(data).GetCol().ColPos)
+}

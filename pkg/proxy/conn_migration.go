@@ -40,9 +40,10 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID:                         c.connID,
-		TempTableMigrationSupported:    true,
-		LastInsertIDMigrationSupported: true,
+		ConnID:                             c.connID,
+		TempTableMigrationSupported:        true,
+		LastInsertIDMigrationSupported:     true,
+		PreparedStatementProtocolSupported: true,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
@@ -121,8 +122,15 @@ func (c *clientConn) migrateConnToContext(
 	if !info.LastInsertIDExported {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	var requiredProtocol int64
+	for _, prepared := range info.PrepareStmts {
+		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
+			return moerr.NewInvalidInput(ctx, "invalid prepared statement migration contract")
+		}
+		requiredProtocol = max(requiredProtocol, prepared.RequiredProtocolVersion)
+	}
 	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||
-		len(info.TempTables) > 0 {
+		len(info.TempTables) > 0 || requiredProtocol != 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -132,6 +140,9 @@ func (c *clientConn) migrateConnToContext(
 			return err
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+		if targetProtocol < requiredProtocol {
+			return moerr.NewNotSupportedf(ctx, "prepared statement migration requires protocol version %d", requiredProtocol)
+		}
 		if info.FoundRows != 0 && targetProtocol < defines.MORPCVersion29 {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")

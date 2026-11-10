@@ -1,0 +1,91 @@
+drop database if exists window_scalar_inputs;
+create database window_scalar_inputs;
+use window_scalar_inputs;
+create table src(id int,v int);
+insert into src values(1,10),(1,20),(2,30);
+select id,rn from (
+select id,row_number() over(partition by id order by (select null)) rn from src
+) w order by id,rn;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select id,rn from (
+select id,row_number() over(partition by id order by (select 1)) rn from src
+) w order by id,rn;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select id,rn from (
+select id,row_number() over(partition by id order by null) rn from src
+) w order by id,rn;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select id,count(*) as n,
+sum(case when (id=1 and v in(10,20)) or (id=2 and v=30) then 1 else 0 end) as valid_rows
+from (
+select id,v,row_number() over(partition by id order by (select null)) rn from src
+) w where rn=1 group by id order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  valid_rows[3,38,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+select id,v,row_number() over(partition by (select src.id) order by v) as rn
+from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  2  𝄀
+2  ¦  30  ¦  1
+select id,v,sum((select src.v)) over(partition by id) as total
+from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  10  ¦  30  𝄀
+1  ¦  20  ¦  30  𝄀
+2  ¦  30  ¦  30
+select id,v,row_number() over(partition by id order by (select -src.v)) as rn
+from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  10  ¦  2  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  30  ¦  1
+select id,v,rank() over(partition by id order by (select v from src where id=99)) as r
+from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  r[-5,64,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  30  ¦  1
+select row_number() over(order by (select v from src)) from src;
+Subquery returns more than 1 row
+select row_number() over(order by (select 1,2)) from src;
+invalid input: subquery should return 1 column
+select id,v,
+rank() over(partition by id order by (select 1)) as r,
+dense_rank() over(partition by id order by null) as dr,
+sum(v) over(partition by id order by (select null)) as total
+from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  r[-5,64,0]  ¦  dr[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  10  ¦  1  ¦  1  ¦  30  𝄀
+1  ¦  20  ¦  1  ¦  1  ¦  30  𝄀
+2  ¦  30  ¦  1  ¦  1  ¦  30
+select id,v,rank() over(order by id,null) as r from src order by id,v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  r[-5,64,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  30  ¦  3
+select id,v,row_number() over(partition by null order by v) as rn from src order by v;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  2  𝄀
+2  ¦  30  ¦  3
+select row_number() over(order by (select null)) as rn from src where id<0;
+➤ rn[-5,64,0]
+select id,sum(v),sum(sum(v)) over(order by (select max(v) from src)) as total
+from src group by id order by id;
+➤ id[4,32,0]  ¦  sum(v)[-5,64,0]  ¦  total[3,38,0]  𝄀
+1  ¦  30  ¦  60  𝄀
+2  ¦  30  ¦  60
+drop database window_scalar_inputs;
+show databases like 'window_scalar_inputs';
+➤ Database[12,5000,0]

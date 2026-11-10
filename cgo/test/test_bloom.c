@@ -75,6 +75,25 @@ void test_marshal_unmarshal() {
     printf("Marshal/unmarshal passed\n");
 }
 
+void test_marshaled_padding() {
+    printf("Testing initialized marshal padding...\n");
+    for (int seeded = 0; seeded < 2; seeded++) {
+        bloomfilter_t *bf = seeded ? bloomfilter_init_with_seed(1000, 3, 12345) : bloomfilter_init(1000, 3);
+        CHECK(bf != NULL, "Failed to allocate BloomFilter");
+        bloomfilter_add(bf, "test_key", 8);
+        size_t size = 0;
+        uint8_t *data = bloomfilter_marshal(bf, &size);
+        CHECK(data != NULL, "Marshal failed");
+        CHECK(size == sizeof(bloomfilter_t) + bitmap_nbyte(bf->nbits), "Wire length must remain compatible");
+        size_t bitmap_end = offsetof(bloomfilter_t, bitmap) + bitmap_nbyte(bf->nbits);
+        for (size_t i = bitmap_end; i < size; i++) {
+            CHECK(data[i] == 0, "Marshal must not expose uninitialized trailing bytes");
+        }
+        bloomfilter_free(bf);
+    }
+    printf("Initialized marshal padding passed\n");
+}
+
 void test_test_and_add() {
     printf("Testing test_and_add...\n");
     bloomfilter_t *bf = bloomfilter_init(1000, 3);
@@ -346,6 +365,7 @@ int main() {
     
     test_basic_ops();
     test_marshal_unmarshal();
+    test_marshaled_padding();
     test_test_and_add();
     test_add_fixed();
     test_test_fixed();

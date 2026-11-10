@@ -14,7 +14,12 @@
 
 package sysview
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
+)
 
 // CollationDefinition is the canonical metadata for a collation identity that
 // MatrixOne can execute or expose through compatibility metadata. SHOW
@@ -31,18 +36,26 @@ type CollationDefinition struct {
 	Advertised   bool
 }
 
-// SupportedCollationDefinitions is the single source of truth for the
-// supported collation mapping. The information_schema.COLLATIONS table and
-// COLLATION_CHARACTER_SET_APPLICABILITY view are populated from every entry;
-// the protocol SHOW COLLATION implementation uses the same advertised set.
-var SupportedCollationDefinitions = []CollationDefinition{
-	{Name: "utf8_general_ci", Charset: "utf8", ID: 33, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "binary", Charset: "binary", ID: 63, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "NO PAD", Advertised: true},
-	{Name: "utf8_bin", Charset: "utf8", ID: 83, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_general_ci", Charset: "utf8mb4", ID: 45, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_bin", Charset: "utf8mb4", ID: 46, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-}
+// SupportedCollationDefinitions is a presentation of the common capability
+// owner, not a second registry. Every native domain that is executable is
+// advertised with its own protocol identity; legacy aliases use their effective
+// admitted semantics.
+var SupportedCollationDefinitions = func() []CollationDefinition {
+	advertised := collation.Advertised()
+	result := make([]CollationDefinition, 0, len(advertised))
+	for _, d := range advertised {
+		row := CollationDefinition{Name: d.Name, Charset: d.Charset.Name(), ID: int64(d.ProtocolID),
+			IsCompiled: "Yes", SortLen: d.SortLen, PadAttribute: "NO PAD", Advertised: true}
+		if d.Default {
+			row.IsDefault = "YES"
+		}
+		if d.PadSpace {
+			row.PadAttribute = "PAD SPACE"
+		}
+		result = append(result, row)
+	}
+	return result
+}()
 
 // DefaultCollationForCharset returns the canonical default collation exposed
 // by the information_schema and SHOW COLLATION compatibility surfaces.
@@ -50,9 +63,163 @@ var SupportedCollationDefinitions = []CollationDefinition{
 // default for the requested character set.
 func DefaultCollationForCharset(charset string) string {
 	for _, definition := range SupportedCollationDefinitions {
-		if strings.EqualFold(definition.Charset, charset) && definition.IsDefault == "YES" {
+		if strings.EqualFold(definition.Charset, collation.CanonicalCharsetName(charset)) && definition.IsDefault == "YES" {
 			return definition.Name
 		}
 	}
 	return ""
+}
+
+// InformationSchemaCharacterSetsCheckSQL is shared by tenant upgrades so their
+// completion predicate uses the same effective capacities as fresh catalogs.
+// The exact row count also detects duplicate or obsolete advertised charsets.
+func InformationSchemaCharacterSetsCheckSQL() string {
+	charsets := []string{"binary", "utf8", "utf8mb4"}
+	clauses := make([]string, 0, 1+len(charsets))
+	clauses = append(clauses, fmt.Sprintf("(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = %d", len(charsets)))
+	for _, charset := range charsets {
+		clauses = append(clauses, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+				"WHERE CHARACTER_SET_NAME = '%s' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = %d)",
+			charset, DefaultCollationForCharset(charset), characterSetMaxBytes(charset)))
+	}
+	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
+}
+
+// InformationSchemaCollationsCheckSQL verifies the complete advertised metadata,
+// including row count, so stale, missing and duplicate rows require a refresh.
+func InformationSchemaCollationsCheckSQL() string {
+	if len(SupportedCollationDefinitions) == 0 {
+		return "SELECT 1 WHERE FALSE"
+	}
+
+	conditions := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		conditions = append(conditions, fmt.Sprintf(
+			"COLLATION_NAME = '%s' AND CHARACTER_SET_NAME = '%s' AND ID = %d AND IS_DEFAULT = '%s' AND IS_COMPILED = '%s' AND SORTLEN = %d AND PAD_ATTRIBUTE = '%s'",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+
+	checks := make([]string, 0, len(conditions))
+	checks = append(checks, conditions[0])
+	for _, condition := range conditions[1:] {
+		checks = append(checks, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
+		))
+	}
+	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE (SELECT COUNT(*) FROM information_schema.COLLATIONS) = %d AND %s LIMIT 1", len(SupportedCollationDefinitions), strings.Join(checks, " AND "))
+}
+
+// databaseDefaultsMetadataSQL projects admitted effective identities, not SQL
+// aliases. Unknown/corrupt metadata returns NULL rather than a server fallback.
+func databaseDefaultsMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case")
+	for _, definition := range collation.Definitions() {
+		for revision := uint32(0); revision <= uint32(collation.RevisionV1); revision++ {
+			identity := uint32(definition.Identity)
+			if err := collation.RequireLegacy(identity, revision, collation.KeyFormatLegacy); err != nil {
+				continue
+			}
+			effective, err := collation.EffectiveDefinition(identity, revision)
+			if err != nil {
+				continue
+			}
+			name := effective.Name
+			if charset {
+				name = effective.Charset.Name()
+			}
+			fmt.Fprintf(&sql, " when dd.version > 0 and dd.collation_id = %d and dd.collation_revision = %d then '%s'", identity, revision, name)
+		}
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
+}
+
+// ColumnCollationSQL projects effective domains for information_schema.COLUMNS.
+// The expression is a planner-owned encoded type.
+func ColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false, true)
+}
+
+// ShowColumnCollationSQL preserves SHOW's NULL for non-character binary types.
+func ShowColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false, false)
+}
+
+func columnDomainMetadataSQL(encodedType string, charset, includeBinary bool) string {
+	var sql strings.Builder
+	fmt.Fprintf(&sql, "(case internal_column_character_set(%s)", encodedType)
+	// These are classifier presentation codes, not persisted identities.
+	for code, identity := range []collation.Identity{collation.UTF8MB4GeneralCIIdentity, collation.UTF8MB4BinIdentity,
+		collation.BinaryIdentity, collation.UTF8MB4GeneralCIIdentity, collation.UTF8UnicodeCIIdentity, collation.UTF8MB4UnicodeCIIdentity} {
+		if code == 2 && !includeBinary {
+			continue
+		}
+		revision := uint32(collation.RevisionLegacy)
+		if code >= 4 {
+			revision = uint32(collation.RevisionV1)
+		}
+		if err := collation.RequireLegacy(uint32(identity), revision, collation.KeyFormatLegacy); err != nil {
+			continue
+		}
+		definition, err := collation.EffectiveDefinition(uint32(identity), revision)
+		if err != nil {
+			continue
+		}
+		if code == 0 {
+			// This classifier code is absent historical column metadata, not
+			// the persisted modern default. Keep its released spelling.
+			definition, _ = collation.Lookup("utf8_general_ci")
+		}
+		name := definition.Name
+		if charset {
+			name = definition.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " WHEN %d then '%s'", code, name)
+	}
+	sql.WriteString(" else NULL end)")
+	return sql.String()
+}
+
+// Legacy databases have no persisted pair. Project the effective server
+// domain, including compatibility aliases, instead of advertising the spelling.
+func databaseServerMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case lower(@@session.collation_server)")
+	for _, definition := range collation.Advertised() {
+		identity, revision := uint32(definition.LegacyIdentity), uint32(0)
+		if definition.Semantics == collation.UCA400 {
+			identity, revision = uint32(definition.Identity), uint32(collation.RevisionV1)
+		}
+		effective, err := collation.EffectiveDefinition(identity, revision)
+		if err != nil {
+			continue
+		}
+		name := effective.Name
+		if charset {
+			name = effective.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " when '%s' then '%s'", definition.Name, name)
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
+}
+
+// Report the admitted encoding's capacity, not the strict native domain's.
+// utf8/utf8mb3 are four-byte UTF-8 compatibility spellings in current SQL.
+func characterSetMaxBytes(charset string) int32 {
+	identity, ok := collation.ResolveCharset(charset)
+	if !ok {
+		return 0
+	}
+	d, _ := collation.EffectiveDefinition(uint32(identity), 0)
+	return d.Charset.MaxBytes()
 }

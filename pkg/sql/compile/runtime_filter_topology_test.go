@@ -15,16 +15,31 @@
 package compile
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/golang/mock/gomock"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -245,6 +260,8 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		otherSpec := &plan.RuntimeFilterSpec{Tag: 99}
 		consumer.DataSource.RuntimeFilterSpecs = append(
 			consumer.DataSource.RuntimeFilterSpecs, otherSpec)
+		logical := consumer.DataSource.node
+		logical.RuntimeFilterProbeList = append(logical.RuntimeFilterProbeList, otherSpec)
 		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
@@ -253,8 +270,9 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		require.Equal(t, []*plan.RuntimeFilterSpec{otherSpec},
 			consumer.DataSource.RuntimeFilterSpecs,
 			"an unreachable scalar consumer must keep the no-filter fallback")
-		require.Len(t, consumer.DataSource.node.RuntimeFilterProbeList, 1,
+		require.Len(t, logical.RuntimeFilterProbeList, 2,
 			"physical fallback must not mutate the reusable logical plan")
+		require.Equal(t, []*plan.RuntimeFilterSpec{otherSpec}, consumer.DataSource.node.RuntimeFilterProbeList)
 		require.Nil(t, build.RuntimeFilterSpec,
 			"the unreachable producer must not send a current-CN message")
 	})
@@ -331,6 +349,61 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 	})
 }
 
+func TestOptionalRuntimeFilterFallbackSurvivesDataSourceInitialization(t *testing.T) {
+	const tag int32 = 7
+	proc := newPlanTestProcess(t)
+	ctrl := gomock.NewController(t)
+	tx := mock_frontend.NewMockTxnOperator(ctrl)
+	tx.EXPECT().GetWorkspace().Return(&disttae.Transaction{}).AnyTimes()
+	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	proc.Base.TxnOperator = tx
+	table := &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "k", Typ: types.T_int64.ToType().PlanType()}}}
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().Reset(tx).Return(nil).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
+	consumer := makeRuntimeFilterConsumerScope(tag, engine.Node{Id: "consumer"})
+	logical := consumer.DataSource.node
+	logical.TableDef, logical.ObjRef = table, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}
+	other := &plan.RuntimeFilterSpec{Tag: 99}
+	logical.RuntimeFilterProbeList = append(logical.RuntimeFilterProbeList, other)
+	consumer.DataSource.RuntimeFilterSpecs = append(consumer.DataSource.RuntimeFilterSpecs, other)
+	consumer.DataSource.Rel = rel
+	before := plan2.DeepCopyNode(logical)
+	producer, build := makeRuntimeFilterProducerScope(tag, engine.Node{Id: "unreachable"})
+	t.Cleanup(build.Release)
+	consumer.PreScopes = []*Scope{producer}
+	query := makeRightSingleTopologyPlan(tag)
+	query.Nodes[1].IsRightJoin = false
+	query.Nodes[1].RuntimeFilterBuildList[0].ScalarPredicate = true
+	require.NoError(t, validateLocalRuntimeFilterTopology(query, []int32{1}, []*Scope{consumer}))
+	require.Nil(t, build.RuntimeFilterSpec)
+	c := &Compile{proc: proc}
+	t.Cleanup(func() {
+		for _, executor := range c.filterExprExes {
+			executor.Free()
+		}
+	})
+	for range 2 {
+		require.NoError(t, consumer.resetForReuse(c))
+		require.NoError(t, c.compileTableScanDataSource(consumer))
+		require.Equal(t, []*plan.RuntimeFilterSpec{other}, consumer.DataSource.RuntimeFilterSpecs,
+			"initialization must not restore a consumer whose publisher was removed")
+		require.True(t, proto.Equal(before, logical), "the reusable logical plan must keep both tags")
+	}
+	// Remote representation and subsequent initialization use the per-source
+	// node too, rather than looking up the unchanged logical node by ID.
+	remoteNode, err := sourceNodeForRemoteRun(consumer.DataSource, proc)
+	require.NoError(t, err)
+	wire, err := remoteNode.Marshal()
+	require.NoError(t, err)
+	restored := new(plan.Node)
+	require.NoError(t, restored.Unmarshal(wire))
+	remote := &Scope{DataSource: &Source{node: restored, Rel: rel}}
+	require.NoError(t, c.compileTableScanDataSource(remote))
+	require.Equal(t, []*plan.RuntimeFilterSpec{other}, remote.DataSource.RuntimeFilterSpecs)
+}
+
 func TestCollectRuntimeFilterTopologyVisitsSharedScopeOnce(t *testing.T) {
 	const tag int32 = 9
 	cn := engine.Node{Id: "cn1", Addr: "cn1:6001"}
@@ -388,5 +461,162 @@ func BenchmarkValidateLocalRuntimeFilterTopologyNoFilter(b *testing.B) {
 		if err := validateLocalRuntimeFilterTopology(qry, nil, nil); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
+	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
+	client.version = vectorscan.IndexSearchScanProtocolVersion
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	c.proc.Base.SessionInfo.TimeZone = time.UTC
+	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+	c.proc.SetMessageBoard(message.NewMessageBoard())
+	const tag int32 = 17
+	roots := make([]*Scope, 0, len(c.cnList))
+	producers := make([]*Scope, 0, len(c.cnList))
+	for i, cn := range c.cnList {
+		cn.Mcpu, cn.CNCNT, cn.CNIDX = 1, 2, int32(i)
+		consumer := makeRuntimeFilterConsumerScope(tag, cn)
+		consumer.Proc = c.proc.NewNoContextChildProc(0)
+		consumer.DataSource.node.NodeType = plan.Node_INDEX_SEARCH_SCAN
+		consumer.DataSource.node.IndexSearchScan = &plan.IndexSearchScan{AlgoOptions: []byte(`{}`)}
+		consumer.DataSource.node.RuntimeFilterProbeList[0].MustApply = true
+		consumer.DataSource.node.RuntimeFilterProbeList[0].UseMembershipFilter = true
+		consumer.RootOp = table_scan.NewArgument()
+		t.Cleanup(consumer.RootOp.Release)
+		producer, op := makeRuntimeFilterProducerScope(tag, cn)
+		op.RuntimeFilterSpec.MustApply, op.RuntimeFilterSpec.UseMembershipFilter = true, true
+		t.Cleanup(op.Release)
+		producer.Proc = c.proc.NewNoContextChildProc(0)
+		producer.Proc.Reg.MergeReceivers = []*process.WaitRegister{process.NewPipelineEdge(1, 0)}
+		consumer.PreScopes = []*Scope{producer}
+		roots, producers = append(roots, consumer), append(producers, producer)
+	}
+	input := &Scope{NodeInfo: roots[0].NodeInfo, Proc: c.proc.NewNoContextChildProc(0)}
+	_, d := constructDispatchLocalAndRemote(0, producers, input)
+	d.FuncId = dispatch.SendToAllFunc
+	t.Cleanup(d.Release)
+	input.RootOp = d
+	roots[0].PreScopes = append(roots[0].PreScopes, input)
+	topology := collectRuntimeFilterTopology(roots, []int32{tag})
+	require.NoError(t, requiredIVFTopologyError(tag, topology, roots))
+	// Both Any and a missing remote edge would send partial domains.
+	d.FuncId = dispatch.SendToAllLocalFunc
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.FuncId = dispatch.SendToAnyFunc
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.FuncId = dispatch.SendToAllFunc
+	remoteRegs := d.RemoteRegs
+	d.RemoteRegs = nil
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.RemoteRegs = remoteRegs
+	extra := dispatch.NewArgument()
+	extra.FuncId, extra.LocalRegs = dispatch.SendToAllLocalFunc, d.LocalRegs
+	t.Cleanup(extra.Release)
+	extraSource := &Scope{NodeInfo: input.NodeInfo, Proc: c.proc.NewNoContextChildProc(0), RootOp: extra}
+	roots[0].PreScopes = append(roots[0].PreScopes, extraSource)
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots), "an extra partial sender cannot seal the domain")
+	roots[0].PreScopes = roots[0].PreScopes[:len(roots[0].PreScopes)-1]
+	connectorOp := connector.NewArgument().WithReg(producers[0].Proc.Reg.MergeReceivers[0])
+	t.Cleanup(connectorOp.Release)
+	roots[0].PreScopes = append(roots[0].PreScopes, &Scope{NodeInfo: input.NodeInfo, RootOp: connectorOp})
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[0].PreScopes = roots[0].PreScopes[:len(roots[0].PreScopes)-1]
+	producers[0].RootOp.(*hashbuild.HashBuild).IsShuffle = true
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	producers[0].RootOp.(*hashbuild.HashBuild).IsShuffle = false
+	roots[1].NodeInfo.CNIDX = 0
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[1].NodeInfo.CNIDX = 1
+	// A separate RPC fragment can be colocated but have an unreachable board.
+	saved := roots[1].PreScopes
+	roots[1].PreScopes = nil
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[1].PreScopes = saved
+	var required int64
+	data, err := encodeRemoteScopeWithProtocol(roots[1], c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
+	decoded, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+	require.Len(t, decoded.PreScopes, 1)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: message.RuntimeFilter_DROP}, decoded.PreScopes[0].Proc.GetMessageBoard())
+	receiver := message.NewMessageReceiver([]int32{tag}, message.MessageAddress{CnAddr: message.CURRENTCN}, decoded.Proc.GetMessageBoard())
+	msgs, _, receiveErr := receiver.ReceiveMessage(false, context.Background())
+	require.NoError(t, receiveErr)
+	require.Len(t, msgs, 1)
+	require.Equal(t, int32(message.RuntimeFilter_DROP), msgs[0].(message.RuntimeFilterMessage).Typ)
+	require.NotNil(t, decoded.Proc.GetMessageBoard())
+	require.Same(t, decoded.Proc.GetMessageBoard(), decoded.PreScopes[0].Proc.GetMessageBoard(), "actual RPC decoding must keep producer and reader on the same board")
+}
+
+func TestOuterPKFilterBuildMergesAllVectorPartitions(t *testing.T) {
+	for _, owners := range []int{1, 2} {
+		t.Run(map[int]string{1: "local row fetch", 2: "distributed row fetch"}[owners], func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.cnList = engine.Nodes{{Id: "cn1", Addr: c.addr, Mcpu: 1}, {Id: "cn2", Addr: "cn2:6001", Mcpu: 1}}
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			const tag int32 = 23
+			filter := &plan.RuntimeFilterSpec{Tag: tag, Expr: &plan.Expr{}}
+			node := &plan.Node{JoinType: plan.Node_INNER, Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}, RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{filter}}
+			candidates := make([]*Scope, 2)
+			probes := make([]*Scope, owners)
+			// Register cleanup before assembling the graph; scopes are never run.
+			t.Cleanup(func() {
+				seen := make(map[*Scope]bool)
+				var release func(*Scope)
+				release = func(s *Scope) {
+					if s == nil || seen[s] {
+						return
+					}
+					seen[s] = true
+					for _, child := range s.PreScopes {
+						release(child)
+					}
+					_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error { op.Release(); return nil })
+				}
+				for _, s := range probes {
+					release(s)
+				}
+				for _, s := range candidates {
+					release(s)
+				}
+			})
+			for i, cn := range c.cnList {
+				candidates[i] = generateScopeWithRootOperator(c.proc.NewNoContextChildProc(0), []vm.OpType{vm.TableScan})
+				candidates[i].NodeInfo = cn
+				if i < owners {
+					probes[i] = generateScopeWithRootOperator(c.proc.NewNoContextChildProc(0), []vm.OpType{vm.HashJoin})
+					probes[i].NodeInfo = cn
+					probes[i].RootOp.(*hashjoin.HashJoin).RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{filter}
+				}
+			}
+			c.compileBuildSideForBroadcastJoin(node, probes, candidates)
+			complete := probes[0].PreScopes[0]
+			require.Len(t, complete.PreScopes, 2, "both vector partitions must reach the same build before row-fetch filtering")
+			for i, candidate := range candidates {
+				require.Same(t, candidate, complete.PreScopes[i])
+				require.NoError(t, checkScopeWithExpectedList(candidate, []vm.OpType{vm.TableScan, vm.Connector}))
+			}
+			if owners == 1 {
+				require.NoError(t, checkScopeWithExpectedList(complete, []vm.OpType{vm.Merge, vm.HashBuild}))
+				require.Same(t, filter, complete.RootOp.(*hashbuild.HashBuild).RuntimeFilterSpec)
+			} else {
+				require.NoError(t, checkScopeWithExpectedList(complete, []vm.OpType{vm.Merge, vm.Dispatch}))
+				producers := make([]*Scope, 0, owners)
+				for _, probe := range probes {
+					producer := probe.PreScopes[len(probe.PreScopes)-1]
+					require.Equal(t, probe.NodeInfo.Addr, producer.NodeInfo.Addr)
+					require.Same(t, filter, producer.RootOp.(*hashbuild.HashBuild).RuntimeFilterSpec)
+					producers = append(producers, producer)
+				}
+				require.True(t, ivfBroadcastTargets(complete.RootOp.(*dispatch.Dispatch), producers))
+			}
+			require.False(t, filter.MustApply, "outer PK filters retain optional PASS semantics")
+		})
 	}
 }

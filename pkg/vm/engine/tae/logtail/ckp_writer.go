@@ -92,6 +92,14 @@ func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
 }
 
 func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error {
+	// Appendable carriers are published independently of their first append.
+	// Until persisted, their payload belongs to WAL replay. Checkpoint replay
+	// treats every collected object as a file and would skip that payload.
+	// Use the catalog's persisted contract, including legacy checkpoint flags,
+	// rather than guessing from an extent that old persisted objects may lack.
+	if !entry.ObjectPersisted() {
+		return nil
+	}
 	return entry.ForeachMVCCNodeInRange(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
 		if node.IsAborted() {
 			return nil
@@ -331,7 +339,7 @@ func (data *CheckpointData_V2) Close() {
 	data.sinker.Close()
 }
 func (data *CheckpointData_V2) ExportStats(prefix string) []zap.Field {
-	fields := make([]zap.Field, 0)
+	fields := make([]zap.Field, 0, 2)
 	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), data.size))
 	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), data.rows))
 	return fields
@@ -618,7 +626,7 @@ func prepareCNMeta(meta map[uint64]*CheckpointMeta, mp *mpool.MPool) (bat *conta
 	usageInsLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
 	usageDelLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
 
-	sortMeta := make([]int, 0)
+	sortMeta := make([]int, 0, len(meta))
 	for tid := range meta {
 		sortMeta = append(sortMeta, int(tid))
 	}

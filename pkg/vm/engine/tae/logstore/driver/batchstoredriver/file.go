@@ -245,7 +245,7 @@ func (rf *rotateFile) getFileState() *vFileState {
 	return rf.uncommitted[l-1].GetState()
 }
 
-func (rf *rotateFile) makeSpace(size int) (rotated *vFile, curr *vFileState, err error) {
+func (rf *rotateFile) makeSpace(size int) (curr *vFileState, err error) {
 	var (
 		rotNeeded bool
 	)
@@ -256,28 +256,19 @@ func (rf *rotateFile) makeSpace(size int) (rotated *vFile, curr *vFileState, err
 		rotNeeded, err = rf.checker.PrepareAppend(rf.uncommitted[l-1], size)
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if l == 0 || rotNeeded {
 		if rotNeeded {
-			rotated = rf.uncommitted[l-1]
-			rf.scheduleCommit(rotated)
+			rf.scheduleCommit(rf.uncommitted[l-1])
 		}
 		if err = rf.scheduleNew(); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	curr = rf.getFileState()
-	// if size > curr.bufSize {
-	// 	return nil, nil, moerr.NewInternalErrorNoCtx("buff size is %v, but entry size is %v", rf.getFileState().file.bufSize, size) //TODO write without buf
-	// }
-	// if size+curr.bufPos > curr.bufSize {
-	// 	curr.file.Sync()
-	// 	logutil.Info("rf.250\n")
-	// 	curr.bufPos = 0
-	// }
 	curr.file.PrepareWrite(size)
-	return rotated, curr, nil
+	return curr, nil
 }
 
 func (rf *rotateFile) GetAppender() FileAppender {

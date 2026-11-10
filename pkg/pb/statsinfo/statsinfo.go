@@ -15,9 +15,8 @@
 package statsinfo
 
 import (
+	"cmp"
 	"context"
-
-	"golang.org/x/exp/constraints"
 )
 
 // StatsInfoKeyWithContext associates a statistics key with a context.
@@ -32,6 +31,8 @@ func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
 	if sc == nil || newInfo == nil {
 		return
 	}
+	// Aggregated partitions are not a uniform row sample of one population.
+	sc.ByteRangeMap = nil
 	// TODO: do not handle ShuffleRange for now.
 	// sc.ShuffleRangeMap = nil
 	sc.NdvMap = mergeMaps(sc.NdvMap, newInfo.NdvMap)
@@ -45,7 +46,7 @@ func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
 	sc.TableCnt += newInfo.TableCnt
 }
 
-func mergeMaps[K comparable, V constraints.Ordered](m1, m2 map[K]V) map[K]V {
+func mergeMaps[K comparable, V cmp.Ordered](m1, m2 map[K]V) map[K]V {
 	result := make(map[K]V)
 	for key, value := range m1 {
 		result[key] = value

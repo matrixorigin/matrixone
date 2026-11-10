@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -394,30 +395,6 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 	rt.cleanup()
 }
 
-/*
-kill a connection or query.
-if killConnection is true, the query will be canceled first, then the network will be closed.
-if killConnection is false, only the query will be canceled. the connection keeps intact.
-*/
-func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineByConnID(uint32(id))
-
-	killMyself := idThatKill == id
-	if rt != nil {
-		ses := rt.getSession()
-		if killConnection {
-			ses.Debugf(ctx, "kill connection %d", id)
-			rt.killConnection(killMyself)
-		} else {
-			ses.Debugf(ctx, "kill query %s on the connection %d", statementId, id)
-			rt.killQuery(killMyself, statementId)
-		}
-	} else {
-		return moerr.NewInternalErrorf(ctx, "Unknown connection id %d", id)
-	}
-	return nil
-}
-
 func getConnectionInfo(rs *Conn) string {
 	conn := rs.RawConn()
 	if conn != nil {
@@ -426,12 +403,11 @@ func getConnectionInfo(rs *Conn) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
+func (rm *RoutineManager) Handler(rs *Conn, msg []byte) (err error) {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
 	}()
-	var err error
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -453,8 +429,10 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
 	}
 	defer routine.mc.endRequest()
-	routine.setInProcessRequest(true)
-	defer routine.setInProcessRequest(false)
+	if !routine.beginClientRequest() {
+		return io.EOF
+	}
+	defer func() { err = routine.endClientRequest(err) }()
 	ses := routine.getSession()
 
 	//handle request
@@ -544,6 +522,7 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 		req.TempTableMigrationSupported,
 		req.LastInsertIDMigrationSupported,
 		resp,
+		req.PreparedStatementProtocolSupported,
 	)
 }
 

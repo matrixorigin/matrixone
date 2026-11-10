@@ -25,6 +25,9 @@ import (
 
 // MarshalBinaryWithBufferV1 in version 1, vector.nulls.bitmap is v1
 func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
+	if v.IsDictionary() {
+		return moerr.NewInvalidStateNoCtx("dictionary vectors must be materialized before legacy serialization")
+	}
 
 	// write class
 	buf.WriteByte(uint8(v.class))
@@ -73,10 +76,19 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	if v.IsDictionary() || (len(data) > 0 && data[0] > DICTIONARY) {
+		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
+	}
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
 	// admission before any decoded descriptor can become visible.
-	if len(data) >= 1+types.TSize && types.DecodeType(data[1:1+types.TSize]).Oid != types.T_json {
-		return v.unmarshalBinaryV1(data)
+	if len(data) >= 1+types.TSize {
+		typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
+		if err != nil {
+			return err
+		}
+		if typ.Oid != types.T_json {
+			return v.unmarshalBinaryV1(data)
+		}
 	}
 	if err := validateJSONLegacyWire(data); err != nil {
 		return err
@@ -96,6 +108,13 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 }
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
+	if len(data) < 1+types.TSize {
+		return allocationAccountInvalid("short legacy vector type")
+	}
+	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
+	if err != nil {
+		return err
+	}
 	v.areaDisjoint = false
 	if v.allocationAccount != nil {
 		return allocationAccountInvalid(
@@ -103,11 +122,11 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 		)
 	}
 	// read class
-	v.class = int(data[0])
+	v.class = int(decodedPhysicalClass(data[0]))
 	data = data[1:]
 
 	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
+	v.typ = typ
 	data = data[types.TSize:]
 
 	// read length

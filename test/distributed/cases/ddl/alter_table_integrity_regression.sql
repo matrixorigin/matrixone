@@ -1,6 +1,6 @@
 -- @suit
 -- @case
--- @desc: regressions for #26854, #26853, #26839, and #26838
+-- @desc: regressions for #26854, #26853, #26839, #26838, and #29910
 -- @label:bvt
 
 drop database if exists alter_table_integrity_regression;
@@ -120,6 +120,29 @@ insert into self_restrict values (1,null), (2,1);
 truncate table self_restrict;
 select count(*) from self_restrict;
 insert into self_restrict values (3,null), (4,3);
+
+-- #29910: COPY ALTER preserves populated self references, including after
+-- DROP FOREIGN KEY. The sentinel must never be looked up as a physical table.
+create table self_modify (
+    id int primary key,
+    parent_id int,
+    url varchar(100),
+    constraint fk_self_modify foreign key (parent_id) references self_modify(id)
+);
+insert into self_modify values (1,null,'parent'), (2,1,'child');
+alter table self_modify modify column url varchar(125);
+select id, parent_id, url from self_modify order by id;
+select character_maximum_length from information_schema.columns
+    where table_schema = database() and table_name = 'self_modify' and column_name = 'url';
+insert into self_modify values (3,999,'must reject');
+delete from self_modify where id = 1;
+alter table self_modify drop foreign key fk_self_modify;
+alter table self_modify modify column url varchar(150);
+alter table self_modify add constraint fk_self_modify
+    foreign key (parent_id) references self_modify(id);
+select id, parent_id, url from self_modify order by id;
+insert into self_modify values (3,999,'must reject');
+delete from self_modify where id = 1;
 
 -- #26854: a column added by the same ALTER does not exist in the source
 -- table. Later RENAME, MODIFY, and CHANGE actions must preserve that absence

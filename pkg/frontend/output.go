@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 	"time"
 
@@ -87,6 +88,14 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		row[i] = vector.GetFixedAtNoTypeCheck[uint64](vec, rowIndex)
 	case types.T_float32:
 		row[i] = vector.GetFixedAtNoTypeCheck[float32](vec, rowIndex)
+	case types.T_bf16:
+		row[i] = vector.GetFixedAtNoTypeCheck[types.BF16](vec, rowIndex).ToFloat32()
+	case types.T_float16:
+		row[i] = vector.GetFixedAtNoTypeCheck[types.Float16](vec, rowIndex).ToFloat32()
+	case types.T_float8:
+		row[i] = vector.GetFixedAtNoTypeCheck[types.Float8](vec, rowIndex).ToFloat32()
+	case types.T_float4:
+		row[i] = vector.GetFixedAtNoTypeCheck[types.Float4](vec, rowIndex).ToFloat32()
 	case types.T_float64:
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
@@ -117,6 +126,13 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		} else {
 			row[i] = append([]float64(nil), arr...)
 		}
+	case types.T_array_float8, types.T_array_float4:
+		// vecf8/vecf4 render as their dequantized vecf32 values.
+		arr, err := types.BlockScaledToFloat32(vec.GetBytesAt(rowIndex))
+		if err != nil {
+			return err
+		}
+		row[i] = arr
 	case types.T_array_bf16:
 		arr := vector.GetArrayAt[types.BF16](vec, rowIndex)
 		if safeRefSlice {
@@ -248,16 +264,15 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		row[i] = colSlices.arrUint64[sliceIdx][rowIndex]
 	case types.T_float32:
 		row[i] = colSlices.arrFloat32[sliceIdx][rowIndex]
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// Widened into arrFloat32 by convertVectorToSlice; present as float32.
+		row[i] = colSlices.arrFloat32[sliceIdx][rowIndex]
 	case types.T_float64:
 		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_geometry, types.T_geometry32:
-		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
-		if err != nil {
-			return err
-		}
-		row[i] = []byte(text)
+		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -278,6 +293,12 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		} else {
 			row[i] = append([]float64(nil), arr...)
 		}
+	case types.T_array_float8, types.T_array_float4:
+		arr, err := types.BlockScaledToFloat32(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
+		if err != nil {
+			return err
+		}
+		row[i] = arr
 	case types.T_array_bf16:
 		arr := vector.GetArrayAt2[types.BF16](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
 		if safeRefSlice {
@@ -582,7 +603,8 @@ func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) (float32, error) {
 	sliceIdx := slices.GetSliceIdx(i)
 	typ := slices.GetType(i)
 	switch typ.Oid {
-	case types.T_float32:
+	case types.T_float32,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return slices.arrFloat32[sliceIdx][r], nil
 	case types.T_float64:
 		return float32(slices.arrFloat64[sliceIdx][r]), nil
@@ -602,7 +624,8 @@ func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) (float64, error) {
 	sliceIdx := slices.GetSliceIdx(i)
 	typ := slices.GetType(i)
 	switch typ.Oid {
-	case types.T_float32:
+	case types.T_float32,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return float64(slices.arrFloat32[sliceIdx][r]), nil
 	case types.T_float64:
 		return slices.arrFloat64[sliceIdx][r], nil
@@ -634,6 +657,8 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_array_float64:
 		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledToString(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)))
 	case types.T_array_bf16:
 		return types.ArrayToString[types.BF16](vector.GetArrayAt2[types.BF16](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_array_float16:
@@ -669,11 +694,7 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
 	case types.T_geometry, types.T_geometry32:
-		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)))
-		if err != nil {
-			return nil, err
-		}
-		return []byte(text), nil
+		return encodeMySQLGeometry(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), *vec.GetType())
 	default:
 		return nil, moerr.NewInternalError(slices.ctx, "invalid bytes based slice")
 	}
@@ -727,9 +748,11 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	case types.T_datetime:
 		scale := vec.GetType().Scale
 		dt := slices.arrDatetime[sliceIdx][r]
-		// If fractional seconds are 0, format without fractional part (MySQL behavior)
 		if scale > 0 && dt.MicroSec() == 0 {
-			return dt.String2(0), nil
+			if scale > 9 {
+				scale = 9
+			}
+			return dt.String() + ".000000000"[:scale+1], nil
 		}
 		return dt.String2(scale), nil
 	default:
@@ -789,6 +812,31 @@ func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Bat
 	return nil
 }
 
+// lowPrecFloatVecToFloat32Slice widens a low-precision float column (bf16/float16/
+// float8/float4) to a fresh []float32 so the MySQL result path can treat it as FLOAT.
+// A const vector yields a length-1 slice, matching the const handling in the getters.
+func lowPrecFloatVecToFloat32Slice(vec *vector.Vector) []float32 {
+	switch vec.GetType().Oid {
+	case types.T_bf16:
+		return widenLowPrecFloatSlice(vector.ToSliceNoTypeCheck2[types.BF16](vec))
+	case types.T_float16:
+		return widenLowPrecFloatSlice(vector.ToSliceNoTypeCheck2[types.Float16](vec))
+	case types.T_float8:
+		return widenLowPrecFloatSlice(vector.ToSliceNoTypeCheck2[types.Float8](vec))
+	case types.T_float4:
+		return widenLowPrecFloatSlice(vector.ToSliceNoTypeCheck2[types.Float4](vec))
+	}
+	return nil
+}
+
+func widenLowPrecFloatSlice[T types.LowPrecFloat](in []T) []float32 {
+	out := make([]float32, len(in))
+	for i := range in {
+		out[i] = in[i].ToFloat32()
+	}
+	return out
+}
+
 func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector, i int, colSlices *ColumnSlices) error {
 	if vec.IsConstNull() {
 		return nil
@@ -834,6 +882,10 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float32:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat32)
 		colSlices.arrFloat32 = append(colSlices.arrFloat32, vector.ToSliceNoTypeCheck2[float32](vec))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// No MySQL wire type; widen losslessly to a float32 slice and present as FLOAT.
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat32)
+		colSlices.arrFloat32 = append(colSlices.arrFloat32, lowPrecFloatVecToFloat32Slice(vec))
 	case types.T_float64:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat64)
 		colSlices.arrFloat64 = append(colSlices.arrFloat64, vector.ToSliceNoTypeCheck2[float64](vec))
@@ -852,7 +904,8 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_array_float64:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_date:
@@ -898,4 +951,15 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		return moerr.NewInternalErrorf(ctx, "convertVectorToSlice : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
+}
+
+// encodeMySQLGeometry belongs to the MySQL boundary. Internal row extraction
+// continues to produce WKT; persisted payloads remain bare WKB.
+func encodeMySQLGeometry(payload []byte, typ types.Type) ([]byte, error) {
+	out, srid, err := planfunction.AppendGeometryPayloadToStandardWKB(make([]byte, 4), payload, typ)
+	if err != nil {
+		return nil, err
+	}
+	binary.LittleEndian.PutUint32(out, srid)
+	return out, nil
 }

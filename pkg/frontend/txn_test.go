@@ -162,8 +162,8 @@ func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 }
 
 func (t *testWorkspace) WriteOffset() uint64 {
-	//TODO implement me
-	panic("implement me")
+	// This fixture has no data writes; derived execution reads the empty workspace.
+	return 0
 }
 
 func (t *testWorkspace) Adjust(writeOffset uint64) error {
@@ -1131,6 +1131,13 @@ func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing
 	}
 	paths := []terminalCommitPath{
 		{
+			name: "implicit commit before rename",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.stmt = &tree.RenameTable{}
+				return th.commitBeforeStatement(execCtx)
+			},
+		},
+		{
 			name: "explicit commit",
 			run: func(th *TxnHandler, execCtx *ExecCtx) error {
 				execCtx.txnOpt.byCommit = true
@@ -1435,6 +1442,36 @@ func TestCommitFailureAdvancesSessionGeneration(t *testing.T) {
 	if got := ses.getDDLVersion(); got != 1 {
 		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
 	}
+}
+
+func TestFinishTxnReconnectErrorRollsBackExplicitTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	op.wp.SetHaveDDL(true)
+	op.wp.stack = []uint64{0}
+	op.wp.stmtId = 1
+	ses.txnHandler.txnOp = op
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.optionBits |= OPTION_BEGIN
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Delete{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	reconnectErr := moerr.NewRetryForCNRollingRestart()
+	require.Same(t, reconnectErr, finishTxnFunc(ses, reconnectErr, ec))
+	require.Equal(t, 1, op.rollbackCalls)
+	require.Nil(t, ses.txnHandler.txnOp)
+	require.Equal(t, []uint64{0}, op.wp.stack, "whole-txn failure must not select statement-only rollback")
+	require.Equal(t, uint64(1), ses.getDDLVersion())
 }
 
 func TestRollbackDDLAdvancesSessionGeneration(t *testing.T) {
@@ -1893,10 +1930,6 @@ func (txnop *testTxnOp) AppendEventCallback(event client.EventType, callbacks ..
 func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	//TODO implement me
 	panic("implement me")
-}
-
-func (txnop *testTxnOp) NextSequence() uint64 {
-	return 0
 }
 
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
@@ -2368,6 +2401,8 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))

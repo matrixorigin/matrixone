@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const (
@@ -151,7 +153,15 @@ func ConstructBasePKFilter(
 	mp *mpool.MPool,
 ) (filter BasePKFilter, err error) {
 	cleanup := &basePKFilterCleanup{}
-	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
+	// Zone maps and primary-key readers currently store original bytes. Native
+	// Unicode collations compare UCA weights, so a raw PK probe can discard a
+	// true match (for example `A = 'a'`) before the residual row comparator
+	// runs. Leave this optional fast path disabled until the persisted summary
+	// format carries the same collation domain.
+	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
+		return BasePKFilter{}, nil
+	}
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef), false)
 	if err != nil || !filter.Valid {
 		cleanup.run()
 		filter.cleanup = nil
@@ -165,18 +175,141 @@ func ConstructBasePKFilter(
 	return filter, nil
 }
 
-func constructBasePKFilter(
+// ConstructBaseClusterFilter builds the serialized-key filter for the hidden
+// composite cluster-by column, mirroring ConstructBasePKFilter. It returns an
+// invalid filter for tables without a composite cluster-by key. The filter
+// stays local to the in-memory replay path: block readers keep their existing
+// pruning behaviour.
+func ConstructBaseClusterFilter(
+	expr *plan.Expr,
+	tblDef *plan.TableDef,
+	mp *mpool.MPool,
+) (filter BasePKFilter, err error) {
+	name, ok := compositeClusterByColumnName(tblDef)
+	if !ok {
+		return BasePKFilter{}, nil
+	}
+	if tableClusterByUsesUnicodeCollation(tblDef, name) {
+		return BasePKFilter{}, nil
+	}
+	cleanup := &basePKFilterCleanup{}
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, name, false)
+	if err != nil || !filter.Valid {
+		cleanup.run()
+		filter.cleanup = nil
+		return filter, err
+	}
+	if len(cleanup.fns) == 0 {
+		filter.cleanup = nil
+	} else {
+		filter.cleanup = cleanup
+	}
+	return filter, nil
+}
+
+func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
+	if tblDef == nil || tblDef.Pkey == nil {
+		return false
+	}
+	if columnUsesUnicodeCollation(tblDef, tblDef.Pkey.PkeyColName) {
+		return true
+	}
+	for _, name := range tblDef.Pkey.Names {
+		if columnUsesUnicodeCollation(tblDef, name) {
+			return true
+		}
+	}
+	if tblDef.Pkey.CompPkeyCol != nil {
+		return types.IsUnicodeCollation(uint8(tblDef.Pkey.CompPkeyCol.Typ.Charset))
+	}
+	return false
+}
+
+// columnUsesUnicodeCollation reports whether the named column of tblDef is a
+// native-Unicode-collation text column. Reader table definitions assembled
+// from a snapshot or an index path are not required to carry Name2ColIndex;
+// failing to find the column in that optional map must not re-enable a
+// raw-byte key probe.
+func columnUsesUnicodeCollation(tblDef *plan.TableDef, name string) bool {
+	if name == "" {
+		return false
+	}
+	if tblDef.Name2ColIndex != nil {
+		if pos, ok := tblDef.Name2ColIndex[name]; ok && pos >= 0 &&
+			int(pos) < len(tblDef.Cols) && tblDef.Cols[pos] != nil {
+			return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
+		}
+	}
+	for _, col := range tblDef.Cols {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return types.IsUnicodeCollation(uint8(col.Typ.Charset))
+		}
+	}
+	return false
+}
+
+func primaryKeySortKeyName(tblDef *plan.TableDef) string {
+	if tblDef == nil || tblDef.Pkey == nil {
+		return ""
+	}
+	return tblDef.Pkey.PkeyColName
+}
+
+// compositeClusterByColumnName returns the hidden compound column name of a
+// composite cluster-by sort key.
+func compositeClusterByColumnName(tblDef *plan.TableDef) (string, bool) {
+	if tblDef == nil || tblDef.ClusterBy == nil {
+		return "", false
+	}
+	name := tblDef.ClusterBy.Name
+	if !planutil.JudgeIsCompositeClusterByColumn(name) {
+		return "", false
+	}
+	return name, true
+}
+
+// tableClusterByUsesUnicodeCollation is the cluster-by counterpart of
+// tablePrimaryKeyUsesUnicodeCollation: a serialized compound key is compared
+// by raw bytes, so a native-Unicode part must keep its predicates on the
+// collation-aware residual path.
+func tableClusterByUsesUnicodeCollation(tblDef *plan.TableDef, clusterName string) bool {
+	if tblDef == nil {
+		return false
+	}
+	parts := planutil.SplitCompositeClusterByColumnName(clusterName)
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if columnUsesUnicodeCollation(tblDef, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func constructBaseSortKeyFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
 	mp *mpool.MPool,
 	cleanup *basePKFilterCleanup,
+	sortKeyName string,
+	candidate bool,
 ) (filter BasePKFilter, err error) {
 	if expr == nil {
 		return
 	}
+	candidate = candidate || expr.CandidateFilter
 
 	defer func() {
-		if tblDef.Pkey.CompPkeyCol != nil {
+		// The serialized compound key columns -- __mo_cpkey_col and the
+		// composite __mo_cbkey_* hidden column -- are VARCHAR regardless of
+		// their parts.
+		if primaryKeySortKeyName(tblDef) == sortKeyName && tblDef.Pkey != nil &&
+			tblDef.Pkey.CompPkeyCol != nil {
+			filter.Oid = types.T_varchar
+		} else if name, ok := compositeClusterByColumnName(tblDef); ok && name == sortKeyName &&
+			tblDef.ClusterBy.CompCbkeyCol != nil {
 			filter.Oid = types.T_varchar
 		}
 		if filter.Valid {
@@ -186,11 +319,18 @@ func constructBasePKFilter(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return BasePKFilter{}, nil
+		}
+		if candidate && exprImpl.F.Func.ObjName != "and" && exprImpl.F.Func.ObjName != "or" &&
+			!candidateScalarFilterSafe(expr, tblDef, true) {
+			return BasePKFilter{}, nil
+		}
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, candidate)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -239,7 +379,7 @@ func constructBasePKFilter(
 			)
 
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, candidate)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -247,7 +387,6 @@ func constructBasePKFilter(
 					hasUnsupported = true
 					continue
 				}
-
 				filters1 = append(filters1, toDisjuncts(ff)...)
 				filters2 = append(filters2, ff)
 			}
@@ -305,7 +444,7 @@ func constructBasePKFilter(
 
 		case ">=":
 			//a >= ?
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -316,7 +455,7 @@ func constructBasePKFilter(
 
 		case "<=":
 			//a <= ?
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -327,7 +466,7 @@ func constructBasePKFilter(
 
 		case ">":
 			//a > ?
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -338,7 +477,7 @@ func constructBasePKFilter(
 
 		case "<":
 			//a < ?
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -349,7 +488,7 @@ func constructBasePKFilter(
 
 		case "=":
 			// a = ?
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -359,7 +498,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_eq":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -369,7 +508,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "in":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, sortKeyName)
 			if !ok {
 				return
 			}
@@ -388,7 +527,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_in":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, sortKeyName)
 			if !ok {
 				return
 			}
@@ -404,7 +543,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "in_range":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				return
 			}
@@ -426,7 +565,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "between":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -437,7 +576,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_between":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok {
 				return
 			}
@@ -448,7 +587,7 @@ func constructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_in_range":
-			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, sortKeyName)
 			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				return
 			}
@@ -499,14 +638,29 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if !vec.IsConst() && vec.GetSorted() && !vec.GetNulls().Any() {
 		return vec, nil
 	}
-	owned := vector.NewVec(types.T_any.ToType())
-	// Keep the mutable clone on the Go heap: search closures retain it after this
-	// function returns, and GC can reclaim it without adding another mpool owner.
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return normalizePKInVectorPayload(data, mp)
+}
+
+func normalizePKInVectorPayload(data []byte, mp *mpool.MPool) (ret *vector.Vector, err error) {
+	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	defer owned.Free(mp)
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, err
 	}
-	normalizePKInVector(owned)
-	return owned, nil
+	if err := normalizePKInVector(owned, mp); err != nil {
+		return nil, err
+	}
+	encoded, err := owned.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	ret = vector.NewVec(types.T_any.ToType())
+	if err := ret.UnmarshalBinary(encoded); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func validatePKInVectorShape(vec *vector.Vector) (err error) {
@@ -554,7 +708,14 @@ func validatePKInVectorEncoding(data []byte) error {
 		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector class %d", class)
 	}
 	pos := 1
-	typ := types.DecodeType(data[pos : pos+types.TSize])
+	typ, err := types.DecodeTypeChecked(data[pos : pos+types.TSize])
+	if err != nil {
+		return err
+	}
+	// This reader sorts and compares keys, rather than merely transporting them.
+	if err := plan.RequireLegacyCollations(typ.PlanType()); err != nil {
+		return err
+	}
 	pos += types.TSize
 	if !supportedPKInType(typ.Oid) || typ.TypeSize() != typ.Oid.TypeLen() {
 		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector type %s", typ.Oid.String())
@@ -638,7 +799,7 @@ func validatePKInNullEncoding(data []byte, logicalLength uint64) error {
 	return nil
 }
 
-func normalizePKInVector(vec *vector.Vector) {
+func normalizePKInVector(vec *vector.Vector, mp *mpool.MPool) error {
 	// A constant vector represents a repeated value, while IN is set-valued.
 	// Collapse its logical length before encoding it for workspace filtering;
 	// otherwise a corrupt or adversarial logical length can force an O(n)
@@ -651,7 +812,7 @@ func normalizePKInVector(vec *vector.Vector) {
 			vec.SetLength(1)
 		}
 		vec.SetSorted(true)
-		return
+		return nil
 	}
 	if vec.GetNulls().Any() {
 		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
@@ -660,9 +821,11 @@ func normalizePKInVector(vec *vector.Vector) {
 				sels = append(sels, int64(row))
 			}
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
-	vec.InplaceSortAndCompact()
+	return vec.InplaceSortAndCompact(mp)
 }
 
 func releaseUnreferencedMergedVectors(filters []BasePKFilter, keep *basePKFilterResource) {

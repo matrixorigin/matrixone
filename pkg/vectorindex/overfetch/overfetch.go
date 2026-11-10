@@ -19,7 +19,7 @@
 // in how many candidates survive, so they need proportionally more headroom.
 //
 // The math lives here — rather than in the planner — because for a prepared
-// statement k (LIMIT ?) is not known until EXECUTE. The table-function search
+// statement k (LIMIT ?) is not known until EXECUTE. The index search scan
 // resolves k at EXECUTE and calls into this package, so a literal limit and a
 // bound parameter go through the identical calculation.
 package overfetch
@@ -30,21 +30,17 @@ import "math"
 // least k+10, so a small k still has headroom the multiplier alone would not give.
 const MinExtraCandidates uint64 = 10
 
-// FactorStep is one bucket of the multiplier step function: k < Below uses Factor.
+// factorStep is one bucket of the multiplier step function: k < Below uses Factor.
 // Steps are ordered ascending by Below and the last one falls through to the
 // package's default factor.
-type FactorStep struct {
+type factorStep struct {
 	Below  uint64
 	Factor float64
 }
 
-// postFilterSteps and filteredPostModeSteps are the single definition of each
-// step function. Both the Go helpers below and the planner's equivalent SQL
-// expression (BuildOverFetchLimitExpr) are derived from these tables, so the
-// value a new CN computes in Go and the value an old CN computes by evaluating
-// the pushed expression cannot drift apart.
+// postFilterSteps and filteredPostModeSteps define the two step functions.
 var (
-	postFilterSteps = []FactorStep{
+	postFilterSteps = []factorStep{
 		{Below: 10, Factor: 5.0},  // Small limits: 5x
 		{Below: 50, Factor: 2.0},  // Medium limits: 2x
 		{Below: 100, Factor: 1.5}, // Large limits: 1.5x
@@ -52,7 +48,7 @@ var (
 	}
 	postFilterDefaultFactor = 1.2 // Huge limits: 1.2x
 
-	filteredPostModeSteps = []FactorStep{
+	filteredPostModeSteps = []factorStep{
 		{Below: 50, Factor: 5.0},
 		{Below: 100, Factor: 2.0},
 		{Below: 200, Factor: 1.5},
@@ -60,26 +56,7 @@ var (
 	filteredPostModeDefaultFactor = 1.3
 )
 
-// PostFilterFactorSteps returns the post-filter step table. The slice is copied so
-// a caller building an expression from it cannot mutate the shared definition.
-func PostFilterFactorSteps() []FactorStep {
-	return append([]FactorStep(nil), postFilterSteps...)
-}
-
-// FilteredPostModeFactorSteps returns the ivfflat filtered-post-mode step table.
-func FilteredPostModeFactorSteps() []FactorStep {
-	return append([]FactorStep(nil), filteredPostModeSteps...)
-}
-
-// DefaultFactor is the multiplier used above the last step of the chosen table.
-func DefaultFactor(filteredPostMode bool) float64 {
-	if filteredPostMode {
-		return filteredPostModeDefaultFactor
-	}
-	return postFilterDefaultFactor
-}
-
-func factorFromSteps(k uint64, steps []FactorStep, defaultFactor float64) float64 {
+func factorFromSteps(k uint64, steps []factorStep, defaultFactor float64) float64 {
 	for _, step := range steps {
 		if k < step.Below {
 			return step.Factor

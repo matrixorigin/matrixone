@@ -53,6 +53,9 @@ const (
 	leastGreatestTemporalOverload
 	leastGreatestJSONTemporalOverload
 	leastGreatestYearNumericOverload
+	// Appended identity: old workers must not execute collation-aware ordering
+	// through the historical byte-order overload, even after a capability probe.
+	LeastGreatestCollationOverload
 )
 
 // check input types for least and greatest function.
@@ -63,10 +66,24 @@ func leastGreatestCheck(_ []overload, inputs []types.Type) checkResult {
 	if !ok {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
+	if resolution.overloadID == leastGreatestNormalOverload && leastGreatestNeedsCollationOverload(resolution.resultType) {
+		resolution.overloadID = LeastGreatestCollationOverload
+	}
 	if len(resolution.castTypes) > 0 {
 		return newCheckResultWithCast(resolution.overloadID, resolution.castTypes)
 	}
 	return newCheckResultWithSuccess(resolution.overloadID)
+}
+
+func leastGreatestNeedsCollationOverload(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_char:
+		return true // CHAR comparison now ignores trailing spaces.
+	case types.T_varchar, types.T_text, types.T_blob, types.T_datalink:
+		return types.IsUnicodeCollation(typ.Charset)
+	default:
+		return false
+	}
 }
 
 func leastGreatestReturnType(parameters []types.Type) types.Type {
@@ -100,6 +117,20 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return leastGreatestResolution{resultType: types.T_varchar.ToType(), overloadID: leastGreatestNormalOverload}, true
 	}
 
+	if target, hasVector, ok := commonVectorType(nonNull); hasVector {
+		if !ok || !leastGreatestExecutorSupportsOid(target.Oid) {
+			return leastGreatestResolution{}, false
+		}
+		resolution := leastGreatestResolution{resultType: target, overloadID: leastGreatestNormalOverload}
+		for _, input := range nonNull {
+			if input != target {
+				resolution.castTypes = leastGreatestCastTypes(inputs, target)
+				break
+			}
+		}
+		return resolution, true
+	}
+
 	if allLeastGreatestJSON(nonNull) {
 		target := types.T_varchar.ToType()
 		return leastGreatestResolution{
@@ -126,6 +157,10 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return resolution, true
 	}
 
+	if resolution, ok, handled := resolveLeastGreatestMixedBool(inputs, nonNull); handled {
+		return resolution, ok
+	}
+
 	// Fast path: every non-NULL argument already shares the same type Oid. This
 	// preserves the original behavior (including any per-type scale handling) for
 	// the common case where no promotion is needed.
@@ -138,13 +173,6 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
-		if baseOid.IsArrayRelate() {
-			for _, input := range nonNull[1:] {
-				if input.Width != nonNull[0].Width {
-					return leastGreatestResolution{}, false
-				}
-			}
-		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}
@@ -156,6 +184,19 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 			}, true
 		}
 		return leastGreatestResolution{resultType: nonNull[0], overloadID: leastGreatestNormalOverload}, true
+	}
+
+	for _, input := range nonNull {
+		if input.Oid == types.T_uuid {
+			if target, _, ok := textStringCommonType(inputs); ok {
+				return leastGreatestResolution{
+					resultType: target,
+					castTypes:  leastGreatestCastTypes(inputs, target),
+					overloadID: leastGreatestNormalOverload,
+				}, true
+			}
+			break
+		}
 	}
 
 	if hasUnsupportedLeastGreatestMixedType(nonNull) {
@@ -215,6 +256,59 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 	}
 
 	return leastGreatestResolution{}, false
+}
+
+// resolveLeastGreatestMixedBool gives TRUE/FALSE MySQL's numeric meaning (1/0)
+// when BOOL arguments are mixed with other types: GREATEST(2, TRUE) is 2 and
+// GREATEST('a', TRUE) compares 'a' with '1'. The type is resolved as if every
+// BOOL argument were a small integer, and the BOOL arguments are then cast straight to
+// the type chosen for their position. handled is false when there is nothing
+// to do (no BOOL, or only BOOL arguments), so the caller keeps its own rules.
+func resolveLeastGreatestMixedBool(inputs, nonNull []types.Type) (resolution leastGreatestResolution, ok bool, handled bool) {
+	hasBool, hasOther, onlyUnsigned := false, false, true
+	for i := range nonNull {
+		switch {
+		case nonNull[i].Oid == types.T_bool:
+			hasBool = true
+		case nonNull[i].IsUInt() || nonNull[i].Oid == types.T_bit:
+			hasOther = true
+		default:
+			hasOther = true
+			onlyUnsigned = false
+		}
+	}
+	if !hasBool || !hasOther {
+		return leastGreatestResolution{}, false, false
+	}
+	// 0 and 1 fit the narrowest integer; staying unsigned next to unsigned
+	// operands keeps GREATEST(uint64_col, TRUE) out of the DECIMAL widening.
+	boolAs := types.T_int8.ToType()
+	if onlyUnsigned {
+		boolAs = types.T_uint8.ToType()
+	}
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bool {
+			normalized[i] = boolAs
+		}
+	}
+	resolution, ok = resolveLeastGreatestType(normalized)
+	if !ok {
+		return leastGreatestResolution{}, false, true
+	}
+	castTypes := resolution.castTypes
+	if len(castTypes) == 0 {
+		castTypes = leastGreatestCastTypes(inputs, resolution.resultType)
+	} else {
+		castTypes = append([]types.Type(nil), castTypes...)
+	}
+	for i := range inputs {
+		if inputs[i].Oid == types.T_bool && !IfTypeCastSupported(types.T_bool, castTypes[i].Oid) {
+			return leastGreatestResolution{}, false, true
+		}
+	}
+	resolution.castTypes = castTypes
+	return resolution, true, true
 }
 
 func leastGreatestCastTypes(inputs []types.Type, target types.Type) []types.Type {
@@ -325,8 +419,7 @@ func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 			// that intermediate width become LEAST/GREATEST's result metadata: the
 			// established string overload contract uses the conservative VARCHAR
 			// capacity when the argument widths need promotion.
-			target = types.T_varchar.ToType()
-			target.Charset = mergedCharset
+			target = types.MergeStringCollationMetadata(types.T_varchar.ToType(), inputs)
 			return target, true
 		}
 		for i := range inputs {
@@ -372,7 +465,6 @@ func hasUnsupportedLeastGreatestMixedType(inputs []types.Type) bool {
 	for i := range inputs {
 		switch inputs[i].Oid {
 		case types.T_interval, types.T_uuid, types.T_Rowid,
-			types.T_array_float32, types.T_array_float64,
 			types.T_geometry, types.T_geometry32, types.T_datalink:
 			return true
 		}
@@ -600,8 +692,7 @@ func leastGreatestMergedStringType(inputs []types.Type, targetOID types.T) types
 	// to every applicable argument; the return-type callback receives the same
 	// target. Keep this derivation shared by every mixed-type resolver because
 	// JSON and date-bearing inputs dispatch before the ordinary string path.
-	target.Charset = types.MergeStringCharset(inputs, target.Charset)
-	return target
+	return types.MergeStringCollationMetadata(target, inputs)
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set
@@ -1298,6 +1389,34 @@ func leastGreatestRestoreTemporalResultType(parameters []*vector.Vector, result 
 			result.GetResultVector().SetType(resolution.resultType)
 		}
 	}
+}
+
+func leastCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, true)
+}
+
+func greatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, false)
+}
+
+func leastGreatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList, least bool) error {
+	if len(parameters) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "collation-aware LEAST/GREATEST requires an argument")
+	}
+	paramType := leastGreatestParamType(parameters)
+	switch paramType.Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return moerr.NewNotSupported(proc.Ctx, "collation-aware LEAST/GREATEST requires a string domain")
+	}
+	compare := func(v1, v2 []byte) bool { return compareTextBytes(paramType, v1, v2) < 0 }
+	if !least {
+		compare = func(v1, v2 []byte) bool { return compareTextBytes(paramType, v1, v2) > 0 }
+	}
+	return leastGreatestFnVarlen(parameters, result, proc, length, selectList, compare)
 }
 
 func leastFn(parameters []*vector.Vector,

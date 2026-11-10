@@ -29,6 +29,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Exact percentile helpers provide reference values for the sketch tests.
+func interpolateNumeric[T numeric](lo, hi T, fraction *big.Rat) float64 {
+	var scratch percentileArithmeticScratch
+	return interpolateNumericWithScratch(&scratch, lo, hi, percentileFraction{
+		numerator: fraction.Num(), denominator: fraction.Denom(),
+	})
+}
+
+func percentileNumericVals[T numeric](values []T, p float64) float64 {
+	if len(values) == 0 || p < 0 || p > 1 {
+		return math.NaN()
+	}
+	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	if err != nil {
+		return math.NaN()
+	}
+	loRank, hiRank, frac := percentileRanks(uint64(len(values)), rat)
+	lo := selectKthNumeric(values, int(loRank))
+	hi := selectKthNumeric(values, int(hiRank))
+	return interpolateNumeric(lo, hi, frac)
+}
+
+func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32) (types.Decimal128, error) {
+	if len(values) == 0 || p < 0 || p > 1 {
+		return types.Decimal128{}, nil
+	}
+	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	loRank, hiRank, frac := percentileRanks(uint64(len(values)), rat)
+	compare := func(a, b types.Decimal64) int { return a.Compare(b) }
+	lo := FromD64ToD128(selectKthFunc(values, int(loRank), compare))
+	hi := FromD64ToD128(selectKthFunc(values, int(hiRank), compare))
+	return interpolateDecimal(lo, hi, frac, 1)
+}
+
 // --- percentile computation algorithm tests ---
 
 func TestPercentileNumericVals_Basic(t *testing.T) {
@@ -260,8 +297,43 @@ func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
 	}
 	oneGroup := measure(1)
 	manyGroups := measure(AggBatchSize)
-	require.LessOrEqual(t, manyGroups, oneGroup+1,
-		"percentile finalization arithmetic must not allocate per group")
+
+	// Each group runs a fixed THREE big.Int divisions: the rank QuoRem, the
+	// numeric-interpolation QuoRem (via rationalToFloat64), and the decimal
+	// QuoRem. The scratch reuses every big.Int it owns, so on go1.26 and earlier
+	// big.Int.QuoRem allocated nothing and the per-group floor was 0. Go 1.27's
+	// math/big no longer recycles the temporaries QuoRem allocates internally, so
+	// each division now costs a fixed number of allocations no caller-side reuse
+	// can remove. Measure that per-division floor at runtime so the bound tracks
+	// the toolchain, then assert the finalization allocates nothing per group
+	// BEYOND its three divisions -- a stray new(big.Int) or a fourth division in
+	// the group loop still fails.
+	const divisionsPerGroup = 3
+	floor := quoRemAllocFloor()
+	allowed := oneGroup + float64(AggBatchSize-1)*divisionsPerGroup*floor
+	require.LessOrEqualf(t, manyGroups, allowed+1,
+		"percentile finalization arithmetic must not allocate per group beyond its %d big.Int divisions (measured floor %.0f allocs/division)",
+		divisionsPerGroup, floor)
+}
+
+// quoRemAllocFloor reports how many heap allocations a single big.Int.QuoRem
+// performs on the running toolchain, with the quotient and remainder
+// preallocated and reused exactly as percentileArithmeticScratch does. It is 0
+// on go1.26 and earlier and 2 on go1.27 (which stopped recycling QuoRem's
+// internal division temporaries); measuring it keeps the per-group allocation
+// bound above toolchain-agnostic rather than assuming a zero floor.
+func quoRemAllocFloor() float64 {
+	numerator := new(big.Int).Lsh(big.NewInt(1), 256)
+	numerator.Add(numerator, big.NewInt(1))
+	denominator := new(big.Int).Lsh(big.NewInt(1), 128)
+	denominator.Add(denominator, big.NewInt(3))
+	var quotient, remainder big.Int
+	for range 4 {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	}
+	return testing.AllocsPerRun(100, func() {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	})
 }
 
 func TestPercentileArithmeticScratchExactRanks(t *testing.T) {

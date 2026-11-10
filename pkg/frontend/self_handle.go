@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -50,6 +51,20 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.SetDefaultRole:
+		err = handleSetDefaultRole(ses, execCtx, st)
+		if err != nil {
+			return
+		}
+	case *tree.SetPassword:
+		// SET PASSWORD is dispatched to the frontend (tree/stmt.go), but no
+		// password-rotation handler exists. Falling through the switch returns
+		// a nil error that respClientWhenSuccess turns into a false OK while
+		// the old credential keeps working. Reject every parsed form with a
+		// fixed not-supported error instead; the constant message never
+		// echoes the password, its subject, or the statement text.
+		return stats, moerr.NewNotSupported(execCtx.reqCtx,
+			"set password is not supported, use ALTER USER ... IDENTIFIED BY ... to change a password")
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
@@ -256,6 +271,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateExtension, *tree.LoadExtension:
+		return stats, moerr.NewNotSupported(execCtx.reqCtx, "extension statements are not supported in MatrixOne")
 	case *tree.CheckTableStmt:
 		ses.EnterFPrint(FPCheckTableStmt)
 		defer ses.ExitFPrint(FPCheckTableStmt)
@@ -540,6 +557,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			if err = handleGrantRole(ses, execCtx, &st.GrantRole); err != nil {
 				return
 			}
+			ses.refreshRewritePolicyAndValidatePrepared(execCtx.reqCtx)
 		case tree.GrantTypePrivilege:
 			if err = handleGrantPrivilege(ses, execCtx, &st.GrantPrivilege); err != nil {
 				return
@@ -554,6 +572,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			if err = handleRevokeRole(ses, execCtx, &st.RevokeRole); err != nil {
 				return
 			}
+			ses.refreshRewritePolicyAndValidatePrepared(execCtx.reqCtx)
 		case tree.RevokeTypePrivilege:
 			if err = handleRevokePrivilege(ses, execCtx, &st.RevokePrivilege); err != nil {
 				return

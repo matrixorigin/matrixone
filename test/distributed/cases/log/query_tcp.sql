@@ -72,11 +72,36 @@ CREATE  TABLE rawlog_withnull (
 `end_time` DATETIME,
 `duration` BIGINT UNSIGNED,
 `resource` TEXT);
-load data infile '$resources/external_table_file/rawlog_withnull.csv' into table rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 load data local infile '$resources/external_table_file/rawlog_withnull.csv' into table rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 
 -- @session
 -- END>
+
+-- Server-side LOAD uses the sys fixture, preserving the one-OK-packet oracle.
+create database if not exists bvt_query_tcp_server;
+CREATE TABLE bvt_query_tcp_server.rawlog_withnull (
+`raw_item` VARCHAR(1024),
+`node_uuid` VARCHAR(36),
+`node_type` VARCHAR(64),
+`span_id` VARCHAR(16),
+`statement_id` VARCHAR(36),
+`logger_name` VARCHAR(1024),
+`timestamp` DATETIME,
+`level` VARCHAR(1024),
+`caller` VARCHAR(1024),
+`message` TEXT,
+`extra` TEXT,
+`err_code` VARCHAR(1024),
+`error` TEXT,
+`stack` VARCHAR(4096),
+`span_name` VARCHAR(1024),
+`parent_span_id` VARCHAR(16),
+`start_time` DATETIME,
+`end_time` DATETIME,
+`duration` BIGINT UNSIGNED,
+`resource` TEXT);
+load data infile '$resources/external_table_file/rawlog_withnull.csv' into table bvt_query_tcp_server.rawlog_withnull fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+drop database bvt_query_tcp_server;
 
 -- check sql: more in ../statement_query_type/query_tcp.sql
 -- select statement,duration,stats,mo_cu(stats, duration, 'cpu') cpu, mo_cu(stats, duration, 'mem') mem, mo_cu(stats, duration, 'network') network from system.statement_info where statement_id in ('018e5a85-36ec-7649-b3f9-3ae73df2708d','018e5a86-2176-7b1e-ae45-b00aac9c7437');

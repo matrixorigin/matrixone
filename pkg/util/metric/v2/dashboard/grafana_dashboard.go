@@ -224,10 +224,11 @@ func (c *DashboardCreator) withMultiGraph(
 	queries []string,
 	legends []string,
 	axisOpts ...axis.Option) row.Option {
-	opts := []graph.Option{
+	opts := make([]graph.Option, 0, 3+len(queries))
+	opts = append(opts,
 		graph.Span(span),
 		graph.DataSource(c.dataSource),
-		graph.LeftYAxis(axisOpts...)}
+		graph.LeftYAxis(axisOpts...))
 
 	for i, query := range queries {
 		opts = append(opts,
@@ -253,11 +254,12 @@ func (c *DashboardCreator) withTimeSeries(
 	tsOpts ...timeseries.Option,
 ) row.Option {
 
-	opts := []timeseries.Option{
+	opts := make([]timeseries.Option, 0, 3+len(tsOpts)+len(queries))
+	opts = append(opts,
 		timeseries.Span(span),
 		timeseries.DataSource(c.dataSource),
 		timeseries.Tooltip(timeseries.AllSeries), // default show all metrics' value.
-	}
+	)
 	opts = append(opts, tsOpts...)
 
 	for i, query := range queries {
@@ -329,11 +331,12 @@ func (c *DashboardCreator) getPercentHist(
 func (c *DashboardCreator) getTimeSeries(
 	title string, pql []string, legend []string,
 	opts ...timeseries.Option) row.Option {
-	options := []timeseries.Option{
+	options := make([]timeseries.Option, 0, 3+len(opts)+len(pql))
+	options = append(options,
 		timeseries.DataSource(c.dataSource),
 		timeseries.FillOpacity(0),
 		timeseries.Height("300px"),
-	}
+	)
 	options = append(options, opts...)
 	for i := range pql {
 		options = append(options, timeseries.WithPrometheusTarget(
@@ -389,7 +392,7 @@ func (c *DashboardCreator) getMultiHistogram(
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
 
-		var queries []string
+		queries := make([]string, 0, len(metrics))
 		for _, metric := range metrics {
 			queries = append(queries,
 				fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval]))  by (le))", percent, metric))

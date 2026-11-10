@@ -134,6 +134,101 @@ func TestBinaryStringMixedLengthOrdAndPosition(t *testing.T) {
 	require.Equal(t, []int64{0, 2}, vector.MustFixedColNoTypeCheck[int64](instrResult.GetResultVector()))
 }
 
+func TestBinaryStringFieldComparison(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			// Preserve bytes, first-match ordering, and the distinct NULL rules
+			// for the subject and candidates.
+			subject := testutil.MakeVarlenaVector([][]byte{
+				{'a'}, {0xff}, {0}, {'a'}, {}, nil, {'a'},
+			}, []uint64{5}, oid.ToType(), mp)
+			defer subject.Free(mp)
+			first := testutil.MakeVarlenaVector([][]byte{
+				{'A'}, {0xfe}, {}, {'a', ' '}, {}, {'a'}, nil,
+			}, []uint64{6}, types.T_blob.ToType(), mp)
+			defer first.Free(mp)
+			second := testutil.MakeVarlenaVector([][]byte{
+				{'a'}, {0xff}, {0}, {'a'}, {}, {'a'}, {'a'},
+			}, nil, types.T_blob.ToType(), mp)
+			defer second.Free(mp)
+			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(subject.Length()))
+			require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, subject.Length(), nil))
+			require.Equal(t, []uint64{2, 2, 2, 2, 1, 0, 2}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+			for row := range subject.Length() {
+				require.False(t, result.GetResultVector().IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
+func TestBinaryStringFieldSubjectDomain(t *testing.T) {
+	binaryText := types.T_varchar.ToType()
+	binaryText.Charset = types.CharsetBinary
+	for _, tc := range []struct {
+		name    string
+		typ     types.Type
+		domains []types.RuntimeStringDomain
+		want    []uint64
+	}{
+		{name: "text with binary candidates", typ: types.T_varchar.ToType(), want: []uint64{1, 1}},
+		{name: "text with binary row", typ: types.T_varchar.ToType(),
+			domains: []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringBinary}, want: []uint64{1, 1}},
+		{name: "binary with text row", typ: types.T_blob.ToType(),
+			domains: []types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringInherit}, want: []uint64{2, 2}},
+		{name: "binary charset", typ: binaryText, want: []uint64{2, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			subject := makeBinaryStringTestInput(t, proc, tc.typ, [][]byte{{'a'}, {'a'}}, tc.domains)
+			defer subject.Free(mp)
+			first, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("A"), 2, mp)
+			require.NoError(t, err)
+			defer first.Free(mp)
+			second, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("a"), 2, mp)
+			require.NoError(t, err)
+			defer second.Free(mp)
+			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+			defer result.Free()
+			for range 2 {
+				require.NoError(t, result.PreExtendAndReset(2))
+				require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, 2, nil))
+				require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+			}
+			for row, domain := range tc.domains {
+				require.Equal(t, domain, subject.GetRuntimeStringDomainAt(row))
+			}
+		})
+	}
+}
+
+func TestBinaryStringFieldConstantAndSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	subject, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("a"), 2, mp)
+	require.NoError(t, err)
+	defer subject.Free(mp)
+	candidate := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{{'A'}, {'a'}}, nil)
+	defer candidate.Free(mp)
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2, nil))
+	require.Equal(t, []uint64{0, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}))
+	require.True(t, result.GetResultVector().IsNull(0))
+	require.Equal(t, uint64(1), vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector())[1])
+	require.NoError(t, result.PreExtendAndReset(0))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 0, nil))
+	require.Zero(t, result.GetResultVector().Length())
+}
+
 func TestBinaryStringMixedSlicingReverseAndCase(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
@@ -690,7 +785,8 @@ func TestByteLikeSegmentMatcherFindsLateValidAlignment(t *testing.T) {
 func TestByteLikeSegmentMatcherRejectsRepeatedAnchor(t *testing.T) {
 	mp := mpool.MustNewZero()
 	value := bytes.Repeat([]byte{'a'}, 32_000)
-	pattern := []byte{'%', 'a'}
+	pattern := make([]byte, 0, 16_002)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, 16_000-2)...)
 	pattern = append(pattern, 'b', '%')
 	matched, err := byteLike(pattern, value, nil, false, mp)
@@ -728,7 +824,7 @@ func TestByteLikeCompiledPatternUsesLinearAccountedStorage(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-compile-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-compile-limit", limited)
 	require.Error(t, newOpBuiltInRegexp().likeFn(
 		[]*vector.Vector{value, patternVector}, result, limitedProc, 1, nil))
 	require.Zero(t, limited.CurrNB())
@@ -913,7 +1009,8 @@ func makeDenseDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value
 
 func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
 	value = bytes.Repeat([]byte{'a'}, segmentLength)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, segmentLength+2)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'a', '%')
 	return value, pattern
@@ -1005,7 +1102,7 @@ func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) 
 	require.LessOrEqual(t, patternLength, types.MaxBlobLen)
 	require.Greater(t, directVerificationWork, budget.remaining)
 
-	const denseSegmentCount, denseSegmentLength = 32, 8_192
+	const denseSegmentCount, denseSegmentLength = 32, 4_352
 	denseValue, densePattern := makeDenseDirectMultiSegmentByteLike(denseSegmentCount, denseSegmentLength)
 	localCursor := 0
 	for segment := 0; segment < denseSegmentCount; segment++ {
@@ -1086,7 +1183,8 @@ func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
 func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
 	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, 2*size+3)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
 	pattern = append(pattern, 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
@@ -1146,7 +1244,7 @@ func TestByteLikeSparseEqualFrequencyAdversary(t *testing.T) {
 }
 
 func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
-	const segmentLength = 1_000
+	const segmentLength = 8_192
 	pattern := append([]byte{'a'}, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'b')
 	value := bytes.Repeat([]byte{'a'}, 20_000)
@@ -1159,8 +1257,13 @@ func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, used)
 	require.Equal(t, -1, matchedAt)
-	require.Less(t, cap(compiled.convolutionScratch), 100_000,
-		"scratch must follow one segment-sized block, not the full remaining value")
+	require.Equal(t, 401_408, cap(compiled.convolutionScratch),
+		"three 32768-element transforms and one 8192-candidate block")
+	value[len(value)-1] = 'b'
+	matchedAt, used, err = compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, len(value)-segmentLength, matchedAt)
 }
 
 func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {
@@ -1231,7 +1334,7 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-convolution-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-convolution-limit", limited)
 	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
 	require.Error(t, err)
 	require.Zero(t, limited.CurrNB())
@@ -1400,7 +1503,8 @@ func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
 	for _, size := range []int{2_000, 4_000, 8_000, 16_000, 32_000, 64_000} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
 			value := bytes.Repeat([]byte{'a'}, size)
-			pattern := []byte{'%', 'a'}
+			pattern := make([]byte, 0, size/2+2)
+			pattern = append(pattern, '%', 'a')
 			pattern = append(pattern, bytes.Repeat([]byte{'_'}, size/2-2)...)
 			pattern = append(pattern, 'b', '%')
 			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())

@@ -1,0 +1,10 @@
+# github.com/matrixorigin/matrixone/pkg/sql/plan.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+ok  	github.com/matrixorigin/matrixone/pkg/sql/plan	20.275s
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+ok  	github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service	0.981s

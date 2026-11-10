@@ -46,9 +46,17 @@ type LLMClient interface {
 func NewLLMClient(server string, addr string, model string, options string) (LLMClient, error) {
 	switch server {
 	case MockServer:
-		return NewMockClient(model, options)
+		client, err := NewMockClient(model, options)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
 	case OllamaServer:
-		return NewOllamaClient(addr, model, options)
+		client, err := NewOllamaClient(addr, model, options)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
 	default:
 		return nil, moerr.NewInvalidInputf(context.TODO(), "invalid server: %s", server)
 	}

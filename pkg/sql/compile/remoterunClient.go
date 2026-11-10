@@ -30,10 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -41,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -84,14 +88,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	var requiresBoundProtocol bool
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
+	var requiredProtocol int64
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		&requiresBoundProtocol,
+		&requiredProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -118,13 +122,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
+	sender.odkuGeneration = s.Proc.ODKUResultGeneration()
 	// Capture the execution-attempt sink, rather than looking it up from proc
 	// when the terminal message arrives. Retry/reuse can replace proc.WarningSink
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if requiresBoundProtocol {
-		if err = sender.confirmProtocolOnStream(defines.MORPCVersion96); err != nil {
+	if requiredProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredProtocol); err != nil {
 			return sender, err
 		}
 	}
@@ -251,16 +256,16 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+	return prepareRemoteRunSendingDataWithProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
 }
 
-func prepareRemoteRunSendingDataWithVectorProtocol(
+func prepareRemoteRunSendingDataWithProtocol(
 	sqlStr string,
 	s *Scope,
 	proc *process.Process,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	requiresBoundProtocol *bool,
+	requiredProtocol *int64,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
@@ -289,8 +294,19 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiresBoundProtocol); err != nil {
+	if scopeData, err = encodeRemoteScopeWithProtocol(encodedScope, proc, requiredProtocol); err != nil {
 		return nil, false, nil, false, err
+	}
+
+	// Only producers (including forwarded producer subtrees) need an ordinal
+	// range. Ordinary nested remote reads must not consume a receiver's bounded
+	// range and prevent the next sibling pipeline from being sent.
+	var odkuOrdinalBase uint64
+	if remoteScopeProducesODKUOrdinals(encodedScope) {
+		odkuOrdinalBase, err = proc.NextODKURemoteOrdinalBase()
+		if err != nil {
+			return nil, false, nil, false, err
+		}
 	}
 
 	// Encode the Process related information.
@@ -299,11 +315,36 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		odkuOrdinalBase,
 	); err != nil {
 		return nil, false, nil, false, err
 	}
 
 	return scopeData, withoutOutput, processData, folded, nil
+}
+
+// PRE_INSERT owns ordinal generation; DEDUP_JOIN only consumes provenance.
+// Inspect all operator children and scope descendants, not just the remote root.
+func remoteScopeProducesODKUOrdinals(scope *Scope) bool {
+	if scope == nil {
+		return false
+	}
+	produces := false
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if pre, ok := op.(*preinsert.PreInsert); ok && pre.TrackODKUResult {
+			produces = true
+		}
+		return nil
+	})
+	if produces {
+		return true
+	}
+	for _, child := range scope.PreScopes {
+		if remoteScopeProducesODKUOrdinals(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -329,6 +370,111 @@ func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSen
 	return receiveMessageFromCnServerIfOnlyRun(s, sender)
 }
 
+// adoptRelayedS3ObjectsAtIntake performs the recording side's r6
+// ownership adoption of the S3 objects a remote fragment relayed into
+// this run's stream (issue #25590 round-22 review, finding H1,
+// hardened by the round-23 review): every decoded flush-info batch's
+// object names join the recording workspace's per-object reservations
+// HERE — before the batch is forwarded into the local pipeline (whose
+// downstream may already have stopped and discard it) and before the
+// ack releases the fragment's credit — so an enumerable cleanup owner
+// exists from the moment the bytes leave the wire, strictly earlier
+// than the fragment's own terminal settlement. Admission uses the SAME
+// per-object reservation the writers use (round-22 review, finding
+// H2): a saturated recording engine refuses the admission now, the
+// refusal fails the transport and with it the whole run — the refused
+// batch is never acknowledged, so the fragment's settlement behind its
+// batch-flow drain observes the failing query's own terminal
+// (cancellation or stop) and keeps the non-transferred rollback: every
+// still-local name stays reachable and the fragment deletes it. The
+// failure-side owner is the fragment itself in both stream modes
+// (issue #25590 round-52 review, design r17). A received obligation is
+// never discarded without an enumerable owner — refusals can never
+// pile names onto a bound nobody releases.
+//
+// r23 producer provenance (round-23 review, finding 1): rows are a
+// candidate for adoption only after scopeRemoteObjectAdmission finds
+// a REGISTERED remote-persistence producer in this scope's own
+// operator tree — the plan the coordinator itself built. Ordinary
+// query rows never reach any recognizer, whatever their column shape;
+// a crafted ordinary result naming an existing committed file books
+// nothing anywhere. Inside a provenance-admitted stream, finding 3's
+// registry dispatches the three layout classifiers (multi_update's
+// relay action rows, the standalone insert's block-info results, the
+// standalone delete's remote rows), and a classifier that recognizes
+// its producer's layout must decode every ownership row before the
+// ack — undecodable, incomplete metadata fails the run and keeps the
+// fragment's local owner.
+func adoptRelayedS3ObjectsAtIntake(
+	s *Scope, bat *batch.Batch,
+) error {
+	adm := scopeRemoteObjectAdmission(s)
+	if !adm.any() {
+		return nil
+	}
+	mp := s.Proc.Mp()
+	matched := false
+	var names []string
+	if adm.insertS3 {
+		rowNames, ok, err := insert.TryExtractS3InsertObjectNames(bat)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if adm.deleteRemote {
+		rowNames, ok, err := deletion.TryExtractRemoteDeleteObjectNames(bat, mp)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if adm.multiUpdateS3 {
+		rowNames, ok, err := multi_update.TryExtractRelayS3InfoObjectNames(bat, mp)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if !matched || len(names) == 0 {
+		return nil
+	}
+	txnOp := s.Proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return nil
+	}
+	rtx, isDisttae := ws.(*disttae.Transaction)
+	if !isDisttae {
+		return nil
+	}
+	return rtx.AdoptRemoteTransferredObjectNames(names)
+}
+
+// AdoptRemoteRunIntakeMetadata is the transport intake's exported
+// contract (issue #25590 round-23 review): the receive loops call it
+// for every decoded batch — before the ack releases the fragment's
+// credit — and the transport regression calls the same path to prove a
+// stream without a registered persistence producer never turns rows
+// into cleanup obligations.
+func AdoptRemoteRunIntakeMetadata(
+	s *Scope, bat *batch.Batch,
+) error {
+	return adoptRelayedS3ObjectsAtIntake(s, bat)
+}
+
 func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient) error {
 	var bat *batch.Batch
 	var end bool
@@ -342,6 +488,13 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): even a
+		// stream this loop only drains discards the decoded batch, so
+		// the relayed object names need their recording-side owner HERE.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 		bat.Clean(mp)
@@ -365,6 +518,14 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): adopt the
+		// relayed object names before forwarding — the local receiver
+		// below may already have stopped and discard this batch, and the
+		// ack that follows releases the fragment's credit.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 		connectorAnalyze.Network(bat)
@@ -413,6 +574,14 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): adopt the
+		// relayed object names before the dispatch re-emits the batch —
+		// its receivers may already have stopped, and the ack that
+		// follows releases the fragment's credit.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 
@@ -482,8 +651,9 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *AnalyzeModule
-	proc *process.Process
+	anal           *AnalyzeModule
+	proc           *process.Process
+	odkuGeneration uint64
 
 	// warningSink is the captured diagnostic destination on the initiating
 	// process for this execution attempt. Remote terminal warnings are applied
@@ -508,7 +678,6 @@ type messageSenderOnClient struct {
 	// close must still call Stream.Close.
 	receiveClosed           bool
 	reuseEligible           bool
-	terminalNegotiated      bool
 	stopResponseTried       bool
 	expectedEnd             pipeline.Method
 	reportingRequestStarted bool
@@ -516,12 +685,6 @@ type messageSenderOnClient struct {
 	closeOnce               sync.Once
 	requestFinishAck        bool
 	pendingBatchAck         uint64
-	// allowCleanupCancellation is set after successful local cleanup. Pipeline
-	// and query contexts may be intentionally cancelled by that cleanup; FIN
-	// then runs on its own bounded context. Cancellation before this transition
-	// still poisons reuse.
-	allowCleanupCancellation bool
-
 	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
 	gaugeDecOnce sync.Once
 	terminalMu   sync.Mutex
@@ -620,7 +783,8 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 }
 
 // The capability query uses a different RPC connection. Confirm on the stream
-// that will carry the pipeline so a replacement old CN cannot run partition zero.
+// that will carry the pipeline so a replacement old CN cannot execute a newer
+// contract.
 func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
 	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
 	defer cancel()
@@ -649,7 +813,7 @@ func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) erro
 			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
 			response.GetSid() != pipeline.Status_Last ||
 			response.GetProtocolVersion() < minimum {
-			return moerr.NewNotSupportedNoCtx("remote pipeline stream does not support vector partition zero")
+			return moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
 		}
 		return nil
 	}
@@ -710,9 +874,7 @@ func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
 	sender.safeToClose = false
 	sender.receiveClosed = false
 	sender.reuseEligible = false
-	sender.terminalNegotiated = false
 	sender.stopResponseTried = false
-	sender.allowCleanupCancellation = false
 	sender.expectedEnd = method
 }
 
@@ -722,26 +884,36 @@ func (sender *messageSenderOnClient) markReceiveClosed() {
 	sender.safeToClose = true
 	sender.receiveClosed = true
 	sender.reuseEligible = false
-	sender.terminalNegotiated = false
 }
 
-func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful bool) {
+func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful, valid bool) {
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()
 	sender.safeToClose = true
-	sender.terminalNegotiated = message.GetCmd() == sender.expectedEnd &&
+	sender.reuseEligible = successful && valid && message.GetCmd() == sender.expectedEnd &&
 		message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
-	sender.reuseEligible = sender.terminalNegotiated &&
-		(successful || sender.allowCleanupCancellation)
 }
 
-func (sender *messageSenderOnClient) prepareForLocalCleanup() {
-	sender.stateMu.Lock()
-	defer sender.stateMu.Unlock()
-	sender.allowCleanupCancellation = true
-	if sender.terminalNegotiated {
-		sender.reuseEligible = true
+// finishRemoteTerminal arbitrates both normal and StopSending completion.
+// Execution failures keep their identity even when auxiliary terminal data is
+// malformed. Invalid data cannot authorize backend reuse during later cleanup.
+func (sender *messageSenderOnClient) finishRemoteTerminal(message *pipeline.Message) error {
+	analysisErr := sender.dealRemoteTerminalWithResult(message.GetAnalyse(), len(message.GetErr()) == 0 && (sender.ctx == nil || sender.ctx.Err() == nil || context.Cause(sender.ctx) == process.ErrPipelineStopped))
+	var remoteErr error
+	valid := analysisErr == nil
+	if data := message.GetErr(); len(data) > 0 {
+		decoded := new(moerr.Error)
+		if remoteErr = decoded.UnmarshalBinary(data); remoteErr != nil {
+			valid = false
+		} else {
+			remoteErr = decoded
+		}
 	}
+	sender.markTerminal(message, remoteErr == nil && valid, valid)
+	if remoteErr != nil {
+		return process.MarkPipelineFailure(remoteErr)
+	}
+	return analysisErr
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
@@ -785,18 +957,9 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			}
 			batchSequence = sequence
 		}
-		if m.IsEndMessage() {
-			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
-				return nil, false, err
-			}
-		}
-		if info, get := m.TryToGetMoErr(); get {
-			sender.markTerminal(m, false)
-			return nil, false, info
-		}
-		if m.IsEndMessage() {
-			sender.markTerminal(m, true)
-			return nil, true, nil
+		if m.IsEndMessage() || len(m.GetErr()) > 0 {
+			err = sender.finishRemoteTerminal(m)
+			return nil, err == nil, err
 		}
 
 		if dataBuffer == nil {
@@ -855,7 +1018,7 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
 		return moerr.NewRPCTimeout(sender.ctx)
 	}
-	return moerr.NewQueryInterrupted(sender.ctx)
+	return sender.ctx.Err()
 }
 
 func forwardRemoteBatchWithContext(
@@ -892,7 +1055,7 @@ func forwardRemoteBatchWithContext(
 // its terminal response. The terminal error remains part of execution state:
 // cancellation may have won the caller's receive select immediately before the
 // remote pipeline reported its actual failure.
-func (sender *messageSenderOnClient) waitingTheStopResponse() error {
+func (sender *messageSenderOnClient) waitingTheStopResponse(parentCtx context.Context) error {
 	sender.stateMu.Lock()
 	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
 		sender.stateMu.Unlock()
@@ -903,10 +1066,13 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	// second full timeout to the same statement.
 	sender.stopResponseTried = true
 	sender.stateMu.Unlock()
+	if err := parentCtx.Err(); err != nil {
+		return err
+	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
 	maxWaitingTime, cancel := context.WithTimeoutCause(
-		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
+		parentCtx, pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.
@@ -919,7 +1085,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 		// The handshake owns an independent live context. A cancellation-shaped
 		// Send result therefore describes a closed transport, not successful
 		// pipeline cancellation, and must not be suppressible by RemoteRun.
-		if isScopeCancellationError(err) {
+		if process.IsPipelineCancellationError(err) {
 			return moerr.NewStreamClosedNoCtx()
 		}
 		return err
@@ -937,18 +1103,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				_ = sender.dealRemoteTerminal(message.GetAnalyse())
-				if terminalErr, ok := message.TryToGetMoErr(); ok {
-					sender.markTerminal(message, false)
-					return terminalErr
-				}
-				// StopSending is also a clean teardown when the original server
-				// worker answers with its negotiated terminal response. The later FIN
-				// still waits for the same server cleanup barrier. Unnegotiated or
-				// mismatched terminal responses remain poisoned.
-				sender.markTerminal(message, true)
-				// in fact, we should deal the cost analysis information here.
-				return nil
+				return sender.finishRemoteTerminal(message)
 			}
 
 		case <-maxWaitingTime.Done():
@@ -966,42 +1121,45 @@ func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
 	return message
 }
 
-func (sender *messageSenderOnClient) finishStreamForReuse() bool {
+func (sender *messageSenderOnClient) finishStreamForReuse(cleanupCtx context.Context) bool {
+	if cleanupCtx.Err() != nil {
+		return false
+	}
 	var senderDone <-chan struct{}
-	sender.stateMu.Lock()
-	allowCleanupCancellation := sender.allowCleanupCancellation
-	sender.stateMu.Unlock()
-	cancelCtx := sender.ctx
-	if allowCleanupCancellation {
-		cancelCtx = nil
-	}
-	if cancelCtx != nil && cancelCtx.Err() != nil {
-		return false
-	}
-	if cancelCtx != nil {
-		senderDone = cancelCtx.Done()
-	}
-	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
-	defer cancel()
-	streamID := sender.streamSender.ID()
-	if err := sender.streamSender.Send(finishCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
-		return false
-	}
-	select {
-	case value, ok := <-sender.receiveCh:
-		if !ok || value == nil {
-			sender.markReceiveClosed()
+	if sender.ctx != nil {
+		if sender.ctx.Err() != nil && context.Cause(sender.ctx) != process.ErrPipelineStopped {
 			return false
 		}
-		message, ok := value.(*pipeline.Message)
-		return ok && message.GetID() == streamID &&
-			message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
-			message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
-			message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
-	case <-finishCtx.Done():
+		senderDone = sender.ctx.Done()
+	}
+	streamID := sender.streamSender.ID()
+	if err := sender.streamSender.Send(cleanupCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
 		return false
-	case <-senderDone:
-		return false
+	}
+	for {
+		select {
+		case value, ok := <-sender.receiveCh:
+			if !ok || value == nil {
+				sender.markReceiveClosed()
+				return false
+			}
+			if cleanupCtx.Err() != nil || (sender.ctx != nil && sender.ctx.Err() != nil &&
+				context.Cause(sender.ctx) != process.ErrPipelineStopped) {
+				return false
+			}
+			message, ok := value.(*pipeline.Message)
+			return ok && message.GetID() == streamID &&
+				message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
+				message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
+				message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+		case <-cleanupCtx.Done():
+			return false
+		case <-senderDone:
+			if context.Cause(sender.ctx) != process.ErrPipelineStopped {
+				return false
+			}
+			senderDone = nil
+		}
 	}
 }
 
@@ -1021,6 +1179,10 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 }
 
 func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
+	return sender.dealRemoteTerminalWithResult(data, true)
+}
+
+func (sender *messageSenderOnClient) dealRemoteTerminalWithResult(data []byte, publishODKU bool) error {
 	sender.terminalMu.Lock()
 	defer sender.terminalMu.Unlock()
 	if sender.terminalSeen {
@@ -1037,6 +1199,19 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	}
+	if publishODKU && sender.proc != nil && envelope.ODKUResult != nil {
+		sender.proc.MergeODKUResultSummaryAtGeneration(process.ODKUResultSummary{
+			HasGenerated:          envelope.ODKUResult.HasGenerated,
+			FirstGeneratedOrdinal: envelope.ODKUResult.FirstGeneratedOrdinal,
+			FirstGeneratedID:      envelope.ODKUResult.FirstGeneratedID,
+			HasAction:             envelope.ODKUResult.HasAction,
+			LastActionOrdinal:     envelope.ODKUResult.LastActionOrdinal,
+			LastActionID:          envelope.ODKUResult.LastActionID,
+			HasSuccessfulAction:   envelope.ODKUResult.HasSuccessfulAction,
+			LastSuccessfulOrdinal: envelope.ODKUResult.LastSuccessfulOrdinal,
+			LastSuccessfulID:      envelope.ODKUResult.LastSuccessfulID,
+		}, sender.odkuGeneration)
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
@@ -1091,17 +1266,17 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	return nil
 }
 
-func (sender *messageSenderOnClient) close() {
+func (sender *messageSenderOnClient) close(cleanupCtx context.Context) {
 	sender.closeOnce.Do(func() {
 		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-		_ = sender.waitingTheStopResponse()
+		_ = sender.waitingTheStopResponse(cleanupCtx)
 		sender.markMissingGroupConcatTerminal()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
-		if !receiveClosed && reuseEligible && sender.finishStreamForReuse() {
+		if !receiveClosed && reuseEligible && sender.finishStreamForReuse(cleanupCtx) {
 			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
 			if sender.ctxCancel != nil {
 				sender.ctxCancel()

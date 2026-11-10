@@ -22,7 +22,7 @@ import (
 )
 
 func TestInRangeAcceptsPromotedDecimalConstants(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select in_range(c, 9999999999999999999999999999999999999.9,
 			99999999999999999999999999999999999999, 0)
 		from (select cast(1 as decimal(38,0)) as c) t`)
@@ -52,7 +52,7 @@ func TestInRangeStillRejectsNonconstantBounds(t *testing.T) {
 		"select in_range(c, cast(rand() as decimal(38,0)), 15.0, 0) from (select cast(1 as decimal(38,0)) c) t",
 		"select in_range(c, 0.0, cast(rand() as decimal(38,0)), 0) from (select cast(1 as decimal(38,0)) c) t",
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.ErrorContains(t, err, "argument of in_range must be constant", sql)
 	}
 }

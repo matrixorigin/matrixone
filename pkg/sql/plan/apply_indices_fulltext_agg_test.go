@@ -76,7 +76,7 @@ func TestFullTextAggMatchRewrittenToScore(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 			ctx := NewBindContext(builder, nil)
 
 			matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -127,7 +127,7 @@ func TestFullTextAggMatchRewrittenToScore(t *testing.T) {
 // #29065: PROJECT -> FILTER(HAVING max(match)>0 as colref) -> AGG(AggList max(match)) -> SCAN(no where).
 // The membership-implying HAVING must let the aggregate MATCH drive the index scan.
 func TestFullTextAggHavingDrivesIndex(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	tableDef := makeFullTextJoinTestTableDef("ft", true)
@@ -174,7 +174,7 @@ func TestFullTextAggHavingDrivesIndex(t *testing.T) {
 // query must NOT be driven -- the raw match survives (left to 20105) rather than returning wrong
 // counts for a multi-row group.
 func TestFullTextAggHavingCoAggregateNotDriven(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	tableDef := makeFullTextJoinTestTableDef("ft", true)
@@ -282,7 +282,7 @@ func TestFullTextDriverFuncs(t *testing.T) {
 // exercising getFullTextMatchFromAggHaving / aggOutputInvariantToMatcherFilter directly.
 func aggHavingFixture(t *testing.T) (*QueryBuilder, *planpb.TableDef, int32, *planpb.Node) {
 	t.Helper()
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	tableDef := makeFullTextJoinTestTableDef("ft", true)
 	registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
@@ -463,7 +463,7 @@ func TestFullTextAggHavingMultipleDistinctMatchesNotDriven(t *testing.T) {
 // not harvest it -- driving the index below the AGG from a post-window predicate would drop groups
 // before ROW_NUMBER etc. are computed and silently shift their output.
 func TestResolveFullTextIndexPathHavingBarrier(t *testing.T) {
-	newFilter := func(builder *QueryBuilder, ctx *BindContext, child int32) int32 {
+	newFilter := func(t testing.TB, builder *QueryBuilder, ctx *BindContext, child int32) int32 {
 		ftyp := types.T_float32.ToType()
 		aggCol := &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
 		pred, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*planpb.Expr{aggCol, makePlan2Float64ConstExprWithType(0)})
@@ -471,8 +471,8 @@ func TestResolveFullTextIndexPathHavingBarrier(t *testing.T) {
 		return builder.appendNode(&planpb.Node{NodeType: planpb.Node_FILTER, Children: []int32{child}, FilterList: []*planpb.Expr{pred}}, ctx)
 	}
 	// build PROJECT over `mid(agg over scan)`, where mid() inserts the middle nodes above the AGG.
-	buildPath := func(mid func(b *QueryBuilder, c *BindContext, aggID int32) int32) *fullTextIndexPath {
-		builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	buildPath := func(t testing.TB, mid func(b *QueryBuilder, c *BindContext, aggID int32) int32) *fullTextIndexPath {
+		builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 		ctx := NewBindContext(builder, nil)
 		tableDef := makeFullTextJoinTestTableDef("ft", true)
 		registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
@@ -501,32 +501,32 @@ func TestResolveFullTextIndexPathHavingBarrier(t *testing.T) {
 	}
 
 	t.Run("filter directly above agg is HAVING", func(t *testing.T) {
-		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 { return newFilter(b, c, aggID) })
+		path := buildPath(t, func(b *QueryBuilder, c *BindContext, aggID int32) int32 { return newFilter(t, b, c, aggID) })
 		require.NotNil(t, path)
 		require.NotNil(t, path.havingNode, "a FILTER adjacent to the AGG is its HAVING")
 	})
 
 	t.Run("filter above WINDOW is not HAVING", func(t *testing.T) {
-		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+		path := buildPath(t, func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
 			win := b.appendNode(&planpb.Node{NodeType: planpb.Node_WINDOW, Children: []int32{aggID}, BindingTags: []int32{b.genNewBindTag()}}, c)
-			return newFilter(b, c, win)
+			return newFilter(t, b, c, win)
 		})
 		require.NotNil(t, path)
 		require.Nil(t, path.havingNode, "a WINDOW between the FILTER and the AGG disqualifies the FILTER")
 	})
 
 	t.Run("filter above a LIMIT node is not HAVING", func(t *testing.T) {
-		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+		path := buildPath(t, func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
 			lim := b.appendNode(&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{aggID}, Limit: makePlan2Int64ConstExprWithType(5), BindingTags: []int32{b.genNewBindTag()}}, c)
-			return newFilter(b, c, lim)
+			return newFilter(t, b, c, lim)
 		})
 		require.NotNil(t, path)
 		require.Nil(t, path.havingNode, "a LIMIT between the FILTER and the AGG disqualifies the FILTER")
 	})
 
 	t.Run("real HAVING below a WINDOW is still found", func(t *testing.T) {
-		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
-			filt := newFilter(b, c, aggID)
+		path := buildPath(t, func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+			filt := newFilter(t, b, c, aggID)
 			return b.appendNode(&planpb.Node{NodeType: planpb.Node_WINDOW, Children: []int32{filt}, BindingTags: []int32{b.genNewBindTag()}}, c)
 		})
 		require.NotNil(t, path)
@@ -627,7 +627,7 @@ func TestWrappedMatchDropSafe(t *testing.T) {
 // (#28974). Plan shape PROJECT -> WINDOW -> SCAN(match filter); after applyIndices no fulltext_match
 // may remain anywhere and the index scan must exist.
 func TestFullTextWindowMatchRewritten(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
@@ -670,7 +670,7 @@ func TestFullTextWindowMatchRewritten(t *testing.T) {
 // SCAN(match filter): after applyIndices no fulltext_match may remain, and exactly one index scan
 // serves both the scan's WHERE MATCH and the post-window copy.
 func TestFullTextWindowFilterListMatchRewritten(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -732,7 +732,7 @@ func TestFullTextWindowFilterListMatchRewritten(t *testing.T) {
 // execution as 20105. Plan shape PROJECT -> FILTER(match > 0) -> WINDOW -> SCAN(match filter): after
 // applyIndices no fulltext_match may remain, and exactly one index scan serves both copies.
 func TestFullTextOuterFilterAboveWindowMatchRewritten(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -800,7 +800,7 @@ func ftWindowSpecWithMatch(match *planpb.Expr) *planpb.Expr {
 // PROJECT -> WINDOW -> PARTITION -> SCAN(match filter): after applyIndices no fulltext_match may
 // remain, the index scan must exist, and the PARTITION node must still be in the plan.
 func TestFullTextWindowPartitionMatchRewritten(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -849,7 +849,7 @@ func TestFullTextWindowPartitionMatchRewritten(t *testing.T) {
 // fulltext_match survives to 20105 despite the index scan existing (#28974 P2). Plan shape
 // PROJECT(projects match) -> WINDOW -> SCAN(match filter).
 func TestFullTextWindowProjectedMatchPropagated(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -889,7 +889,7 @@ func TestFullTextWindowProjectedMatchPropagated(t *testing.T) {
 // the scan's WHERE MATCH); the outer window's own spec must then be resolved against the published
 // served scores, or its fulltext_match survives to 20105 (#28974 P2 subsequent windows).
 func TestFullTextWindowStackedSpecMatchPropagated(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
@@ -977,7 +977,7 @@ func TestReplaceScoreFnInExprByTraversesWindowSpec(t *testing.T) {
 // binder can place between a WINDOW and its base scan, stop at a scan that carries indexes, and
 // refuse to descend a WINDOW child (stacked windows are handled innermost-first) or a JOIN.
 func TestResolveScanNodeUnderWindow(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	scanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
 
@@ -1035,7 +1035,7 @@ func TestExprCallsFuncTraversesWindowSpec(t *testing.T) {
 // sibling Node_PARTITION's OrderBy (appendWindowNode builds both). The WINDOW rewrite must resolve
 // BOTH copies to the served score, or the un-rewritten copy reaches execution as 20105 (#28974 P2).
 func TestFullTextWindowPartitionByMatchServed(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)

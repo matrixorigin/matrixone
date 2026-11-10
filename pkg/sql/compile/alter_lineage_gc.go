@@ -21,11 +21,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -38,6 +40,22 @@ const (
 	dataBranchLineageGCLockWaitTimeout = time.Second
 	dataBranchLineageGCTimeBudget      = time.Minute
 )
+
+type lineageGCAppliedFrontier interface {
+	advanceLineageGCAppliedSnapshot(context.Context, client.TxnOperator) error
+}
+
+func (s *sqlExecutor) advanceLineageGCAppliedSnapshot(ctx context.Context, op client.TxnOperator) error {
+	barrier, ok := getLogtailReadBarrier(s.eng)
+	if !ok || op == nil || op.GetWorkspace() == nil {
+		return moerr.NewInternalError(ctx, "lineage GC applied frontier is unavailable")
+	}
+	frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+	if err != nil {
+		return err
+	}
+	return op.GetWorkspace().AdvanceSnapshot(ctx, frontier)
+}
 
 func DataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
@@ -66,7 +84,7 @@ func dataBranchLineageGCExecutorWithBudget(
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
 		}
-		// One invocation performs one fixed-SI discovery and at most one bounded
+		// One invocation performs one provisional RC discovery and at most one bounded
 		// mutation batch. This removes the former 16x full-catalog rescan while
 		// retaining durable progress across scheduled invocations. The local
 		// budget bounds discovery CPU/I/O and task-worker occupancy; its expiry
@@ -124,31 +142,88 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 		query := func(sql string) (executor.Result, error) {
 			return txn.Exec(sql, statementOpts)
 		}
-
-		// Read a transactionally consistent candidate plan without owning the
-		// foreground lifecycle gate. The gate write below is the validation
-		// point: explicit snapshot isolation keeps this discovery snapshot fixed,
-		// and every owner writer writes the same row before catalog mutation. A
-		// writer that crossed after discovery therefore makes this transaction
-		// conflict at the gate or commit instead of applying a stale plan.
-		dag, err := loadAlterDataBranchDAGWithQuery(query, false)
-		if err != nil || len(dag.Info) == 0 {
-			return err
+		loadPlan := func() (databranchutils.AlterLineageCompactionPlan, error) {
+			dag, err := loadAlterDataBranchDAGWithQuery(query, false)
+			if err != nil || len(dag.Info) == 0 {
+				return databranchutils.AlterLineageCompactionPlan{}, err
+			}
+			edges, err := loadAlterDataBranchLineageEdgesWithQuery(query)
+			if err != nil {
+				return databranchutils.AlterLineageCompactionPlan{}, err
+			}
+			sources, err := loadAlterDataBranchHistoricalSourcesWithQuery(query, now)
+			if err != nil {
+				return databranchutils.AlterLineageCompactionPlan{}, err
+			}
+			return databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources), nil
 		}
-		edges, err := loadAlterDataBranchLineageEdgesWithQuery(query)
+		// The ungated pass is only an empty-work filter. Local RC Snapshot/PITR
+		// publishers do not write G, so a fixed-SI gate write cannot validate
+		// this plan after a publisher commits.
+		plan, err := loadPlan()
 		if err != nil {
 			return err
 		}
-		sources, err := loadAlterDataBranchHistoricalSourcesWithQuery(query, now)
-		if err != nil {
-			return err
-		}
-		plan := databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources)
 		if len(plan.TableIDs) == 0 {
 			return nil
 		}
 		if batchSize <= 0 {
 			return moerr.NewInternalErrorNoCtx("invalid data branch lineage GC batch size")
+		}
+		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
+		readRegistryID := func() (uint64, error) {
+			res, err := txn.Exec(catalog.FeatureRegistryCatalogSharedGateSQL, gateOpts)
+			if err != nil {
+				return 0, err
+			}
+			defer res.Close()
+			var id uint64
+			count := 0
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 {
+					id = vector.MustFixedColNoTypeCheck[uint64](cols[0])[0]
+					count += rows
+				}
+				return true
+			})
+			if count != 1 || id == 0 {
+				return 0, moerr.NewInternalError(ctx, "missing lineage GC registry identity")
+			}
+			return id, nil
+		}
+		registryID, err := readRegistryID()
+		if err != nil {
+			return err
+		}
+		gate, err := txn.Exec(catalog.SnapshotLifecycleGateSQL, gateOpts)
+		if err != nil {
+			return err
+		}
+		gateRows := 0
+		gate.ReadRows(func(rows int, _ []*vector.Vector) bool { gateRows += rows; return true })
+		gate.Close()
+		if gateRows != 1 {
+			return moerr.NewInternalError(ctx, "missing SNAPSHOT lifecycle registry row")
+		}
+		frontier, ok := sqlExecutor.(lineageGCAppliedFrontier)
+		if !ok {
+			return moerr.NewInternalError(ctx, "lineage GC applied frontier is unavailable")
+		}
+		if err = frontier.advanceLineageGCAppliedSnapshot(ctx, txn.Txn()); err != nil {
+			return err
+		}
+		currentID, err := readRegistryID()
+		if err != nil {
+			return err
+		}
+		if currentID != registryID {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		// Recompute under C/G with an applied RC frontier. This is the only
+		// plan that may drive deletion; all owner publishers are excluded now.
+		plan, err = loadPlan()
+		if err != nil || len(plan.TableIDs) == 0 {
+			return err
 		}
 		if len(plan.TableIDs) > batchSize {
 			plan.TableIDs = plan.TableIDs[:batchSize]
@@ -157,13 +232,15 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 		for i, tableID := range plan.TableIDs {
 			plan.SnapshotNames[i] = databranchutils.BranchSnapshotName(tableID)
 		}
-
-		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
-		gate, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
+		// Legacy fixed-snapshot owner paths validate discovery by writing G at
+		// terminal commit. Keep the GC write so an earlier owner decision cannot
+		// commit after this deletion against an unchanged G version.
+		validation, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
 		if err != nil {
 			return err
 		}
-		gate.Close()
+		validation.Close()
+
 		for _, sql := range []string{
 			databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames),
 			databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs),
@@ -179,7 +256,7 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 	}, executor.Options{}.
 		WithAccountID(catalog.System_Account).
 		WithTxnMode(txn.TxnMode_Pessimistic).
-		WithTxnIsolation(txn.TxnIsolation_SI).
+		WithTxnIsolation(txn.TxnIsolation_RC).
 		WithLockWaitTimeout(dataBranchLineageGCLockWaitTimeout))
 	return compacted, err
 }

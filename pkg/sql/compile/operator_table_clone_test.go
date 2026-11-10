@@ -35,6 +35,7 @@ import (
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tableCloneRecordingExecutor struct {
@@ -44,6 +45,7 @@ type tableCloneRecordingExecutor struct {
 	sql    string
 	sqls   []string
 	opts   executor.Options
+	ctx    context.Context
 }
 
 func (e *tableCloneRecordingExecutor) Exec(
@@ -57,6 +59,7 @@ func (e *tableCloneRecordingExecutor) Exec(
 	e.sql = sql
 	e.sqls = append(e.sqls, sql)
 	e.opts = opts
+	e.ctx = ctx
 	if e.run != nil {
 		return e.run(sql)
 	}
@@ -141,6 +144,85 @@ func TestConstructTableCloneUsesPhysicalTemporaryDestination(t *testing.T) {
 		defines.GenTempTableName(proc.Base.SessionInfo.SessionId, "clone_db", "temp_dst"),
 		tc.Ctx.DstTblName,
 	)
+}
+
+func TestConstructTableCloneLendsSessionForAllocatorReads(t *testing.T) {
+	for _, boundary := range []struct {
+		name                                   string
+		publication                            *plan.PubInfo
+		snapshot                               *plan.Snapshot
+		account                                uint32
+		inheritedOnly, missingCaller, wantLent bool
+	}{
+		{name: "same account", wantLent: true},
+		{name: "same account inherited only", inheritedOnly: true, wantLent: true},
+		{name: "same account snapshot", snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}, wantLent: true},
+		{name: "publisher wins over snapshot", publication: &plan.PubInfo{TenantId: 17}, snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 23}}, account: 17},
+		{name: "foreign snapshot", snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 17}}, account: 17},
+		{name: "publisher inherited only", publication: &plan.PubInfo{TenantId: 17}, inheritedOnly: true, account: 17},
+		{name: "unknown caller", publication: &plan.PubInfo{TenantId: 17}, missingCaller: true, account: 17},
+	} {
+		t.Run(boundary.name, func(t *testing.T) {
+			for _, failRead := range []bool{false, true} {
+				t.Run(map[bool]string{false: "success", true: "max read failure"}[failRead], func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					owner := &trackingTempTableSession{tables: map[string]string{"db.src": "physical_src"}}
+					proc.Session = owner
+					if boundary.missingCaller {
+						proc.Ctx = context.Background()
+					}
+					inherited := &trackingTempTableSession{}
+					if boundary.inheritedOnly {
+						inherited = owner
+					}
+					proc.Ctx = process.ContextWithInternalExecutorSession(proc.Ctx, inherited)
+					if boundary.inheritedOnly {
+						proc.Session = nil
+					}
+					originalCtx := proc.Ctx
+					wantErr := errors.New("max read failed")
+					exec := &tableCloneRecordingExecutor{}
+					exec.run = func(sql string) (executor.Result, error) {
+						if boundary.wantLent {
+							require.Same(t, owner, getInternalExecutorSession(exec.ctx))
+						} else {
+							require.Nil(t, getInternalExecutorSession(exec.ctx), "foreign account must mask inherited aliases")
+						}
+						require.True(t, exec.opts.HasAccountID())
+						require.Equal(t, boundary.account, exec.opts.AccountID())
+						require.False(t, defines.HasTemporaryTableAccess(exec.ctx), "clone must retain ordinary ownership checks")
+						if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
+							return newTableCloneOffsetResult(t, proc.Mp(), 0, 7), nil
+						}
+						if failRead {
+							return executor.Result{}, wantErr
+						}
+						return newTableCloneResult(t, proc.Mp(), 7), nil
+					}
+					runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+					src := &plan.TableDef{TblId: 7, DbName: "db", Name: "physical_src", Cols: []*plan.ColDef{{
+						Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+					}}}
+					tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+						SrcTableDef: src, SrcObjDef: &plan.ObjectRef{PubInfo: boundary.publication},
+						ScanSnapshot: boundary.snapshot, CreateTable: cloneCreatePlan(src),
+					})
+					if tc != nil {
+						t.Cleanup(tc.Release)
+					}
+					require.Same(t, originalCtx, proc.Ctx, "session lending must end on every exit")
+					require.Same(t, inherited, getInternalExecutorSession(originalCtx), "caller context retains its inherited session")
+					require.Len(t, exec.sqls, 2)
+					if failRead {
+						require.ErrorIs(t, err, wantErr)
+					} else {
+						require.NoError(t, err)
+						require.Equal(t, uint64(7), tc.Ctx.SrcAutoIncrMaxValues["id"])
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestConstructTableCloneUsesCopiedStateForFreshClone(t *testing.T) {

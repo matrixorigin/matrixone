@@ -300,6 +300,17 @@ func checkMethodVersion(
 		return moerr.NewNotSupportedNoCtx(
 			"writer-fair lock admission is unavailable in the current protocol version")
 	}
+	if err != nil && (req.Method == pb.Method_TryLock || req.Method == pb.Method_ForwardTryLock) {
+		// A FastFail conflict is only recoverable when both peers support the
+		// typed negative acknowledgement and its cleanup capabilities. Never
+		// retry this request as an ordinary waitable Lock against an old peer.
+		return moerr.NewNotSupportedNoCtx(
+			"nonblocking row lock admission is unavailable in the current protocol version")
+	}
+	if err != nil && (req.Method == pb.Method_BeginDrain || req.Method == pb.Method_QueryDrain) {
+		return moerr.NewNotSupportedNoCtx(
+			"instance-bound lock-service drain is unavailable in the current protocol version")
+	}
 	return err
 }
 
@@ -326,6 +337,48 @@ func (c *client) lookupLockServiceAddress(
 		},
 	)
 	return address, err
+}
+
+// cachedLockServiceOwners reads the existing raw inventory without refreshing
+// discovery or sending an RPC. WorkState and public SQL admission must not
+// hide a lock owner that still has a live internal listener.
+func (c *client) cachedLockServiceOwners(ctx context.Context, scratch []string) ([]string, error) {
+	owners := scratch[:0]
+	err := clusterservice.GetCNServiceRawWithContext(
+		ctx, c.cluster, clusterservice.NewSelectAll(),
+		func(cn metadata.CNService) bool {
+			owners = append(owners, cn.ServiceID)
+			return true
+		},
+	)
+	return owners, err
+}
+
+// confirmLockServiceOwner is used only when a cold publisher's keeper
+// snapshot lacks the TN-selected owner. Use current raw discovery first,
+// refreshing only on a miss, just as sending the first Lock RPC would do.
+func (c *client) confirmLockServiceOwner(ctx context.Context, serviceID string) (bool, error) {
+	sid := getUUIDFromServiceIdentifier(serviceID)
+	address, err := c.lookupLockServiceAddress(ctx, sid)
+	if err != nil || address != "" {
+		return address != "", err
+	}
+	if err := c.refreshCluster(ctx); err != nil {
+		return false, err
+	}
+	address, err = c.lookupLockServiceAddress(ctx, sid)
+	return address != "", err
+}
+
+func (c *client) refreshCluster(ctx context.Context) error {
+	if refresher, ok := c.cluster.(interface {
+		Refresh(context.Context) error
+	}); ok {
+		return refresher.Refresh(ctx)
+	}
+	// External cluster implementations have no cancellable refresh contract.
+	c.cluster.ForceRefresh(false)
+	return ctx.Err()
 }
 
 // activeTxnOwnerPresent consults the local raw membership view, without an RPC,
@@ -363,10 +416,12 @@ func (c *client) asyncSend(
 	for i := 0; i < 2; i++ {
 		var lookupErr error
 		switch request.Method {
-		case pb.Method_ForwardLock:
+		case pb.Method_ForwardLock,
+			pb.Method_ForwardTryLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
+			pb.Method_TryLock,
 			pb.Method_LockWriterFair,
 			pb.Method_Unlock,
 			pb.Method_BatchUnlock,
@@ -404,17 +459,8 @@ func (c *client) asyncSend(
 			break
 		}
 		if i == 0 {
-			if refresher, ok := c.cluster.(interface {
-				Refresh(context.Context) error
-			}); ok {
-				if err := refresher.Refresh(ctx); err != nil {
-					return returnError(err)
-				}
-			} else {
-				// External cluster implementations do not expose a cancellable
-				// refresh contract. Request an asynchronous refresh instead of
-				// blocking an RPC past its context.
-				c.cluster.ForceRefresh(false)
+			if err := c.refreshCluster(ctx); err != nil {
+				return returnError(err)
 			}
 		}
 	}
@@ -1333,24 +1379,26 @@ func writeResponseWithDeadline(
 		if extraFields != nil {
 			extra = extraFields()
 		}
-		fields := []zap.Field{
+		fields := make([]zap.Field, 0, 5+len(extra))
+		fields = append(fields,
 			zap.Error(err),
 			zap.Uint64("request-id", requestID),
 			zap.String("method", method),
 			zap.String("remote", remote),
 			zap.String("response", detail),
-		}
+		)
 		fields = append(fields, extra...)
 		logger.Error("write response failed", fields...)
 		// A dropped response leaves the peer's Future waiting unless the
 		// session is closed and the client-side backend fails pending futures.
 		if closeErr := cs.Close(); closeErr != nil {
-			closeFields := []zap.Field{
+			closeFields := make([]zap.Field, 0, 4+len(extra))
+			closeFields = append(closeFields,
 				zap.Error(closeErr),
 				zap.Uint64("request-id", requestID),
 				zap.String("method", method),
 				zap.String("remote", remote),
-			}
+			)
 			closeFields = append(closeFields, extra...)
 			logger.Error("close client session after write response failed", closeFields...)
 		}

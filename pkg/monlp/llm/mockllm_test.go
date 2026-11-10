@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestMockEchoModel(t *testing.T) {
@@ -26,16 +28,17 @@ func TestMockEchoModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs := []Message{
-		{
+	msgs := make([]Message, 0, 3)
+	msgs = append(msgs,
+		Message{
 			Role:    "system",
 			Content: "You are a helpful assistant.",
 		},
-		{
+		Message{
 			Role:    "user",
 			Content: "Hello, world!",
 		},
-	}
+	)
 
 	reply, err := client.ChatMsg(context.Background(), msgs)
 	if err != nil {
@@ -80,4 +83,22 @@ func TestMockEchoModel(t *testing.T) {
 	if embedding[0] != 13 {
 		t.Fatal("embedding is not correct")
 	}
+}
+
+func TestNewLLMClientFailureReturnsNilInterface(t *testing.T) {
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+	for _, tc := range []struct{ server, model, options string }{
+		{MockServer, "", ""},
+		{OllamaServer, "test-model", "{invalid"},
+		{"unknown", "echo", ""},
+	} {
+		client, err := NewLLMClient(tc.server, "", tc.model, tc.options)
+		require.Error(t, err)
+		require.True(t, client == nil, "failed factory returned a typed-nil %T", client)
+	}
+	client, err := NewLLMClient(MockServer, "", MockEchoModel, "")
+	require.NoError(t, err)
+	reply, err := client.Chat(context.Background(), `[{"role":"user","content":"ok"}]`)
+	require.NoError(t, err)
+	require.Equal(t, "ok", reply)
 }

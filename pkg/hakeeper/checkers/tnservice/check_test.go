@@ -234,7 +234,7 @@ func TestCheck(t *testing.T) {
 
 		clusterInfo := mockClusterInfo(10, 11)
 		commonFields := hakeeper.NewCheckerCommonFields("", config, idAlloc, clusterInfo, pb.TaskTableUser{}, currTick)
-		tc := NewTNServiceChecker(commonFields, tnState)
+		tc := NewTNServiceChecker(commonFields, tnState, operator.NewController())
 		steps := tc.Check()
 		require.Equal(t, len(steps), 0)
 	}
@@ -280,7 +280,7 @@ func TestCheck(t *testing.T) {
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
 		commonFields := hakeeper.NewCheckerCommonFields("", config, idAlloc, clusterInfo, pb.TaskTableUser{}, currTick)
-		tc := NewTNServiceChecker(commonFields, tnState)
+		tc := NewTNServiceChecker(commonFields, tnState, operator.NewController())
 		operators := tc.Check()
 		require.Equal(t, 2, len(operators))
 
@@ -337,7 +337,7 @@ func TestCheck(t *testing.T) {
 		//  20 - add replica after a while
 		getCheckState("").bootstrapping = false
 		commonFields := hakeeper.NewCheckerCommonFields("", config, idAlloc, cluster, pb.TaskTableUser{}, staleTick)
-		tc := NewTNServiceChecker(commonFields, tnState)
+		tc := NewTNServiceChecker(commonFields, tnState, operator.NewController())
 		operators := tc.Check()
 		require.Equal(t, 0, len(operators))
 
@@ -345,7 +345,7 @@ func TestCheck(t *testing.T) {
 		//  14 - add replica
 		//  20 - add replica
 		commonFields = hakeeper.NewCheckerCommonFields("", config, idAlloc, cluster, pb.TaskTableUser{}, currTick)
-		tc = NewTNServiceChecker(commonFields, tnState)
+		tc = NewTNServiceChecker(commonFields, tnState, operator.NewController())
 		operators = tc.Check()
 		require.Equal(t, 2, len(operators))
 

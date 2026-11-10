@@ -95,11 +95,4 @@ var (
 	PipelineRemoteReceiverWaitAlreadyClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
 		"already_closed",
 	)
-	PipelineRemoteNotifyRetryCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "pipeline",
-			Name:      "remote_notify_legacy_retry_total",
-			Help:      "Total compatibility retries after a peer reports that a remote receiver is not registered yet.",
-		})
 )

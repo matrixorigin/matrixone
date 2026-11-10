@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -51,6 +52,7 @@ type viewMetadataCleanupRecordingExecutor struct {
 	failures        map[int]error
 	opts            []executor.Options
 	txnOptions      []executor.Options
+	checkTxnContext func(context.Context) error
 }
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
@@ -91,9 +93,80 @@ func (e *viewMetadataCleanupRecordingExecutor) ExecTxn(
 	opts executor.Options,
 ) error {
 	e.txnOptions = append(e.txnOptions, opts)
+	if e.checkTxnContext != nil {
+		return e.checkTxnContext(ctx)
+	}
 	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		return e.Exec(ctx, sql, opts)
 	}, nil))
+}
+
+// Exercise the public fence boundary without lock waits or wall-clock sleeps.
+func TestRequireViewMetadataRevalidationContextOwnership(t *testing.T) {
+	type contextKey struct{}
+	stopped := errors.New("executor stopped")
+	unknown := moerr.NewTxnUnknown(context.Background(), "context-ownership")
+	catalogErr := errors.New("catalog unavailable")
+	for _, tc := range []struct {
+		name                       string
+		budget                     time.Duration
+		cancelBefore, cancelDuring bool
+		result                     error
+	}{
+		{name: "fallback", result: stopped},
+		{name: "short-caller", budget: time.Second, result: stopped},
+		{name: "long-caller", budget: time.Minute, result: stopped},
+		{name: "canceled-caller", cancelBefore: true, result: context.Canceled},
+		{name: "cancel-during-call", budget: time.Minute, cancelDuring: true, result: context.Canceled},
+		{name: "unknown-commit", budget: time.Minute, result: unknown},
+		{name: "catalog-error", budget: time.Minute, result: catalogErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := context.WithValue(context.Background(), contextKey{}, "caller-value")
+			var cancel context.CancelFunc
+			if tc.budget != 0 {
+				parent, cancel = context.WithTimeout(parent, tc.budget)
+			} else {
+				parent, cancel = context.WithCancel(parent)
+			}
+			defer cancel()
+			if tc.cancelBefore {
+				cancel()
+			}
+			before := time.Now()
+			var observed context.Context
+			exec := &viewMetadataCleanupRecordingExecutor{checkTxnContext: func(ctx context.Context) error {
+				observed = ctx
+				require.Equal(t, "caller-value", ctx.Value(contextKey{}))
+				deadline, ok := ctx.Deadline()
+				require.True(t, ok)
+				if want, explicit := parent.Deadline(); explicit {
+					require.Equal(t, want, deadline, "the operation owner controls the whole transaction budget")
+				} else {
+					require.False(t, deadline.Before(before.Add(viewMetadataRecoveryCallTimeout)))
+					require.False(t, deadline.After(time.Now().Add(viewMetadataRecoveryCallTimeout)))
+				}
+				if tc.cancelDuring {
+					cancel()
+				}
+				if tc.cancelBefore || tc.cancelDuring {
+					return ctx.Err()
+				}
+				return tc.result
+			}}
+			err := RequireViewMetadataRevalidation(parent, exec)
+			require.ErrorIs(t, err, tc.result)
+			require.Len(t, exec.txnOptions, 1, "the fence must not retry a transaction")
+			if tc.cancelBefore || tc.cancelDuring {
+				require.ErrorIs(t, observed.Err(), context.Canceled)
+			} else {
+				require.NoError(t, parent.Err(), "the fence must not cancel its caller")
+				if tc.budget == 0 {
+					require.ErrorIs(t, observed.Err(), context.Canceled, "release the fallback timer")
+				}
+			}
+		})
+	}
 }
 
 func viewMetadataLifecycleGateTestResult() executor.Result {
@@ -757,7 +830,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		}
 		require.False(t, ctx.DatabaseExists("BINDING_DB", nil))
 		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
-		_, _, err := ctx.Resolve("BINDING_DB", "BINDING_TABLE", nil)
+		_, _, err := ctx.Resolve("BINDING_DB", "BINDING_TABLE", nil, nil)
 		require.ErrorIs(t, err, expected)
 		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
 		_, _, err = ctx.ResolveById(13, nil)
@@ -779,7 +852,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		originalTop := proc.GetTopContext()
 		require.False(t, ctx.DatabaseExists("db", nil))
 		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
-		_, _, err := ctx.Resolve("db", "table", nil)
+		_, _, err := ctx.Resolve("db", "table", nil, nil)
 		require.ErrorIs(t, err, expected)
 		require.Equal(t, originalTop, proc.GetTopContext())
 		storage.EXPECT().GetNameById(gomock.Any(), gomock.Any(), uint64(19)).Return("", "", expected)
@@ -801,7 +874,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 				"sub": {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
 			},
 		}
-		_, _, err := ctx.Resolve("sub", "table", nil)
+		_, _, err := ctx.Resolve("sub", "table", nil, nil)
 		var unavailable *viewRefreshDependencyUnavailableError
 		require.ErrorAs(t, err, &unavailable)
 	})
@@ -1115,13 +1188,13 @@ func TestViewMetadataLifecycleSkipsInternalDatabasesBeforeCatalogProbe(t *testin
 		}
 	}
 
-	t.Run("user database still probes lifecycle", func(t *testing.T) {
+	t.Run("inactive user database skips catalog writes", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		exec := &viewMetadataCleanupRecordingExecutor{}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
 		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
 			refreshViewsAfterRelationMutation("user_db", "relation", 0, 0))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+		require.Empty(t, exec.sqls)
 	})
 }
 
@@ -1149,8 +1222,7 @@ func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
 		c := &Compile{proc: proc, pn: &planpb.Plan{}}
 
 		require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
+		require.Empty(t, exec.sqls)
 
 		exec.sqls = nil
 		require.NoError(t, c.refreshViewsAfterRelationMutation("db", "src", 9, 10))
@@ -1213,73 +1285,20 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 	}
 }
 
-func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
-	t.Run("catalog not upgraded", func(t *testing.T) {
-		for _, run := range []func(*Compile) error{
-			func(c *Compile) error { return c.persistViewDependencies(nil, "db", nil) },
-			func(c *Compile) error { return c.refreshViewsAfterRelationMutation("db", "t", 0, 0) },
-			func(c *Compile) error { return c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0) },
-			func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 1) },
-			func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 1, "db") },
-			func(c *Compile) error { return c.enqueueViewsAfterDatabaseRemoval("db", 0, 1, 1) },
-		} {
-			proc := testutil.NewProcess(t)
-			exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{
-				2: moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH),
-			}}
-			installUnavailableViewMetadataTestExecutor(t, proc, exec)
-			require.NoError(t, run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls)
-		}
-	})
-
-	t.Run("catalog ready", func(t *testing.T) {
+func TestViewMetadataInactiveLifecycleSkipsCatalogWrites(t *testing.T) {
+	for _, run := range []func(*Compile) error{
+		func(c *Compile) error { return c.persistViewDependencies(nil, "db", nil) },
+		func(c *Compile) error { return c.refreshViewsAfterRelationMutation("db", "t", 0, 0) },
+		func(c *Compile) error { return c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0) },
+		func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 1) },
+		func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 1, "db") },
+		func(c *Compile) error { return c.enqueueViewsAfterDatabaseRemoval("db", 0, 1, 1) },
+	} {
 		proc := testutil.NewProcess(t)
 		exec := &viewMetadataCleanupRecordingExecutor{}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
-		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
-			persistViewDependencies(nil, "db", nil))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
-	})
-
-	t.Run("catalog failure", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		testErr := moerr.NewTxnNeedRetryNoCtx()
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: testErr}}
-		installUnavailableViewMetadataTestExecutor(t, proc, exec)
-		err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencies(nil, "db", nil)
-		require.ErrorIs(t, err, testErr)
-	})
-}
-
-func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(*Compile) error
-	}{
-		{
-			name: "view",
-			run:  func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 11) },
-		},
-		{
-			name: "database",
-			run: func(c *Compile) error {
-				return c.deleteDroppedDatabaseViewMetadata(0, 7, "db")
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			exec := &viewMetadataCleanupRecordingExecutor{}
-			installViewMetadataTestExecutor(t, proc, exec)
-			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Len(t, exec.sqls, 4)
-			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
-			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-			require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
-		})
+		require.NoError(t, run(&Compile{proc: proc, pn: &planpb.Plan{}}))
+		require.Empty(t, exec.sqls)
 	}
 }
 
@@ -1866,7 +1885,8 @@ func TestSeedViewMetadataRevalidationPageIsBounded(t *testing.T) {
 		ids[i] = int32(i + 1)
 	}
 	require.NoError(t, executor.AppendFixedRows(accounts, 0, ids))
-	results := []executor.Result{marker.GetResult(), accounts.GetResult()}
+	results := make([]executor.Result, 0, 2+viewMetadataRecoveryPageSize+1)
+	results = append(results, marker.GetResult(), accounts.GetResult())
 	results = append(results, make([]executor.Result, viewMetadataRecoveryPageSize+1)...)
 	results[len(results)-1].AffectedRows = 1
 	exec := &viewMetadataCleanupRecordingExecutor{results: results}
@@ -2120,27 +2140,4 @@ func TestRecoveryContextRestoresCatalogSnapshot(t *testing.T) {
 	require.Equal(t, snapshot, cached)
 	require.NotSame(t, snapshot, cached)
 	require.Len(t, exec.sqls, 1)
-}
-
-func TestViewMetadataCleanupPropagatesLifecycleAndRowErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(*Compile) error
-	}{
-		{"view", func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 11) }},
-		{"database", func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 7, "db") }},
-	}
-	for _, tc := range tests {
-		for _, failAt := range []int{1, 2} {
-			t.Run(fmt.Sprintf("%s call %d", tc.name, failAt), func(t *testing.T) {
-				proc := testutil.NewProcess(t)
-				expected := errors.New("catalog failure")
-				exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{failAt: expected}}
-				installViewMetadataTestExecutor(t, proc, exec)
-				err := tc.run(&Compile{proc: proc, pn: &planpb.Plan{}})
-				require.ErrorIs(t, err, expected)
-				require.Len(t, exec.sqls, failAt)
-			})
-		}
-	}
 }

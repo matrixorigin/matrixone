@@ -146,6 +146,10 @@ func TestBuildShowDatabasesRejectsTableSnapshot(t *testing.T) {
 	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	// QueryBuilder construction resolves the D11 statement scalar through
+	// GetProcess; the nil default process keeps the MySQL-compatible
+	// boolean-contracts default for this strict mock.
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 
 	_, err := buildShowDatabases(&tree.ShowDatabases{AtTsExpr: &tree.AtTimeStamp{
 		Type:         tree.ATTIMESTAMPSNAPSHOT,
@@ -157,7 +161,7 @@ func TestBuildShowDatabasesRejectsTableSnapshot(t *testing.T) {
 
 func TestBuildShowDatabasesRestrictsDatabaseSnapshot(t *testing.T) {
 	ctx := &namedSnapshotCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		snapshot: &Snapshot{
 			TS:     &timestamp.Timestamp{PhysicalTime: 42},
 			Tenant: &planpb.SnapshotTenant{},

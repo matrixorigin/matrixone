@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +79,12 @@ func (data *containsObjectData) Contains(
 	_ *mpool.MPool,
 ) error {
 	return data.contains(keys)
+}
+
+func (data *containsObjectData) WaitAppendCommittingBefore(
+	types.TS, txnif.TxnReader, containers.Vector, index.ZM,
+) bool {
+	return false
 }
 
 func (data *dedupErrorObjectData) GetDuplicatedRows(
@@ -150,7 +158,7 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 		pks,
 		from,
 		to,
-		true,
+		dedupMetricPrePrepare,
 	)
 	if rowIDs != nil {
 		defer rowIDs.Close()
@@ -162,7 +170,6 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 }
 
 func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	entry := catalog.MockStaloneTableEntry(1, schema)
@@ -221,7 +228,7 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	entry.AddEntryLocked(first)
 	entry.AddEntryLocked(second)
 
-	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs())
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
 	require.True(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
 	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
@@ -233,7 +240,6 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 }
 
 func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	entry := catalog.MockStaloneTableEntry(1, schema)
@@ -544,9 +550,7 @@ func TestAutoIncrEpochFenceRejectsMultipleEpochsWithoutLocalAlter(t *testing.T) 
 }
 
 func TestTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -591,9 +595,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -642,9 +644,174 @@ func TestAppend(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestConcurrentFreezeAppendReservations(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 8
+	const rowsPerTxn = 16
+	allRows := catalog.MockBatch(schema, txnCount*rowsPerTxn)
+	defer allRows.Close()
+	batches := allRows.Split(txnCount)
+	txns := make([]txnif.AsyncTxn, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(txnCount*rowsPerTxn), tableEntry.GetRows())
+
+	readTxn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	readDB, err := readTxn.GetDatabase("db")
+	require.NoError(t, err)
+	readRel, err := readDB.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	pkIdx := schema.GetSingleSortKeyIdx()
+	for row := 0; row < allRows.Length(); row++ {
+		pk := allRows.Vecs[pkIdx].Get(row)
+		value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, pk, value)
+	}
+	require.NoError(t, readTxn.Commit(ctx))
+}
+
+func TestConcurrentDedupSamePK(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 16
+	txns := make([]txnif.AsyncTxn, txnCount)
+	batches := make([]*containers.Batch, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		// Offset zero makes every batch contain the same primary key.
+		batches[i] = containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+	defer func() {
+		for _, bat := range batches {
+			bat.Close()
+		}
+	}()
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	duplicates := 0
+	wwConflicts := 0
+	otherFailures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+			switch {
+			case moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry):
+				duplicates++
+			case moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict):
+				wwConflicts++
+			default:
+				otherFailures++
+				t.Logf("unexpected commit error: %v", err)
+			}
+		}
+	}
+	t.Logf(
+		"same-PK concurrent commit: successes=%d failures=%d duplicates=%d ww-conflicts=%d other=%d rows=%d",
+		successes, failures, duplicates, wwConflicts, otherFailures, tableEntry.GetRows(),
+	)
+	require.Zero(t, otherFailures, "every failed writer must report duplicate entry or WW conflict")
+	it := tableEntry.MakeDataObjectIt()
+	defer it.Release()
+	for ok := it.First(); ok; ok = it.Next() {
+		obj := it.Item()
+		rows, err := obj.GetObjectData().Rows()
+		require.NoError(t, err)
+		t.Logf("data object: id=%s physical-rows=%d", obj.ID().String(), rows)
+		compactable, reason := obj.GetObjectData().PrepareCompactInfo()
+		require.Truef(t, compactable, "object %s is not compactable: %s", obj.ID().String(), reason)
+	}
+	t.Logf("data object count: %d", tableEntry.ObjectCnt(false))
+	require.Equal(t, 1, successes)
+	require.Equal(t, txnCount-1, failures)
+	require.Equal(t, uint64(1), tableEntry.GetRows())
+}
+
 func TestIndex(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
 	assert.Nil(t, err)
@@ -855,9 +1022,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -888,9 +1053,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -931,8 +1094,6 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
@@ -990,12 +1151,15 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
+func initTestContext(ctx context.Context, t *testing.T, dir string, decorators ...func(catalog.DataFactory) catalog.DataFactory) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 	)
-	factory := tables.NewDataFactory(rt, dir)
+	var factory catalog.DataFactory = tables.NewDataFactory(rt, dir)
+	for _, decorate := range decorators {
+		factory = decorate(factory)
+	}
 	c := catalog.MockCatalog(factory)
 	driver := wal.NewLocalHandle(dir, "store", nil)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt),
@@ -1011,9 +1175,7 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1057,9 +1219,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1109,9 +1269,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1147,9 +1305,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestObject1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1220,9 +1376,7 @@ func TestObject1(t *testing.T) {
 }
 
 func TestObject2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1256,8 +1410,6 @@ func TestObject2(t *testing.T) {
 }
 
 func TestIsEmptyDroppedAppendableObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1329,9 +1481,7 @@ func TestIsEmptyDroppedAppendableObject(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1413,8 +1563,6 @@ func TestDedup1(t *testing.T) {
 	t.Log(c.SimplePPString(common.PPL1))
 }
 func TestCreateAppendableObjectWithOptions(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1466,8 +1614,6 @@ func TestCreateAppendableObjectWithOptions(t *testing.T) {
 }
 
 func TestCreateAppendableObjectWithOptionsRejectsInvalidOptions(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1498,8 +1644,6 @@ func TestCreateAppendableObjectWithOptionsRejectsInvalidOptions(t *testing.T) {
 }
 
 func TestCreateAppendableObjectWithOptionsErrors(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1565,8 +1709,6 @@ func (r *replayAObjectCreateRecorder) RecordReplayAObjectCreate(
 }
 
 func TestEnsureReplayAObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1644,4 +1786,105 @@ func TestReplayAppendNodeCreateTS(t *testing.T) {
 	node.TxnMVCCNode.Txn = nil
 	node.TxnMVCCNode.End = types.TS{}
 	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
+}
+
+// dedupRangeObjectData observes the real incremental object traversal without I/O.
+type dedupRangeObjectData struct {
+	containsObjectData
+	visit func(types.TS, types.TS) error
+}
+
+func (d *dedupRangeObjectData) GetDuplicatedRows(
+	_ context.Context, _ txnif.TxnReader, _ containers.Vector, _ index.ZM,
+	from, to types.TS, _ containers.Vector, _ *mpool.MPool,
+) error {
+	return d.visit(from, to)
+}
+
+func TestPrePrepareDedupRangeCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase string
+		first       bool
+	}{
+		{"freeze", txnif.FreezePhase, false},
+		{"preprepare", txnif.PrePreparePhase, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			start, phaseTS := types.BuildTS(2, 0), types.BuildTS(10, 0)
+			schema := catalog.NewEmptySchema("data")
+			require.NoError(t, schema.AppendPKCol("pk", types.T_int64.ToType(), 0))
+			require.NoError(t, schema.Finalize(false))
+			tombSchema := catalog.GetTombstoneSchema(schema)
+			entry := catalog.MockStaloneTableEntry(1, schema)
+			pool := containers.NewVectorPool(t.Name(), 4)
+			defer pool.Destory()
+			txn := txnbase.MockTxnReaderWithStartTS(start)
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+			rt := dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool))
+			rt.Now = func() types.TS { return phaseTS }
+			tbl := &txnTable{entry: entry, store: &txnStore{ctx: ctx, txn: txn, rt: rt}}
+			tbl.dataTable = newBaseTable(schema, false, tbl)
+			tbl.tombstoneTable = newBaseTable(tombSchema, true, tbl)
+			calls := map[bool]int{}
+			failSecond := false
+			conflict := moerr.NewTxnWWConflictNoCtx(0, "")
+			for _, isTombstone := range []bool{false, true} {
+				base := tbl.getBaseTable(isTombstone)
+				bat := containers.BuildBatch(base.schema.Attrs(), base.schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
+				defer bat.Close()
+				for _, vec := range bat.Vecs {
+					vec.Append(nil, true)
+				}
+				if isTombstone {
+					bat.Vecs[0].Update(0, types.Rowid{}, false)
+				} else {
+					bat.Vecs[0].Update(0, int64(1), false)
+				}
+				base.tableSpace = &tableSpace{node: &anode{data: bat, rows: 1}}
+				oid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+				obj := catalog.MockObjectEntry(entry, stats, isTombstone, func(*catalog.ObjectEntry) data.Object {
+					return &dedupRangeObjectData{
+						containsObjectData: containsObjectData{contains: func(containers.Vector) error { return nil }},
+						visit: func(from, to types.TS) error {
+							calls[isTombstone]++
+							require.Equal(t, start.Next(), from)
+							require.Equal(t, phaseTS, to)
+							if failSecond && isTombstone != tc.first {
+								return conflict
+							}
+							return nil
+						},
+					}
+				}, types.BuildTS(5, 0))
+				entry.AddEntryLocked(obj)
+			}
+			phase := dedupMetricPhase(tc.phase)
+			opposite := dedupMetricFreeze
+			if phase == opposite {
+				opposite = dedupMetricPrePrepare
+			}
+			metric := objectScanMetrics(phase, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			other := objectScanMetrics(opposite, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			before := testutil.ToFloat64(metric.operation)
+			oppositeBefore := testutil.ToFloat64(other.operation)
+			require.NoError(t, tbl.PrePrepareDedup(ctx, tc.first, tc.phase, phaseTS))
+			require.Equal(t, before+1, testutil.ToFloat64(metric.operation))
+			require.Equal(t, oppositeBefore, testutil.ToFloat64(other.operation))
+			require.Equal(t, 1, calls[tc.first])
+			require.Equal(t, phaseTS, tbl.getBaseTable(tc.first).dedupTS)
+			require.True(t, tbl.getBaseTable(!tc.first).dedupTS.IsEmpty())
+			failSecond = true
+			require.ErrorIs(t, tbl.PrePrepareDedup(ctx, !tc.first, tc.phase, phaseTS), conflict)
+			require.Equal(t, 1, calls[!tc.first])
+			require.Equal(t, start, tbl.getBaseTable(!tc.first).dedupTS, "failed check must not advance coverage")
+			failSecond = false
+			require.NoError(t, tbl.PrePrepareDedup(ctx, !tc.first, tc.phase, phaseTS))
+			require.Equal(t, 2, calls[!tc.first])
+			require.Equal(t, phaseTS, tbl.getBaseTable(!tc.first).dedupTS)
+			used, _ := pool.Used(false)
+			require.Zero(t, used)
+		})
+	}
 }

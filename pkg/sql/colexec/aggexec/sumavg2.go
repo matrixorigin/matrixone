@@ -208,7 +208,37 @@ type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.F
 func (*sumAvgExec[T, A]) sourcePreservingMerge() {}
 
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	// A scalar fill already knows its group; do not build BatchFill's local
+	// aggregation table for a single row (notably in cumulative windows).
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	// Keep NaN payload selection on the original arithmetic path. Compilers
+	// may commute a floating addition, selecting a different operand's NaN.
+	if value != value || sums[y] != sums[y] {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	result := sums[y] + value
+	if err := exec.ofCheck(sums[y], value, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	if exec.isSum {
+		exec.state[x].vecs[0].UnsetNull(y)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	}
+	return nil
 }
 
 func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
@@ -291,8 +321,11 @@ func (exec *sumAvgExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector)
 }
 
 func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	return exec.bulkFillSumRange(groupIndex, 0, vectors[0].Length(), vectors)
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillSumRange(groupIndex, offset, n int, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -310,7 +343,7 @@ func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*
 	var localSum T
 	filled := false
 	for i := 0; i < n; i++ {
-		row := i
+		row := offset + i
 		if isConst {
 			row = 0
 		}
@@ -347,8 +380,11 @@ func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*
 }
 
 func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	return exec.bulkFillAvgRange(groupIndex, 0, vectors[0].Length(), vectors)
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillAvgRange(groupIndex, offset, n int, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -366,7 +402,7 @@ func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*
 	var localSum T
 	var localCnt int64
 	for i := 0; i < n; i++ {
-		row := i
+		row := offset + i
 		if isConst {
 			row = 0
 		}
@@ -490,7 +526,7 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]T
+	var sums []T
 	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -596,7 +632,7 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]T
+	var sums []T
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -865,6 +901,14 @@ func decimal128NativeIntegerAvg[T float64 | int64 | uint64](sum T, count int64, 
 	return avg, nil
 }
 
+func nativeIntegerAvg128[T float64 | int64 | uint64](sum T, count int64, resultType types.Type) (types.Decimal128, error) {
+	avg, err := decimal128NativeIntegerAvg(sum, count, resultType.Scale)
+	if err != nil {
+		return decAvg(decimal128FromNativeSum(sum), count, 0, resultType)
+	}
+	return avg, nil
+}
+
 // flushExactAvg converts the native integer accumulator to the declared
 // Decimal128/Decimal256 result only once per group. Row and batch filling stay
 // on the compact integer path, which is important for the common INT AVG
@@ -967,10 +1011,7 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 						nulls[j] = true
 						continue
 					}
-					avg, avgErr := decimal128NativeIntegerAvg(sums[j], count, resultType.Scale)
-					if avgErr != nil {
-						avg, avgErr = decAvg(decimal128FromNativeSum(sums[j]), count, 0, resultType)
-					}
+					avg, avgErr := nativeIntegerAvg128(sums[j], count, resultType)
 					if avgErr != nil {
 						return nil, avgErr
 					}
@@ -1142,7 +1183,34 @@ type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 func (*sumAvgDecExec[A, S]) sourcePreservingMerge() {}
 
 func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := decimalStateFromArg[A, S](
+		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+	sumVec := exec.state[x].vecs[0]
+	sums := chunkArr[S](sumVec)
+	if exec.isSum && sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+		sums[y] = value
+	} else {
+		var err error
+		if sums[y], err = decimalStateAdd(sums[y], value); err != nil {
+			return err
+		}
+	}
+	if !exec.isSum {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	}
+	return nil
 }
 
 func (exec *sumAvgDecExec[A, S]) windowSlidingSupported() bool {
@@ -1217,8 +1285,11 @@ func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vect
 }
 
 func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	return exec.bulkFillSumRange(groupIndex, 0, vectors[0].Length(), vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillSumRange(groupIndex, offset, n int, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -1237,7 +1308,7 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors 
 	var localSum S
 	filled := false
 	for i := 0; i < n; i++ {
-		row := i
+		row := offset + i
 		if isConst {
 			row = 0
 		}
@@ -1277,8 +1348,11 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors 
 }
 
 func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	return exec.bulkFillAvgRange(groupIndex, 0, vectors[0].Length(), vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -1297,7 +1371,7 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors 
 	var localSum S
 	var localCnt int64
 	for i := 0; i < n; i++ {
-		row := i
+		row := offset + i
 		if isConst {
 			row = 0
 		}
@@ -1336,6 +1410,14 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors 
 func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	// The legacy combiner buffers only 255 groups and updates later groups
+	// directly. A checked large call must keep that order: a local subtotal
+	// may overflow even when adding each row to the existing state succeeds.
+	// With at most 256 rows, the 256th group can have only one input row.
+	if len(exec.state) == 1 && exec.state[0].length <= 256 &&
+		(exec.localAddSafe || len(groups) <= 256) {
+		return exec.batchFillDense(offset, groups, vectors[0])
 	}
 	if exec.isSum {
 		return exec.batchFillSum(offset, groups, vectors)
@@ -1425,7 +1507,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]S
+	var sums []S
 	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -1530,7 +1612,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]S
+	var sums []S
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]

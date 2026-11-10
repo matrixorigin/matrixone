@@ -53,12 +53,13 @@ func runTimestampPairCase(
 	inputs []FunctionTestInput,
 	wanted FunctionTestResult,
 	selectList *FunctionSelectList,
-) *vector.Vector {
+) types.Type {
 	t.Helper()
 	testCase := NewFunctionTestCase(proc, inputs, wanted, timestampWithTime).WithSelectList(selectList)
+	defer testCase.Free()
 	succeed, errInfo := testCase.Run()
 	require.True(t, succeed, errInfo)
-	return testCase.GetResultVectorDirectly()
+	return *testCase.GetResultVectorDirectly().GetType()
 }
 
 func TestTimestampPairTypeResolution(t *testing.T) {
@@ -114,10 +115,30 @@ func TestTimestampPairTypeResolution(t *testing.T) {
 		require.Equal(t, types.New(types.T_datetime, test.wantScale, test.wantScale), fn.GetReturnType())
 	}
 
-	unary, err := GetFunctionByName(proc.Ctx, "timestamp", []types.Type{types.T_date.ToType()})
-	require.NoError(t, err)
-	require.Equal(t, EncodeOverloadID(TIMESTAMP, 0), unary.GetEncodedOverloadID())
-	require.Equal(t, types.T_timestamp, unary.GetReturnType().Oid)
+	for _, tc := range []struct {
+		input     types.Type
+		wantID    int32
+		wantScale int32
+	}{
+		{types.T_date.ToType(), 6, 0},
+		{types.T_datetime.ToTypeWithScale(3), 7, 3},
+		{types.T_timestamp.ToTypeWithScale(6), 8, 6},
+		{types.T_varchar.ToType(), 9, 6},
+		{types.T_char.ToType(), 10, 6},
+		{types.T_text.ToType(), 9, 6},
+		{types.T_any.ToType(), 9, 6},
+	} {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "timestamp", []types.Type{tc.input})
+			require.NoError(t, err)
+			require.Equal(t, EncodeOverloadID(TIMESTAMP, tc.wantID), fn.GetEncodedOverloadID())
+			require.Equal(t, types.New(types.T_datetime, tc.wantScale, tc.wantScale), fn.GetReturnType())
+		})
+	}
+	for legacyID := int32(0); legacyID < 5; legacyID++ {
+		_, err := GetFunctionByNameWithOverload(proc.Ctx, "timestamp", []types.Type{dateTypes[0]}, legacyID)
+		require.Error(t, err, "released unary identities are execution-only")
+	}
 
 	for _, args := range [][]types.Type{
 		{types.T_time.ToType(), types.T_time.ToType()},
@@ -130,7 +151,7 @@ func TestTimestampPairTypeResolution(t *testing.T) {
 		{types.T_date.ToType(), types.T_binary.ToType()},
 		{types.T_date.ToType(), types.T_varbinary.ToType()},
 	} {
-		_, err = GetFunctionByName(proc.Ctx, "timestamp", args)
+		_, err := GetFunctionByName(proc.Ctx, "timestamp", args)
 		require.Error(t, err, "timestamp(%v) must be rejected", args)
 	}
 
@@ -164,7 +185,7 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 			parseTimestampPairTime(t, "-25:00:00", 6),
 		}, nil),
 	}, NewFunctionTestResult(wantedType, false, wanted, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 
 	datetimeType := types.T_datetime.ToTypeWithScale(3)
 	result = runTimestampPairCase(t, proc, []FunctionTestInput{
@@ -177,7 +198,7 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 10:00:00.123456", 6),
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 
 	result = runTimestampPairCase(t, proc, []FunctionTestInput{
 		NewFunctionTestInput(dateType, []types.Date{
@@ -189,7 +210,7 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 00:00:00", 6),
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 
 	result = runTimestampPairCase(t, proc, []FunctionTestInput{
 		NewFunctionTestInput(dateType, []types.Date{
@@ -201,7 +222,7 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 12:34:56.123000", 6),
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 
 	proc.GetSessionInfo().TimeZone = time.UTC
 	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 23:45:01.654", 3)
@@ -214,7 +235,7 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 23:45:01.654000", 6),
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 }
 
 func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
@@ -234,7 +255,7 @@ func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
 			dateInput,
 			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{tomorrowDatetime}, nil),
 		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
-		require.Equal(t, wantedType, *result.GetType())
+		require.Equal(t, wantedType, result)
 	})
 
 	t.Run("datetime-shaped text", func(t *testing.T) {
@@ -242,7 +263,7 @@ func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
 			dateInput,
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{tomorrowDatetime.String2(6)}, nil),
 		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
-		require.Equal(t, wantedType, *result.GetType())
+		require.Equal(t, wantedType, result)
 	})
 
 	t.Run("ISO datetime-shaped text", func(t *testing.T) {
@@ -250,7 +271,7 @@ func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
 			dateInput,
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{tomorrow.String() + "T12:34:56.654321"}, nil),
 		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
-		require.Equal(t, wantedType, *result.GetType())
+		require.Equal(t, wantedType, result)
 	})
 }
 
@@ -271,13 +292,13 @@ func TestTimestampPairCompactDatetimeString(t *testing.T) {
 		wantedDatetime,
 		wantedTime,
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 
 	result = runTimestampPairCase(t, proc, []FunctionTestInput{
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2024-01-15"}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"20240115120000.123456"}, nil),
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{wantedDatetime}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 }
 
 func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
@@ -323,7 +344,7 @@ func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 		parseTimestampPairDatetime(t, "2023-12-31 23:00:00", 6),
 		parseTimestampPairDatetime(t, "2024-01-15 12:00:00", 6),
 	}, []bool{false, true, true, true, true, true, false, true, false, false, false}), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 }
 
 func TestTimestampPairUsesSessionTimezone(t *testing.T) {
@@ -342,7 +363,7 @@ func TestTimestampPairUsesSessionTimezone(t *testing.T) {
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 12:30:00.123456", 6),
 	}, nil), nil)
-	require.Equal(t, wantedType, *result.GetType())
+	require.Equal(t, wantedType, result)
 }
 
 func TestTimestampPairConstantAndSelectList(t *testing.T) {
@@ -374,11 +395,59 @@ func TestTimestampPairConstantAndSelectList(t *testing.T) {
 		0,
 		parseTimestampPairDatetime(t, "2024-01-15 01:00:00.000000", 6),
 	}, []bool{true, false}), &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	require.Equal(t, wantedType, *maskedResult.GetType())
+	require.Equal(t, wantedType, maskedResult)
 }
 
 func TestTimestampPairNullability(t *testing.T) {
 	notNull := &planpb.Expr{Typ: planpb.Type{NotNullable: true}}
 	require.False(t, DeduceNotNullable(EncodeOverloadID(TIMESTAMP, 5), []*planpb.Expr{notNull, notNull}))
-	require.True(t, DeduceNotNullable(EncodeOverloadID(TIMESTAMP, 0), []*planpb.Expr{notNull}))
+	require.False(t, DeduceNotNullable(EncodeOverloadID(TIMESTAMP, 0), []*planpb.Expr{notNull}))
+}
+
+func TestUnaryTimestampDatetimeResults(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fsp   int32
+		want  types.Datetime
+	}{
+		{"date", NewFunctionTestConstInput(types.T_date.ToType(), []types.Date{parseTimestampPairDate(t, "2024-02-29")}, nil), 0, parseTimestampPairDatetime(t, "2024-02-29", 0)},
+		{"datetime3", NewFunctionTestConstInput(types.T_datetime.ToTypeWithScale(3), []types.Datetime{parseTimestampPairDatetime(t, "2024-02-29 12:34:56.123", 3)}, nil), 3, parseTimestampPairDatetime(t, "2024-02-29 12:34:56.123", 3)},
+		{"string", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2024-02-29 12:34:56.123456"}, nil), 6, parseTimestampPairDatetime(t, "2024-02-29 12:34:56.123456", 6)},
+		{"text", NewFunctionTestConstInput(types.T_text.ToType(), []string{"2024-02-29 12:34:56.123456"}, nil), 6, parseTimestampPairDatetime(t, "2024-02-29 12:34:56.123456", 6)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*3600)
+			fn, err := GetFunctionByName(proc.Ctx, "timestamp", []types.Type{tc.input.typ})
+			require.NoError(t, err)
+			require.Equal(t, types.New(types.T_datetime, tc.fsp, tc.fsp), fn.GetReturnType())
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, NewFunctionTestResult(fn.GetReturnType(), false, []types.Datetime{tc.want}, nil), timestampAsDatetime)
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+	for _, offset := range []int{0, 8} {
+		proc := newTmpProcess(t)
+		proc.GetSessionInfo().TimeZone = time.FixedZone("session", offset*3600)
+		value, err := types.ParseTimestamp(time.UTC, "2024-02-29 12:34:56.123", 3)
+		require.NoError(t, err)
+		wanted := types.DatetimeFromClock(2024, 2, 29, uint8(12+offset), 34, 56, 123000)
+		c := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(3), []types.Timestamp{value}, nil)}, NewFunctionTestResult(types.New(types.T_datetime, 3, 3), false, []types.Datetime{wanted}, nil), timestampAsDatetime)
+		ok, info := c.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
+func TestUnaryTimestampInvalidNullAndMask(t *testing.T) {
+	proc := newTmpProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	valid := parseTimestampPairDatetime(t, "2024-02-29 12:34:56.123456", 6)
+	c := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-29 12:34:56.123456", "invalid", "0000-00-00", "", "invalid"}, []bool{false, false, false, true, false}),
+	}, NewFunctionTestResult(types.New(types.T_datetime, 6, 6), false, []types.Datetime{valid, 0, 0, 0, 0}, []bool{false, true, true, true, true}), timestampAsDatetime).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+	ok, info := c.RunAndFree()
+	require.True(t, ok, info)
+	require.Empty(t, warnings.warnings)
 }

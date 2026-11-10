@@ -58,7 +58,7 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	client.version = defines.MORPCVersion79
-	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
 		"a worker below the result-contract version must not receive a multi-CN plan")
 	require.Equal(t, c.addr, c.cnList[0].Addr)
@@ -68,7 +68,7 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	client.version = defines.MORPCVersion80
-	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
 		"a v80 worker keeps the multi-CN placement")
 	data, err := encodeRemoteScope(scope, c.proc)
@@ -85,7 +85,7 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Mcpu: 4}}
 	client.version = defines.MORPCVersion80
-	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
 	require.Equal(t, c.addr, c.cnList[0].Addr)
 

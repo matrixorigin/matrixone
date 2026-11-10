@@ -3,15 +3,15 @@ desc system.sql_statement_hotspot;
 no such table system.sql_statement_hotspot
 desc system.sql_statement_hotspot;
 Field    Type    Null    Key    Default    Extra    Comment
-statement_id    VARCHAR(36)    NO        null        
-statement    TEXT    NO        null        
-timeconsumed    DOUBLE(0)    YES        null        
-memorysize    DECIMAL(38,3)    YES        null        
-collecttime    DATETIME(6)    NO        null        
-node    VARCHAR(36)    NO        null        
-account    VARCHAR(1024)    NO        null        
-user    VARCHAR(1024)    NO        null        
-type    VARCHAR(1024)    NO        null        
+statement_id    varchar(36)    NO        null        
+statement    text    NO        null        
+timeconsumed    double    YES        null        
+memorysize    decimal(38,3)    YES        null        
+collecttime    datetime(6)    NO        null        
+node    varchar(36)    NO        null        
+account    varchar(1024)    NO        null        
+user    varchar(1024)    NO        null        
+type    varchar(1024)    NO        null        
 select count(1) >= 0 as checked from system.sql_statement_hotspot;
 checked
 1

@@ -113,6 +113,9 @@ func (partition *Partition) callHash(proc *process.Process) (vm.CallResult, erro
 			if err != nil {
 				return result, err
 			}
+			if result.Status == vm.ExecYield {
+				return result, nil
+			}
 			if result.Batch == nil {
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err
@@ -373,7 +376,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 		} else if spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		}
-		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
+		typ := types.MustTypeFromPlan(spec.Expr.Typ)
 		compares[i] = compare.New(typ, desc, nullsLast)
 		if compares[i] == nil {
 			return moerr.NewInternalErrorNoCtx("unsupported sort fallback partition key")

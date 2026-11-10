@@ -64,7 +64,7 @@ func TestPreparedTimeArithmeticUsesNumericParameterContext(t *testing.T) {
 		{name: "integer divide time right", op: "div", left: "?", right: "n_nationkey"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 				Id: int32(types.T_time), Width: 6, Scale: 3,
 			}
@@ -94,10 +94,11 @@ func TestPreparedTimeArithmeticKeepsBoundaries(t *testing.T) {
 	}{
 		{name: "time zero scale", time: types.T_time, scale: 0, want: true},
 		{name: "time microsecond scale", time: types.T_time, scale: 6, want: true},
-		{name: "date remains unsupported", time: types.T_date, scale: 0, want: false},
+		{name: "date numeric arithmetic", time: types.T_date, scale: 0, want: true},
+		{name: "geometry remains unsupported", time: types.T_geometry, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 				Id: int32(tc.time), Width: 6, Scale: tc.scale,
 			}
@@ -113,7 +114,7 @@ func TestPreparedTimeArithmeticKeepsBoundaries(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticCoversModAndNestedParameters(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 3,
 	}
@@ -138,17 +139,29 @@ func TestPreparedTimeArithmeticCoversModAndNestedParameters(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticRespectsExplicitStringCast(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 3,
 	}
-	_, err := runOneStmt(mock, t,
+	p, err := runOneStmt(mock, t,
 		"prepare stmt_char from 'select n_nationkey * cast(? as char) from nation'")
-	require.Error(t, err)
+	require.NoError(t, err)
+	multiply := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "*")
+	require.NotNil(t, multiply)
+	require.Equal(t, int32(types.T_float64), multiply.Typ.Id)
+	found := false
+	require.NoError(t, planpb.VisitExprTree(multiply, func(expr *Expr) error {
+		if fn := expr.GetF(); fn != nil && (fn.SyntaxExplicitCast || isCastOverload(expr, 1)) {
+			found = true
+			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+		}
+		return nil
+	}))
+	require.True(t, found, "numeric coercion must retain the explicit character boundary")
 }
 
 func TestPreparedTimeArithmeticFillsAndExecutes(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_runtime from 'select cast(''03:04:05.123456'' as time(6)) * ?'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -192,7 +205,7 @@ func TestPreparedTimeArithmeticAsIntegerArgument(t *testing.T) {
 		{"explicit text uses prefix", "cast(cast(''00:00:01.5'' as time(6)) + ? as char)", "a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare time_integer_consumer from 'select substring_index(''a.b.c.d'',''.'',"+tc.source+")'")
 			require.NoError(t, err)
 			cached := prepared.GetDcl().GetPrepare().Plan
@@ -235,12 +248,12 @@ func TestPreparedTimeArithmeticAsIntegerArgument(t *testing.T) {
 func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 	for _, op := range []string{"+", "-", "%"} {
 		t.Run(op, func(t *testing.T) {
-			ordinary, err := runOneStmt(NewMockOptimizer(false), t,
+			ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"select cast('00:00:01' as time(0)) "+op+" 10")
 			require.NoError(t, err)
 			ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_runtime from 'select cast(''00:00:01'' as time(0)) "+op+" ?'")
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
@@ -251,25 +264,34 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 			preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 
 			for _, expr := range []*planpb.Expr{ordinaryExpr, preparedExpr} {
-				require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
-				require.Equal(t, int32(18), expr.Typ.Width)
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+				width := int32(20)
+				if op == "%" {
+					width = 19
+				}
+				require.Equal(t, width, expr.Typ.Width)
 				require.Equal(t, int32(0), expr.Typ.Scale)
 			}
 
 			if op != "+" {
 				return
 			}
-			ordinaryMax, err := runOneStmt(NewMockOptimizer(false), t,
+			ordinaryMax, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"select cast('00:00:01' as time(0)) + 9223372036854775807")
 			require.NoError(t, err)
 			ordinaryMaxExpr := ordinaryMax.GetQuery().Nodes[len(ordinaryMax.GetQuery().Nodes)-1].ProjectList[0]
 			proc := testutil.NewProc(t)
 			executor, err := colexec.NewExpressionExecutor(proc, ordinaryMaxExpr)
 			require.NoError(t, err)
-			_, ordinaryErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			ordinaryResult, ordinaryErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			ordinaryValue := ""
+			if ordinaryErr == nil {
+				ordinaryValue = formatDecimalResult(ordinaryResult)
+			}
 			executor.Free()
 			proc.Free()
-			require.Error(t, ordinaryErr)
+			require.NoError(t, ordinaryErr)
+			require.Equal(t, "9223372036854775808", ordinaryValue)
 
 			preparedMax, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
@@ -280,14 +302,19 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 			proc = testutil.NewProc(t)
 			executor, err = colexec.NewExpressionExecutor(proc, preparedMaxExpr)
 			require.NoError(t, err)
-			_, preparedErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			preparedResult, preparedErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			preparedValue := ""
+			if preparedErr == nil {
+				preparedValue = formatDecimalResult(preparedResult)
+			}
 			executor.Free()
 			proc.Free()
-			require.Error(t, preparedErr)
+			require.NoError(t, preparedErr)
+			require.Equal(t, "9223372036854775808", preparedValue)
 		})
 	}
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 0,
 	}
@@ -332,7 +359,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 	} {
 		for _, binary := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/binary=%t", tc.name, binary), func(t *testing.T) {
-				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 					"prepare fallback_time from 'select "+strings.ReplaceAll(tc.expression, "'", "''")+"'")
 				require.NoError(t, err)
 				template := prepared.GetDcl().GetPrepare().Plan
@@ -376,7 +403,6 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 						require.NoError(t, err)
 						actual := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 						proc := testutil.NewProc(t)
-						t.Cleanup(proc.Free)
 						eval := func(expr *planpb.Expr) (*vector.Vector, error) {
 							executor, err := colexec.NewExpressionExecutor(proc, expr)
 							require.NoError(t, err)
@@ -389,11 +415,11 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 							require.True(t, result.IsNull(0))
 							return
 						}
-						ordinary, err := runOneStmt(NewMockOptimizer(false), t, "select "+
+						ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+
 							strings.ReplaceAll(tc.expression, "?", "cast("+value+" as "+castType+")"))
 						require.NoError(t, err)
 						expected := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
-						require.Equal(t, expected.Typ.Id, actual.Typ.Id)
+						require.Equal(t, expected.Typ.Id, actual.Typ.Id, "expected=%s actual=%s", expected.String(), actual.String())
 						require.Equal(t, expected.Typ.Width, actual.Typ.Width)
 						require.Equal(t, expected.Typ.Scale, actual.Typ.Scale)
 						want, wantErr := eval(expected)
@@ -442,10 +468,10 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 
 	for _, op := range []string{"+", "-", "%"} {
 		t.Run(op, func(t *testing.T) {
-			ordinary, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf(
+			ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, fmt.Sprintf(
 				"select cast('%s' as time(6)) %s 10", timeLiteral, op))
 			require.NoError(t, err)
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf(
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, fmt.Sprintf(
 				"prepare stmt_fractional_time from 'select cast(''%s'' as time(6)) %s ?'",
 				timeLiteral, op))
 			require.NoError(t, err)
@@ -462,17 +488,21 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 			require.NoError(t, ordinaryErr)
 			require.NoError(t, preparedErr)
 			require.Equal(t, ordinaryType, preparedType)
-			require.Equal(t, types.T_decimal64, ordinaryType.Oid)
-			require.Equal(t, int32(18), ordinaryType.Width)
+			require.Equal(t, types.T_decimal128, ordinaryType.Oid)
+			width := int32(26)
+			if op == "%" {
+				width = 19
+			}
+			require.Equal(t, width, ordinaryType.Width)
 			require.Equal(t, int32(6), ordinaryType.Scale)
 			require.Equal(t, ordinaryValue, preparedValue)
 		})
 	}
 
-	ordinaryMax, err := runOneStmt(NewMockOptimizer(false), t,
+	ordinaryMax, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select cast('03:04:05.123456' as time(6)) + 9223372036854775807")
 	require.NoError(t, err)
-	preparedMax, err := runOneStmt(NewMockOptimizer(false), t,
+	preparedMax, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_fractional_time_max from 'select cast(''03:04:05.123456'' as time(6)) + ?'")
 	require.NoError(t, err)
 	filledMax, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
@@ -480,20 +510,22 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 			ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
 		})
 	require.NoError(t, err)
-	_, _, ordinaryErr := evaluate(t,
+	_, ordinaryValue, ordinaryErr := evaluate(t,
 		ordinaryMax.GetQuery().Nodes[len(ordinaryMax.GetQuery().Nodes)-1].ProjectList[0])
-	_, _, preparedErr := evaluate(t,
+	_, preparedValue, preparedErr := evaluate(t,
 		filledMax.GetQuery().Nodes[len(filledMax.GetQuery().Nodes)-1].ProjectList[0])
-	require.Error(t, ordinaryErr)
-	require.Error(t, preparedErr)
+	require.NoError(t, ordinaryErr)
+	require.NoError(t, preparedErr)
+	require.Equal(t, "9223372036854806212.123456", ordinaryValue)
+	require.Equal(t, ordinaryValue, preparedValue)
 }
 
 func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 	const ordinarySQL = "select cast('00:00:01.000000' as time(6)) + (10000000000000 - 9999999999999)"
-	ordinary, err := runOneStmt(NewMockOptimizer(false), t, ordinarySQL)
+	ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, ordinarySQL)
 	require.NoError(t, err)
 
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_nested_scale from 'select cast(''00:00:01.000000'' as time(6)) + (? - ?)'")
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
@@ -519,8 +551,8 @@ func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 	preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 	ordinaryType, ordinaryValue := evaluate(ordinaryExpr)
 	preparedType, preparedValue := evaluate(preparedExpr)
-	require.Equal(t, types.T_decimal64, ordinaryType.Oid)
-	require.Equal(t, int32(18), ordinaryType.Width)
+	require.Equal(t, types.T_decimal128, ordinaryType.Oid)
+	require.Equal(t, int32(26), ordinaryType.Width)
 	require.Equal(t, int32(6), ordinaryType.Scale)
 	require.Equal(t, ordinaryType, preparedType)
 	require.Equal(t, "2.000000", ordinaryValue)
@@ -528,10 +560,10 @@ func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
-	ordinary, err := runOneStmt(NewMockOptimizer(false), t,
+	ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select cast('00:00:01' as time(0)) + cast(10 as unsigned)")
 	require.NoError(t, err)
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_unsigned from 'select cast(''00:00:01'' as time(0)) + ?'")
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
@@ -546,8 +578,8 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal64), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(18), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
+	require.Equal(t, int32(21), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(0), ordinaryExpr.Typ.Scale)
 	require.Equal(t, ordinaryExpr.Typ.Id, preparedExpr.Typ.Id)
 	require.Equal(t, ordinaryExpr.Typ.Width, preparedExpr.Typ.Width)
@@ -566,7 +598,7 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_null_envelope from 'select cast(''00:00:01'' as time(0)) + (? + ?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -582,19 +614,19 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 		{name: "left null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 38, id: types.T_decimal128},
 		{name: "right null", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 38, id: types.T_decimal128},
 		{name: "both null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 18, id: types.T_decimal64},
 		{name: "both integers", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
-		}, width: 18, id: types.T_decimal64},
+		}, width: 20, id: types.T_decimal128},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -615,7 +647,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_null_envelope_abs from 'select abs(cast(''00:00:01'' as time(0)) + (? + ?))'")
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -625,14 +657,14 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
-	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+	require.Equal(t, int32(38), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 	require.False(t, expr.Typ.NotNullable)
 }
 
 func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_null_envelope_signed from 'select cast(''00:00:01'' as time(0)) + cast((? + ?) as signed)'")
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -642,8 +674,8 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
-	require.Equal(t, int32(18), expr.Typ.Width)
+	require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+	require.Equal(t, int32(20), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 
 	for _, tc := range []struct {
@@ -666,7 +698,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			folded, err := runOneStmt(NewMockOptimizer(false), t, tc.query)
+			folded, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.query)
 			require.NoError(t, err)
 			foldedPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), folded.GetDcl().GetPrepare().Plan, []any{
@@ -674,8 +706,8 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 				})
 			require.NoError(t, err)
 			foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
-			require.Equal(t, int32(types.T_decimal64), foldedExpr.Typ.Id)
-			require.Equal(t, int32(18), foldedExpr.Typ.Width)
+			require.Equal(t, int32(types.T_decimal128), foldedExpr.Typ.Id)
+			require.Equal(t, int32(20), foldedExpr.Typ.Width)
 			require.Equal(t, int32(0), foldedExpr.Typ.Scale)
 			if tc.want == "" {
 				return
@@ -695,7 +727,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_position_scope from 'select ? as direct, cast(''00:00:01'' as time(0)) + (? + ?) as nested'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -716,7 +748,7 @@ func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T)
 }
 
 func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 0,
 	}
@@ -725,7 +757,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 	require.NoError(t, err)
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(38), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(22), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(2), ordinaryExpr.Typ.Scale)
 
 	prepared, err := runOneStmt(mock, t,
@@ -777,7 +809,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 }
 
 func TestPreparedTimeArithmeticTimeZeroFractionalParameter(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_runtime from 'select cast(''00:00:01'' as time(0)) * ?'")
 	require.NoError(t, err)
 
@@ -838,7 +870,7 @@ func TestPreparedTimeArithmeticTimeZeroFractionalParameter(t *testing.T) {
 }
 
 func TestOrdinaryTimeZeroFractionalLiteral(t *testing.T) {
-	query, err := runOneStmt(NewMockOptimizer(false), t,
+	query, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select cast('00:00:01' as time(0)) * 1.25")
 	require.NoError(t, err)
 	proc := testutil.NewProc(t)
@@ -855,7 +887,7 @@ func TestOrdinaryTimeZeroFractionalLiteral(t *testing.T) {
 }
 
 func TestPreparedTimeArithmeticOrdinaryLiteralControl(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 3,
 	}
@@ -867,7 +899,7 @@ func TestTimeArithmeticDecimalResultFSPIsCapped(t *testing.T) {
 	for _, name := range []string{"addtime", "subtime"} {
 		for _, precision := range []string{"decimal(10,7)", "decimal(30,18)"} {
 			t.Run(name+"/"+precision, func(t *testing.T) {
-				query, err := runOneStmt(NewMockOptimizer(false), t,
+				query, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 					"select "+name+"(time '00:00:00', cast(0.0000005 as "+precision+"))")
 				require.NoError(t, err)
 				call := findPlanFunctionExpr(query, name)

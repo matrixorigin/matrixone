@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -292,11 +293,12 @@ func TestPredicatePlanRejectsMissingComparisonValue(t *testing.T) {
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {
-		options := tree.MongoDBOptions{
+		options := make(tree.MongoDBOptions, 0, 3+len(extra))
+		options = append(options,
 			tree.NewMongoDBOption("connection", "source"),
 			tree.NewMongoDBOption("database", "telemetry"),
 			tree.NewMongoDBOption("collection", "raw"),
-		}
+		)
 		options = append(options, extra...)
 		return tree.NewMongoDBTableParam(options)
 	}
@@ -405,6 +407,27 @@ func TestParseTableMappingSpecDefaultContractFromSQL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRetainedColumnNames(t *testing.T) {
+	columns := []*planpb.ColDef{
+		nil,
+		{Name: "value"},
+		{Name: "hidden", Hidden: true},
+		{Name: catalog.ExternalQuery, ColId: catalog.ExternalQueryColId},
+		{Name: catalog.ExternalQuery, ColId: 1},
+		{Name: "value"},
+	}
+	require.Equal(t, []string{"value", catalog.ExternalQuery, "value"}, RetainedColumnNames(columns))
+	require.NotNil(t, RetainedColumnNames(nil))
+	require.Empty(t, RetainedColumnNames(nil))
+}
+
+func TestProjectedPaths(t *testing.T) {
+	require.NotNil(t, ProjectedPaths(nil))
+	require.Empty(t, ProjectedPaths(nil))
+	columns := []ColumnMapping{{Path: "a.b"}, {Path: "a"}, {Path: "a.b"}, {Path: ""}, {Path: ""}, {Path: "c"}}
+	require.Equal(t, []string{"a.b", "a", "", "c"}, ProjectedPaths(columns))
 }
 
 func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
@@ -520,6 +543,13 @@ func TestPlanPredicatePushesTryNullBSONDateTimeWithSafeRounding(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bson.DateTime(10124), predicate.Value,
 		">= must round its BSON millisecond candidate outward")
+
+	literalExpr.GetLit().Value = &planpb.Literal_Datetimeval{Datetimeval: int64(literalDatetime)}
+	pushed, _ = PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, columns)
+	require.NotNil(t, pushed, "folded DATETIME literals keep the same BSON candidate")
+	predicate, err = PredicateFromPlan(t.Context(), pushed)
+	require.NoError(t, err)
+	require.Equal(t, bson.DateTime(10124), predicate.Value)
 
 	castLiteral := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 3},

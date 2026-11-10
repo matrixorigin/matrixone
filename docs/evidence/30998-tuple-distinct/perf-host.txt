@@ -1,0 +1,4 @@
+ 8:54  up 41 days,  7:28, 10 users, load averages: 6.99 6.68 6.69
+hw.ncpu: 10
+hw.memsize: 17179869184
+machdep.cpu.brand_string: Apple M4

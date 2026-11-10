@@ -24,12 +24,14 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"errors"
 	"io"
 	"math"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/zipstream"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -67,6 +69,7 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 
+	param.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	fs, readPath, err := plan2.GetForETLWithType(param, data)
 	if err != nil {
 		return nil, err
@@ -136,6 +139,24 @@ type decompressReader struct {
 	src          io.Closer
 }
 
+// Read resurfaces truncated compressed streams.  Every decoder in
+// getUnCompressReader reports a stream that ends before its framing is
+// complete with io.ErrUnexpectedEOF, while a structurally valid stream ends
+// with a plain io.EOF.  CSVParser.readBlock interprets io.ErrUnexpectedEOF as
+// a plain file's legal short final block and returns the bytes read so far
+// as a complete input, so a load of a truncated ZSTD/GZIP/LZ4 file silently
+// committed only the decompressed prefix and reported success (#30652).
+// Translating the sentinel here keeps that short-block interpretation for
+// plain files only; decompressed streams must end cleanly on io.EOF.
+func (d *decompressReader) Read(p []byte) (int, error) {
+	n, err := d.Reader.Read(p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, moerr.NewInvalidInputNoCtx(
+			"the compressed stream is truncated or corrupted (unexpected end of stream)")
+	}
+	return n, err
+}
+
 func (d *decompressReader) Close() error {
 	var err error
 	if d.closeDecoder != nil {
@@ -186,7 +207,7 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 		}
 		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
 	case tree.ZIP:
-		zr, closeDecoder, err := getZipReader(ctx, r)
+		zr, closeDecoder, err := zipstream.NewReader(ctx, r)
 		if err != nil {
 			return nil, err
 		}

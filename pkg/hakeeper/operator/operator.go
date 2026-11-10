@@ -110,6 +110,14 @@ func (o *Operator) CheckExpired() bool {
 	if o.CheckSuccess() {
 		return false
 	}
+	// A TN start remains owned until its checker observes a started shard or
+	// an unavailable target. A wall-clock timeout would abandon its retry
+	// before the configured TN failure-detection interval has elapsed.
+	if len(o.steps) == 1 {
+		if _, ok := o.steps[0].(AddTnReplica); ok {
+			return false
+		}
+	}
 	return o.status.CheckExpired(ExpireTime)
 }
 

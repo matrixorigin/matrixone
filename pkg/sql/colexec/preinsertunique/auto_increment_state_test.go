@@ -46,7 +46,8 @@ func TestInsertIgnoreFinalKeySetMatchesExactIntegerIdentity(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 	// Cover dense sequences, equal low bits, signed/unsigned extrema and a
 	// reproducible wide domain. The oracle is an independent exact Go set.
-	values := []uint64{0, 1, math.MaxUint64, math.MaxInt64, 1 << 63}
+	values := make([]uint64, 0, 6149)
+	values = append(values, 0, 1, math.MaxUint64, math.MaxInt64, 1<<63)
 	rng := rand.New(rand.NewSource(28349))
 	for i := range 2048 {
 		values = append(values, uint64(i), uint64(i)<<32|7, rng.Uint64())

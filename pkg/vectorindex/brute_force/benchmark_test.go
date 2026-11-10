@@ -29,7 +29,7 @@ import (
 func benchmarkBruteForceGeneric(b *testing.B, dsize, qsize int, dimension uint, ncpu uint, createFn func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)) {
 	b.Helper()
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(b, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	limit := uint(10)
 	elemsz := uint(4) // float32

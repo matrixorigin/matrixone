@@ -17,10 +17,7 @@ package frontend
 import (
 	"context"
 	"database/sql"
-	"math"
 	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -133,15 +130,7 @@ func ExecuteAndGetRowsAffected(
 	query string,
 	args ...interface{},
 ) (int64, error) {
-	exec, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
+	return taskservice.ExecRowsAffected(ctx, tx, query, args...)
 }
 
 func WithBackgroundExec(
@@ -177,6 +166,93 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 	return !(pc.Unit == "h" && pc.Length < minLength)
 }
 
+func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string, sourceCaseMode ...int64) error {
+	return checkCDCSourcePrimaryKeyWithExclude(ctx, bh, dbName, tableName, "", sourceCaseMode...)
+}
+
+func checkCDCSourcePrimaryKeyWithExclude(ctx context.Context, bh BackgroundExec, dbName, tableName, exclude string, sourceCaseMode ...int64) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if err := bh.Exec(ctx, cdc.CollectCDCSourceCandidateSQL(accountID, dbName, tableName, sourceCaseMode...)); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	bh.ClearExecResultSet()
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+	}
+	caseMode := int64(0)
+	if len(sourceCaseMode) > 0 {
+		caseMode = sourceCaseMode[0]
+	}
+	for _, result := range results {
+		// A concrete-table candidate query normally returns one row. A malformed
+		// mode-2 identifier deliberately uses a broader catalog candidate set,
+		// so filter every returned row with the same local identifier policy.
+		if result.GetRowCount() == 0 {
+			continue
+		}
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			candidateDB, err := result.GetString(ctx, row, 3)
+			if err != nil {
+				return err
+			}
+			candidateTable, err := result.GetString(ctx, row, 1)
+			if err != nil {
+				return err
+			}
+			if !cdc.CDCSourceNameMatches(candidateDB, dbName, caseMode) ||
+				!cdc.CDCSourceNameMatches(candidateTable, tableName, caseMode) {
+				continue
+			}
+			if exclude != "" {
+				matched, err := regexp.MatchString(exclude, candidateDB+"."+candidateTable)
+				if err != nil {
+					return err
+				}
+				if matched {
+					return nil
+				}
+			}
+			constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+			if err != nil {
+				return err
+			}
+			var constraintBytes []byte
+			if !constraintIsNull {
+				constraint, err := result.GetString(ctx, row, 6)
+				if err != nil {
+					return err
+				}
+				constraintBytes = []byte(constraint)
+			}
+			hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+			if err != nil {
+				return err
+			}
+			if hasForeignKey {
+				// Concrete sources name exactly one table. TableDetector skips FK
+				// children, so admission must accept this same non-source.
+				return nil
+			}
+			hasUserPK, err := result.GetUint64(ctx, row, 7)
+			if err != nil {
+				return err
+			}
+			if hasUserPK == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+			}
+			return nil
+		}
+	}
+	return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+}
+
 // CDCCheckPitrGranularity checks if the PITR (Point-in-Time Recovery) granularity settings
 // meet the minimum requirements for CDC tasks at different levels (cluster/account/db/table)
 // It verifies the PITR configuration in descending order of priority (cluster > account > database > table)
@@ -191,13 +267,98 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 //
 // Returns:
 // - error: Returns an error if no PITR configuration meets the minimum requirement, otherwise nil.
-var CDCCheckPitrGranularity = func(
+var CDCCheckPitrGranularityWithExclude = func(
 	ctx context.Context,
 	bh BackgroundExec,
 	accName string,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	// Validate concrete source tables before persisting the CDC task. A CDC
+	// stream needs a user-visible primary key to identify UPDATE/DELETE rows;
+	// MatrixOne's internal fake key is not a supported sink identity.
+	if bh != nil {
+		for _, pt := range pts.Pts {
+			if pt == nil {
+				continue
+			}
+			if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+				accountID, err := defines.GetAccountId(ctx)
+				if err != nil {
+					return err
+				}
+				candidateSQL := cdc.CollectCDCSourceCandidateSQL(accountID, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode)
+				if err := bh.Exec(ctx, candidateSQL); err != nil {
+					return err
+				}
+				results, err := getResultSet(ctx, bh)
+				bh.ClearExecResultSet()
+				if err != nil {
+					return err
+				}
+				for _, result := range results {
+					for row := uint64(0); row < result.GetRowCount(); row++ {
+						dbName, err := result.GetString(ctx, row, 3)
+						if err != nil {
+							return err
+						}
+						tableName, err := result.GetString(ctx, row, 1)
+						if err != nil {
+							return err
+						}
+						if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+							!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+							continue
+						}
+						if exclude != "" {
+							matched, err := regexp.MatchString(exclude, dbName+"."+tableName)
+							if err != nil {
+								return err
+							}
+							if matched {
+								continue
+							}
+						}
+						constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+						if err != nil {
+							return err
+						}
+						var constraintBytes []byte
+						if !constraintIsNull {
+							// ExecResult intentionally exposes only typed getters. String
+							// conversion preserves the serialized constraint bytes and works
+							// for both the real result set and the test implementation.
+							constraint, err := result.GetString(ctx, row, 6)
+							if err != nil {
+								return err
+							}
+							constraintBytes = []byte(constraint)
+						}
+						hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+						if err != nil {
+							return err
+						}
+						if hasForeignKey {
+							continue
+						}
+						hasUserPK, err := result.GetUint64(ctx, row, 7)
+						if err != nil {
+							return err
+						}
+						if hasUserPK == 0 {
+							return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						}
+
+					}
+				}
+				continue
+			}
+			if err := checkCDCSourcePrimaryKeyWithExclude(ctx, bh, pt.Source.Database, pt.Source.Table, exclude, pts.SourceCaseMode); err != nil {
+				return err
+			}
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -271,6 +432,19 @@ var CDCCheckPitrGranularity = func(
 	return nil
 }
 
+// CDCCheckPitrGranularity is kept for callers that have no Exclude option.
+// CREATE CDC uses CDCCheckPitrGranularityWithExclude so admission sees the
+// same source set as the runtime scanner.
+var CDCCheckPitrGranularity = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	accName string,
+	pts *cdc.PatternTuples,
+	minLength ...int64,
+) error {
+	return CDCCheckPitrGranularityWithExclude(ctx, bh, accName, pts, "", minLength...)
+}
+
 var (
 	getGlobalPuWrapper = getPu
 )
@@ -324,21 +498,8 @@ var initAesKeyBySqlExecutor = func(
 	return
 }
 
-func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
-	if tsStr == "" {
-		return
-	}
-
-	if tz != nil {
-		if ts, err = time.ParseInLocation(
-			time.DateTime, tsStr, tz,
-		); err == nil {
-			return
-		}
-	}
-
-	ts, err = time.Parse(time.RFC3339, tsStr)
-	return
+func CDCStrToTime(tsStr string, tz *time.Location) (time.Time, error) {
+	return cdc.CDCStrToTime(tsStr, tz)
 }
 
 func CDCStrToTS(tsStr string) (types.TS, error) {
@@ -359,191 +520,17 @@ func CDCStrToTS(tsStr string) (types.TS, error) {
 	return types.BuildTS(t.UnixNano(), 0), nil
 }
 
-// CDCParseTableInfo parses a string to get account,database,table info
-//
-// input format:
-//
-//	DbLevel: database
-//	TableLevel: database.table
-//
-// There must be no special characters (','  '.'  ':' '`') in database name & table name.
-func CDCParseTableInfo(
-	ctx context.Context,
-	input string,
-	level string,
-) (db string, table string, err error) {
-	parts := strings.Split(strings.TrimSpace(input), ".")
-	if level == cdc.CDCPitrGranularity_DB && len(parts) != 1 {
-		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
-		return
-	} else if level == cdc.CDCPitrGranularity_Table && len(parts) != 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
-		return
-	}
-
-	db = strings.TrimSpace(parts[0])
-	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
-		return
-	}
-
-	if level == cdc.CDCPitrGranularity_Table {
-		table = strings.TrimSpace(parts[1])
-		if !tableNameIsLegal(table) {
-			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
-			return
-		}
-	} else {
-		table = cdc.CDCPitrGranularity_All
-	}
-	return
+// CDCParseTableInfo parses a CDC database or table pattern.
+func CDCParseTableInfo(ctx context.Context, input string, level string) (string, string, error) {
+	return cdc.CDCParseTableInfo(ctx, input, level)
 }
 
-// CDCParsePitrGranularity parses a comma-separated list of table patterns into a PatternTuples struct.
-// The level parameter specifies whether patterns are at account/db/table level.
-// For account level, returns a single pattern matching all DBs and tables.
-// For db/table level, parses each pattern into source and sink components.
-func CDCParsePitrGranularity(
-	ctx context.Context,
-	level string,
-	tables string,
-) (pts *cdc.PatternTuples, err error) {
-	pts = &cdc.PatternTuples{}
-
-	if level == cdc.CDCPitrGranularity_Account {
-		pts.Append(&cdc.PatternTuple{
-			Source: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-			Sink: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-		})
-		return
-	}
-
-	// split tables by ',' => table pair
-	var pt *cdc.PatternTuple
-	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
-	dup := make(map[string]struct{})
-	for _, pair := range tablePairs {
-		if pt, err = CDCParseGranularityTuple(
-			ctx, level, pair, dup,
-		); err != nil {
-			return
-		}
-		pts.Append(pt)
-	}
-	return
+// CDCParsePitrGranularity parses a list of CDC patterns.
+func CDCParsePitrGranularity(ctx context.Context, level string, tables string) (*cdc.PatternTuples, error) {
+	return cdc.CDCParsePitrGranularity(ctx, level, tables)
 }
 
-// CDCParseGranularityTuple pattern example:
-//
-//	db1
-//	db1:db2
-//	db1.t1
-//	db1.t1:db2.t2
-//
-// There must be no special characters (','  '.'  ':' '`') in database name & table name.
-func CDCParseGranularityTuple(
-	ctx context.Context,
-	level string,
-	pattern string,
-	dup map[string]struct{},
-) (pt *cdc.PatternTuple, err error) {
-	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
-	if len(splitRes) > 2 {
-		err = moerr.NewInternalErrorf(
-			ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern,
-		)
-		return
-	}
-
-	pt = &cdc.PatternTuple{OriginString: pattern}
-
-	// handle source part
-	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(
-		ctx, splitRes[0], level,
-	); err != nil {
-		return
-	}
-	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
-	if _, ok := dup[key]; ok {
-		err = moerr.NewInternalErrorf(
-			ctx, "one db/table: %s can't be used as multi sources in a cdc task", key,
-		)
-		return
-	}
-	dup[key] = struct{}{}
-
-	// handle sink part
-	if len(splitRes) > 1 {
-		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(
-			ctx, splitRes[1], level,
-		); err != nil {
-			return
-		}
-	} else {
-		// if not specify sink, then sink = source
-		pt.Sink.Database = pt.Source.Database
-		pt.Sink.Table = pt.Source.Table
-	}
-	return
-}
-
-// only accept positive integers that end with m or h
-func isValidFrequency(freq string) bool {
-	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
-		return false
-	}
-
-	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
-
-	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
-	if !matched {
-		return false
-	}
-
-	num, err := strconv.Atoi(numPart)
-	if err != nil {
-		return false
-	}
-
-	if num < 0 {
-		return false
-	}
-
-	if num > 10000000 {
-		return false
-	}
-
-	return true
-}
-
-// e.g. 1h -> 1
-//
-//	30m -> 1
-//	60m -> 1
-//	61m -> 2
-//
-// call isValidFrequency before calling this function
-func transformIntoHours(freq string) int64 {
-	if strings.HasSuffix(freq, "h") {
-		hoursStr := strings.TrimSuffix(freq, "h")
-		hours, _ := strconv.Atoi(hoursStr)
-		return int64(hours)
-	}
-
-	if strings.HasSuffix(freq, "m") {
-		minStr := strings.TrimSuffix(freq, "m")
-		minutes, _ := strconv.Atoi(minStr)
-
-		hours := int(math.Ceil(float64(minutes) / 60.0))
-
-		return int64(hours)
-	}
-
-	return 0
+// CDCParseGranularityTuple parses a CDC source and sink pattern.
+func CDCParseGranularityTuple(ctx context.Context, level string, pattern string, dup map[string]struct{}) (*cdc.PatternTuple, error) {
+	return cdc.CDCParseGranularityTuple(ctx, level, pattern, dup)
 }

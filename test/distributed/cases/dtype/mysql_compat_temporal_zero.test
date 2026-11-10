@@ -332,6 +332,35 @@ execute temporal_invalid_date_insert using @invalid_date_id, @invalid_date_value
 select count(*) as invalid_prepared_date_rows from mysql_compat_temporal_zero_dml;
 deallocate prepare temporal_invalid_date_insert;
 
+-- Incomplete strings retain fields for formatting and diagnose calendar rejection (#30234).
+select date_format('2024-00-00', '%Y-%m-%d') as partial_format;
+show warnings;
+select to_days('2024-00-00') is null as partial_is_null;
+show warnings;
+select to_seconds('2024-00-00') is null as partial_is_null;
+show warnings;
+select dayofweek('2024-00-00') is null as partial_is_null;
+show warnings;
+select week('2024-00-00', 0) is null as partial_is_null;
+show warnings;
+select last_day('2024-00-00') is null as partial_is_null;
+show warnings;
+select date_add('2024-00-00', interval 1 day) is null as partial_is_null;
+show warnings;
+select datediff('2024-00-00', '2024-01-01') is null as partial_is_null;
+show warnings;
+drop table if exists temporal_incomplete_strings_30234;
+create table temporal_incomplete_strings_30234(id int, v varchar(16));
+insert into temporal_incomplete_strings_30234 values (1, '2024-00-00'), (2, '2024-02-29');
+select v, date_format(v, '%Y-%m-%d') as formatted from temporal_incomplete_strings_30234 order by id;
+prepare temporal_incomplete_format from 'select date_format(?, ''%Y-%m-%d'') as formatted';
+set @incomplete30234 = '2024-00-00';
+execute temporal_incomplete_format using @incomplete30234;
+set @incomplete30234 = '2024-02-29';
+execute temporal_incomplete_format using @incomplete30234;
+deallocate prepare temporal_incomplete_format;
+drop table temporal_incomplete_strings_30234;
+
 set sql_mode = @old_sql_mode;
 set time_zone = @old_time_zone;
 drop table mysql_compat_temporal_zero;

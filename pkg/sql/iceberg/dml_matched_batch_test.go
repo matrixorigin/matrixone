@@ -16,10 +16,13 @@ package iceberg
 
 import (
 	"context"
+	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,6 +94,84 @@ func TestBuildDMLMatchedDeleteTargetFromBatchRejectsInvalidColumnIndex(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "column index out of range") {
 		t.Fatalf("expected column index error, got %v", err)
+	}
+}
+
+func TestBuildDMLMatchedDeleteTargetFromBatchRowOrdinalBounds(t *testing.T) {
+	dataFile := api.DataFile{FilePath: "s3://warehouse/private/orders/data/part-1.parquet"}
+	for _, tc := range []struct {
+		name     string
+		start    int64
+		count    int
+		nilBatch bool
+		wantErr  string
+	}{
+		{name: "zero start", count: 2},
+		{name: "single row at max", start: math.MaxInt64, count: 1},
+		{name: "two rows ending at max", start: math.MaxInt64 - 1, count: 2},
+		{name: "two rows overflow", start: math.MaxInt64, count: 2, wantErr: "row ordinal overflows int64"},
+		{name: "three rows ending at max", start: math.MaxInt64 - 2, count: 3},
+		{name: "three rows overflow", start: math.MaxInt64 - 1, count: 3, wantErr: "row ordinal overflows int64"},
+		{name: "negative start", start: -1, count: 1, wantErr: "row ordinal must be non-negative"},
+		{name: "empty batch at max", start: math.MaxInt64},
+		{name: "empty batch ignores negative start", start: -1},
+		{name: "nil batch at max", start: math.MaxInt64, nilBatch: true},
+		{name: "nil batch ignores negative start", start: -1, nilBatch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var bat *batch.Batch
+			if !tc.nilBatch {
+				bat = batch.NewWithSize(0)
+				bat.SetRowCount(tc.count)
+			}
+			target, err := BuildDMLMatchedDeleteTargetFromBatch(context.Background(), DMLMatchedRowsBatchRequest{
+				DataFile: dataFile, Batch: bat, IncludePositionRows: true, StartRowOrdinal: tc.start,
+			})
+			if tc.wantErr != "" {
+				if !moerr.IsMoErrCode(err, moerr.ErrInvalidState) || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected metadata-invalid error containing %q, got %v", tc.wantErr, err)
+				}
+				if strings.Contains(err.Error(), dataFile.FilePath) || !strings.Contains(err.Error(), api.RedactPath(dataFile.FilePath)) {
+					t.Fatalf("expected redacted path in error: %v", err)
+				}
+				if !reflect.DeepEqual(target, DMLMatchedDeleteTarget{}) {
+					t.Fatalf("expected zero target on error, got %+v", target)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("build matched target: %v", err)
+			}
+			if !reflect.DeepEqual(target.DataFile, dataFile) || len(target.PositionRows) != tc.count || target.HasRowOrdinal != (tc.count > 0) {
+				t.Fatalf("unexpected target: %+v", target)
+			}
+			for row, position := range target.PositionRows {
+				if position.FilePath != dataFile.FilePath || position.Pos != tc.start+int64(row) {
+					t.Fatalf("unexpected position at row %d: %+v", row, position)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildDMLMatchedDeleteTargetFromBatchEqualityOnlyIgnoresRowOrdinal(t *testing.T) {
+	bat, cleanup := newMatchedDeleteBatch(t)
+	defer cleanup()
+	for _, start := range []int64{-1, math.MaxInt64} {
+		target, err := BuildDMLMatchedDeleteTargetFromBatch(context.Background(), DMLMatchedRowsBatchRequest{
+			DataFile: api.DataFile{FilePath: "s3://warehouse/data.parquet"}, Batch: bat,
+			EqualityFieldIDs: []int{1}, EqualityColumnIndexes: []int32{0}, PredicateStable: true,
+			StartRowOrdinal: start,
+		})
+		if err != nil {
+			t.Fatalf("equality-only request at start %d: %v", start, err)
+		}
+		if target.HasRowOrdinal || len(target.PositionRows) != 0 || !target.PredicateStable || !reflect.DeepEqual(target.EqualityIDs, []int{1}) || len(target.EqualityRows) != 2 {
+			t.Fatalf("unexpected equality-only target: %+v", target)
+		}
+		if target.EqualityRows[0].Values[1] != int32(7) || target.EqualityRows[1].Values[1] != int32(8) {
+			t.Fatalf("unexpected equality values: %+v", target.EqualityRows)
+		}
 	}
 }
 

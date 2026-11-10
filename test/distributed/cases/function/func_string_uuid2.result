@@ -77,19 +77,23 @@ select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '-0.4'));
 ➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, -0.4))[12,-1,0]  𝄀
 1026BABA6CCD780C95645B8C656024DB
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '1abc'));
-invalid input: '1abc' cannot be converted into boolean value
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1abc))[12,-1,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '2xyz'));
-invalid input: '2xyz' cannot be converted into boolean value
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 2xyz))[12,-1,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 'abc'));
-invalid input: 'abc' cannot be converted into boolean value
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, abc))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', ''));
-invalid input: '' cannot be converted into boolean value
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, ))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
 select hex(uuid_to_bin(null));
 ➤ hex(uuid_to_bin(null))[12,-1,0]  𝄀
 null
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', null));
 ➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, null))[12,-1,0]  𝄀
-null
+6CCD780CBABA102695645B8C656024DB
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'));
 ➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db))[12,-1,0]  𝄀
 6ccd780c-baba-1026-9564-5b8c656024db
@@ -121,16 +125,20 @@ select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '-0.4
 ➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), -0.4)[12,-1,0]  𝄀
 6ccd780c-baba-1026-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '1abc');
-invalid input: '1abc' cannot be converted into boolean value
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 1abc)[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '2xyz');
-invalid input: '2xyz' cannot be converted into boolean value
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 2xyz)[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 'abc');
-invalid input: 'abc' cannot be converted into boolean value
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), abc)[12,-1,0]  𝄀
+1026baba-6ccd-780c-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '');
-invalid input: '' cannot be converted into boolean value
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), )[12,-1,0]  𝄀
+1026baba-6ccd-780c-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'), null);
 ➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db), null)[12,-1,0]  𝄀
-null
+6ccd780c-baba-1026-9564-5b8c656024db
 select bin_to_uuid(null);
 ➤ bin_to_uuid(null)[12,-1,0]  𝄀
 null
@@ -168,9 +176,11 @@ select id, hex(uuid_to_bin(u, swap_flag)) from t_uuid_funcs where is_uuid(u) ord
 ➤ id[4,32,0]  ¦  hex(uuid_to_bin(u, swap_flag))[12,-1,0]  𝄀
 1  ¦  6CCD780CBABA102695645B8C656024DB  𝄀
 2  ¦  1026BABA6CCD780C95645B8C656024DB  𝄀
-3  ¦  null
-select id, bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag) from t_uuid_funcs where is_uuid(u) and swap_flag is not null order by id;
+3  ¦  6CCD780CBABA102695645B8C656024DB
+select id, bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag) from t_uuid_funcs where is_uuid(u) or u is null order by id;
 ➤ id[4,32,0]  ¦  bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag)[12,-1,0]  𝄀
 1  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
-2  ¦  6ccd780c-baba-1026-9564-5b8c656024db
+2  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
+3  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
+5  ¦  null
 drop table t_uuid_funcs;

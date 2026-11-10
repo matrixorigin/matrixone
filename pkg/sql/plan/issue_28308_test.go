@@ -23,7 +23,7 @@ import (
 
 func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	t.Run("cascade delete", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_CASCADE, planpb.ForeignKeyDef_RESTRICT)
 
 		logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
@@ -51,7 +51,7 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	})
 
 	t.Run("set null update remains implicit", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_SET_NULL, planpb.ForeignKeyDef_RESTRICT)
 
 		logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
@@ -84,7 +84,7 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	})
 
 	t.Run("replace cascade delete remains implicit", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_CASCADE, planpb.ForeignKeyDef_RESTRICT)
 
 		logicPlan, err := runOneStmt(mock, t, "replace into dept values (1, 'Sales', 'New York')")
@@ -117,7 +117,7 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	})
 
 	t.Run("self reference cascade keeps direct rows as owner", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 		logicPlan, err := runOneStmt(mock, t, "delete from self_ref_cascade where id = 1")
 		require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	})
 
 	t.Run("self reference set null keeps direct rows as owner", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		mock.ctxt.tables["self_ref_cascade"].Fkeys[0].OnDelete = planpb.ForeignKeyDef_SET_NULL
 
 		logicPlan, err := runOneStmt(mock, t, "delete from self_ref_cascade where id = 1")
@@ -170,7 +170,7 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 	})
 
 	t.Run("multiple self reference set nulls share one implicit action", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		for _, fk := range mock.ctxt.tables["self_ref_multi_cascade"].Fkeys {
 			fk.OnDelete = planpb.ForeignKeyDef_SET_NULL
 		}
@@ -211,7 +211,7 @@ func TestIssue28308SelfReferentialSetNullKeepsSiblingRestrict(t *testing.T) {
 		{name: "combined set null", combined: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			configureIssue28308SelfReferentialBoundary(t, mock, tc.combined)
 
 			logicPlan, err := runOneStmt(mock, t,

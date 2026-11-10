@@ -126,7 +126,7 @@ func TestOndupValuesQualifiedTarget(t *testing.T) {
 }
 
 func TestBuildInsertOndupValuesQualifiedTarget(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into dept(deptno, loc) values (10, 'new') on duplicate key update loc = values(dept.loc)")
 	require.NoError(t, err)

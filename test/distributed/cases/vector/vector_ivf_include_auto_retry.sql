@@ -37,7 +37,7 @@ insert into t values
     (999, '[10,10,10]', 1, 'hit');
 
 create index idx using ivfflat on t(vec)
-    lists=5 op_type 'vector_l2_ops' include(category, payload);
+    lists=2 op_type 'vector_l2_ops' include(category, payload);
 set experimental_ivf_index = 1;
 set probe_limit = 1;
 

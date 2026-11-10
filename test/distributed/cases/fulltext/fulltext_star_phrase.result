@@ -1,0 +1,70 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_star_phrase;
+create database ft_star_phrase;
+use ft_star_phrase;
+create table cjk(id int primary key, body varchar(200));
+insert into cjk values (1,'苹果香蕉'),(2,'苹果香蕉西瓜'),(3,'苹果香瓜');
+create fulltext index fi on cjk(body) with parser ngram;
+select id from cjk where match(body) against('苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from cjk where match(body) against('+苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from cjk where match(body) against('+苹果香蕉' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from cjk where match(body) against('苹果*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from cjk where match(body) against('苹果香蕉西瓜*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+2
+create table lat(id int primary key, body varchar(200));
+insert into lat values
+(1,'abcdefghijklmnopqrstuvwxyz'),
+(2,'abcdefghijklmnopqrstuvwabc'),
+(3,'zzzabcdefghijklmnopqrstuvw');
+create fulltext index fi on lat(body) with parser ngram;
+select id from lat where match(body) against('abcdefghijklmnopqrstuvwxyz*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from lat where match(body) against('abcdefghijklmnopqrstuvw*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+create table cyr(id int primary key, body varchar(200));
+insert into cyr values (1,'aяяяяяяяяяяяя'),(2,'other');
+create fulltext index fi on cyr(body) with parser ngram;
+select id from cyr where match(body) against('aяяяяяяяяяяяя*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+create table jb(id int primary key, body varchar(200));
+insert into jb values (1,'苹果香蕉'),(2,'苹果香蕉西瓜'),(3,'苹果甜瓜');
+create fulltext index fi on jb(body) with parser gojieba;
+select id from jb where match(body) against('苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+create table jvc(id int primary key, body json);
+insert into jvc values (1,'{"w":"苹果香蕉"}'),(2,'{"w":"苹果香瓜"}'),(3,'{"w":"other"}');
+create fulltext index fi on jvc(body) with parser json_value;
+select id from jvc where match(body) against('苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from jvc where match(body) against('+苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+create table jvl(id int primary key, body json);
+insert into jvl values (1,'{"w":"abcdefghijklmnopqrstuvwxyz"}'),(2,'{"w":"abcdefghijklmnopqrstuvwabc"}');
+create fulltext index fi on jvl(body) with parser json_value;
+select id from jvl where match(body) against('abcdefghijklmnopqrstuvwxyz*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+drop database ft_star_phrase;

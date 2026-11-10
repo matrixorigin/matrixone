@@ -143,7 +143,7 @@ func TestUnionAreaProjectionBoundaryMatrix(t *testing.T) {
 }
 
 func TestSerializedRuntimeFilterBoundsNullAndAreaModes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keys := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(keys,
 		make([]byte, types.VarlenaInlineSize+9), false, proc.Mp()))
@@ -210,6 +210,15 @@ func TestExpressionRecoveryInvalidAndLeafMatrix(t *testing.T) {
 	peak, err = expressionTypePeak(plan.Type{Id: int32(types.T_array_float32), Width: 2}, 2)
 	require.NoError(t, err)
 	require.Positive(t, peak)
+	target := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_T{T: &plan.TargetType{}},
+	}
+	one, err := expressionVectorPeak(nil, target, 1, false)
+	require.NoError(t, err)
+	many, err := expressionVectorPeak(nil, target, 8192, false)
+	require.NoError(t, err)
+	require.Equal(t, one, many, "a CAST type token is one constant NULL, not a batch of strings")
 
 	require.Nil(t, nodeFunctionArgs(column))
 	require.Nil(t, nodeFunctionArgs(functionWithoutBody))

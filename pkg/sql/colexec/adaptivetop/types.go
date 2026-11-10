@@ -146,6 +146,3 @@ func (a *AdaptiveTop) Release() {
 
 func (a *AdaptiveTop) GetOperatorBase() *vm.OperatorBase { return &a.OperatorBase }
 func (a AdaptiveTop) TypeName() string                   { return opName }
-func (a *AdaptiveTop) ExecProjection(_ *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

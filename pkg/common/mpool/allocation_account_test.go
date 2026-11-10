@@ -292,6 +292,7 @@ func TestAllocationAccountFinalizeWaitsForRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, account.acquire(1, testAllocationOwner))
 	require.NoError(t, registry.reserveMetadata())
+	registry.addCommittedCapacity(1)
 	account.Seal()
 
 	released := make(chan struct{})

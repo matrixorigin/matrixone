@@ -91,7 +91,7 @@ insert into child_t values (1, 1) returning id, parent_id;
 id    parent_id
 1    1
 insert into child_t values (2, 999) returning id, parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select count(*) from child_t where id = 2;
 count(*)
 0

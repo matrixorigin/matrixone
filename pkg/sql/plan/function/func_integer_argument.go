@@ -218,6 +218,13 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
+		if !source.GetIsBin() {
+			// Keep the original value policy and diagnose only successfully
+			// evaluated text arguments. Binary literals carry numeric bytes.
+			text := convertByteSliceToString(value)
+			prefix := leadingDecimalIntegerPrefix(text)
+			appendIntegerNumericCoercionWarning(proc, text, prefix, prefix != "", false)
+		}
 		if err = result.Append(integer, false); err != nil {
 			return err
 		}
@@ -266,6 +273,22 @@ func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector
 		return integerArgumentRows(source, result, proc, length, selectList, func(v float32) (integerArgumentValue, error) { return realIntegerArgument(float64(v), truncate), nil })
 	case types.T_float64:
 		return integerArgumentRows(source, result, proc, length, selectList, func(v float64) (integerArgumentValue, error) { return realIntegerArgument(v, truncate), nil })
+	case types.T_bf16:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.BF16) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float16:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float16) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float8:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float8) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float4:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float4) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
 	case types.T_decimal64:
 		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Decimal64) (integerArgumentValue, error) {
 			return decimal64IntegerArgument(v, source.GetType().Scale)
@@ -340,26 +363,11 @@ func NewTextIntegerBitsCast(parameters []*vector.Vector, result vector.FunctionR
 // Temporal values are rounded in their clock/calendar domain before decimal
 // packing. Rounding HHMMSS directly would produce invalid minute/hour carries.
 func timeIntegerArgument(value types.Time) (integerArgumentValue, error) {
-	n, _ := signedIntegerArgument(value)
-	seconds := (n.magnitude + 500000) / 1000000
-	// Preserve MySQL's TIME ceiling when fractional rounding crosses it, but
-	// do not saturate MatrixOne's independently supported extended TIME domain.
-	const mysqlLastSecond = 838*3600 + 59*60 + 59
-	if n.magnitude/1000000 == mysqlLastSecond && seconds > mysqlLastSecond {
-		seconds = mysqlLastSecond
-	}
-	n.magnitude = seconds/3600*10000 + (seconds/60)%60*100 + seconds%60
-	return n, nil
+	return signedIntegerArgument(roundedTimeInteger(value))
 }
 
 func datetimeIntegerArgument(value types.Datetime) (integerArgumentValue, error) {
-	rounded := value.TruncateToScale(0)
-	if rounded.Year() > types.MaxDatetimeYear {
-		// MySQL val_int retains the original date with a zero clock when
-		// fractional carry cannot advance the maximum calendar date.
-		rounded = value.ToDate().ToDatetime()
-	}
-	return signedIntegerArgument(packedDatetimeInt64(rounded))
+	return signedIntegerArgument(roundedDatetimeInteger(value))
 }
 
 // NewTemporalIntegerArgumentCast is selected only by temporal-capable roles.

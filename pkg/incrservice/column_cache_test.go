@@ -24,6 +24,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -342,6 +343,49 @@ func TestInsertInt32WithManual(t *testing.T) {
 		newTestVector(8, types.New(types.T_int32, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int32, 0, 0), fillValues, fillRows),
 	)
+}
+
+func TestInsertMediumIntAutoIncrementRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		max  uint64
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), max: 1<<23 - 1},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), max: 1<<24 - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runColumnCacheTestsWithInitOffset(t, 1, 1, tc.max-1, func(ctx context.Context, cache *columnCache) {
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				first := vector.NewVec(tc.typ)
+				defer first.Free(mp)
+				if tc.typ.Oid == types.T_int32 {
+					require.NoError(t, vector.AppendFixed[int32](first, 0, true, mp))
+				} else {
+					require.NoError(t, vector.AppendFixed[uint32](first, 0, true, mp))
+				}
+				id, err := cache.insertAutoValues(ctx, 0, first, 1, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.max, id)
+				if tc.typ.Oid == types.T_int32 {
+					require.Equal(t, []int32{int32(tc.max)}, vector.MustFixedColWithTypeCheck[int32](first))
+				} else {
+					require.Equal(t, []uint32{uint32(tc.max)}, vector.MustFixedColWithTypeCheck[uint32](first))
+				}
+
+				next := vector.NewVec(tc.typ)
+				defer next.Free(mp)
+				if tc.typ.Oid == types.T_int32 {
+					require.NoError(t, vector.AppendFixed[int32](next, 0, true, mp))
+				} else {
+					require.NoError(t, vector.AppendFixed[uint32](next, 0, true, mp))
+				}
+				_, err = cache.insertAutoValues(ctx, 0, next, 1, nil)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "expected MEDIUMINT auto-increment exhaustion, got %v", err)
+			})
+		})
+	}
 }
 
 func TestInsertInt64(t *testing.T) {

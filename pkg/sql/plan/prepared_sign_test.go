@@ -28,7 +28,7 @@ import (
 
 func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_sign from 'select sign(?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -39,7 +39,7 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparePlan))
 	require.True(t, PreparedPlanHasDeferredNumericFunction(preparePlan))
 
-	ordinary, err := runOneStmt(NewMockOptimizer(false), t,
+	ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_sign_column from 'select sign(n_regionkey) from nation'")
 	require.NoError(t, err)
 	ordinaryFn := findPlanFunctionExpr(ordinary.GetDcl().GetPrepare().Plan, "sign")
@@ -55,7 +55,7 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 		{name: "explicit integer", sql: "prepare stmt_sign_integer from 'select sign(cast(? as signed))'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			plan := prepared.GetDcl().GetPrepare().Plan
 			require.Empty(t, PreparedPlanNumericFallbackParamPositions(plan),
@@ -100,7 +100,7 @@ func signOverloadForTest(expr *Expr) int32 {
 
 func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_elt from 'select elt(?, ''a'', ''b'', ''c'')'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -163,7 +163,7 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 		})
 	}
 
-	preparedDouble, err := runOneStmt(NewMockOptimizer(false), t,
+	preparedDouble, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_elt_double from 'select elt(cast(? as double), ''a'', ''b'')'")
 	require.NoError(t, err)
 	doublePlan := preparedDouble.GetDcl().GetPrepare().Plan

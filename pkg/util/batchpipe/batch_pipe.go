@@ -185,7 +185,6 @@ type BaseBatchPipe[T HasName, B any] struct {
 	impl              PipeImpl[T, B]
 	isRunning         int32
 	opts              baseBatchPipeOpts
-	dropped           int64
 	itemCh            chan T
 	batchCh           chan B
 	sendingLock       sync.RWMutex
@@ -220,7 +219,6 @@ func (bc *BaseBatchPipe[T, B]) SendItem(ctx context.Context, items ...T) error {
 		select {
 		case bc.itemCh <- item:
 		default:
-			atomic.AddInt64(&bc.dropped, 1)
 		}
 	}
 	return nil

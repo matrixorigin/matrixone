@@ -178,14 +178,12 @@ func makeReturningColPos(tableDef *planpb.TableDef, positions map[string]int32) 
 func (builder *QueryBuilder) recordReturningSource(
 	step int32,
 	tableDef *planpb.TableDef,
-	objRef *planpb.ObjectRef,
 	tableName string,
 	alias string,
 	colPos map[string]int32,
 ) {
 	builder.returningSourceStep = step
 	builder.returningTableDef = tableDef
-	builder.returningObjRef = objRef
 	builder.returningTableName = strings.ToLower(tableName)
 	builder.returningAlias = strings.ToLower(alias)
 	builder.returningColPos = makeReturningColPos(tableDef, colPos)
@@ -228,7 +226,6 @@ func (builder *QueryBuilder) materializeReturningSource(
 	inputNodeID int32,
 	inputTag int32,
 	tableDef *planpb.TableDef,
-	objRef *planpb.ObjectRef,
 	tableName string,
 	alias string,
 	colPos map[string]int32,
@@ -236,7 +233,7 @@ func (builder *QueryBuilder) materializeReturningSource(
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, inputNodeID, inputTag)
 	builder.preserveReturningSinkProjection(sinkID)
 	step := builder.appendStep(sinkID)
-	builder.recordReturningSource(step, tableDef, objRef, tableName, alias, colPos)
+	builder.recordReturningSource(step, tableDef, tableName, alias, colPos)
 	return builder.appendTaggedSinkScan(bindCtx, step, inputTag)
 }
 
@@ -263,8 +260,13 @@ func returningExprForbidden(expr *planpb.Expr) string {
 			if strings.EqualFold(e.F.Func.ObjName, "python_user_defined_function") {
 				return "external UDF in RETURNING expression"
 			}
-			if function.GetFunctionIsVolatileOrRealTimeRelatedByName(e.F.Func.ObjName) {
-				return "volatile function in RETURNING expression"
+			// Resolve the actual overload: a no-fold, execution-stable conversion
+			// must not make every overload sharing its name volatile.
+			if impl, known := function.GetFunctionByIdWithoutError(e.F.Func.Obj); known {
+				unstable, _ := function.GetFunctionValueUnstableByID(e.F.Func.Obj)
+				if unstable || impl.IsRealTimeRelated() {
+					return "volatile function in RETURNING expression"
+				}
 			}
 		}
 		for _, arg := range e.F.Args {
@@ -400,7 +402,7 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	if bindName == "" {
 		bindName = builder.returningTableName
 	}
-	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx); err != nil {
+	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx, builder.returningTableDef.DbName); err != nil {
 		return err
 	}
 	if len(returnCtx.bindings) != 1 {
@@ -463,5 +465,8 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	builder.qry.HasReturning = true
 	builder.qry.ReturningStep = builder.appendStep(projectID)
 	builder.qry.Headings = append(builder.qry.Headings, returnCtx.headings...)
+	if builder.integerPrecision != nil {
+		builder.captureIntegerPrecisionOutputs(returnCtx)
+	}
 	return nil
 }

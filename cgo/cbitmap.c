@@ -34,12 +34,6 @@
 // structure is sized to the value SPAN, not the max value. When the builder is
 // told not to offset, base is 0 and bit i == value i (legacy layout). words
 // holds bitmap_size(nbits) uint64s; NULL when nbits == 0 (matches nothing).
-typedef struct {
-  uint64_t base;
-  uint64_t nbits;
-  uint64_t *words;
-} mo_cbitmap_t;
-
 // Decode elemsz little-endian bytes (1/2/4/8) of a fixed integer into uint64 by
 // zero-extension. MUST match mo_decode_uint in croaring.c and rawIntToUint64 in
 // Go so the build and probe sides map a value to the same bit.
@@ -125,13 +119,39 @@ void mo_cbitmap_free(void *f) {
   free(b);
 }
 
-bool mo_cbitmap_contain(void *f, uint64_t val) {
-  if (!f) return false;
-  mo_cbitmap_t *b = (mo_cbitmap_t *)f;
-  if (val < b->base) return false;  // below base also guards the subtraction
-  uint64_t idx = val - b->base;
-  if (idx >= b->nbits) return false;
-  return bitmap_test(b->words, idx);
+int mo_cbitmap_create(uint64_t base, uint64_t nbits, void **out) {
+  if (!out) return MO_CBITMAP_INVALID_INPUT;
+  *out = NULL;
+  if (nbits > UINT64_MAX - 63 || (nbits && base > UINT64_MAX - (nbits - 1)) ||
+      (nbits + 63) / 64 > SIZE_MAX / sizeof(uint64_t)) return MO_CBITMAP_RANGE_TOO_LARGE;
+  mo_cbitmap_t *f = malloc(sizeof(mo_cbitmap_t));
+  if (!f) return MO_CBITMAP_OOM;
+  f->base = base;
+  f->nbits = nbits;
+  f->words = nbits ? calloc((nbits + 63) / 64, sizeof(uint64_t)) : NULL;
+  if (nbits && !f->words) { free(f); return MO_CBITMAP_OOM; }
+  *out = f;
+  return MO_CBITMAP_OK;
+}
+
+int mo_cbitmap_add_fixed(void *filter, const void *key, size_t len, size_t elemsz,
+                         size_t nitem, const void *nullmap, size_t nullmaplen) {
+  if (!filter || (elemsz != 1 && elemsz != 2 && elemsz != 4 && elemsz != 8) ||
+      nitem > len / elemsz || (nitem && !key) ||
+      (nullmap && nitem && (nitem - 1) / 8 >= nullmaplen)) return MO_CBITMAP_INVALID_INPUT;
+  mo_cbitmap_t *f = filter;
+  const unsigned char *data = key;
+  // Validate the complete input before publishing any bits.
+  for (size_t i = 0; i < nitem; i++) {
+    if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
+    uint64_t value = mo_cbm_decode(data + i * elemsz, elemsz);
+    if (value < f->base || value - f->base >= f->nbits) return MO_CBITMAP_RANGE_TOO_LARGE;
+  }
+  for (size_t i = 0; i < nitem; i++) {
+    if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
+    bitmap_set(f->words, mo_cbm_decode(data + i * elemsz, elemsz) - f->base);
+  }
+  return MO_CBITMAP_OK;
 }
 
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,

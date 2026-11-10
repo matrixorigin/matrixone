@@ -32,15 +32,31 @@ func writeMockGo(t *testing.T) string {
 	path := filepath.Join(dir, "go")
 	script := `#!/bin/bash
 if [[ "$1" == version ]]; then
+    if [[ "${2:-}" != -m ]]; then echo 'go version go1.27.1 linux/amd64'; exit 0; fi
     if [[ -n "${MOCK_GO_BUILD_INFO:-}" ]]; then printf "%s\n" "$MOCK_GO_BUILD_INFO"; exit 0; fi
     exit 1
+fi
+if [[ "$1" == env ]]; then
+    case "$2" in
+        GOBIN) printf '%s\n' "${MOCK_GOBIN-${0%/*}}" ;;
+        GOPATH) printf '%s\n' "${MOCK_GOPATH:-${0%/*}}" ;;
+    esac
+    exit 0
 fi
 count=0
 if [[ -f "${MOCK_GO_COUNTER}" ]]; then count=$(<"${MOCK_GO_COUNTER}"); fi
 count=$((count + 1))
 echo "${count}" > "${MOCK_GO_COUNTER}"
 echo "$*" >> "${MOCK_GO_ARGS}"
-if (( count >= MOCK_GO_SUCCEED_AFTER )); then exit 0; fi
+if (( count >= MOCK_GO_SUCCEED_AFTER )); then
+    if [[ -n "${MOCK_INSTALLED_TOOL:-}" ]]; then
+        mkdir -p "${MOCK_INSTALLED_TOOL%/*}"
+        cp "$MOCK_ANALYSIS_TEMPLATE" "$MOCK_INSTALLED_TOOL" || exit 1
+        chmod +x "$MOCK_INSTALLED_TOOL" || exit 1
+        echo 'install diagnostics' # The installer must not return this as a path.
+    fi
+    exit 0
+fi
 exit "${MOCK_GO_FAILURE_STATUS}"
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -155,6 +171,127 @@ func TestInstallGoUTAnalysisChecksCachedVersion(t *testing.T) {
 				}
 			} else {
 				assertAttempts(t, counter, arguments, 1)
+			}
+		})
+	}
+}
+
+func TestUTSummaryUsesInstalledAnalyzer(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		useGOPATH      bool
+		shadow         bool
+		analysisStatus int
+		testStatus     int
+		currentFailure bool
+	}{
+		{name: "GOBIN outside PATH with spaces"},
+		{name: "first GOPATH entry", useGOPATH: true},
+		{name: "stale PATH executable", shadow: true},
+		{name: "analyzer failure", analysisStatus: 42},
+		{name: "test failure", testStatus: 1},
+		{name: "current report failure", currentFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			binDir := filepath.Join(dir, "installed tools")
+			gobin, gopath := binDir, ""
+			if tc.useGOPATH {
+				gobin = ""
+				gopath = filepath.Join(dir, "first") + string(os.PathListSeparator) + filepath.Join(dir, "second")
+				binDir = filepath.Join(dir, "first", "bin")
+			}
+			installed := filepath.Join(binDir, "go-ut-analysis")
+			called := filepath.Join(dir, "called")
+			template := filepath.Join(dir, "analyzer")
+			if err := os.WriteFile(template, []byte("#!/bin/bash\nprintf '%s\\n' \"$0\" > \"$MOCK_ANALYSIS_CALLED\"\nif [[ $MOCK_CURRENT_FAILURE == true ]]; then : > \"$CASE_DIR/ut-report/failed/outputs/current\"; fi\nexit \"$MOCK_ANALYSIS_STATUS\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mock, err := os.ReadFile(filepath.Join(writeMockGo(t), "go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := `export MOCK_GO_COUNTER="$CASE_DIR/counter" MOCK_GO_ARGS="$CASE_DIR/args"
+source ./run_ut.sh UT
+UT_TEST_STATUS=$MOCK_TEST_STATUS
+if [[ "$MOCK_SHADOW" == true ]]; then
+ printf '#!/bin/bash\nexit 99\n' > "$CASE_DIR/optools/go-ut-analysis"
+ chmod +x "$CASE_DIR/optools/go-ut-analysis"
+fi
+mkdir -p "$BUILD_WKSP/ut-report/failed/outputs"
+printf 'previous failure\n' > "$BUILD_WKSP/ut-report/failed/outputs/stale"
+cat > "$UT_REPORT" <<'EOF'
+{"Action":"start","Package":"example/summary"}
+{"Action":"run","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pause","Package":"example/summary","Test":"TestSummary"}
+{"Action":"cont","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pass","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pass","Package":"example/summary"}
+EOF
+ut_summary
+[[ ! -e "$BUILD_WKSP/ut-report/failed/outputs/stale" ]] || exit 93
+[[ -n $(find "$G_WKSP" -path '*previous-failed*/failed/outputs/stale' -type f -print -quit) ]] || exit 94
+`
+			out, err := scheduleHarnessWithMock(t, script, string(mock),
+				"MOCK_GOBIN="+gobin, "MOCK_GOPATH="+gopath, "MOCK_INSTALLED_TOOL="+installed,
+				"MOCK_ANALYSIS_TEMPLATE="+template, "MOCK_ANALYSIS_CALLED="+called,
+				"MOCK_ANALYSIS_STATUS="+strconv.Itoa(tc.analysisStatus), "MOCK_TEST_STATUS="+strconv.Itoa(tc.testStatus),
+				"MOCK_SHADOW="+strconv.FormatBool(tc.shadow), "MOCK_CURRENT_FAILURE="+strconv.FormatBool(tc.currentFailure),
+				"MOCK_GO_SUCCEED_AFTER=1", "MOCK_GO_FAILURE_STATUS=42", "MOCK_GO_BUILD_INFO=")
+			if failed := tc.analysisStatus != 0 || tc.testStatus != 0 || tc.currentFailure; (err != nil) != failed {
+				t.Fatalf("summary: %v\n%s", err, out)
+			}
+			actual, readErr := os.ReadFile(called)
+			if readErr != nil || strings.TrimSpace(string(actual)) != installed {
+				t.Fatalf("expected installed analyzer %q, got %q: %v\n%s", installed, actual, readErr, out)
+			}
+		})
+	}
+}
+
+func TestUTProcessGroupSnapshot(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, snapshot, psStatus, filterStatus, want string
+	}{
+		{"live-leader", "42 7 S", "0", "", "0"},
+		{"live-descendant", "7 42 S", "0", "", "0"},
+		{"zombies-only", "42 42 Z\n7 42 Z", "0", "", "1"},
+		{"unrelated-group", "7 7 S", "0", "", "1"},
+		{"snapshot-failure", "", "7", "", "0"},
+		{"partial-snapshot-failure", "42 42 Z", "7", "", "0"},
+		{"filter-failure", "42 42 S", "0", "2", "0"},
+		{"pending-termination", "42 42 S", "0", "TERM", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `
+set -o nounset
+source "$1"
+snapshot=$2 ps_status=$3 filter_status=$4 expected=$5
+term_pending=0
+trap "term_pending=1" TERM
+function kill() { return 0; }
+function ps() { printf '%s\n' "$snapshot"; return "$ps_status"; }
+function awk() {
+    if [[ "$filter_status" == TERM ]]; then
+        command awk "$@"
+        local status=$?
+        command kill -TERM "$$"
+        return "$status"
+    fi
+    if [[ -n "$filter_status" ]]; then return "$filter_status"; fi
+    command awk "$@"
+}
+status=0
+ut_process_group_alive 42 || status=$?
+[[ "$filter_status" != TERM || "$term_pending" == 1 ]] || exit 1
+[[ "$status" == "$expected" ]] || { printf 'status=%s expected=%s\n' "$status" "$expected"; exit 1; }
+`, "bash", processPath, tc.snapshot, tc.psStatus, tc.filterStatus, tc.want)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("process group snapshot: %v\n%s", err, out)
 			}
 		})
 	}

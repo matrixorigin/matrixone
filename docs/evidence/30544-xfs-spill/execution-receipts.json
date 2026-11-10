@@ -1,0 +1,47 @@
+{
+  "source_rollout": "rollout-2026-10-20T10-57-03-01a1573d-b178-7bc2-8651-763300bebf00.jsonl",
+  "description": "Selected original terminal output lines; no commands were rerun. The cleanup probe command and its output are described in README.",
+  "receipts": [
+    {
+      "timestamp": "2026-10-20T03:38:16.346Z",
+      "rollout_line": 966,
+      "output_lines": [
+        "baseline_exit=0"
+      ]
+    },
+    {
+      "timestamp": "2026-10-20T03:39:33.327Z",
+      "rollout_line": 991,
+      "output_lines": [
+        "fixed_exit=0"
+      ]
+    },
+    {
+      "timestamp": "2026-10-20T03:40:09.015Z",
+      "rollout_line": 1006,
+      "output_lines": [
+        "writer_exit=0"
+      ]
+    },
+    {
+      "timestamp": "2026-10-20T03:43:13.504Z",
+      "rollout_line": 1067,
+      "output_lines": [
+        "173aab744798d4c3d816c4141d768c936fd10efdc10470ce6d860d2af3479238  pkg/sql/colexec/hashbuild/spill.go",
+        "eaeb3c19604501e8d9d2c5462fa516676f38828eee5367da55c9f4002047de74  pkg/sql/colexec/spillutil/join_spill.go",
+        "a1f15e9fbfb66755c72943f44e55d8605e8f5300487909821cca24a83921259a  pkg/sql/colexec/spillio/append.go",
+        "removed_closed_fixture_dirs 8"
+      ]
+    },
+    {
+      "timestamp": "2026-10-20T03:43:13.504Z",
+      "rollout_line": 1067,
+      "output_lines": [
+        "173aab744798d4c3d816c4141d768c936fd10efdc10470ce6d860d2af3479238  pkg/sql/colexec/hashbuild/spill.go",
+        "eaeb3c19604501e8d9d2c5462fa516676f38828eee5367da55c9f4002047de74  pkg/sql/colexec/spillutil/join_spill.go",
+        "a1f15e9fbfb66755c72943f44e55d8605e8f5300487909821cca24a83921259a  pkg/sql/colexec/spillio/append.go",
+        "9ddbe2ff2a19fa07c22abd9ccb3c4f366f732ee8a6cd45cf0ac44173a8802027  -"
+      ]
+    }
+  ]
+}

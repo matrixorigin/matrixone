@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -547,7 +548,7 @@ func testS3FS(
 }
 
 func TestDynamicS3(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
@@ -574,7 +575,7 @@ func TestDynamicS3(t *testing.T) {
 }
 
 func TestDynamicS3Opts(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSQLFileAccess(context.Background(), "sys", "moadmin")
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
@@ -598,7 +599,7 @@ func TestDynamicS3Opts(t *testing.T) {
 }
 
 func TestDynamicS3NoKey(t *testing.T) {
-	ctx := WithParallelMode(context.Background(), ParallelForce)
+	ctx := WithParallelMode(WithSQLFileAccess(context.Background(), "sys", "moadmin"), ParallelForce)
 	prefix := "etl-prefix"
 	buf := new(strings.Builder)
 	w := csv.NewWriter(buf)
@@ -624,7 +625,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 }
 
 func TestDynamicMinio(t *testing.T) {
-	ctx := WithParallelMode(context.Background(), ParallelForce)
+	ctx := WithParallelMode(WithSQLFileAccess(context.Background(), "sys", "moadmin"), ParallelForce)
 	buf := new(strings.Builder)
 	w := csv.NewWriter(buf)
 	err := w.Write([]string{
@@ -1280,35 +1281,50 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	vec.Release()
 }
 
-// The full-object default is intentional: #12198 lets later reads reuse one
-// disk-cache artifact. A bounded entry must opt in to range policy explicitly.
+// The full-object default lets later reads reuse one disk-cache artifact.
+// Without a disk cache, the default must not expand a bounded entry.
 func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		policy Policy
-		min    int64
-		max    *int64
+		name         string
+		policy       Policy
+		disk, memory bool
+		noCache      bool
+		min          int64
+		max          *int64
 	}{
-		{name: "default full object", min: 0},
-		{name: "explicit range", policy: SkipFullFilePreloads, min: 123, max: ptrTo(int64(130))},
+		{name: "default full object", disk: true, min: 0},
+		{name: "explicit range", disk: true, policy: SkipFullFilePreloads, min: 123, max: ptrTo(int64(130))},
+		{name: "zero cache capacities", min: 123, max: ptrTo(int64(130))},
+		{name: "memory cache only", memory: true, min: 123, max: ptrTo(int64(130))},
+		{name: "cache initialization disabled", disk: true, noCache: true, min: 123, max: ptrTo(int64(130))},
+		{name: "disk writes disabled", disk: true, policy: SkipDiskCacheWrites, min: 123, max: ptrTo(int64(130))},
+		{name: "disk reads disabled", disk: true, policy: SkipDiskCacheReads, min: 123, max: ptrTo(int64(130))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
+			config := CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](0),
+				DiskCapacity:   ptrTo[toml.ByteSize](0),
+				DiskPath:       ptrTo(t.TempDir()),
+			}
+			if tc.disk {
+				config.DiskCapacity = ptrTo[toml.ByteSize](1 << 20)
+			}
+			if tc.memory {
+				config.MemoryCapacity = ptrTo[toml.ByteSize](1 << 20)
+			}
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
 					Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
 				},
-				CacheConfig{
-					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
-				},
-				nil, false, false,
+				config,
+				nil, tc.noCache, false,
 			)
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(ctx) })
 
-			data := bytes.Repeat([]byte("abcd"), 1<<18)
+			data := bytes.Repeat([]byte("abcd"), 64)
 			require.NoError(t, fs.Write(ctx, IOVector{
 				FilePath: "foo/bar",
 				Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
@@ -1325,6 +1341,7 @@ func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
 			t.Cleanup(vec.Release)
 			require.NoError(t, fs.Read(ctx, vec))
 			require.Equal(t, data[123:130], vec.Entries[0].Data)
+			require.Equal(t, tc.policy, vec.Policy, "range selection must not mutate caller policy")
 
 			read, ok := recorder.lastRead()
 			require.True(t, ok)
@@ -2527,6 +2544,135 @@ func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) 
 	assert.Equal(t, int64(3), vector.Entries[0].Size)
 }
 
+// streamFill runs readFullObjectToDiskCacheStreaming of foo/bar bytes 1-3 in the
+// background with an async disk cache, reading the object from getReader.
+func streamFill(
+	t *testing.T,
+	ctx context.Context,
+	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
+) (*DiskCache, *IOVector, chan error) {
+	cache, err := NewDiskCache(context.Background(), t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(context.Background()) })
+	s3 := &S3FS{diskCache: cache, asyncUpdate: true}
+	vector := &IOVector{FilePath: "foo/bar", Entries: []IOEntry{{Offset: 1, Size: 3}}}
+	done := make(chan error, 1)
+	go func() {
+		ok, err := s3.readFullObjectToDiskCacheStreaming(ctx, vector, "foo/bar", getReader)
+		if err == nil && !ok {
+			err = errors.New("not done")
+		}
+		done <- err
+	}()
+	return cache, vector, done
+}
+
+func waitResult(t *testing.T, done chan error) error {
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("read did not return")
+		return nil
+	}
+}
+
+// A reader whose ranges are captured returns while the rest of the object still
+// downloads, and the download then caches the whole object.
+func TestS3FSReadFullObjectToDiskCacheStreamingReturnsOnceCaptured(t *testing.T) {
+	ctx := context.Background()
+	pr, pw := io.Pipe()
+	release := make(chan struct{})
+	go func() {
+		_, _ = pw.Write([]byte("hello"))
+		<-release
+		_, _ = pw.Write([]byte(" world"))
+		_ = pw.Close()
+	}()
+	cache, vector, done := streamFill(t, ctx, func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		return pr, nil
+	})
+
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+	require.True(t, cache.isUpdating(cache.pathForFile("foo/bar")))
+
+	close(release)
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache.Flush(flushCtx)
+	require.True(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+}
+
+// A download that fails after the ranges were captured does not fail the read, and
+// caches nothing.
+func TestS3FSReadFullObjectToDiskCacheStreamingErrorAfterCapture(t *testing.T) {
+	ctx := context.Background()
+	cache, vector, done := streamFill(t, ctx, func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		return &errorReadCloser{reader: bytes.NewReader([]byte("hello world")), err: errors.New("reader failed")}, nil
+	})
+
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache.Flush(flushCtx)
+	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+}
+
+// Cancelling the read before its ranges are captured cancels the download.
+func TestS3FSReadFullObjectToDiskCacheStreamingCancelBeforeCapture(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("h")) }()
+	cache, _, done := streamFill(t, ctx, func(fillCtx context.Context, _ *int64, _ *int64) (io.ReadCloser, error) {
+		go func() {
+			<-fillCtx.Done()
+			_ = pw.CloseWithError(fillCtx.Err())
+		}()
+		return pr, nil
+	})
+
+	cancel()
+	require.ErrorIs(t, waitResult(t, done), context.Canceled)
+	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+}
+
+// With every background slot taken, a reader waits for its download as before.
+func TestS3FSReadFullObjectToDiskCacheStreamingWaitsWhenBackgroundFull(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	for i := 0; i < cap(backgroundFills); i++ {
+		backgroundFills <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(backgroundFills); i++ {
+			<-backgroundFills
+		}
+	})
+	ctx := context.Background()
+	pr, pw := io.Pipe()
+	release := make(chan struct{})
+	go func() {
+		_, _ = pw.Write([]byte("hello"))
+		<-release
+		_, _ = pw.Write([]byte(" world"))
+		_ = pw.Close()
+	}()
+	_, vector, done := streamFill(t, ctx, func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		return pr, nil
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before its download ended: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+}
+
 func TestS3FSReadFullObjectToDiskCacheStreamingReadToEnd(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
@@ -3044,4 +3190,183 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 	}
 
+}
+
+func TestS3FSReadWrapperOwnership(t *testing.T) {
+	t.Run("stream-retry", func(t *testing.T) {
+		var opens int
+		var closes [2]int
+		closeErr := errors.New("provider close failed")
+		source := &readTestObjectStorage{open: func(ctx context.Context, key string, min, max *int64, expected *ObjectIdentity) (io.ReadCloser, error) {
+			require.Equal(t, true, ctx.Value(httpTraceKey{}))
+			require.Equal(t, "key", key)
+			require.Nil(t, expected)
+			return newRetryableReader(func(offset int64) (io.ReadCloser, error) {
+				i := opens
+				opens++
+				require.Equal(t, int64(0), offset)
+				if i == 0 {
+					return &readCloser{r: readerFunc(func([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }), closeFunc: func() error { closes[0]++; return nil }}, nil
+				}
+				return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes[1]++; return closeErr }}, nil
+			}, 0, func(err error) bool { return errors.Is(err, io.ErrUnexpectedEOF) })
+		}}
+		sem := newObjectStorageSemaphore(source, 1)
+		metrics := newObjectStorageMetrics(sem, t.Name())
+		fs := &S3FS{name: "test", storage: newObjectStorageHTTPTrace(metrics), ioMerger: NewIOMerger()}
+		activeBefore := testutil.ToFloat64(metrics.numActiveRead)
+		var reader io.ReadCloser
+		vector := IOVector{FilePath: "test:key", Policy: SkipAllCache | SkipFullFilePreloads, Entries: []IOEntry{{Size: 3, ReadCloserForRead: &reader}}}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(t.Context(), &vector))
+		require.NotNil(t, reader)
+		t.Cleanup(func() { _ = reader.Close() })
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.Equal(t, "abc", string(data))
+		require.Equal(t, 2, opens)
+		require.Empty(t, sem.semaphore)
+		require.Equal(t, activeBefore+1, testutil.ToFloat64(metrics.numActiveRead))
+		require.ErrorIs(t, reader.Close(), closeErr)
+		require.ErrorIs(t, reader.Close(), closeErr)
+		require.Equal(t, [2]int{1, 1}, closes)
+		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
+	})
+	t.Run("conditional-lease", func(t *testing.T) {
+		var closes int
+		closeErr := error(ErrObjectChanged)
+		source := &readTestObjectStorage{open: func(ctx context.Context, key string, min, max *int64, expected *ObjectIdentity) (io.ReadCloser, error) {
+			require.Equal(t, true, ctx.Value(httpTraceKey{}))
+			require.Equal(t, "key", key)
+			require.Equal(t, int64(1), *min)
+			require.Equal(t, int64(4), *max)
+			require.Equal(t, &ObjectIdentity{ETag: "version1", Size: 8}, expected)
+			return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes++; return closeErr }}, nil
+		}}
+		sem := newObjectStorageSemaphore(source, 1)
+		metrics := newObjectStorageMetrics(sem, t.Name())
+		fs := &S3FS{name: "test", storage: newObjectStorageHTTPTrace(metrics)}
+		activeBefore := testutil.ToFloat64(metrics.numActiveRead)
+		reader := NewLeasedRangeReader(fs).(ConditionalLeasedRangeReader)
+		identity, err := reader.StatIdentity(t.Context(), "test:key")
+		require.NoError(t, err)
+		admission := new(testRangeAdmission)
+		lease, err := reader.ReadRangeLeaseWithIdentity(t.Context(), "test:key", 1, 3, identity, admission)
+		require.Nil(t, lease)
+		require.ErrorIs(t, err, ErrObjectChanged)
+		require.Zero(t, admission.committed.Load())
+		require.Equal(t, int64(3), admission.aborted.Load())
+		require.Empty(t, sem.semaphore)
+		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
+		require.Equal(t, 1, closes)
+		closeErr = nil
+		lease, err = reader.ReadRangeLeaseWithIdentity(t.Context(), "test:key", 1, 3, identity, admission)
+		require.NoError(t, err)
+		t.Cleanup(lease.Release)
+		require.Equal(t, "abc", string(lease.Bytes()))
+		require.Equal(t, int64(3), admission.committed.Load())
+		require.Equal(t, 2, closes)
+		lease.Release()
+		require.Equal(t, int64(3), admission.released.Load())
+		require.Empty(t, sem.semaphore)
+		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
+	})
+}
+
+// With every background slot taken, cancelling a reader that waits for its download
+// cancels the download and returns.
+func TestS3FSReadFullObjectToDiskCacheStreamingCancelWhileWaiting(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	for i := 0; i < cap(backgroundFills); i++ {
+		backgroundFills <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(backgroundFills); i++ {
+			<-backgroundFills
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	cache, _, done := streamFill(t, ctx, func(fillCtx context.Context, _ *int64, _ *int64) (io.ReadCloser, error) {
+		go func() {
+			<-fillCtx.Done()
+			_ = pw.CloseWithError(fillCtx.Err())
+		}()
+		return pr, nil
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before its download ended: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	require.Error(t, waitResult(t, done))
+	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+}
+
+// With every background slot taken, a download that fails after the reader captured its
+// bytes does not fail the read.
+func TestS3FSReadFullObjectToDiskCacheStreamingErrorAfterCaptureWhenBackgroundFull(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	for i := 0; i < cap(backgroundFills); i++ {
+		backgroundFills <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(backgroundFills); i++ {
+			<-backgroundFills
+		}
+	})
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	_, vector, done := streamFill(t, context.Background(), func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		return pr, nil
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before its download ended: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.NoError(t, pw.CloseWithError(errors.New("source failed")))
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+}
+
+// A download continuing after its reader returned keeps the reader's deadline and ends
+// when the disk cache closes.
+func TestS3FSReadFullObjectToDiskCacheStreamingBackgroundEndsOnClose(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	fillDeadline := make(chan time.Time, 1)
+	fillDone := make(chan struct{})
+	cache, vector, done := streamFill(t, ctx, func(fillCtx context.Context, _ *int64, _ *int64) (io.ReadCloser, error) {
+		d, _ := fillCtx.Deadline()
+		fillDeadline <- d
+		go func() {
+			<-fillCtx.Done()
+			close(fillDone)
+			_ = pw.CloseWithError(fillCtx.Err())
+		}()
+		return pr, nil
+	})
+
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+	require.Equal(t, deadline, <-fillDeadline)
+	cache.Close(ctx)
+	select {
+	case <-fillDone:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the download outlived the disk cache")
+	}
 }

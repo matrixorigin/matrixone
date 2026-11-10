@@ -17,7 +17,6 @@
 package ivfpq
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -41,7 +40,7 @@ func loadedModel(t *testing.T, id string) *IvfpqModel[float32, float32] {
 	t.Cleanup(func() { os.Remove(tarPath) })
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// LoadIndex always fires tag=1 / tag=2 SELECTs in parallel with the
@@ -69,7 +68,7 @@ func loadedModel(t *testing.T, id string) *IvfpqModel[float32, float32] {
 // TestIvfpqSearchEmpty verifies that Search on an empty Indexes slice is a no-op.
 func TestIvfpqSearchEmpty(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
@@ -92,7 +91,7 @@ func TestIvfpqSearchEmpty(t *testing.T) {
 // TestIvfpqSearchTypeMismatch verifies that passing the wrong query type returns an error.
 func TestIvfpqSearchTypeMismatch(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx := loadedModel(t, "type-mismatch")
@@ -112,7 +111,7 @@ func TestIvfpqSearchTypeMismatch(t *testing.T) {
 // TestIvfpqSearchAndSearchFloat32 tests Search and SearchFloat32 with a single loaded index.
 func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx := loadedModel(t, "search-single")
@@ -148,7 +147,7 @@ func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 // TestIvfpqSearchMultipleIndexes verifies result merging across two sub-indexes.
 func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx0 := loadedModel(t, "multi-0")
@@ -176,7 +175,7 @@ func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 // TestIvfpqSearchLoad tests the full Load path (LoadMetadata + LoadIndex) with mock SQL.
 func TestIvfpqSearchLoad(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	// Preload sizes the CDC tail through sqlexec.RunSql, not the runSql stubbed below, and
 	// refuses a tail it cannot size. This model has no tail; say so readably.
@@ -201,13 +200,7 @@ func TestIvfpqSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "search-load", tarPath)
 
 	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)

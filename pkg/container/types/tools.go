@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -31,7 +32,39 @@ func NewProtoType(oid T) plan.Type {
 	}
 }
 
+// TypeFromPlan is the checked conversion at the wire/runtime boundary.
+func TypeFromPlan(typ plan.Type) (Type, error) {
+	if err := typ.ValidateCollation(); err != nil {
+		return Type{}, err
+	}
+	result := NewWithCharset(T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	result.CollationVersion = uint8(typ.CollationVersion)
+	return result, nil
+}
+
+// MustTypeFromPlan is for value-only internal interfaces after the plan's
+// admission check. Invalid metadata must never be narrowed into a legacy type.
+func MustTypeFromPlan(typ plan.Type) Type {
+	result, err := TypeFromPlan(typ)
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+// PlanType carries runtime identity/revision; expression provenance remains
+// owned by the source plan and must be copied with that plan, not invented here.
+func (t Type) PlanType() plan.Type {
+	return plan.Type{Id: int32(t.Oid), Width: t.Width, Scale: t.Scale,
+		Charset: uint32(t.Charset), CollationVersion: uint32(t.CollationVersion)}
+}
+
 func ParseBool(s string) (bool, error) {
+	return ParseBoolWithContext(defaultParseContext, s)
+}
+
+// ParseBoolWithContext parses with the caller's error reporting context.
+func ParseBoolWithContext(ctx context.Context, s string) (bool, error) {
 	// try to parse as a bool, we treat TuRe as true, therefore ToLower.
 	v, err := strconv.ParseBool(strings.ToLower(s))
 	if err == nil {
@@ -44,5 +77,20 @@ func ParseBool(s string) (bool, error) {
 		return num != 0.0, nil
 	}
 
-	return false, moerr.NewInvalidInputNoCtxf("'%s' is not a valid bool expression", s)
+	return false, moerr.NewInvalidInputf(parseErrorContext(ctx), "'%s' is not a valid bool expression", s)
+}
+
+// defaultParseContext is a private token for the context-free entry points.
+// It keeps their successful path free of global context lookups. Resolve it
+// before constructing an error; never pass it across a package boundary.
+var defaultParseContext context.Context = &struct{ context.Context }{context.Background()}
+
+// parseErrorContext resolves the default only on failure. Context-free callers
+// retain their reporting policy without a global context lookup on successful
+// scalar parsing or arithmetic; explicit probe contexts pass through unchanged.
+func parseErrorContext(ctx context.Context) context.Context {
+	if ctx == nil || ctx == defaultParseContext {
+		return moerr.Context()
+	}
+	return ctx
 }

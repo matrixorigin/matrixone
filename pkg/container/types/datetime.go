@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -61,7 +62,19 @@ func (dt Datetime) String() string {
 	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+	// Keep the existing representation for values outside the SQL datetime range.
+	if dt < 0 || y < MinDatetimeYear || y > MaxDatetimeYear {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+	}
+	buf := [19]byte{
+		'0' + byte(y/1000), '0' + byte(y/100%10), '0' + byte(y/10%10), '0' + byte(y%10), '-',
+		'0' + m/10, '0' + m%10, '-',
+		'0' + d/10, '0' + d%10, ' ',
+		'0' + byte(hour/10), '0' + byte(hour%10), ':',
+		'0' + byte(minute/10), '0' + byte(minute%10), ':',
+		'0' + byte(sec/10), '0' + byte(sec%10),
+	}
+	return string(buf[:])
 }
 
 func (dt Datetime) String2(scale int32) string {
@@ -190,6 +203,44 @@ func IsWholeColonClock(s string) bool {
 	return i == len(s)
 }
 
+// TemporalStringKind records recognized calendar syntax without converting a
+// raw string consumer or taking ownership of its SQL diagnostics.
+type TemporalStringKind uint8
+
+const (
+	TemporalStringUnknown TemporalStringKind = iota
+	TemporalStringDate
+	TemporalStringDatetime
+)
+
+// ClassifyTemporalString observes the same grammar as ParseDatetime. Recognized
+// incomplete calendars retain their shape even when value conversion rejects
+// them. Invalid complete calendars and clocks have unknown shape.
+func ClassifyTemporalString(s string) TemporalStringKind {
+	kind := TemporalStringUnknown
+	_, _ = parseDatetime(defaultParseContext, s, 6, &kind, true)
+	return kind
+}
+
+// Observation failures are discarded by the classifier. Ordinary constructors
+// notify the server reporter; reuse a no-report sentinel without per-observation
+// error allocation.
+var errInvalidTemporal = moerr.NewInvalidInput(moerr.NoReportContext(), "invalid temporal value")
+
+func temporalInvalidInput(ctx context.Context, s string, observe bool) error {
+	if observe {
+		return errInvalidTemporal
+	}
+	return moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+}
+
+func temporalInvalidArg(ctx context.Context, arg, s string, observe bool) error {
+	if observe {
+		return errInvalidTemporal
+	}
+	return moerr.NewInvalidArg(parseErrorContext(ctx), arg, s)
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value
@@ -206,8 +257,20 @@ func IsWholeColonClock(s string) bool {
 //	"1999-09-09 11:11"              "1999-09-09 11:11:00.000"
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
+	return ParseDatetimeWithContext(defaultParseContext, s, scale)
+}
+
+// ParseDatetimeWithContext parses with the caller's error reporting context.
+func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datetime, error) {
+	return parseDatetime(ctx, s, scale, nil, false)
+}
+
+func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStringKind, observe bool) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if isZeroDatetimeString(s) {
+		if kind != nil {
+			*kind = zeroDatetimeStringKind(s)
+		}
 		return ZeroDatetime, nil
 	}
 	var dtSepIdx int
@@ -217,10 +280,18 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		dtSepIdx = strings.IndexAny(s, " T")
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
-		if d, err := ParseDateCast(s); err == nil {
+		if d, err := parseDateCast(ctx, s, observe); err == nil {
+			if kind != nil {
+				*kind = TemporalStringDate
+			}
 			return d.ToDatetime(), nil
 		}
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		if kind != nil {
+			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe); err == nil && observedCalendarFields(y, m, d) {
+				*kind = TemporalStringDate
+			}
+		}
+		return -1, temporalInvalidInput(ctx, s, observe)
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -239,53 +310,64 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			var num int64
 			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			year = int32(num)
 			unum, err = strconv.ParseUint(s[5:7], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			month = uint8(unum)
 			unum, err = strconv.ParseUint(s[8:10], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			day = uint8(unum)
 			unum, err = strconv.ParseUint(s[11:13], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			hour = uint8(unum)
 			unum, err = strconv.ParseUint(s[14:16], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(s[17:19], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			second = uint8(unum)
 			if len(s) == 19 {
 				// nothing
 			} else if s[19] == '.' {
-				msec, carry, err = getMsec(s[20:], scale)
+				msec, carry, err = parseMsec(ctx, s[20:], scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 		} else {
 			// Share the DATE grammar for short years and separated calendar
 			// fields. Adding a clock must not change the date's interpretation.
 			if dtSepIdx == len(s)-1 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
-			date, dateErr := ParseDateCast(s[:dtSepIdx])
+			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe)
 			if dateErr != nil || date == ZeroDate {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				if kind != nil {
+					// The value parser exits before clock parsing for incomplete
+					// dates. Observe components and a valid surrogate clock only
+					// for classification; ordinary conversion keeps its error.
+					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe)
+					if componentErr == nil && observedCalendarFields(y, m, d) {
+						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil, observe); clockErr == nil {
+							*kind = TemporalStringDatetime
+						}
+					}
+				}
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			year, month, day, _ = date.Calendar(true)
 			timeStr := s[dtSepIdx+1:]
@@ -298,14 +380,14 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			c1 := strings.IndexByte(hmsStr, ':')
 			if c1 < 0 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			c2 := c1 + 1 + strings.IndexByte(hmsStr[c1+1:], ':')
 			var secStr string
 			if c2 <= c1 {
 				// only h:mm — treat seconds as "00"
 				if len(hmsStr)-c1-1 == 0 {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 				secStr = "00"
 			} else {
@@ -316,7 +398,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			unum, err = strconv.ParseUint(hmsStr[:c1], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			hour = uint8(unum)
 			end := c2
@@ -325,27 +407,27 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			unum, err = strconv.ParseUint(hmsStr[c1+1:end], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(secStr, 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			second = uint8(unum)
 			if dotIdx >= 0 {
 				if dotIdx == len(timeStr)-1 {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
-				msec, carry, err = getMsec(timeStr[dotIdx+1:], scale)
+				msec, carry, err = parseMsec(ctx, timeStr[dotIdx+1:], scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			}
 		}
 	} else {
 		if !isAllDigit(s[:14]) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			return -1, temporalInvalidInput(ctx, s, observe)
 		}
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 		month = (s[4]-'0')*10 + (s[5] - '0')
@@ -356,45 +438,62 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
-				msec, carry, err = getMsec(msecStr, scale)
+				msec, carry, err = parseMsec(ctx, msecStr, scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 		}
 	}
 	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		if kind != nil && ValidTimeInDay(hour, minute, second) && observedCalendarFields(year, month, day) {
+			*kind = TemporalStringDatetime
+		}
+		return -1, temporalInvalidInput(ctx, s, observe)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		return -1, temporalInvalidInput(ctx, s, observe)
+	}
+	if kind != nil {
+		*kind = TemporalStringDatetime
 	}
 	return result, nil
 }
 
+func observedCalendarFields(year int32, month, day uint8) bool {
+	return year >= 0 && year <= MaxDateYear && month <= MaxMonthInYear && day <= 31 &&
+		(month == 0 || day == 0 || ValidCalendarDate(year, month, day))
+}
+
 func isZeroDatetimeString(s string) bool {
+	return zeroDatetimeStringKind(s) != TemporalStringUnknown
+}
+
+func zeroDatetimeStringKind(s string) TemporalStringKind {
 	base := s
 	if dot := strings.IndexByte(s, '.'); dot >= 0 {
 		base = s[:dot]
 		fraction := s[dot+1:]
 		if fraction == "" || !isAllDigit(fraction) {
-			return false
+			return TemporalStringUnknown
 		}
 		for i := range fraction {
 			if fraction[i] != '0' {
-				return false
+				return TemporalStringUnknown
 			}
 		}
 	}
 	switch base {
-	case "0000-00-00", "00000000", "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
-		return true
+	case "0000-00-00", "00000000":
+		return TemporalStringDate
+	case "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
+		return TemporalStringDatetime
 	default:
-		return false
+		return TemporalStringUnknown
 	}
 }
 
@@ -519,6 +618,19 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 	return secPart + base*divisor
 }
 
+// TruncateToScaleWithoutRounding discards fractional digits without carrying
+// into the next second/day. It is used for TIME_TRUNCATE_FRACTIONAL casts.
+func (dt Datetime) TruncateToScaleWithoutRounding(scale int32) Datetime {
+	if dt == ZeroDatetime || scale >= 6 {
+		return dt
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	divisor := scaleVal[scale]
+	return (dt/MicroSecsPerSec)*MicroSecsPerSec + (dt%MicroSecsPerSec)/divisor*divisor
+}
+
 func (dt Datetime) Clock() (hour, minute, sec int8) {
 	if dt == ZeroDatetime {
 		return 0, 0, 0
@@ -552,10 +664,71 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 }
 
 func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
+	value, _ := dt.convertToGoTime(loc)
+	return value
+}
+
+func (dt Datetime) convertToGoTime(loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	year, mon, day, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	nsec := dt.MicroSec() * 1000
-	return time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	candidate := time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	if loc == time.UTC || dt == ZeroDatetime {
+		return candidate, false
+	}
+	_, offset := candidate.Zone()
+	if candidate.UnixMicro()+int64(offset)*MicroSecsPerSec+unixEpochMicroSecs == int64(dt) {
+		return candidate, false
+	}
+	if boundary, ok := dt.nonexistentLocalTimeBoundary(loc, candidate); ok {
+		// Preserve the input fractional seconds while moving a nonexistent wall
+		// time to the first representable wall time after the DST gap.
+		return boundary.Truncate(time.Second).Add(time.Duration(dt.MicroSec()) * time.Microsecond), true
+	}
+	return candidate, false
+}
+
+// IsNonexistentLocalTime reports whether dt is a wall-clock value in a
+// forward timezone transition gap. Go's time.Date silently normalizes such
+// values according to an implementation-specific rule; SQL timestamp casts
+// need to distinguish this case so strict mode can reject it.
+func (dt Datetime) IsNonexistentLocalTime(loc *time.Location) bool {
+	if dt == ZeroDatetime || loc == nil {
+		return false
+	}
+	_, ok := dt.convertToGoTime(loc)
+	return ok
+}
+
+func (dt Datetime) nonexistentLocalTimeBoundary(loc *time.Location, candidate time.Time) (time.Time, bool) {
+	// Search the transitions around the normalized candidate. ZoneBounds is
+	// public and also covers locations with recurring DST extension rules.
+	probe := candidate.Add(-48 * time.Hour)
+	limit := candidate.Add(48 * time.Hour)
+	for n := 0; n < 16; n++ {
+		_, end := probe.ZoneBounds()
+		if end.IsZero() || end.After(limit) {
+			break
+		}
+		before := end.Add(-time.Microsecond).In(loc)
+		after := end.In(loc)
+		_, beforeOffset := before.Zone()
+		_, afterOffset := after.Zone()
+		if afterOffset > beforeOffset {
+			beforeWall := DatetimeFromClock(int32(before.Year()), uint8(before.Month()), uint8(before.Day()),
+				uint8(before.Hour()), uint8(before.Minute()), uint8(before.Second()), uint32(before.Nanosecond()/1000))
+			afterWall := DatetimeFromClock(int32(after.Year()), uint8(after.Month()), uint8(after.Day()),
+				uint8(after.Hour()), uint8(after.Minute()), uint8(after.Second()), uint32(after.Nanosecond()/1000))
+			if dt >= beforeWall && dt < afterWall {
+				return after, true
+			}
+		}
+		probe = end.Add(time.Microsecond)
+	}
+	return time.Time{}, false
 }
 
 func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
@@ -765,10 +938,18 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
+	value, _ := dt.ToTimestampWithLocalTimeStatus(loc)
+	return value
+}
+
+// ToTimestampWithLocalTimeStatus converts once and reports a forward-transition
+// gap so SQL casts can apply their statement policy to the normalized result.
+func (dt Datetime) ToTimestampWithLocalTimeStatus(loc *time.Location) (Timestamp, bool) {
 	if dt == ZeroDatetime {
-		return ZeroTimestamp
+		return ZeroTimestamp, false
 	}
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
+	value, nonexistent := dt.convertToGoTime(loc)
+	return Timestamp(value.UnixMicro() + unixEpochMicroSecs), nonexistent
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {

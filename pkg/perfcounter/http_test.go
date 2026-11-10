@@ -16,12 +16,65 @@ package perfcounter
 
 import (
 	"bytes"
+	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormat(t *testing.T) {
 	c := &CounterSet{}
 	buf := new(bytes.Buffer)
 	format(buf, reflect.ValueOf(c), reflect.TypeOf(c))
+}
+
+func TestCounterReportingAndReset(t *testing.T) {
+	var counters CounterSet
+	var visit func(reflect.Value, func(*atomic.Int64))
+	visit = func(value reflect.Value, fn func(*atomic.Int64)) {
+		if value.Type() == reflect.TypeFor[atomic.Int64]() {
+			fn(value.Addr().Interface().(*atomic.Int64))
+			return
+		}
+		if value.Kind() == reflect.Struct {
+			for i := 0; i < value.NumField(); i++ {
+				visit(value.Field(i), fn)
+			}
+		}
+	}
+	visit(reflect.ValueOf(&counters).Elem(), func(c *atomic.Int64) { c.Store(3) })
+	output := httptest.NewRecorder()
+	counters.ServeHTTP(output, httptest.NewRequest("GET", "/", nil))
+	for _, name := range []string{"FileService", "Memory", "Read", "S3"} {
+		require.Contains(t, output.Body.String(), name)
+	}
+	counters.Reset()
+	visit(reflect.ValueOf(&counters).Elem(), func(c *atomic.Int64) { require.Zero(t, c.Load()) })
+}
+
+func TestConcurrentReporting(t *testing.T) {
+	var counters CounterSet
+	stop, ready, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		counters.FileService.Cache.Memory.Read.Add(1)
+		close(ready)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				counters.FileService.Cache.Memory.Read.Add(1)
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-done })
+	<-ready
+	for i := 0; i < 20; i++ {
+		output := httptest.NewRecorder()
+		counters.ServeHTTP(output, httptest.NewRequest("GET", "/", nil))
+		require.Contains(t, output.Body.String(), "Read")
+	}
 }

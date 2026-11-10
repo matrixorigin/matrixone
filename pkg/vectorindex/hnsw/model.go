@@ -19,32 +19,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/usearchex"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // HnswModel struct - This structure shares with Search, Build and Sync
-type HnswModel[T types.RealNumbers] struct {
+type HnswModel[T types.ArrayElement] struct {
 	Id       string
 	Index    *usearch.Index
 	Path     string
@@ -59,6 +61,9 @@ type HnswModel[T types.RealNumbers] struct {
 	// info required for build
 	MaxCapacity uint
 	NThread     uint
+	// Headroom is the number of rows a writable load reserves room for beyond the
+	// model's current size.
+	Headroom uint
 
 	// inflight counts adds that have been ASSIGNED to this index (a slot reserved
 	// under HnswBuild.mutex) but not yet completed. A concurrent capacity rollover
@@ -77,6 +82,9 @@ type HnswModel[T types.RealNumbers] struct {
 	Nrow    int64
 	BuildTS int64
 
+	// Bounds is the trained range an int8/uint8 model maps its vectors with.
+	Bounds QuantizeBounds
+
 	// for cdc update
 	Dirty atomic.Bool
 	View  bool
@@ -84,18 +92,73 @@ type HnswModel[T types.RealNumbers] struct {
 
 	// view memory byffer for search
 	buffer []byte
+
+	// hold keeps the index-file cache entry a viewed model maps; set only once the model is
+	// loaded.
+	hold *fileservice.IndexFileHold
+
+	// files is the storage engine and index-file cache the model file is read through when
+	// the caller's sqlproc has no process, as for the sync that owns the model; nil takes them
+	// from the process.
+	files *indexfile.Files
+}
+
+// indexFile is an open model file, as indexfile.File.
+type indexFile interface {
+	FDPath() string
+	Keep() *fileservice.IndexFileHold
+	Close() error
+}
+
+// openIndexFile reads a model file through the index-file layer, from files or else from
+// sqlproc's process. It returns nil when there is no storage engine, or no index-file cache
+// and cached is set; the model is then read through SQL. Tests replace it.
+var openIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, ref indexfile.Ref, tempDir string, cached bool) (indexFile, error) {
+	if env := indexfile.NewEnv(sqlproc, files, nil, ""); env.Engine == nil || cached && env.Cache == nil {
+		return nil, nil
+	}
+	f, err := indexfile.OpenWithProcess(sqlproc, files, ref, tempDir)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// writeIndexFile stores a model file through the index-file layer; tests replace it.
+var writeIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, txn client.TxnOperator, ref indexfile.Ref,
+	src io.Reader, tempDir string, run func(sql string) error) (int64, error) {
+	size, _, err := indexfile.Write(sqlproc.GetContext(), indexfile.NewEnv(sqlproc, files, txn, tempDir), ref, src, run)
+	return size, err
+}
+
+// indexFileRef names the model file in tblcfg's storage table by the MD5 its metadata row
+// records: a sync rewrites the model under the same id, so the 32-bit CRC is not used.
+func (idx *HnswModel[T]) indexFileRef(tblcfg vectorindex.IndexTableConfig) indexfile.Ref {
+	return indexfile.Ref{
+		DB:       tblcfg.DbName,
+		Table:    tblcfg.IndexTable,
+		IndexID:  idx.Id,
+		Tag:      int64(vectorindex.Tag_ModelChunk),
+		Size:     idx.FileSize,
+		Checksum: idx.Checksum,
+	}
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, tmpdir string) (*HnswModel[T], error) {
+// NewHnswModelForBuild creates an empty model holding up to max_capacity rows, with room
+// reserved for the first reserve of them (max_capacity when reserve is 0).
+func NewHnswModelForBuild[T types.ArrayElement](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, reserve uint, tmpdir string) (*HnswModel[T], error) {
 	var err error
 	idx := &HnswModel[T]{TmpDir: tmpdir}
 
 	idx.Id = id
 	idx.NThread = uint(nthread)
 	idx.MaxCapacity = max_capacity
+	if reserve == 0 || reserve > max_capacity {
+		reserve = max_capacity
+	}
 
-	err = idx.initIndex(cfg)
+	err = idx.initIndex(cfg, reserve)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +166,7 @@ func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexC
 	return idx, nil
 }
 
-func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
+func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig, reserve uint) (err error) {
 	idx.Index, err = usearch.NewIndex(cfg.Usearch)
 	if err != nil {
 		return err
@@ -118,7 +181,7 @@ func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
 		}
 	}()
 
-	err = idx.Index.Reserve(idx.MaxCapacity)
+	err = idx.Index.Reserve(reserve)
 	if err != nil {
 		return err
 	}
@@ -138,6 +201,12 @@ func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
 
 // Destroy the struct
 func (idx *HnswModel[T]) Destroy() error {
+	return idx.destroy(false)
+}
+
+// destroy is Destroy of a model a newer version has replaced when superseded: its
+// index-file hold is then released without counting as a use.
+func (idx *HnswModel[T]) destroy(superseded bool) error {
 	// Release the index handle, the on-disk file and the buffer independently: they do
 	// not depend on each other, so returning early on the first error used to leak the
 	// remaining two for the lifetime of the process. Collect the outcomes instead.
@@ -162,6 +231,16 @@ func (idx *HnswModel[T]) Destroy() error {
 
 	if idx.buffer != nil {
 		idx.buffer = nil
+	}
+
+	// The hold outlives the mapping: it is released only once the index is destroyed.
+	if idx.hold != nil && idx.Index == nil {
+		if superseded {
+			idx.hold.ReleaseSuperseded()
+		} else {
+			idx.hold.Release()
+		}
+		idx.hold = nil
 	}
 
 	return errs
@@ -280,88 +359,53 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	destroyed = true
 	idx.Index = nil
 
-	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
-	/*
-		fi, err := os.Stat(idx.Path)
-		if err != nil {
-			return err
-		}
-		idx.FileSize := fi.Size()
-	*/
-
 	return nil
 }
 
-// Generate the SQL to update the secondary index tables.
-// 1. store the index file into the index table
-func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
-
-	err := idx.SaveToFile()
-	if err != nil {
-		return nil, err
+// PreparePersistence finishes the model artifact before SQL or admission checks.
+func (idx *HnswModel[T]) PreparePersistence() error {
+	if err := idx.SaveToFile(); err != nil {
+		return err
 	}
-
-	if len(idx.Path) == 0 {
-		// file path is empty string. No file is written
-		return []string{}, nil
+	if idx.Path == "" {
+		idx.FileSize = 0
+		return nil
 	}
-
 	fi, err := os.Stat(idx.Path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	filesz := fi.Size()
-	offset := int64(0)
-	chunksz := int64(0)
-	chunkid := int64(0)
-
-	idx.FileSize = filesz
-
-	if idx.FileSize == 0 {
-		return []string{}, nil
+	if !fi.Mode().IsRegular() {
+		return moerr.NewInvalidInputNoCtx("index artifact must be a regular file")
 	}
-
-	logutil.Infof("HnswModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len.Load())
-
-	sqls := make([]string, 0, 5)
-
-	sql := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
-	n := 0
-	for offset = 0; offset < filesz; {
-		if offset+vectorindex.MaxChunkSize < filesz {
-			chunksz = vectorindex.MaxChunkSize
-
-		} else {
-			chunksz = filesz - offset
-		}
-
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
-		values = append(values, tuple)
-
-		// offset and chunksz
-		offset += chunksz
-		chunkid++
-
-		n++
-		if n == 2000 {
-			newsql := sql + strings.Join(values, ", ")
-			sqls = append(sqls, newsql)
-			values = values[:0]
-			n = 0
-		}
+	idx.FileSize = fi.Size()
+	if idx.Checksum == "" {
+		idx.Checksum, err = vectorindex.CheckSum(idx.Path)
 	}
+	return err
+}
 
-	if len(values) > 0 {
-		newsql := sql + strings.Join(values, ", ")
-		sqls = append(sqls, newsql)
+// WriteIndexFile writes the artifact prepared by this model's native owner as its chunk rows in
+// txn through the index-file layer, which caches it on this CN; run executes one statement in
+// txn. files is nil when sqlproc's process has the storage engine and the cache.
+func (idx *HnswModel[T]) WriteIndexFile(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, tblcfg vectorindex.IndexTableConfig,
+	txn client.TxnOperator, run func(sql string) error) error {
+	if idx.Path == "" || idx.FileSize == 0 {
+		return nil
 	}
-
-	//sql += strings.Join(values, ", ")
-	//return []string{sql}, nil
-	return sqls, nil
+	fp, err := os.Open(idx.Path)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+	size, err := writeIndexFile(sqlproc, files, txn, idx.indexFileRef(tblcfg), io.NewSectionReader(fp, 0, idx.FileSize), idx.spillDir(sqlproc), run)
+	if err != nil {
+		return err
+	}
+	if size != idx.FileSize {
+		return moerr.NewInternalErrorNoCtxf("hnsw index %s: wrote %d bytes, want %d", idx.Id, size, idx.FileSize)
+	}
+	return nil
 }
 
 func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
@@ -400,6 +444,27 @@ func (idx *HnswModel[T]) Full() (bool, error) {
 	return (sz == idx.MaxCapacity), nil
 }
 
+// EnsureRoom grows the reservation of a loaded writable model to hold n more rows, up to its
+// capacity.
+func (idx *HnswModel[T]) EnsureRoom(n uint) error {
+	if idx.Index == nil || idx.View {
+		return nil
+	}
+	size, err := idx.Index.Len()
+	if err != nil {
+		return err
+	}
+	reserved, err := idx.Index.Capacity()
+	if err != nil {
+		return err
+	}
+	want := min(size+n, max(idx.MaxCapacity, size))
+	if want <= reserved {
+		return nil
+	}
+	return idx.Index.Reserve(want)
+}
+
 // add vector to the index
 func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	if idx.View {
@@ -425,8 +490,12 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
@@ -454,8 +523,12 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // remove key
@@ -535,11 +608,23 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
+	// file is the model file read through the index-file layer: the model maps it through
+	// its descriptor and keeps the hold on its cache entry until Destroy.
+	var file indexFile
+	if len(idx.Path) == 0 {
+		if file, err = openIndexFile(sqlproc, idx.files, idx.indexFileRef(tblcfg), idx.spillDir(sqlproc), false); err != nil {
+			return err
+		}
+	}
+	if file != nil {
+		defer file.Close()
+	}
+
 	// ownsTempFile records that THIS call created the spill file, so only a file we
 	// created is unlinked after the mapping is established. A caller-supplied Path is
 	// left alone.
 	ownsTempFile := false
-	if len(idx.Path) == 0 {
+	if len(idx.Path) == 0 && file == nil {
 		// Stream index chunks from DB into a temp file, then let usearch
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
@@ -624,13 +709,18 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		fp = nil
 	}
 
-	// verify checksum from file
-	chksum, err := vectorindex.CheckSum(idx.Path)
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
+	path := idx.Path
+	if file != nil {
+		path = file.FDPath()
+	} else {
+		// verify checksum from file
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return err
+		}
+		if chksum != idx.Checksum {
+			return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
+		}
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -658,7 +748,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 	// View() mmaps the file — data stays off Go heap, OS can page out
 	// under memory pressure.
-	err = usearchidx.View(idx.Path)
+	err = usearchidx.View(path)
 	if err != nil {
 		return err
 	}
@@ -695,6 +785,9 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 
+	if file != nil {
+		idx.hold = file.Keep()
+	}
 	return nil
 }
 
@@ -771,7 +864,11 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if idx.FileSize == 0 && len(idx.Path) == 0 {
 		// indx is newly created and not save to file yet so simply create a usearch index here
-		return idx.initIndex(idxcfg)
+		reserve := idx.MaxCapacity
+		if idx.Headroom > 0 && idx.Headroom < reserve {
+			reserve = idx.Headroom
+		}
+		return idx.initIndex(idxcfg, reserve)
 	}
 
 	if len(idx.Checksum) == 0 {
@@ -779,7 +876,20 @@ func (idx *HnswModel[T]) LoadIndex(
 		return moerr.NewInternalErrorNoCtx("checksum is empty.  Cannot read index file from database")
 	}
 
+	// file is the model file read through the index-file layer. Load copies it, so it is
+	// closed once loaded and the model holds nothing; a reload after Unload opens it again,
+	// so it is used only with a cache to open it from.
+	var file indexFile
 	if len(idx.Path) == 0 {
+		if file, err = openIndexFile(sqlproc, idx.files, idx.indexFileRef(tblcfg), idx.spillDir(sqlproc), true); err != nil {
+			return err
+		}
+	}
+	if file != nil {
+		defer file.Close()
+	}
+
+	if len(idx.Path) == 0 && file == nil {
 
 		// create tempfile for writing
 		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
@@ -870,13 +980,18 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	}
 
-	// check checksum
-	chksum, err := vectorindex.CheckSum(idx.Path)
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
+	path := idx.Path
+	if file != nil {
+		path = file.FDPath()
+	} else {
+		// check checksum
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return err
+		}
+		if chksum != idx.Checksum {
+			return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
+		}
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -903,17 +1018,21 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 
 	if view {
-		err = usearchidx.Load(idx.Path)
+		err = usearchidx.Load(path)
 		if err != nil {
 			return err
 		}
 		idx.View = true
 	} else {
-		err = usearchidx.Load(idx.Path)
+		err = usearchidx.Load(path)
 		if err != nil {
 			return err
 		}
-		err = usearchidx.Reserve(uint(idxcfg.IndexCapacity))
+		var size uint
+		if size, err = usearchidx.Len(); err != nil {
+			return err
+		}
+		err = usearchidx.Reserve(max(size, min(uint(idxcfg.IndexCapacity), size+idx.Headroom)))
 		if err != nil {
 			return err
 		}
@@ -935,10 +1054,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 
 	if !view {
-		// sometimes Reserve() will give bigger capacity than requested
-		if idx.MaxCapacity > uint(idxcfg.IndexCapacity) {
-			idx.MaxCapacity = uint(idxcfg.IndexCapacity)
-		}
+		idx.MaxCapacity = uint(idxcfg.IndexCapacity)
 	}
 
 	return nil
@@ -980,6 +1096,13 @@ func (idx *HnswModel[T]) Unload() error {
 
 // Call usearch.Search
 func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, distances []float32, err error) {
+	return idx.SearchWithMembership(query, limit, nil, false)
+}
+
+// SearchWithMembership searches for the nearest limit keys that membership holds; a nil
+// membership searches every key. With exact, it tests every indexed key against membership
+// and measures the distance of each key membership holds, instead of traversing the graph.
+func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter, exact bool) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -997,11 +1120,22 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(query)
-	keys, distances, serr := idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	kind := idx.Index.GetConfig().Quantization
+	ptr, stored, err := ToStorage(query, kind, idx.Bounds)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer runtime.KeepAlive(stored)
+	var serr error
+	if membership == nil {
+		keys, distances, serr = idx.Index.SearchUnsafe(ptr, limit)
+	} else {
+		keys, distances, serr = usearchex.FilteredSearchUnsafeWithMembership(idx.Index, ptr, limit, membership, exact)
+	}
 	if serr != nil {
 		return nil, nil, serr
 	}
+	RescaleDistances(distances, kind, idx.Bounds)
 	if err := metric.CheckFiniteDists(distances, "vector index search"); err != nil {
 		return nil, nil, err
 	}

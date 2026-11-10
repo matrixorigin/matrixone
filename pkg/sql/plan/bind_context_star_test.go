@@ -49,7 +49,7 @@ func TestUnqualifiedStarRightJoinUsingOrder(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			p, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
 			require.Equal(t, test.want, p.GetQuery().Headings)

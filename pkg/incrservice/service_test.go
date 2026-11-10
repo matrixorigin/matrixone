@@ -760,6 +760,50 @@ func TestCurrentValueBuilderCannotReviveCacheAfterDelete(t *testing.T) {
 	})
 }
 
+func TestRolledBackDeleteKeepsCurrentValueBuilder(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		started, release := store.blockNext()
+		defer release()
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.CurrentValue(ctx, 0, "auto_0")
+			result <- err
+		}()
+		select {
+		case <-started:
+		case <-ctx.Done():
+			require.FailNow(t, "CurrentValue did not reach blocked GetColumns")
+		}
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		op.AddWorkspace(&terminalDeleteWorkspace{deleted: map[uint64]bool{}})
+		require.NoError(t, s.Delete(ctx, 0, op))
+		require.NoError(t, op.Commit(ctx))
+
+		release()
+		require.NoError(t, <-result)
+		s.mu.Lock()
+		_, installed := s.mu.tables[0]
+		_, destroyed := s.mu.destroyed[0]
+		s.mu.Unlock()
+		require.True(t, installed)
+		require.False(t, destroyed)
+		_, err = s.CurrentValue(ctx, 0, "auto_0")
+		require.NoError(t, err)
+	})
+}
+
 func TestCurrentValueRejectsBuilderInvalidatedByReload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(
 		defines.AttachAccountId(context.Background(), catalog.System_Account),
@@ -906,6 +950,63 @@ func TestSetOffsetPreservesMaxUint64TerminalValue(t *testing.T) {
 			_, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+		})
+}
+
+// #29903: only a user-visible auto_increment column may surface as LAST_INSERT_ID.
+// InsertValues returns the first generated value among non-internal columns; the
+// allocator-owned hidden fake primary key (isInternal) is still generated and the
+// column populated, but its value must never be returned.
+func TestInsertValuesExcludesInternalFakePKFromLastInsertID(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 1,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: true}}, op))
+			require.NoError(t, s.Create(ctx, 2,
+				[]AutoColumn{{ColName: "id", ColIndex: 0, Step: 1}}, op))
+			require.NoError(t, s.Create(ctx, 3,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: false}}, op))
+			require.NoError(t, s.Create(ctx, 4, []AutoColumn{
+				{ColName: "id", ColIndex: 0, Step: 1},
+				{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// internal-only (a PK-less table's hidden fake primary key): not returned
+			v := gen()
+			last, err := s.InsertValues(ctx, 1, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "hidden fake PK must not surface as LAST_INSERT_ID")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](v)[0], "fake PK column still populated")
+
+			// user-visible auto column: returned
+			v = gen()
+			last, err = s.InsertValues(ctx, 2, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last)
+
+			// a user column named like the fake PK but visible (isInternal=false): returned (P2-1)
+			v = gen()
+			last, err = s.InsertValues(ctx, 3, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last, "a visible column named __mo_fake_pk_col must still surface")
+
+			// mixed: user auto column given an explicit value, only the hidden fake PK
+			// generates -> LAST_INSERT_ID stays unchanged (P2-2)
+			idVec := explicit(100)
+			fakeVec := gen()
+			last, err = s.InsertValues(ctx, 4, 0, nil, []*vector.Vector{idVec, fakeVec}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "when only the hidden fake PK generates, nothing surfaces")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0], "fake PK still populated")
 		})
 }
 
@@ -1090,8 +1191,11 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 
 			op2 := ops[1]
+			workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{0: true}}
+			op2.AddWorkspace(workspace)
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Rollback(ctx))
+			require.Empty(t, workspace.reads)
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
 }
@@ -1178,6 +1282,138 @@ func TestResetStatementRollbackKeepsOriginalCache(t *testing.T) {
 		// This test verifies cache lifecycle only: memStore models transaction
 		// close, not statement-level catalog rollback for TRUNCATE.
 	})
+}
+
+type terminalDeleteWorkspace struct {
+	client.Workspace
+	deleted   map[uint64]bool
+	reads     []uint64
+	commitErr error
+	prepared  bool
+	finalized bool
+}
+
+func (w *terminalDeleteWorkspace) Readonly() bool { return false }
+
+func (w *terminalDeleteWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
+	if w.commitErr != nil {
+		return nil, w.commitErr
+	}
+	w.prepared = true
+	return nil, nil
+}
+
+func (w *terminalDeleteWorkspace) Rollback(context.Context) error { return nil }
+
+func (w *terminalDeleteWorkspace) FinalizeCommit(context.Context) { w.finalized = true }
+
+func (w *terminalDeleteWorkspace) IsTableDeletedAtTxnClose(id uint64) bool {
+	if !w.prepared {
+		panic("terminal deletion view read before workspace preparation")
+	}
+	if w.finalized {
+		panic("terminal deletion view read after workspace finalization")
+	}
+	w.reads = append(w.reads, id)
+	return w.deleted[id]
+}
+
+func TestDeletePreparationFailureDoesNotReadTerminalView(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), ops[0]))
+		require.NoError(t, ops[0].Commit(ctx))
+		prepareErr := errors.New("workspace preparation failed")
+		workspace := &terminalDeleteWorkspace{
+			deleted: map[uint64]bool{42: true}, commitErr: prepareErr,
+		}
+		op := ops[1]
+		op.AddWorkspace(workspace)
+		require.NoError(t, s.Delete(ctx, 42, op))
+		require.ErrorIs(t, op.Commit(ctx), prepareErr)
+		require.Empty(t, workspace.reads)
+		s.mu.Lock()
+		_, present := s.mu.tables[42]
+		_, destroyed := s.mu.destroyed[42]
+		s.mu.Unlock()
+		require.True(t, present)
+		require.False(t, destroyed)
+	})
+}
+
+func TestDeletePublishesOnlySurvivingPhysicalDrops(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		for _, id := range []uint64{42, 43} {
+			require.NoError(t, s.Create(ctx, id, newTestTableDef(1), ops[0]))
+		}
+		require.NoError(t, ops[0].Commit(ctx))
+		s.mu.Lock()
+		originalGeneration := s.mu.generation[43]
+		s.mu.Unlock()
+
+		op := ops[1]
+		workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{42: true}}
+		op.AddWorkspace(workspace)
+		for _, id := range []uint64{42, 43} {
+			require.NoError(t, s.Delete(ctx, id, op))
+		}
+		require.NoError(t, op.Commit(ctx))
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		_, droppedCache := s.mu.tables[42]
+		_, restoredCache := s.mu.tables[43]
+		_, restoredQueued := s.mu.destroyed[43]
+		require.False(t, droppedCache)
+		require.True(t, restoredCache)
+		require.False(t, restoredQueued)
+		require.Equal(t, originalGeneration, s.mu.generation[43])
+		require.True(t, workspace.finalized)
+		require.Equal(t, []uint64{42, 43}, workspace.reads)
+	})
+}
+
+func TestCreateThenDeleteUsesSurvivingPhysicalDrop(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deleted=%t", deleted), func(t *testing.T) {
+			runServiceTests(t, 1, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+				s, op := ss[0], ops[0]
+				workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{42: deleted}}
+				op.AddWorkspace(workspace)
+				require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), op))
+				require.NoError(t, s.Delete(ctx, 42, op))
+				require.NoError(t, op.Commit(ctx))
+				s.mu.Lock()
+				_, present := s.mu.tables[42]
+				s.mu.Unlock()
+				require.Equal(t, !deleted, present)
+				require.Equal(t, []uint64{42}, workspace.reads)
+			})
+		})
+	}
+}
+
+func TestResetRetiresOnlySurvivingOldPhysicalDrop(t *testing.T) {
+	for _, capable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capable=%t", capable), func(t *testing.T) {
+			runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+				s := ss[0]
+				require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), ops[0]))
+				require.NoError(t, ops[0].Commit(ctx))
+				op := ops[1]
+				if capable {
+					op.AddWorkspace(&terminalDeleteWorkspace{deleted: map[uint64]bool{}})
+				}
+				require.NoError(t, s.Reset(ctx, 42, 44, false, op))
+				require.NoError(t, op.Commit(ctx))
+				s.mu.Lock()
+				_, oldPresent := s.mu.tables[42]
+				s.mu.Unlock()
+				require.Equal(t, capable, oldPresent)
+			})
+		})
+	}
 }
 
 func TestDeleteOnOtherService(t *testing.T) {
@@ -2629,11 +2865,11 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
-	testBlockedBuilderInvalidation(t, false)
+	testBlockedBuilderInvalidation(t, false, false)
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
-	testBlockedBuilderInvalidation(t, true)
+	testBlockedBuilderInvalidation(t, true, false)
 }
 
 func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
@@ -2763,7 +2999,7 @@ func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
 	c := &tableCache{}
 	c.mu.cols = map[string]*columnCache{"auto": col}
 	c.retire()
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	require.Zero(t, allocator.asyncCalls.Load())
 }
 
@@ -2776,14 +3012,14 @@ func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
 		allocator: allocator,
 		committed: true,
 	}
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	col.Lock()
 	allocating := col.allocating
 	col.Unlock()
 	require.False(t, allocating)
 }
 
-func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
+func testBlockedBuilderInvalidation(t *testing.T, closeService, pkRetry bool) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -2797,6 +3033,9 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
 		require.NoError(t, op.Commit(ctx))
 
+		if pkRetry {
+			require.NoError(t, s.Reload(ctx, 0))
+		}
 		started, release := store.blockNext()
 		defer release()
 		result := make(chan error, 1)
@@ -2829,7 +3068,13 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 			release()
 			<-closed
 		} else {
-			require.NoError(t, s.Reload(ctx, 0))
+			if pkRetry {
+				refreshed, err := s.ReloadForPKRetry(ctx, 0, 8, nil)
+				require.NoError(t, err)
+				require.True(t, refreshed)
+			} else {
+				require.NoError(t, s.Reload(ctx, 0))
+			}
 			require.True(t, moerr.IsMoErrCode(<-waiterResult, moerr.ErrTxnNeedRetryWithDefChanged))
 			release()
 		}

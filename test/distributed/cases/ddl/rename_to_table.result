@@ -184,14 +184,14 @@ null    90    4
 null    100    0
 null    null    80
 insert into rename_fk_02(col2,col3) values ('200',5);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 rename table rename_fk_02 to w_04;
 show create table w_04;
 Table    Create Table
 w_04    CREATE TABLE `w_04` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `rename_fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into rename_fk_01 values ('200',983),('300',45),('400',23);
 insert into w_04(col2,col3) values ('400',5),('500',4),('300',0);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from w_04;
 col1    col2    col3
 null    90    5

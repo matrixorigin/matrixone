@@ -32,6 +32,42 @@ const (
 	cVecCount  = 10
 )
 
+func TestOptionalBloomSuppliedScratch(t *testing.T) {
+	for _, args := range []struct {
+		bits   uint64
+		hashes uint32
+	}{{0, 1}, {64, 0}, {64, MAX_K_SEED + 1}} {
+		filter, ok := TryNewCBloomFilterWithSeed(args.bits, args.hashes, 1)
+		require.False(t, ok)
+		require.Nil(t, filter)
+	}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	typ := types.T_int64.ToType()
+	vec, err := vector.NewConstFixed[int64](typ, 42, 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	filter, ok := TryNewCBloomFilterWithSeed(1024, 3, 1)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		if filter.Valid() {
+			filter.Free()
+		}
+	})
+	filter.AddVector(vec)
+	require.False(t, filter.TestFixedVectorInto(nil, make([]uint8, 3)))
+	require.False(t, filter.TestFixedVectorInto(vec, make([]uint8, 2)))
+	scratch := []uint8{9, 9, 9}
+	require.True(t, filter.TestFixedVectorInto(vec, scratch))
+	require.Equal(t, []uint8{1, 1, 1}, scratch)
+	nulls := vector.NewConstNull(typ, 3, mp)
+	t.Cleanup(func() { nulls.Free(mp) })
+	require.True(t, filter.TestFixedVectorInto(nulls, scratch))
+	require.Equal(t, []uint8{0, 0, 0}, scratch)
+	filter.Free()
+	require.False(t, filter.TestFixedVectorInto(vec, scratch))
+}
+
 func TestCBloomFilter(t *testing.T) {
 	bf := NewCBloomFilter(1000, 3)
 	assert.NotNil(t, bf)
@@ -135,13 +171,51 @@ func TestCBloomFilterWithSeed(t *testing.T) {
 	assert.True(t, bf3.Test(key))
 
 	// Marshal and compare bitmaps
-	data1, _ := bf1.Marshal()
-	data2, _ := bf2.Marshal()
-	data3, _ := bf3.Marshal()
+	data1, err := bf1.Marshal()
+	require.NoError(t, err)
+	data2, err := bf2.Marshal()
+	require.NoError(t, err)
+	data3, err := bf3.Marshal()
+	require.NoError(t, err)
 
 	assert.Equal(t, data1, data2, "Filters with same seed should have identical bitmaps")
 	// bf3 might have same bitmap by chance, but unlikely
 	assert.NotEqual(t, data1, data3, "Filters with different seeds should likely have different bitmaps")
+}
+
+func TestCBloomFilterMarshalPadding(t *testing.T) {
+	for _, nbits := range []uint64{1, 64, 65, 1000} {
+		for _, seeded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("nbits=%d/seeded=%v", nbits, seeded), func(t *testing.T) {
+				var bf *CBloomFilter
+				if seeded {
+					bf = NewCBloomFilterWithSeed(nbits, 3, 12345)
+				} else {
+					bf = NewCBloomFilter(nbits, 3)
+				}
+				defer bf.Free()
+				bf.Add([]byte("test_key"))
+				data, err := bf.Marshal()
+				require.NoError(t, err)
+				// The legacy wire header includes one uint64 bitmap slot in
+				// addition to the bitmap bytes. Keep its length, but initialize
+				// the unused trailing slot instead of exposing allocator data.
+				rounded := uint64(1)
+				for rounded < nbits {
+					rounded *= 2
+				}
+				require.Len(t, data, 32+int((rounded+7)/8))
+				require.Equal(t, make([]byte, 8), data[len(data)-8:])
+				restored := &CBloomFilter{}
+				require.NoError(t, restored.Unmarshal(data))
+				defer restored.Free()
+				require.True(t, restored.Test([]byte("test_key")))
+				roundTrip, err := restored.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, data, roundTrip)
+			})
+		}
+	}
 }
 
 func TestCBloomFilter_Free(t *testing.T) {

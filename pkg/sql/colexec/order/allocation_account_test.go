@@ -16,6 +16,7 @@ package order
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +40,29 @@ import (
 type orderTestAllocation struct {
 	registry *mpool.AllocationAccountRegistry
 	account  *mpool.AllocationAccount
+}
+
+type failingOrderChild struct {
+	*colexec.MockOperator
+	err error
+}
+
+type cutoffFailAfterBatch struct {
+	*colexec.MockOperator
+	err       error
+	delivered bool
+}
+
+func (child *cutoffFailAfterBatch) Call(proc *process.Process) (vm.CallResult, error) {
+	if child.delivered {
+		return vm.CancelResult, child.err
+	}
+	child.delivered = true
+	return child.MockOperator.Call(proc)
+}
+
+func (child *failingOrderChild) Call(*process.Process) (vm.CallResult, error) {
+	return vm.CancelResult, child.err
 }
 
 type orderTestCapacityController struct {
@@ -137,6 +162,35 @@ func newAccountedOrder(specs ...*plan.OrderBySpec) *Order {
 	}
 }
 
+func newOrderRecoveryTest(
+	t *testing.T,
+	controller mpool.AllocationCapacityController,
+	specs ...*plan.OrderBySpec,
+) (*process.Process, *Order, orderTestAllocation) {
+	t.Helper()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	if len(specs) == 0 {
+		specs = []*plan.OrderBySpec{{Expr: newOrderColumnExpression(0, types.T_int64)}}
+	}
+	op := newAccountedOrder(specs...)
+	state := installOrderTestAllocation(t, op, 64<<20, controller)
+	t.Cleanup(func() {
+		for _, child := range op.Children {
+			child.Free(proc, t.Failed(), nil)
+		}
+		op.Free(proc, t.Failed(), nil)
+		finalizeOrderTestAllocation(t, op, state)
+		if controlled, ok := controller.(*orderTestCapacityController); ok {
+			require.Zero(t, controlled.current())
+		}
+	})
+	return proc, op, state
+}
+
 func newOrderPairBatch(
 	t testing.TB,
 	proc *process.Process,
@@ -171,7 +225,7 @@ func runOrderPair(
 }
 
 func TestAccountedOrderResidentMultiKeyAndExpressionLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	computed, err := plan2.BindFuncExprImplByPlanExpr(
 		proc.Ctx,
 		"+",
@@ -222,8 +276,36 @@ func TestAccountedOrderResidentMultiKeyAndExpressionLifecycle(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedOrderPreservesChildCapacityErrorAttribution(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	op := newAccountedOrder(
+		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
+	)
+	state := installOrderTestAllocation(t, op, 64<<20, nil)
+	sentinel := errors.Join(
+		mpool.ErrAllocationAccountCapacity,
+		errors.New("child capacity sentinel"),
+	)
+	child := &failingOrderChild{
+		MockOperator: colexec.NewMockOperator(),
+		err:          sentinel,
+	}
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+
+	_, err := vm.Exec(op, proc)
+	require.Same(t, sentinel, err)
+	require.NotContains(t, err.Error(), "order memory capacity exceeded")
+
+	child.Free(proc, true, err)
+	op.Free(proc, true, err)
+	finalizeOrderTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "time_zone", name)
 		require.True(t, system)
@@ -283,42 +365,126 @@ func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestAccountedOrderFinalShufflePressureCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	op := newAccountedOrder(
-		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
-	)
+func TestAccountedOrderFinalShuffleUsesRecoveryCapacity(t *testing.T) {
 	controller := &orderTestCapacityController{limit: 64 << 20}
-	state := installOrderTestAllocation(t, op, 64<<20, controller)
+	proc, op, _ := newOrderRecoveryTest(t, controller)
 	input := newOrderPairBatch(t, proc, []int64{4, 3, 2, 1}, []int64{1, 2, 3, 4})
 	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, op.Prepare(proc))
 	_, err := op.ctr.appendBatch(proc, input)
 	require.NoError(t, err)
-	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSlice(
+	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSliceWithCapacityClass(
 		op.ctr.resultOrderList,
 		op.ctr.resultOrderMP,
 		op.ctr.batWaitForSort.RowCount(),
 		proc,
 		op.ctr.allocationAccount,
 		ordersites.OrderSelections,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	for i := range op.ctr.resultOrderList {
 		op.ctr.resultOrderList[i] = int64(len(op.ctr.resultOrderList) - i - 1)
 	}
-	require.Equal(t, state.account.Snapshot().Used, controller.freeze())
+	controller.freeze()
 
 	result := vm.NewCallResult()
 	err = op.ctr.sortAndSend(proc, &result)
-	require.Error(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3, 4},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, capacity)
+	require.Positive(t, borrowed)
+}
+
+func TestAccountedOrderRetainsRunFromPreAdmittedRecoveryCapacity(t *testing.T) {
+	controller := &orderTestCapacityController{limit: 64 << 20}
+	proc, op, _ := newOrderRecoveryTest(t, controller)
+	input := newOrderPairBatch(t, proc,
+		[]int64{4, 3, 2, 1}, []int64{1, 2, 3, 4})
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, op.Prepare(proc))
+	require.NoError(t, op.ctr.ensureRecoveryCapacity(input))
+	ordinaryUsed := controller.freeze()
+
+	_, err := op.ctr.appendBatch(proc, input)
+	require.NoError(t, err)
+	require.Equal(t, ordinaryUsed, controller.current(),
+		"retained run and append scratch must consume the admitted recovery floor")
+	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, capacity)
+	require.Positive(t, borrowed)
+
+	result := vm.NewCallResult()
+	require.NoError(t, op.ctr.sortAndSend(proc, &result))
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3, 4},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	capacity, borrowed = op.ctr.recoveryCapacity.Snapshot()
+	require.Equal(t, borrowed, capacity,
+		"completed run must release conservative unused recovery headroom")
+}
+
+func TestAccountedOrderRecoveryTargetAddsNextRunToRetainedScratch(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil,
+		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
+		&plan.OrderBySpec{Expr: newOrderColumnExpression(1, types.T_int64)},
+	)
+	require.NoError(t, op.Prepare(proc))
+
+	const rows = 4096
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i)
+	}
+	large := newOrderPairBatch(t, proc, values, values)
+	t.Cleanup(func() { large.Clean(proc.Mp()) })
+	require.NoError(t, op.ctr.ensureRecoveryCapacity(large))
+	_, err := op.ctr.appendBatch(proc, large)
+	require.NoError(t, err)
+	result := vm.NewCallResult()
+	require.NoError(t, op.ctr.sortAndSend(proc, &result))
+	require.NotNil(t, result.Batch)
+	result.Batch.Clean(proc.Mp())
+	op.ctr.rbat = nil
+	require.NoError(t, op.ctr.trimRecoveryCapacity())
+	_, scratchBorrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, scratchBorrowed)
+
+	tiny := newOrderPairBatch(t, proc,
+		[]int64{2, 1}, []int64{1, 2})
+	t.Cleanup(func() { tiny.Clean(proc.Mp()) })
+	require.NoError(t, op.ctr.ensureRecoveryCapacity(tiny))
+	capacityBeforeAppend, _ := op.ctr.recoveryCapacity.Snapshot()
+	_, err = op.ctr.appendBatch(proc, tiny)
+	require.NoError(t, err)
+	capacityAfterAppend, _ := op.ctr.recoveryCapacity.Snapshot()
+	require.Equal(t, capacityBeforeAppend, capacityAfterAppend,
+		"next-run allocations must fit beside scratch retained from the prior run")
+}
+
+func TestAccountedOrderReleasesRecoveryCapacityAtEOF(t *testing.T) {
+	proc, op, state := newOrderRecoveryTest(t, nil)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newOrderPairBatch(t, proc, []int64{2, 1}, []int64{1, 2}),
+	})
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+
+	result, err := vm.Exec(op, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	_, borrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, borrowed)
+	require.True(t, op.ctr.recoveryCapacityActive)
+
+	result, err = vm.Exec(op, proc)
+	require.NoError(t, err)
 	require.Nil(t, result.Batch)
-	op.Children[0].Free(proc, true, err)
-	op.Free(proc, true, err)
-	require.Zero(t, controller.current())
-	finalizeOrderTestAllocation(t, op, state)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
+	require.False(t, op.ctr.recoveryCapacityActive)
+	require.Zero(t, state.account.Snapshot().Used)
 }
 
 func TestAccountedOrderExactCapacityBoundary(t *testing.T) {
@@ -327,7 +493,7 @@ func TestAccountedOrderExactCapacityBoundary(t *testing.T) {
 		peak uint64
 	}
 	build := func(t *testing.T, limit uint64) (boundary, error) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		op := newAccountedOrder(
 			&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 			&plan.OrderBySpec{Expr: newOrderColumnExpression(1, types.T_int64)},
@@ -365,7 +531,8 @@ func TestAccountedOrderExactCapacityBoundary(t *testing.T) {
 }
 
 func TestAccountedOrderCapacityFailureIsControlledAndCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc.Base.Lim.Size = 1
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -375,7 +542,6 @@ func TestAccountedOrderCapacityFailureIsControlledAndCleans(t *testing.T) {
 		newOrderPairBatch(t, proc, []int64{3, 2, 1}, []int64{1, 2, 3}),
 	}))
 	require.NoError(t, op.Prepare(proc))
-	require.Equal(t, state.account.Snapshot().Used, controller.freeze())
 
 	result, err := vm.Exec(op, proc)
 	require.Error(t, err)
@@ -390,11 +556,135 @@ func TestAccountedOrderCapacityFailureIsControlledAndCleans(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	const rows = 4096
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	t.Cleanup(func() { board.CloseAndDrain() })
+	op.ScanCutoff = NewScanCutoff(2*rows, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	cutoff := op.ScanCutoff
+	firstValues := make([]int64, rows)
+	secondValues := make([]int64, rows)
+	for i := range rows {
+		firstValues[i] = int64(rows - i)
+		secondValues[i] = int64(2*rows - i)
+	}
+	first := newOrderPairBatch(t, proc, firstValues, firstValues)
+	second := newOrderPairBatch(t, proc, secondValues, secondValues)
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, op.Prepare(proc))
+	require.NotNil(t, op.ctr.growthParticipant)
+	require.True(t, op.ctr.growthParticipant.Release())
+
+	budget := process.MustNewExecutionResourceBudget(300<<10, 300<<10)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	op.ctr.growthParticipant, err = generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	firstResult, err := vm.Exec(op, proc)
+	require.NoError(t, err)
+	require.NotNil(t, firstResult.Batch)
+	require.Equal(t, rows, firstResult.Batch.RowCount())
+	require.Equal(t, int64(1),
+		vector.MustFixedColWithTypeCheck[int64](firstResult.Batch.Vecs[0])[0])
+	require.Same(t, second, op.ctr.pendingInput)
+	require.Nil(t, op.ctr.batWaitForSort)
+	require.Equal(t, uint64(rows), cutoff.seen, "a pending batch is not yet a witness")
+	require.False(t, cutoff.Done())
+
+	secondResult, err := vm.Exec(op, proc)
+	require.NoError(t, err)
+	require.NotNil(t, secondResult.Batch)
+	require.Equal(t, rows, secondResult.Batch.RowCount())
+	require.Equal(t, int64(rows+1),
+		vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0])[0])
+	require.Nil(t, op.ctr.growthParticipant)
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+	require.True(t, cutoff.Done())
+	require.Equal(t, uint64(2*rows), cutoff.seen, "a replayed batch is counted once after append")
+}
+
+func TestScanCutoffSurvivesConcurrentBoardClose(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	input := newOrderPairBatch(t, proc, []int64{4, 1, 3, 2}, []int64{4, 1, 3, 2})
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, op.Prepare(proc))
+	start := make(chan struct{})
+	var closeDone sync.WaitGroup
+	closeDone.Go(func() {
+		<-start
+		board.CloseAndDrain()
+	})
+	close(start)
+	result, err := vm.Exec(op, proc)
+	closeDone.Wait()
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+}
+
+func TestScanCutoffWitnessFailurePropagates(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	t.Cleanup(func() { board.CloseAndDrain() })
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	cutoff := op.ScanCutoff
+	wantErr := errors.New("scan failed after accepted batch")
+	input := newOrderPairBatch(t, proc, []int64{4, 1, 3, 2}, []int64{4, 1, 3, 2})
+	op.AppendChild(&cutoffFailAfterBatch{MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}), err: wantErr})
+	require.NoError(t, op.Prepare(proc))
+	result, err := vm.Exec(op, proc)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, result.Batch)
+	require.True(t, cutoff.Done(), "failure after publication must still fail the query")
+}
+
+func TestAccountedOrderDynamicShareUsesAllocatedCapacity(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	require.NoError(t, op.Prepare(proc))
+
+	source := newOrderPairBatch(t, proc, []int64{2}, []int64{1})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	_, err := op.ctr.appendBatch(proc, source)
+	require.NoError(t, err)
+	for _, vec := range op.ctr.batWaitForSort.Vecs {
+		require.NoError(t, vec.PreExtend(8192, proc.Mp()))
+	}
+	require.Greater(t,
+		op.ctr.batWaitForSort.Allocated(), op.ctr.batWaitForSort.Size())
+
+	incoming := newOrderPairBatch(t, proc, []int64{3}, []int64{1})
+	t.Cleanup(func() { incoming.Clean(proc.Mp()) })
+	logicalPeak := uint64(3 * (op.ctr.batWaitForSort.Size() + incoming.Allocated()))
+	allocatedPeak := uint64(3 * (op.ctr.batWaitForSort.Allocated() + incoming.Allocated()))
+	require.Less(t, logicalPeak, allocatedPeak)
+	limit := logicalPeak + (allocatedPeak-logicalPeak)/2
+
+	require.True(t, op.ctr.growthParticipant.Release())
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	op.ctr.growthParticipant, err = generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	flush, err := op.ctr.shouldFlushBeforeAppend(incoming)
+	require.NoError(t, err)
+	require.True(t, flush)
+}
+
 func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZeroNoFixed())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZeroNoFixed())
 	defer func() {
 		proc.Free()
-		mpool.DeleteMPool(proc.Mp())
 	}()
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
@@ -433,7 +723,7 @@ func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
 }
 
 func TestAccountedOrderPreservesNonemptyZeroColumnBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder()
 	state := installOrderTestAllocation(t, op, 64<<20, nil)
 	input := batch.NewWithSize(0)
@@ -454,7 +744,7 @@ func TestAccountedOrderPreservesNonemptyZeroColumnBatch(t *testing.T) {
 }
 
 func TestAccountedOrderCancellationCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -480,7 +770,7 @@ func TestAccountedOrderCancellationCleans(t *testing.T) {
 }
 
 func TestAccountedOrderResetClosesAllocationGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -527,8 +817,8 @@ func TestAccountedOrderResetClosesAllocationGeneration(t *testing.T) {
 }
 
 func TestAccountedOrderResetFreesSlicesThroughOriginalMPool(t *testing.T) {
-	firstProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	secondProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	firstProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	secondProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(1, types.T_int64)},
@@ -555,7 +845,7 @@ func TestAccountedOrderResetFreesSlicesThroughOriginalMPool(t *testing.T) {
 }
 
 func TestAccountedOrderDoesNotInheritSealedInputAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	inputRegistry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
 	inputAccount, err := inputRegistry.Open(1 << 20)
@@ -631,10 +921,22 @@ func TestOrderAllocationBindingAndTerminalErrorContracts(t *testing.T) {
 	controlled := orderTerminalCapacityError(
 		context.Background(), mpool.ErrAllocationAccountCapacity)
 	require.True(t, moerr.IsMoErrCode(controlled, moerr.ErrOOM), controlled)
+
+	// Capacity diagnostics must not change semantic errors exposed through SQL.
+	semantic := moerr.NewInvalidInputNoCtx("vector dimensions do not match")
+	for _, original := range []error{nil, semantic, context.Canceled,
+		mpool.ErrAllocationAccountInvariant, mpoolCapacity} {
+		require.Equal(t, original, orderPhaseError("sort-final", original, nil, nil))
+	}
+	phase := orderPhaseError("append", mpool.ErrAllocationAccountCapacity, nil, nil)
+	require.ErrorIs(t, phase, mpool.ErrAllocationAccountCapacity)
+	require.Contains(t, phase.Error(), "order phase=append retained-bytes=0")
+	require.True(t, moerr.IsMoErrCode(
+		orderTerminalCapacityError(context.Background(), phase), moerr.ErrOOM))
 }
 
 func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -649,38 +951,38 @@ func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
 	require.NoError(t, ctr.setAllocationAccount(account))
 	require.NoError(t, ctr.setAllocationAccount(account))
 
-	_, _, err = growOrderSlice[int](nil, nil, -1, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, nil, -1, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	_, _, err = growOrderSlice[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	plain, owner, err := growOrderSlice[int](nil, nil, 3, proc, nil, ordersites.OrderSelections)
+	plain, owner, err := growOrderSliceWithCapacityClass[int](nil, nil, 3, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, plain, 3)
 	require.Nil(t, owner)
 
-	accounted, accountedOwner, err := growOrderSlice[int](
-		nil, nil, 3, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err := growOrderSliceWithCapacityClass[int](
+		nil, nil, 3, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 3)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 2)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 100)
 	mpool.FreeSlice(accountedOwner, accounted)
-	_, _, err = growOrderSlice[uint64](
-		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[uint64](
+		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 	rejectRegistry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	rejectController := &orderTestCapacityController{limit: 1 << 20, rejectNext: true}
 	rejectAccount, err := rejectRegistry.OpenWithController(1<<20, rejectController)
 	require.NoError(t, err)
-	_, _, err = growOrderSlice[int](
-		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](
+		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	_, _, err = rejectRegistry.CompleteTerminal(rejectAccount)
 	require.NoError(t, err)
@@ -701,7 +1003,7 @@ func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
 }
 
 func TestAccountedOrderPrepareFailureRollsBackExecutors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 		&plan.OrderBySpec{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}},
@@ -721,7 +1023,7 @@ func TestAccountedOrderPrepareFailureRollsBackExecutors(t *testing.T) {
 }
 
 func TestAccountedOrderRejectsExtraBufferBeforeRetainingInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -752,7 +1054,7 @@ func BenchmarkOrderUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkOrderResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	first := make([]int64, BenchmarkRows)
 	second := make([]int64, BenchmarkRows)

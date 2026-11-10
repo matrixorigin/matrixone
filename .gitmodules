@@ -1,0 +1,3 @@
+[submodule "sirius"]
+	path = third_party/sirius
+	url = https://github.com/matrixorigin/sirius.git

@@ -282,8 +282,8 @@ where table_schema = database() and table_name = 'hf_scale_materialized'
 and column_name in ('_wstart', '_wend')
 order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  𝄀
-_wstart  ¦  DATETIME(6)  𝄀
-_wend  ¦  DATETIME(6)
+_wstart  ¦  datetime(6)  𝄀
+_wend  ¦  datetime(6)
 drop table hf_scale_materialized;
 drop table hf_scale_boundaries;
 drop table hf_readings;
@@ -378,8 +378,8 @@ where table_schema = database() and table_name = 'boundary_type_rollup_dt'
 and column_name in ('ws', 'c')
 order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
-ws  ¦  datetime  ¦  DATETIME(0)  𝄀
-c  ¦  bigint  ¦  BIGINT
+ws  ¦  datetime  ¦  datetime  𝄀
+c  ¦  bigint  ¦  bigint
 select ws from boundary_type_rollup_dt;
 ➤ ws[93,64,0]  𝄀
 2026-01-01 00:00:00
@@ -408,9 +408,9 @@ where table_schema = database() and table_name = 'boundary_type_rollup_date'
 and column_name in ('ws', 'we', 'c')
 order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
-ws  ¦  datetime  ¦  DATETIME(0)  𝄀
-we  ¦  datetime  ¦  DATETIME(0)  𝄀
-c  ¦  bigint  ¦  BIGINT
+ws  ¦  datetime  ¦  datetime  𝄀
+we  ¦  datetime  ¦  datetime  𝄀
+c  ¦  bigint  ¦  bigint
 select ws, we from boundary_type_rollup_date;
 ➤ ws[93,64,0]  ¦  we[93,64,0]  𝄀
 2026-01-01 00:00:00  ¦  2026-01-01 00:01:00
@@ -455,7 +455,7 @@ where table_schema = database() and table_name = 'boundary_type_rollup_ts'
 and column_name in ('ws', 'c')
 order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
-ws  ¦  timestamp  ¦  TIMESTAMP(0)  𝄀
-c  ¦  bigint  ¦  BIGINT
+ws  ¦  timestamp  ¦  timestamp  𝄀
+c  ¦  bigint  ¦  bigint
 set time_zone = '+00:00';
 drop database time_window_gapfill_bvt;

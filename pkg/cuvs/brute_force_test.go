@@ -19,6 +19,8 @@ package cuvs
 import (
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 )
 
 func TestGpuBruteForce(t *testing.T) {
@@ -214,7 +216,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	// Query closest to row 0; without filter NN would be pkid 1000 (row 0).
 	queries := []float32{0.0, 0.0}
 	predsJSON := `[{"col":0,"op":">","val":50}]`
-	jobID, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, predsJSON)
+	jobID, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, predsJSON, docfilter.CMembership{})
 	if err != nil {
 		t.Fatalf("SearchFloatWithFilterAsync: %v", err)
 	}
@@ -231,7 +233,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	}
 
 	// Sanity: empty preds JSON falls through to unfiltered NN (pkid 1000).
-	jobID2, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, "")
+	jobID2, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, "", docfilter.CMembership{})
 	if err != nil {
 		t.Fatalf("SearchFloatWithFilterAsync (no preds): %v", err)
 	}

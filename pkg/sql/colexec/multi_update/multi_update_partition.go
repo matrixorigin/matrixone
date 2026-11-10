@@ -502,18 +502,12 @@ func (op *PartitionMultiUpdate) writerID(target *partitionUpdateTarget, physical
 	return op.nextWriterID
 }
 
-func (op *PartitionMultiUpdate) ExecProjection(
-	proc *process.Process,
-	input *batch.Batch,
-) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (op *PartitionMultiUpdate) Free(
 	proc *process.Process,
 	pipelineFailed bool,
 	err error,
 ) {
+	op.cancelPendingWriters()
 	op.raw.Free(proc, pipelineFailed, err)
 	op.freePartitionWriters(proc)
 }
@@ -527,6 +521,7 @@ func (op *PartitionMultiUpdate) Reset(
 	pipelineFailed bool,
 	err error,
 ) {
+	op.cancelPendingWriters()
 	op.raw.MultiUpdateCtx = op.rawContexts
 	op.raw.Reset(proc, pipelineFailed, err)
 	op.raw.resetMultiUpdateCtxs()
@@ -536,6 +531,18 @@ func (op *PartitionMultiUpdate) Reset(
 		clear(target.writerIDs)
 	}
 	op.nextWriterID = 0
+}
+
+// A partition and the raw operator can share one sink pool. Cancel every
+// writer before Free or Reset waits for any one partition to drain.
+func (op *PartitionMultiUpdate) cancelPendingWriters() {
+	op.raw.ctr.s3Writer.cancelPending()
+	for _, writer := range op.writers {
+		writer.cancelPending()
+	}
+	for _, writer := range op.freeWriters {
+		writer.cancelPending()
+	}
 }
 
 func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {

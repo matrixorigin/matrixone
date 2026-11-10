@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+// compareTextBytes centralizes the executable text order used by scalar
+// comparison operators. Legacy identities retain their historical byte/PAD
+// behavior; native Unicode collations use the pinned UCA400 key backend.
+func compareTextBytes(typ types.Type, left, right []byte) int {
+	return types.CompareStringValues(typ, left, right)
+}
 
 // comparePreparedJSON applies the SQL category carried by a binary-protocol
 // parameter. The adapter represents that parameter as ByteJSON only so the
@@ -65,7 +73,10 @@ func comparePreparedJSON(
 	}
 	if paramType != types.T_any {
 		expectedKind, ok := vector.PrepareParamKindForType(paramType)
-		if !ok || expectedKind != paramVector.GetPrepareParamKind() {
+		// All-NULL adapter outputs intentionally carry no value category.
+		// Only inspect the NULL bitmap when the category does not match.
+		kind := paramVector.GetPrepareParamKind()
+		if !ok || (expectedKind != kind && !(kind == vector.PrepareParamNone && paramVector.AllNull())) {
 			return moerr.NewInternalErrorf(
 				proc.Ctx,
 				"prepared parameter type %s does not match conversion kind %d",
@@ -74,48 +85,15 @@ func comparePreparedJSON(
 		}
 	}
 
-	var (
-		cachedJSON              bytejson.ByteJson
-		cachedJSONNull          bool
-		cachedJSONReady         bool
-		cachedParam             bytejson.ByteJson
-		cachedParamNull         bool
-		cachedParamReady        bool
-		cachedDecimalParam      bytejson.ParsedNumeric
-		cachedDecimalParamReady bool
-	)
-	if jsonVector.IsConst() {
-		var err error
-		cachedJSON, cachedJSONNull, err = comparisonJSONAt(proc, jsonVector, 0)
-		if err != nil {
-			return err
-		}
-		cachedJSONReady = true
-	}
-	if paramVector.IsConst() {
-		var err error
-		cachedParam, cachedParamNull, err = comparisonJSONAt(proc, paramVector, 0)
-		if err != nil {
-			return err
-		}
-		cachedParamReady = true
-	}
-	if cachedParamReady && !cachedParamNull && paramType == types.T_any &&
-		paramVector.GetPrepareParamKind() == vector.PrepareParamDecimal &&
-		!isJSONLiteralNull(cachedParam) {
-		numericParam, paramIsNull, ok := preparedJSONDecimal(cachedParam)
-		if !ok || paramIsNull {
-			return jsonCastErr(proc.Ctx, types.T_decimal256)
-		}
-		cachedDecimalParam, ok = bytejson.ParseNumeric(numericParam)
-		if !ok {
-			return jsonCastErr(proc.Ctx, types.T_decimal256)
-		}
-		cachedDecimalParamReady = true
-	}
+	resultNulls.Reset()
+	var cachedJSON, cachedParam bytejson.ByteJson
+	var cachedJSONNull, cachedParamNull, cachedJSONReady, cachedParamReady bool
+	var cachedNumericPeer jsonNumericPeer
+	var cachedNumericPeerReady bool
 
 	for row := 0; row < length; row++ {
-		if selectList != nil && selectList.Contains(uint64(row)) {
+		rss[row] = false
+		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(uint64(row))) {
 			resultNulls.Add(uint64(row))
 			continue
 		}
@@ -127,6 +105,9 @@ func comparePreparedJSON(
 			if err != nil {
 				return err
 			}
+			if jsonVector.IsConst() {
+				cachedJSON, cachedJSONNull, cachedJSONReady = jsonValue, jsonNull, true
+			}
 		}
 		paramValue, paramNull := cachedParam, cachedParamNull
 		if !cachedParamReady {
@@ -134,6 +115,9 @@ func comparePreparedJSON(
 			paramValue, paramNull, err = comparisonJSONAt(proc, paramVector, row)
 			if err != nil {
 				return err
+			}
+			if paramVector.IsConst() {
+				cachedParam, cachedParamNull, cachedParamReady = paramValue, paramNull, true
 			}
 		}
 
@@ -153,18 +137,23 @@ func comparePreparedJSON(
 		var comparison int
 		var coercedJSONNull, coercedParamNull bool
 		var err error
-		if paramType == types.T_any {
-			kind := paramVector.GetPrepareParamKindAt(row)
-			if kind == vector.PrepareParamDecimal && cachedDecimalParamReady {
-				comparison, coercedJSONNull, err = comparePreparedJSONDecimalWithParsedParam(
-					proc, jsonValue, cachedDecimalParam)
-			} else {
-				comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(
-					proc, jsonValue, paramValue, kind)
+		kind := paramVector.GetPrepareParamKindAt(row)
+		if isJSONComparisonNumericType(paramType) || paramType == types.T_any &&
+			(kind == vector.PrepareParamInteger || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+			peer := cachedNumericPeer
+			if !cachedNumericPeerReady {
+				peer, err = makeJSONNumericPeer(proc.Ctx, paramValue, paramType, kind)
+				if err == nil && paramVector.IsConst() {
+					cachedNumericPeer, cachedNumericPeerReady = peer, true
+				}
 			}
+			if err == nil {
+				comparison, coercedJSONNull, err = compareJSONNumeric(proc.Ctx, jsonValue, &peer)
+			}
+		} else if paramType == types.T_any {
+			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(proc, jsonValue, paramValue, kind)
 		} else {
-			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalarsAsType(
-				proc, jsonValue, paramValue, paramType)
+			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalarsAsType(proc, jsonValue, paramValue, paramType)
 		}
 		if err != nil {
 			return err
@@ -176,6 +165,9 @@ func comparePreparedJSON(
 				resultNulls.Add(uint64(row))
 			}
 			continue
+		}
+		if jsonPos == 1 {
+			comparison = -comparison
 		}
 		rss[row] = cmp(comparison)
 	}
@@ -385,42 +377,13 @@ func comparePreparedJSONScalars(
 		comparison, leftNull, leftErr := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, right)
 		return comparison, leftNull, false, leftErr
 
-	case vector.PrepareParamInteger:
-		left, leftNull, leftOK := preparedJSONInteger(jsonValue)
-		right, rightNull, rightOK := preparedJSONInteger(paramValue)
-		if !leftOK || !rightOK {
-			return 0, false, false, jsonCastErr(proc.Ctx, types.T_int64)
+	case vector.PrepareParamInteger, vector.PrepareParamFloat, vector.PrepareParamDecimal:
+		peer, err := makeJSONNumericPeer(proc.Ctx, paramValue, types.T_any, kind)
+		if err != nil {
+			return 0, false, false, err
 		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		return comparePreparedJSONIntegers(left, right), false, false, nil
-
-	case vector.PrepareParamFloat:
-		left, leftNull, leftOK := jsonToScalar(jsonValue)
-		right, rightNull, rightOK := jsonToScalar(paramValue)
-		if !leftOK || !rightOK {
-			return 0, false, false, jsonCastErr(proc.Ctx, types.T_float64)
-		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		return compareFloat64Total(left, right), false, false, nil
-
-	case vector.PrepareParamDecimal:
-		left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
-		right, rightNull, rightOK := preparedJSONDecimal(paramValue)
-		if !leftOK || !rightOK {
-			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
-		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		comparison, ok := bytejson.CompareNumeric(left, right)
-		if !ok {
-			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
-		}
-		return comparison, false, false, nil
+		comparison, jsonNull, err := compareJSONNumeric(proc.Ctx, jsonValue, &peer)
+		return comparison, jsonNull, false, err
 
 	case vector.PrepareParamNone:
 		left, leftErr := preparedJSONString(jsonValue)
@@ -438,88 +401,21 @@ func comparePreparedJSONScalars(
 	}
 }
 
-func comparePreparedJSONDecimalWithParsedParam(
-	proc *process.Process,
-	jsonValue bytejson.ByteJson,
-	paramValue bytejson.ParsedNumeric,
-) (comparison int, jsonNull bool, err error) {
-	left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
-	if !leftOK {
-		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
-	}
-	if leftNull {
-		return 0, true, nil
-	}
-	parsedLeft, ok := bytejson.ParseNumeric(left)
-	if !ok {
-		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
-	}
-	comparison, ok = bytejson.CompareParsedNumeric(parsedLeft, paramValue)
-	if !ok {
-		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
-	}
-	return comparison, false, nil
-}
-
 func comparePreparedJSONScalarsAsType(
 	proc *process.Process,
 	jsonValue bytejson.ByteJson,
 	paramValue bytejson.ByteJson,
 	paramType types.T,
 ) (comparison int, jsonNull bool, paramNull bool, err error) {
+	if isJSONComparisonNumericType(paramType) {
+		peer, err := makeJSONNumericPeer(proc.Ctx, paramValue, paramType, vector.PrepareParamNone)
+		if err != nil {
+			return 0, false, false, err
+		}
+		comparison, jsonNull, err := compareJSONNumeric(proc.Ctx, jsonValue, &peer)
+		return comparison, jsonNull, false, err
+	}
 	switch paramType {
-	case types.T_int8:
-		return comparePreparedJSONSignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MinInt8, math.MaxInt8, paramType)
-	case types.T_int16:
-		return comparePreparedJSONSignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MinInt16, math.MaxInt16, paramType)
-	case types.T_int32:
-		return comparePreparedJSONSignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MinInt32, math.MaxInt32, paramType)
-	case types.T_int64:
-		return comparePreparedJSONSignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MinInt64, math.MaxInt64, paramType)
-
-	case types.T_uint8:
-		return comparePreparedJSONUnsignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MaxUint8, paramType)
-	case types.T_uint16:
-		return comparePreparedJSONUnsignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MaxUint16, paramType)
-	case types.T_uint32:
-		return comparePreparedJSONUnsignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MaxUint32, paramType)
-	case types.T_uint64:
-		return comparePreparedJSONUnsignedScalars(
-			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
-
-	case types.T_float32:
-		left, leftNull, leftErr := preparedJSONFloatScalar(proc.Ctx, jsonValue, paramType)
-		if leftErr != nil {
-			return 0, false, false, leftErr
-		}
-		right, rightNull, rightErr := preparedJSONFloatScalar(proc.Ctx, paramValue, paramType)
-		if rightErr != nil {
-			return 0, false, false, rightErr
-		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		return compareFloat64Total(left, right), false, false, nil
-	case types.T_float64:
-		left, leftNull, leftErr := preparedJSONFloatScalarWithLimit(proc.Ctx, jsonValue, paramType, math.MaxFloat64, false)
-		if leftErr != nil {
-			return 0, false, false, leftErr
-		}
-		right, rightNull, rightErr := preparedJSONFloatScalarWithLimit(proc.Ctx, paramValue, paramType, math.MaxFloat64, false)
-		if rightErr != nil {
-			return 0, false, false, rightErr
-		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		return compareFloat64Total(left, right), false, false, nil
 	case types.T_bit, types.T_year:
 		return comparePreparedJSONUnsignedScalars(
 			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
@@ -535,28 +431,6 @@ func comparePreparedJSONScalarsAsType(
 
 	return 0, false, false, moerr.NewInternalErrorf(
 		proc.Ctx, "unsupported prepared parameter type %s", paramType.String())
-}
-
-func comparePreparedJSONSignedScalars(
-	ctx context.Context,
-	leftValue bytejson.ByteJson,
-	rightValue bytejson.ByteJson,
-	minValue int64,
-	maxValue int64,
-	paramType types.T,
-) (comparison int, leftNull bool, rightNull bool, err error) {
-	left, leftNull, leftOK := jsonToInt64Scalar(leftValue)
-	if !leftOK || (!leftNull && (left < minValue || left > maxValue)) {
-		return 0, false, false, jsonCastErr(ctx, paramType)
-	}
-	right, rightNull, rightOK := jsonToInt64Scalar(rightValue)
-	if !rightOK || (!rightNull && (right < minValue || right > maxValue)) {
-		return 0, false, false, jsonCastErr(ctx, paramType)
-	}
-	if leftNull || rightNull {
-		return 0, leftNull, rightNull, nil
-	}
-	return compareInt64(left, right), false, false, nil
 }
 
 func comparePreparedJSONUnsignedScalars(
@@ -611,81 +485,6 @@ func preparedJSONFloatScalarWithLimit(
 	return result, false, nil
 }
 
-type preparedJSONIntegerValue struct {
-	signed   int64
-	unsigned uint64
-	isSigned bool
-}
-
-func preparedJSONInteger(value bytejson.ByteJson) (preparedJSONIntegerValue, bool, bool) {
-	if value.Type == bytejson.TpCodeLiteral {
-		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
-			return preparedJSONIntegerValue{}, true, true
-		}
-		return preparedJSONIntegerValue{}, false, false
-	}
-	if value.Type == bytejson.TpCodeString {
-		text := string(value.GetString())
-		if signed, ok := bytejson.NumericTextToInt64(text); ok {
-			return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
-		}
-		if unsigned, ok := bytejson.NumericTextToUint64(text); ok {
-			return preparedJSONIntegerValue{unsigned: unsigned}, false, true
-		}
-		return preparedJSONIntegerValue{}, false, false
-	}
-	if signed, ok := bytejson.NumericToInt64(value); ok {
-		return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
-	}
-	if unsigned, ok := bytejson.NumericToUint64(value); ok {
-		return preparedJSONIntegerValue{unsigned: unsigned}, false, true
-	}
-	return preparedJSONIntegerValue{}, false, false
-}
-
-// preparedJSONDecimal maps numeric JSON scalars and numeric JSON strings into
-// the exact ByteJSON numeric domain. CompareNumeric then shares one equality
-// model with JSON containment and overlap instead of independently lowering
-// DECIMAL values to float64.
-func preparedJSONDecimal(value bytejson.ByteJson) (bytejson.ByteJson, bool, bool) {
-	switch value.Type {
-	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
-		return value, false, true
-	case bytejson.TpCodeDecimal:
-		return value, false, true
-	case bytejson.TpCodeString:
-		// STRING and DECIMAL share the same length-prefixed payload layout.
-		// Reclassify the local descriptor so a per-row numeric string does not
-		// allocate a duplicate payload solely for exact comparison.
-		value.Type = bytejson.TpCodeDecimal
-		return value, false, true
-	case bytejson.TpCodeLiteral:
-		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
-			return bytejson.ByteJson{}, true, true
-		}
-	}
-	return bytejson.ByteJson{}, false, false
-}
-
-func comparePreparedJSONIntegers(left, right preparedJSONIntegerValue) int {
-	if left.isSigned && right.isSigned {
-		return compareInt64(left.signed, right.signed)
-	}
-	if !left.isSigned && !right.isSigned {
-		return compareUint64(left.unsigned, right.unsigned)
-	}
-	if left.isSigned {
-		if left.signed < 0 {
-			return -1
-		}
-		return compareUint64(uint64(left.signed), right.unsigned)
-	}
-	if right.signed < 0 {
-		return 1
-	}
-	return compareUint64(left.unsigned, uint64(right.signed))
-}
-
 func preparedJSONString(value bytejson.ByteJson) ([]byte, error) {
 	switch value.Type {
 	case bytejson.TpCodeString:
@@ -726,7 +525,8 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 	case types.T_year:
 	default:
 		return false
@@ -769,13 +569,26 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 	case types.T_enum:
 	case types.T_year:
 	default:
 		return false
 	}
 	return true
+}
+
+// The canonical DATETIME range uses the same year-1 microsecond epoch as
+// TIMESTAMP. Keep physical tails and the distinct -1 zero sentinel on the
+// calendar conversion path. Tests check this endpoint against DatetimeFromClock.
+const mixedComparisonMaxDatetime = types.Datetime(315537897599999999)
+
+func fixedZoneComparisonTimestamp(value types.Datetime, zone *time.Location, offsetMicros int64) types.Timestamp {
+	if value >= 0 && value <= mixedComparisonMaxDatetime {
+		return types.Timestamp(int64(value) - offsetMicros)
+	}
+	return value.ToTimestamp(zone)
 }
 
 func compareDatetimeAndTimestamp(
@@ -787,20 +600,39 @@ func compareDatetimeAndTimestamp(
 	selectList *FunctionSelectList,
 ) error {
 	zone := proc.GetSessionInfo().TimeZone
+	fixed, offsetMicros := false, int64(0)
+	// Avoid timezone discovery on zero/single-evaluation and masked paths.
+	// Local can initialize lazily even when FLAT NULL bitmaps mask every row.
+	if zone != nil && zone != time.Local && length > 1 &&
+		!(parameters[0].IsConst() && parameters[1].IsConst()) &&
+		!parameters[0].IsConstNull() && !parameters[1].IsConstNull() &&
+		selectList.ShouldEvalAllRow() && !selectList.IgnoreAllRow() {
+		if offset, ok := types.FixedZoneOffset(zone); ok && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32 {
+			fixed, offsetMicros = true, int64(offset)*types.MicroSecsPerSec
+		}
+	}
 	if parameters[0].GetType().Oid == types.T_datetime {
 		timestampScale := parameters[1].GetType().Scale
-		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](
-			parameters, result, proc, length,
-			func(left types.Datetime, right types.Timestamp) bool {
-				return cmp(left.ToTimestamp(zone).TruncateToScale(timestampScale), right)
-			}, selectList)
+		compare := func(left types.Datetime, right types.Timestamp) bool {
+			return cmp(left.ToTimestamp(zone).TruncateToScale(timestampScale), right)
+		}
+		if fixed {
+			compare = func(left types.Datetime, right types.Timestamp) bool {
+				return cmp(fixedZoneComparisonTimestamp(left, zone, offsetMicros).TruncateToScale(timestampScale), right)
+			}
+		}
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](parameters, result, proc, length, compare, selectList)
 	}
 	timestampScale := parameters[0].GetType().Scale
-	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](
-		parameters, result, proc, length,
-		func(left types.Timestamp, right types.Datetime) bool {
-			return cmp(left, right.ToTimestamp(zone).TruncateToScale(timestampScale))
-		}, selectList)
+	compare := func(left types.Timestamp, right types.Datetime) bool {
+		return cmp(left, right.ToTimestamp(zone).TruncateToScale(timestampScale))
+	}
+	if fixed {
+		compare = func(left types.Timestamp, right types.Datetime) bool {
+			return cmp(left, fixedZoneComparisonTimestamp(right, zone, offsetMicros).TruncateToScale(timestampScale))
+		}
+	}
+	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](parameters, result, proc, length, compare, selectList)
 }
 
 func floatArrayEqual[T constraints.Float](left, right []T) bool {
@@ -1115,9 +947,67 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 	return left, right, leftScale > 0 || rightScale > 0
 }
 
+// blockScaledCompare compares two vecf8 or vecf4 operands of the same type by their
+// dequantized values, element-wise as for the other vector types; done is false for any
+// other pair. A string literal is cast to the column's type before, so it is quantized as
+// a stored value is.
+func blockScaledCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
+	selectList *FunctionSelectList, nullSafe bool, cmp func(c int) bool) (done bool, err error) {
+	oid := parameters[0].GetType().Oid
+	if !oid.IsBlockScaledArray() || parameters[1].GetType().Oid != oid {
+		return false, nil
+	}
+	f := func(v1, v2 []byte) bool { return cmp(types.CompareBlockScaledFromBytes(v1, v2, false)) }
+	if nullSafe {
+		return true, opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, f, selectList)
+	}
+	return true, opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, f, selectList)
+}
+
+// lowPrecisionCompare compares two bf16, float16, float8 or float4 operands of the same
+// type by their float32 values; done is false for any other pair. Binding widens these
+// operands to float32, so this covers plans in which both sides keep the column type.
+func lowPrecisionCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
+	selectList *FunctionSelectList, nullSafe bool, cmp func(a, b float32) bool) (done bool, err error) {
+	oid := parameters[0].GetType().Oid
+	if !oid.IsLowPrecisionFloat() || parameters[1].GetType().Oid != oid {
+		return false, nil
+	}
+	switch oid {
+	case types.T_bf16:
+		return true, lowPrecisionCompareOf[types.BF16](parameters, rs, proc, length, selectList, nullSafe, cmp)
+	case types.T_float16:
+		return true, lowPrecisionCompareOf[types.Float16](parameters, rs, proc, length, selectList, nullSafe, cmp)
+	case types.T_float8:
+		return true, lowPrecisionCompareOf[types.Float8](parameters, rs, proc, length, selectList, nullSafe, cmp)
+	case types.T_float4:
+		return true, lowPrecisionCompareOf[types.Float4](parameters, rs, proc, length, selectList, nullSafe, cmp)
+	default:
+		return true, moerr.NewInternalErrorNoCtxf("lowPrecisionCompare: unexpected type %s", oid)
+	}
+}
+
+func lowPrecisionCompareOf[T types.LowPrecFloat](parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
+	selectList *FunctionSelectList, nullSafe bool, cmp func(a, b float32) bool) error {
+	f := func(a, b T) bool { return cmp(a.ToFloat32(), b.ToFloat32()) }
+	if nullSafe {
+		return opBinaryFixedFixedToFixedNullSafe[T](parameters, rs, proc, length, f, selectList)
+	}
+	return opBinaryFixedFixedToFixed[T, T, bool](parameters, rs, proc, length, f, selectList)
+}
+
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, true, func(c int) bool { return c == 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, true, func(a, b float32) bool { return a == b }); done {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
 	}
@@ -1195,12 +1085,12 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(a, b)
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1284,8 +1174,17 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 
 // should convert to c.Numeric next.
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c == 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a == b }); done {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
 	}
@@ -1368,15 +1267,15 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
+		if !types.IsUnicodeCollation(paramType.Charset) && parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
-			return v1 == v2
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			return compareTextBytes(*paramType, v1, v2) == 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1708,8 +1607,20 @@ func valueDec256Compare(
 }
 
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c > 0 }, selectList)
+	}
+	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c > 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c > 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a > b }); done {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left > right
@@ -1785,15 +1696,15 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1874,8 +1785,20 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+	}
+	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c >= 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a >= b }); done {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left >= right
@@ -1951,15 +1874,15 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2040,8 +1963,17 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c != 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a != b }); done {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
 	}
@@ -2123,15 +2055,15 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return !bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2212,8 +2144,20 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c < 0 }, selectList)
+	}
+	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c < 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c < 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a < b }); done {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left < right
@@ -2289,15 +2233,15 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2378,8 +2322,20 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+	}
+	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c <= 0 }); done {
+		return err
+	}
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a <= b }); done {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left <= right
@@ -2455,15 +2411,15 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {

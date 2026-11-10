@@ -156,6 +156,7 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 		defer logutil.Info("cross service metrics task exiting")
 
 		timer := time.NewTicker(time.Second * 5)
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -351,7 +352,6 @@ func getView(ctx context.Context, desc *prom.Desc) *table.View {
 }
 
 type descExtra struct {
-	orig   *prom.Desc
 	fqName string
 	labels []*dto.LabelPair
 }
@@ -364,7 +364,7 @@ func newDescExtra(desc *prom.Desc) *descExtra {
 	str = str[:strings.Index(str, "}")]
 	varLblCnt := len(strings.Split(str, ","))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
-	return &descExtra{orig: desc, fqName: fqName, labels: labels}
+	return &descExtra{fqName: fqName, labels: labels}
 }
 
 type InitOptions struct {
@@ -484,13 +484,6 @@ var SqlStatementCUTable = &table.Table{
 	SupportUserAccess: true,
 	// SupportConstAccess
 	SupportConstAccess: true,
-}
-
-// GetAllTables
-//
-// Deprecated: use table.GetAllTables() instead.
-func GetAllTables() []*table.Table {
-	return []*table.Table{SingleMetricTable, SqlStatementCUTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {

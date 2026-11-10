@@ -97,6 +97,11 @@ func (c *viewDependencyCaptureContext) enterNestedView() error {
 }
 
 func (c *viewDependencyCaptureContext) chargeViewColumns(count int) error {
+	if state, _ := c.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		if err := state.charge(0, count); err != nil {
+			return err
+		}
+	}
 	if !c.metadataBudget {
 		return nil
 	}
@@ -114,12 +119,19 @@ func (c *viewDependencyCaptureContext) leaveNestedView() {
 	c.depth--
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewDependencyCaptureContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 func (c *viewDependencyCaptureContext) Resolve(
 	schemaName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	obj, tableDef, err := c.CompilerContext.Resolve(schemaName, tableName, snapshot)
+	borrowOutput.Reset()
+	obj, tableDef, err := c.CompilerContext.Resolve(schemaName, tableName, snapshot, nil)
 	if err == nil && c.depth == 0 && obj != nil && tableDef != nil {
 		if err = c.record(obj, tableDef, snapshot, schemaName, tableName); err != nil {
 			return nil, nil, err

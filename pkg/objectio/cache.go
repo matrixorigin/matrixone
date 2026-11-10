@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -75,7 +76,19 @@ var BlkReadStats = newBlockReadStats()
 
 type mataCacheKey [cacheKeyLen]byte
 
-var metaCache *fifocache.Cache[mataCacheKey, []byte]
+var metaCache *s3fifo.Cache[mataCacheKey, metaBytes]
+
+// metaBytes is cached object metadata; it has no reference count.
+type metaBytes []byte
+
+func (metaBytes) Retain()  {}
+func (metaBytes) Release() {}
+
+func getMeta(key mataCacheKey) ([]byte, bool) {
+	v, _, ok, _ := metaCache.Get(key, nil)
+	return v, ok
+}
+
 var onceInit sync.Once
 
 var (
@@ -84,17 +97,27 @@ var (
 	metaCachePressureDeadline      atomic.Int64
 )
 
-// metaLoadGroup deduplicates concurrent loads for the same cache key,
+// metaLoadCalls deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
 // Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
 var metaLoadMu sync.Mutex
-var metaLoadCalls = make(map[mataCacheKey]*loadCall)
+var metaLoadCalls = make(map[mataCacheKey]*loadGroup)
+
+// A group keeps its latest generation reachable by all admitted callers, even
+// after completion removes it from metaLoadCalls. Both fields use metaLoadMu.
+// It holds no history chain: abandoned generations can be reclaimed as their
+// waiters advance. users bounds the lifetime of an abandoned map entry.
+type loadGroup struct {
+	current *loadCall
+	users   int
+}
 
 type loadCall struct {
 	done      chan struct{}
 	val       []byte
 	err       error
 	completed bool
+	abandoned bool
 }
 
 func metaCacheSize() int64 {
@@ -186,29 +209,27 @@ func metaCachePressureTarget(capacity int64) (int64, bool) {
 	return capacity * percent / 100, true
 }
 
-func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
+func newMetaCache(capacity fscache.CapacityFunc) *s3fifo.Cache[mataCacheKey, metaBytes] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	ret := fifocache.New[mataCacheKey, []byte](
-		capacity,
-		shardMetaCacheKey,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
+	return s3fifo.New(s3fifo.Options[mataCacheKey, metaBytes]{
+		Capacity:  capacity,
+		Hash:      shardMetaCacheKey,
+		Admission: metaCachePressureTarget,
+		OnInsert: func(_ mataCacheKey, _ metaBytes, size int64, _ uint64) {
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
-		nil,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postEvict
+		OnRemove: func(_ mataCacheKey, _ metaBytes, size int64, _ uint64, _ s3fifo.Reason) {
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
-		})
-	ret.SetAdmissionTarget(metaCachePressureTarget)
-	return ret
+		},
+	})
 }
 
 func EvictCache(ctx context.Context) (target int64) {
-	ch := make(chan int64, 1)
-	metaCache.Evict(ctx, ch, 0)
-	target = <-ch
+	target = metaCache.Capacity()
+	metaCache.EvictTo(ctx, target)
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
 	)
@@ -232,7 +253,7 @@ func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (used int64
 		zap.Int64("target", target),
 		zap.Int64("target-percent", percent),
 	)
-	used = metaCache.EvictToTargetWithWait(ctx, target)
+	used = metaCache.EvictTo(ctx, target)
 	metric.FSCachePressureMetaEvictCounter.Inc()
 	metric.FSCachePressureMetaEvictDuration.Observe(time.Since(start).Seconds())
 	logutil.Info("metadata cache pressure evicted",
@@ -264,10 +285,10 @@ func LoadObjectMetaByExtent(
 ) (meta ObjectMeta, err error) {
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
-		return MustObjectMeta(v), nil
+		return checkedObjectMeta(v)
 	}
 	if extent.Length() == 0 {
 		logutil.Warn("[LoadObjectMetaByExtent]",
@@ -280,8 +301,16 @@ func LoadObjectMetaByExtent(
 	if err != nil {
 		return
 	}
-	meta = MustObjectMeta(v)
-	return
+	return checkedObjectMeta(v)
+}
+
+// cached metadata and newly loaded metadata share the same checked boundary.
+// Keep MustObjectMeta for callers that explicitly require an assertion.
+func checkedObjectMeta(buffer []byte) (ObjectMeta, error) {
+	if len(buffer) < IOEntryHeaderSize || DecodeIOEntryHeader(buffer).Type != IOET_ObjMeta {
+		return nil, moerr.NewInvalidInputNoCtx("invalid object metadata header")
+	}
+	return ObjectMeta(buffer), nil
 }
 
 func validateLocation(ctx context.Context, location *Location) error {
@@ -302,7 +331,7 @@ func FastLoadBF(
 	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -325,7 +354,7 @@ func LoadBFWithMeta(
 	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -345,40 +374,87 @@ func LoadBFWithMeta(
 // share the result. This prevents cache stampede under high concurrency.
 //
 // Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
-// deleted. Waiters read through metaCache after the load finishes so they do
-// not keep per-call copies of large metadata buffers.
+// deleted. Waiters share the group's latest result even if cache admission fails.
+// A caller executes its I/O closure at most once; owner errors are not retried.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	metaLoadMu.Lock()
-	if call, ok := metaLoadCalls[key]; ok {
-		metaLoadMu.Unlock()
-		select {
-		case <-call.done:
-			if v, ok := metaCache.Get(ctx, key); ok {
-				return v, nil
+	var group *loadGroup
+	var call, abandoned *loadCall
+	defer func() {
+		if group != nil {
+			metaLoadMu.Lock()
+			group.users--
+			if group.users == 0 && metaLoadCalls[key] == group {
+				delete(metaLoadCalls, key)
 			}
-			if call.err != nil {
-				return nil, call.err
-			}
-			if !call.completed {
-				return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
-			}
-			return call.val, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+			metaLoadMu.Unlock()
 		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		metaLoadMu.Lock()
+		// A previous miss may predate a completed load. Serialize this check
+		// with election so it cannot grant ownership after that publication.
+		if v, ok := getMeta(key); ok {
+			metaLoadMu.Unlock()
+			return v, nil
+		}
+		if group == nil {
+			group = metaLoadCalls[key]
+			if group == nil {
+				group = &loadGroup{}
+				metaLoadCalls[key] = group
+			}
+			group.users++
+		}
+		if pending := group.current; pending != abandoned {
+			metaLoadMu.Unlock()
+			select {
+			case <-pending.done:
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if v, ok := getMeta(key); ok {
+					return v, nil
+				}
+				if pending.abandoned {
+					// Cancellation belongs to the loader, not to its live waiters.
+					// Replace only the generation we observed as abandoned. A
+					// peer may already have completed its replacement uncached.
+					abandoned = pending
+					continue
+				}
+				if pending.err != nil {
+					return nil, pending.err
+				}
+				if !pending.completed {
+					return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
+				}
+				return pending.val, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		call = &loadCall{done: make(chan struct{})}
+		group.current = call
+		metaLoadMu.Unlock()
+		break
 	}
-	call := &loadCall{done: make(chan struct{})}
-	metaLoadCalls[key] = call
-	metaLoadMu.Unlock()
 
 	defer func() {
 		metaLoadMu.Lock()
 		close(call.done)
-		delete(metaLoadCalls, key)
+		if !call.abandoned {
+			// New callers may start a separate load after a terminal result;
+			// existing callers retain this group's result, not the new one's.
+			delete(metaLoadCalls, key)
+		}
 		metaLoadMu.Unlock()
 	}()
 
 	call.val, call.err = load()
+	call.abandoned = isMetadataLoadCancellation(call.err, ctx.Err())
 	call.completed = true
 	if call.err == nil {
 		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
@@ -386,9 +462,36 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 			metric.FSCachePressureMetaSkipCounter.Inc()
 			return call.val, call.err
 		}
-		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
+		metaCache.Set(key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err
+}
+
+// isMetadataLoadCancellation requires every error leaf to belong to the
+// loader's cancellation. A joined storage failure or independent deadline
+// must not be discarded when that loader also happens to be canceled.
+func isMetadataLoadCancellation(err, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isMetadataLoadCancellation(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isMetadataLoadCancellation(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr)
 }
 
 func FastLoadObjectMeta(

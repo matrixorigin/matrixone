@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -95,7 +96,7 @@ func jpExtractFloat(col int32, path string) *plan.Expr {
 // process/txn: an AlwaysAsync json index NEVER reports covered (it self-completes or fails closed),
 // so indexCoversSnapshot is false. The point is exercising the full reachable path safely (#27926).
 func TestIndexCoversSnapshotReachesCoverageHook(t *testing.T) {
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := mockCtx.GetProcess()
 	proc.Base.TxnOperator = fakeCoverageTxn{} // the mock proc has no txn otherwise
 	b := &QueryBuilder{compCtx: mockCtx}
@@ -550,27 +551,28 @@ func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
 	// even with NO residual filter and a literal LIMIT — the shape the gate is
 	// most willing to push — a probe is refused
 	scan := &plan.Node{TableDef: &plan.TableDef{}}
-	require.Nil(t, b.buildFullTextCandidateLimit(
-		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
+	ok, literalOnly := b.fullTextCandidateLimitRule(scan, nil, []*plan.Expr{probe}, nil, false, false)
+	require.False(t, ok)
+	require.Nil(t, candidateLimitForRule(ok, literalOnly, limit, nil),
 		"a probe must not be truncated, whatever the rest of the shape allows")
 }
 
-// A prepared plan carrying an injected json coverage probe must be flagged so it rebuilds every
-// EXECUTE: its covered/partial decision reflects the async index's freshness at build time, which
-// no schema version tracks, so a reused plan would drop rows committed after it was cached. A user
-// MATCH builds the same fulltext2_search node but is freshness-tolerant, so only JSONProbeMode counts.
+// Prepared index searches defer their rebuild policy to the registered plugin.
+// An injected JSON probe must recheck transaction-local writes; a user MATCH
+// remains reusable. HNSW must recheck source coverage at every EXECUTE.
 func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 	mkPlan := func(nodes ...*plan.Node) *Plan {
 		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
 	}
 	ftNode := func(mode int64) *plan.Node {
+		opts, err := ft2plan.EncodeScanOptions(ft2plan.ScanOptions{Config: "cfg", Mode: mode})
+		require.NoError(t, err)
 		return &plan.Node{
-			NodeType: plan.Node_FUNCTION_SCAN,
-			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Name: fulltext2_search_func_name}},
-			TblFuncExprList: []*plan.Expr{
-				makePlan2StringConstExprWithType("cfg"),
-				jpStrLit("pattern"),
-				{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: mode}}}},
+			NodeType: plan.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &plan.IndexSearchScan{
+				Index:        &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+				QueryPayload: jpStrLit("pattern"),
+				AlgoOptions:  opts,
 			},
 		}
 	}
@@ -584,6 +586,25 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 		"an injected json coverage probe must force a rebuild")
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+		},
+	})), "an HNSW search does not depend on index freshness and remains reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		},
+	})), "an algorithm without the coverage policy remains reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index:       &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+			AlgoOptions: []byte("invalid"),
+		},
+	})), "invalid fulltext2 options cannot identify an injected JSON probe")
 }
 
 // recordJSONProbeTail marks a scan self-completing and records (keyed by node id) both the json
@@ -592,7 +613,7 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 // EXPLAIN. The display SQL names the source db/table, the pk projection, the plan-time build_ts lower
 // bound, the change_type='insert' filter, and the pushed json predicate.
 func TestRecordJSONProbeTail(t *testing.T) {
-	mockCtx := newFullTextJoinMockCompilerContext()
+	mockCtx := newFullTextJoinMockCompilerContext(t)
 	mockCtx.GetProcess().Base.TxnOperator = fakeCoverageTxn{}
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	scanNode := &plan.Node{
@@ -635,7 +656,7 @@ func TestRecordJSONProbeTail(t *testing.T) {
 // i.e. every pk, degrading the mandatory join to a full self-join. Returning false makes
 // addJSONFulltextProbes skip the probe so the query runs as a plain Table Scan instead.
 func TestRecordJSONProbeTailDeclines(t *testing.T) {
-	mockCtx := newFullTextJoinMockCompilerContext()
+	mockCtx := newFullTextJoinMockCompilerContext(t)
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	scanNode := &plan.Node{
 		NodeId: 9,
@@ -715,7 +736,7 @@ func (e recordingSourceEngine) GetRelationById(ctx context.Context, _ client.Txn
 // decideJSONProbe binds that account onto the context before GetRelationById; assert it arrives.
 func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
 	idx := jpJSONIndex("j", `{"parser":"json"}`)
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := mockCtx.GetProcess()
 	proc.Base.TxnOperator = fakeCoverageTxn{}
 	var seen uint32
@@ -756,7 +777,7 @@ func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
 func TestDecideJSONProbeMatrix(t *testing.T) {
 	idx := jpJSONIndex("j", `{"parser":"json"}`)
 	newCase := func(eng engine.Engine) (*QueryBuilder, *plan.Node) {
-		mockCtx := NewMockCompilerContext(false)
+		mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		proc := mockCtx.GetProcess()
 		proc.Base.TxnOperator = fakeCoverageTxn{}
 		proc.Base.SessionInfo.StorageEngine = eng
@@ -828,11 +849,11 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	require.Equal(t, jsonProbeCovered, kind)
 }
 
-// The self-completing json probe emits a fulltext2_search TVF that can execute on a remote worker;
+// The self-completing json probe emits a fulltext2 search scan that can execute on a remote worker;
 // a CN predating the probe_tail contract mishandles it and loses rows. addJSONFulltextProbes must
 // decline the probe (plain Table Scan) until MOProtocolVersion reaches the gate (#28917 review).
 func TestSelfCompletingJSONProbeGate(t *testing.T) {
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	rt := moruntime.ServiceRuntime(b.compCtx.GetProcess().GetService())
 	require.NotNil(t, rt)

@@ -55,6 +55,9 @@ func TestBitwiseBinaryOperatorsMatchBinaryDomain(t *testing.T) {
 					get, err = GetFunctionByName(ctx, op, []types.Type{test.typ, countType})
 					require.NoError(t, err)
 					wantID := test.leftID
+					if op == ">>" {
+						wantID = test.rightID
+					}
 					if countType.Oid == types.T_uint64 {
 						wantID++
 					}
@@ -120,22 +123,12 @@ func assertBitwiseExecFactory(t *testing.T, result FuncGetResult) {
 	require.NotNil(t, overload.newOp())
 }
 
-func cleanupBitwiseTestCase(t *testing.T, tc *FunctionTestCase) {
-	t.Helper()
-	t.Cleanup(func() {
-		for _, parameter := range tc.parameters {
-			parameter.Free(tc.proc.Mp())
-		}
-		tc.result.Free()
-	})
-}
-
 func TestBitwiseStringLengthMismatchReturnsTypedError(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_varbinary, 8, 0)
 	for _, test := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "and", fn: operatorOpBitAndStrFn},
 		{name: "or", fn: operatorOpBitOrStrFn},
@@ -148,7 +141,7 @@ func TestBitwiseStringLengthMismatchReturnsTypedError(t *testing.T) {
 					NewFunctionTestInput(typ, []string{string([]byte{0x00, 0x01})}, nil),
 				},
 				NewFunctionTestResult(typ, true, nil, nil), test.fn)
-			cleanupBitwiseTestCase(t, &tc)
+			defer tc.Free()
 
 			err := tc.result.PreExtendAndReset(tc.fnLength)
 			require.NoError(t, err)
@@ -176,15 +169,14 @@ func TestBitwiseBinaryComplementAndShifts(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(typ, input, nil)},
 			NewFunctionTestResult(typ, false, []string{string([]byte{0xff, 0x00}), string([]byte{0xfe, 0xfd}), ""}, nil),
 			operatorOpBitwiseBinaryNotFn)
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info, "complement %s", oid)
 	}
 
 	typ := types.New(types.T_varbinary, 8, 0)
 	shiftCases := []struct {
 		name  string
-		fn    fEvalFn
+		fn    executeLogicOfOverload
 		count []int64
 		want  []string
 	}{
@@ -210,8 +202,7 @@ func TestBitwiseBinaryComplementAndShifts(t *testing.T) {
 					NewFunctionTestInput(types.T_int64.ToType(), test.count, nil),
 				},
 				NewFunctionTestResult(typ, false, test.want, nil), test.fn)
-			cleanupBitwiseTestCase(t, &tc)
-			ok, info := tc.Run()
+			ok, info := tc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -233,8 +224,7 @@ func TestBitwiseBinaryNotHandlesNullMasksAndConstantResults(t *testing.T) {
 				[]bool{false, true, true}),
 			operatorOpBitwiseBinaryNotFn).WithSelectList(
 			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -243,8 +233,7 @@ func TestBitwiseBinaryNotHandlesNullMasksAndConstantResults(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(typ, []string{"ignored", "also ignored"}, nil)},
 			NewFunctionTestResult(typ, false, []string{"", ""}, []bool{true, true}),
 			operatorOpBitwiseBinaryNotFn).WithSelectList(&FunctionSelectList{AllNull: true})
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -254,7 +243,7 @@ func TestBitwiseBinaryNotHandlesNullMasksAndConstantResults(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestConstInput(typ, []string{constValue, "ignored"}, nil)},
 			NewFunctionTestResult(typ, false, nil, nil),
 			operatorOpBitwiseBinaryNotFn)
-		cleanupBitwiseTestCase(t, &tc)
+		defer tc.Free()
 		constResult, err := vector.NewConstBytes(typ, []byte("old"), 2, proc.Mp())
 		require.NoError(t, err)
 		tc.result.SetResultVector(constResult)
@@ -279,7 +268,7 @@ func TestBitwiseBinaryShiftHandlesLargeRowsAndCounts(t *testing.T) {
 	wantRightOne[0] = 0x7f
 	for _, test := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []byte
 	}{
 		{name: "left", fn: operatorOpBitShiftLeftBinaryUint64Fn, want: wantLeftOne},
@@ -294,8 +283,7 @@ func TestBitwiseBinaryShiftHandlesLargeRowsAndCounts(t *testing.T) {
 				NewFunctionTestResult(typ, false,
 					[]string{string(test.want), string(make([]byte, len(src)))}, nil),
 				test.fn)
-			cleanupBitwiseTestCase(t, &tc)
-			ok, info := tc.Run()
+			ok, info := tc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -318,8 +306,7 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 				[]bool{false, true, true, true}),
 			operatorOpBitShiftLeftBinaryInt64Fn).WithSelectList(
 			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -331,8 +318,7 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 			},
 			NewFunctionTestResult(typ, false, []string{"", ""}, []bool{true, true}),
 			operatorOpBitShiftLeftBinaryInt64Fn).WithSelectList(&FunctionSelectList{AllNull: true})
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -346,7 +332,7 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 			NewFunctionTestResult(typ, false,
 				[]string{string([]byte{0x02, 0x04}), string([]byte{0x02, 0x04})}, nil),
 			operatorOpBitShiftLeftBinaryInt64Fn)
-		cleanupBitwiseTestCase(t, &tc)
+		defer tc.Free()
 		ok, info := tc.Run()
 		require.True(t, ok, info)
 		got, isNull := vector.GenerateFunctionStrParameter(tc.parameters[0]).GetStrValue(0)
@@ -363,7 +349,7 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 			},
 			NewFunctionTestResult(typ, false, nil, nil),
 			operatorOpBitShiftLeftBinaryInt64Fn)
-		cleanupBitwiseTestCase(t, &tc)
+		defer tc.Free()
 		constResult, err := vector.NewConstBytes(typ, []byte("old"), 2, proc.Mp())
 		require.NoError(t, err)
 		tc.result.SetResultVector(constResult)
@@ -391,8 +377,7 @@ func TestBitwiseBinaryShiftPreservesUnmaskedNulls(t *testing.T) {
 			[]string{string([]byte{0x02, 0x04}), "", ""},
 			[]bool{false, true, true}),
 		operatorOpBitShiftLeftBinaryInt64Fn)
-	cleanupBitwiseTestCase(t, &tc)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 

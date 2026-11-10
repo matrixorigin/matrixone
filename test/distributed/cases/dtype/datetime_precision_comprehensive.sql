@@ -380,4 +380,29 @@ FROM t_dateadd_scale;
 
 DROP TABLE t_dateadd_scale;
 
+-- ============================================================================
+-- Test 17: Exact-second and zero DATETIME(6) values keep their declared scale
+-- The direct DATETIME columns exercise the frontend text-protocol result path.
+-- The raw-byte regression is kept in pkg/frontend because mo-tester/JDBC
+-- normalizes trailing zero fractional digits when rendering DATETIME values.
+-- ============================================================================
+DROP TABLE IF EXISTS t_datetime_wire_scale;
+CREATE TABLE t_datetime_wire_scale (
+    id INT PRIMARY KEY,
+    dt6 DATETIME(6)
+);
+
+SET @old_datetime_wire_sql_mode = @@sql_mode;
+SET sql_mode = '';
+INSERT INTO t_datetime_wire_scale VALUES
+    (1, '2024-01-15 10:20:30'),
+    (2, CAST('0000-00-00 00:00:00' AS DATETIME(6)));
+SET sql_mode = @old_datetime_wire_sql_mode;
+
+SELECT id, dt6
+FROM t_datetime_wire_scale
+ORDER BY id;
+
+DROP TABLE t_datetime_wire_scale;
+
 DROP DATABASE test_datetime_precision;

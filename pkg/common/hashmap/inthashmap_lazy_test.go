@@ -142,6 +142,81 @@ func TestIntHashMapFloat32ZeroCountWithNonZeroStart(t *testing.T) {
 	}
 }
 
+func TestIntHashMapIteratorReadWriteTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		types   []types.Type
+		hasNull bool
+		count   int
+	}{
+		{"int32", []types.Type{types.T_int32.ToType()}, false, 2},
+		{"int64", []types.Type{types.T_int64.ToType()}, false, 2},
+		{"composite", []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}, false, 2},
+		{"nullable", []types.Type{types.T_int32.ToType()}, true, 2},
+		{"full-batch", []types.Type{types.T_int64.ToType()}, false, UnitLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, m.CurrNB()) })
+			makeKeys := func(base int) []*vector.Vector {
+				vecs := make([]*vector.Vector, len(tc.types))
+				for j, typ := range tc.types {
+					vec := vector.NewVec(typ)
+					vecs[j] = vec
+					t.Cleanup(func() { vec.Free(m) })
+					for i := 0; i < tc.count; i++ {
+						value := base + i + j*1000
+						if typ.Oid == types.T_int32 {
+							require.NoError(t, vector.AppendFixed(vec, int32(value), tc.hasNull && i == 1 && base == 10, m))
+						} else {
+							require.NoError(t, vector.AppendFixed(vec, int64(value), false, m))
+						}
+					}
+				}
+				return vecs
+			}
+			keys, missing := makeKeys(10), makeKeys(10000)
+			first, err := NewIntHashMap(tc.hasNull, m)
+			require.NoError(t, err)
+			defer first.Free()
+			second, err := NewIntHashMap(tc.hasNull, m)
+			require.NoError(t, err)
+			defer second.Free()
+			itr := first.NewIterator()
+			for _, owner := range []*IntHashMap{first, second} {
+				if owner != first {
+					IteratorClearOwner(itr)
+					IteratorChangeOwner(itr, owner)
+				}
+				// Grow, shrink, and regrow without allocating a new iterator.
+				for _, count := range []int{tc.count, 1, tc.count} {
+					_, _, err = itr.Find(0, count, missing)
+					require.NoError(t, err)
+					inserted, _, err := itr.Insert(0, count, keys)
+					require.NoError(t, err)
+					for i, group := range inserted {
+						require.Equal(t, uint64(i+1), group)
+					}
+					found, _, err := owner.NewIterator().Find(0, count, keys)
+					require.NoError(t, err)
+					require.Equal(t, inserted, found)
+					require.Equal(t, uint64(tc.count), owner.GroupCount())
+				}
+				absent, _, err := itr.Find(0, tc.count, missing)
+				require.NoError(t, err)
+				for _, group := range absent {
+					require.Zero(t, group)
+				}
+				isNew, err := itr.DetectDup(keys, 0)
+				require.NoError(t, err)
+				require.False(t, isNew)
+				_, _, err = itr.Find(0, tc.count, keys)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func assertIntIteratorCapacity(t *testing.T, itr *intHashMapIterator, want int, hasNull bool) {
 	t.Helper()
 	if want == 0 {
@@ -164,6 +239,49 @@ var (
 	benchmarkIntValues   []uint64
 	benchmarkIntZValues  []int64
 )
+
+func BenchmarkIntHashMapEncodeFlatFixed(b *testing.B) {
+	for _, typ := range []types.T{types.T_int32, types.T_int64} {
+		for _, mode := range []string{"flat", "null-outside-range", "composite"} {
+			b.Run(typ.String()+"/"+mode, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				owner, err := NewIntHashMap(false, mp)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() {
+					owner.Free()
+					if mp.CurrNB() != 0 {
+						b.Fatalf("retained hash memory: %d", mp.CurrNB())
+					}
+				})
+				vecType, columns := typ, 1
+				if mode == "composite" {
+					vecType, columns = types.T_int32, 2
+				}
+				vecs := make([]*vector.Vector, columns)
+				for i := range vecs {
+					vec := newVector(UnitLimit+1, vecType.ToType(), mp, false, nil)
+					b.Cleanup(func() { vec.Free(mp) })
+					if mode == "null-outside-range" {
+						vec.GetNulls().Add(UnitLimit)
+					}
+					vecs[i] = vec
+				}
+				itr := owner.NewIterator()
+				itr.ensureCapacity(UnitLimit)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					clear(itr.keys)
+					clear(itr.keyOffs)
+					copy(itr.zValues, OneInt64s[:])
+					itr.encodeHashKeys(vecs, 0, UnitLimit)
+				}
+			})
+		}
+	}
+}
 
 func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
 	for _, count := range []int{1, 255, 256} {

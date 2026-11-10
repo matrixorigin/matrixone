@@ -54,7 +54,7 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(6)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(4)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
@@ -113,6 +113,21 @@ func TestExplicitCloneInstallsLifecycleValidationOnlyAfterSuccess(t *testing.T) 
 	require.False(t, handler.lineageOwnerLifecycleValidation)
 }
 
+func generatedColumnsLogicallyEqualForTest(left, right *plan.GeneratedCol) bool {
+	return dataBranchGeneratedColumnsLogicallyEqual(
+		&plan.ColDef{GeneratedCol: left}, &plan.ColDef{GeneratedCol: right}, nil, nil, nil,
+	)
+}
+
+func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
+	return checkSchemaCompatibilityWithResolver(
+		tarDef, baseDef,
+		func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+		},
+	)
+}
+
 func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
 	require.True(t, isDataBranchWritableColumn(&plan.ColDef{Name: "tenant"}))
@@ -132,8 +147,8 @@ func TestDataBranchColumnClassification(t *testing.T) {
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
-	require.False(t, dataBranchGeneratedColumnsEqual(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
-	require.True(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
+	require.True(t, generatedColumnsLogicallyEqualForTest(
 		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
 		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
 	))
@@ -149,19 +164,19 @@ func TestDataBranchGeneratedColumnsTreatLegacyNoneAsOrdinaryText(t *testing.T) {
 			}},
 		}}
 	}
-	require.True(t, dataBranchGeneratedColumnsEqual(
+	require.True(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
 		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_HEX),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
 	))
@@ -232,7 +247,7 @@ func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
 
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
 		branchQuotaUsageSQL(7),
 	)
 }
@@ -249,63 +264,6 @@ func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 		},
 	}
 	require.Equal(t, []int{0, 2, 3}, dataBranchFakePKColIdxes(tblDef))
-}
-
-func TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes(t *testing.T) {
-	newTableDef := func() *plan.TableDef {
-		return &plan.TableDef{Cols: []*plan.ColDef{
-			{ColId: 1, Name: "id", Primary: true, NotNull: true, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
-			{ColId: 2, Name: "payload", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
-			{ColId: 3, Name: "amount", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 2}},
-			{ColId: 4, Name: "color", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}},
-		}}
-	}
-
-	t.Run("equal schemas", func(t *testing.T) {
-		require.True(t, isSchemaEquivalent(newTableDef(), newTableDef()))
-	})
-
-	for _, tc := range []struct {
-		name   string
-		mutate func(*plan.TableDef)
-	}{
-		{
-			name: "varchar width",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.Width = 80
-			},
-		},
-		{
-			name: "decimal scale",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[2].Typ.Scale = 4
-			},
-		},
-		{
-			name: "enum definition",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[3].Typ.Enumvalues = "red,green"
-			},
-		},
-		{
-			name: "type nullability",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.NotNullable = true
-			},
-		},
-		{
-			name: "auto increment",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.AutoIncr = true
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			left, right := newTableDef(), newTableDef()
-			tc.mutate(right)
-			require.False(t, isSchemaEquivalent(left, right))
-		})
-	}
 }
 
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
@@ -337,7 +295,7 @@ func TestFormatValIntoString_ControlByteRoundTrip(t *testing.T) {
 
 func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 	val := []byte{'x', 0x00, '\\', 0x07, '\''}
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+	for _, oid := range []types.T{types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, formatValIntoString(&Session{}, val, types.New(oid, 0, 0), &buf))
@@ -352,6 +310,26 @@ func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 			require.Equal(t, `x'7800'`, buf.String())
 		})
 	}
+}
+
+func TestFormatValIntoString_BinaryTypedLiteral(t *testing.T) {
+	for _, width := range []int32{1, 255} {
+		for _, tc := range []struct {
+			value any
+			hex   string
+		}{
+			{[]byte{}, ""},
+			{[]byte{0xff, 0x00, '\\', '\''}, "ff005c27"},
+			{"AB\x00", "414200"},
+		} {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tc.value, types.New(types.T_binary, width, 0), &buf))
+			require.Equal(t, fmt.Sprintf("serial_extract(serial(x'%s'),0 as BINARY(%d))", tc.hex, width), buf.String())
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(&Session{}, nil, types.New(types.T_binary, 255, 0), &buf))
+	require.Equal(t, "NULL", buf.String())
 }
 
 func TestFormatValIntoString_Time(t *testing.T) {
@@ -437,14 +415,14 @@ func TestFormatValIntoString_FloatLiterals(t *testing.T) {
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float32 NaN payload 0", math.Float32frombits(0x7fc00000), types.T_float32.ToType(), "bit_cast(unhex('0000c07f') as float)"},
 		{"float32 NaN payload 1", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
-		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "cast('+Inf' as float)"},
-		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "cast('-Inf' as float)"},
+		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "bit_cast(unhex('0000807f') as float)"},
+		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "bit_cast(unhex('000080ff') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "1.25"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"float64 NaN payload 0", math.Float64frombits(0x7ff8000000000000), types.T_float64.ToType(), "bit_cast(unhex('000000000000f87f') as double)"},
 		{"float64 NaN payload 1", math.Float64frombits(0x7ff8000000000001), types.T_float64.ToType(), "bit_cast(unhex('010000000000f87f') as double)"},
-		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
-		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "cast('-Inf' as double)"},
+		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
+		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f0ff') as double)"},
 	}
 
 	for _, tt := range tests {
@@ -467,7 +445,7 @@ func TestFormatValIntoStringWithFloatCast(t *testing.T) {
 		{"float32 NaN", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "cast(1.25 as double)"},
-		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"non-float unchanged", int64(7), types.T_int64.ToType(), "7"},
 	}
@@ -1282,6 +1260,8 @@ func newValidateSession(t testing.TB) *Session {
 	t.Helper()
 
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = sysAccountName
+	proc.Base.SessionInfo.Role = moAdminRoleName
 	service := "validate-output-dir"
 
 	InitServerLevelVars(service)
@@ -2311,23 +2291,32 @@ func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
 }
 
 func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {
-	tarDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
-		Cols: []*plan.ColDef{
-			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}},
-		},
+	for _, tc := range []struct {
+		name   string
+		typ    plan.Type
+		mutate func(*plan.Type)
+	}{
+		{"varchar width", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.Width = 80 }},
+		{"decimal scale", plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}, func(typ *plan.Type) { typ.Scale = 0 }},
+		{"enum definition", plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, func(typ *plan.Type) { typ.Enumvalues = "red,green" }},
+		{"type nullability", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.NotNullable = true }},
+		{"auto increment", plan.Type{Id: int32(types.T_int64)}, func(typ *plan.Type) { typ.AutoIncr = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := func() *plan.TableDef {
+				return &plan.TableDef{
+					Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+					Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}, {Name: "payload", Typ: tc.typ}},
+				}
+			}
+			target, base := table(), table()
+			_, _, _, err := checkSchemaCompatibility(target, base)
+			require.NoError(t, err)
+			tc.mutate(&base.Cols[1].Typ)
+			_, _, _, err = checkSchemaCompatibility(target, base)
+			require.ErrorContains(t, err, "different type attributes")
+		})
 	}
-	baseDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
-		Cols: []*plan.ColDef{
-			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 0}},
-		},
-	}
-
-	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.ErrorContains(t, err, "different type attributes")
 }
 
 func TestCheckSchemaCompatibility_RejectsDifferentColumnNullability(t *testing.T) {

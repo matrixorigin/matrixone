@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -41,6 +42,7 @@ import (
 const opName = "preinsert"
 
 const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
+const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -61,6 +63,9 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	if preInsert.ctr.canFreeVecIdx == nil {
 		preInsert.ctr.canFreeVecIdx = make(map[int]bool)
 	}
+	if preInsert.ctr.ownedVecSlots == nil {
+		preInsert.ctr.ownedVecSlots = make(map[int]bool)
+	}
 	if preInsert.CompPkeyExpr != nil && preInsert.ctr.compPkExecutor == nil {
 		preInsert.ctr.compPkExecutor, err = colexec.NewExpressionExecutor(proc, preInsert.CompPkeyExpr)
 		if err != nil {
@@ -79,8 +84,30 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
-	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
+	if (preInsert.TrackAutoIncrementGenerated || preInsert.TrackODKUResult) && preInsert.AutoIncrementGeneratedColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
+	}
+	if preInsert.TrackODKUResult && preInsert.ODKUOrdinalColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU input ordinal column")
+	}
+	if preInsert.TrackODKUResult && preInsert.ODKUAutoIncrementColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU auto-increment source column")
+	}
+	if preInsert.TrackODKUResult && !preInsert.HasAutoCol {
+		return moerr.NewInvalidInput(proc.Ctx,
+			"ODKU result tracking requires an auto-increment column")
+	}
+	if preInsert.TrackODKUResult {
+		colIdx := int(preInsert.ODKUAutoIncrementColumn)
+		if colIdx >= len(preInsert.TableDef.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx,
+				"ODKU auto-increment source column is outside table definition")
+		}
+		col := preInsert.TableDef.Cols[colIdx]
+		if col == nil || col.Hidden || !col.Typ.AutoIncr {
+			return moerr.NewInvalidInput(proc.Ctx,
+				"ODKU auto-increment source column is not a user auto-increment column")
+		}
 	}
 	return
 }
@@ -113,6 +140,11 @@ func (preInsert *PreInsert) retryWithDefChanged() error {
 }
 
 func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
+	// Direct drives (Prepare-less tests) initialize the container literal
+	// themselves; keep the ownership marker usable on every entry path.
+	if preInsert.ctr.ownedVecSlots == nil {
+		preInsert.ctr.ownedVecSlots = make(map[int]bool)
+	}
 	if first {
 		for idx := range preInsert.Attrs {
 			if preInsert.TableDef.Cols[idx].Typ.AutoIncr {
@@ -134,13 +166,49 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 	if preInsert.IsNewUpdate {
 		vecCnt = len(bat.Vecs)
 	}
+	if !preInsert.IsNewUpdate {
+		// Repeated plain source references reach this operator as one child
+		// vector installed into two output columns: a same-type assignment
+		// keeps the plan cast-free and the column expression executor then
+		// hands out the input vector itself. The IGNORE adjustment and the
+		// NULL primary-key drop rewrite output slots in place, so a vector
+		// shared by two columns would let the first column's adjustment set
+		// its sibling's cell to the implicit default and clear a null bitmap
+		// the sibling still needs. Give every repeated vector after its first
+		// appearance an owned independent copy, reusing the canFreeVecIdx
+		// ownership the auto-increment columns already have: later calls
+		// refresh it by CleanOnlyData+UnionBatch and Free releases it.
+		seen := make(map[*vector.Vector]struct{}, vecCnt)
+		for idx := 0; idx < vecCnt; idx++ {
+			v := bat.Vecs[idx]
+			if v == nil || v.IsConst() || preInsert.ctr.canFreeVecIdx[idx] {
+				continue
+			}
+			if _, shared := seen[v]; shared {
+				preInsert.ctr.canFreeVecIdx[idx] = true
+			} else {
+				seen[v] = struct{}{}
+			}
+		}
+	}
 	for idx := 0; idx < vecCnt; idx++ {
 		if preInsert.ctr.canFreeVecIdx[idx] {
 			typ := bat.Vecs[idx].GetType()
-			if preInsert.ctr.buf.Vecs[idx] != nil {
+			if preInsert.ctr.buf.Vecs[idx] != nil && preInsert.ctr.ownedVecSlots[idx] {
+				// Storage this operator allocated on an earlier batch:
+				// safe to clean and refill in place.
 				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
 			} else {
+				// canFreeVecIdx marks the slot owned from now on, but the
+				// buffer entry may still be a child vector an earlier batch
+				// borrowed into this slot (the repeated vector only became
+				// shared this batch). Cleaning that borrowed entry would
+				// clear the live child vector before its length is read and
+				// leave every destination it feeds with zero-length data,
+				// and Free would later release storage the child still owns,
+				// so install fresh independent storage instead.
 				preInsert.ctr.buf.Vecs[idx] = vector.NewOffHeapVecWithType(*typ)
+				preInsert.ctr.ownedVecSlots[idx] = true
 			}
 			cnt := bat.Vecs[idx].Length()
 			if bat.Vecs[idx].IsConst() {
@@ -160,8 +228,10 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
+				preInsert.ctr.ownedVecSlots[idx] = true
 			} else {
 				preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
+				preInsert.ctr.ownedVecSlots[idx] = false
 			}
 		}
 	}
@@ -176,6 +246,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 				return err
 			}
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
+			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
 		}
@@ -185,6 +256,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 				return err
 			}
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
+			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
 		}
@@ -198,6 +270,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 				return err
 			}
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
+			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, rowIdVec)
 		}
 	} else {
@@ -208,6 +281,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 				return err
 			}
 			preInsert.ctr.buf.Vecs[colIdx] = vec
+			preInsert.ctr.ownedVecSlots[colIdx] = true
 			colIdx += 1
 		}
 		if preInsert.ctr.clusterByExecutor != nil {
@@ -216,6 +290,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 				return err
 			}
 			preInsert.ctr.buf.Vecs[colIdx] = vec
+			preInsert.ctr.ownedVecSlots[colIdx] = true
 			colIdx += 1
 		}
 		if preInsert.IsOldUpdate {
@@ -229,6 +304,82 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 		}
 	}
 
+	return err
+}
+
+// ignoreFillColumnAlignment returns the ColDefs aligned one-to-one with
+// preInsert.Attrs, plus the attr index of the one column the IGNORE fill must
+// leave untouched: the resolvable single-column primary key that forbids NULL
+// and is not auto-incremented. That key keeps its supplied NULL through
+// PRE_INSERT so the write side keeps dropping the row (publishing its own
+// ER_BAD_NULL_ERROR warning) instead of letting several adjusted rows claim
+// the same primary key inside one statement before duplicate arbitration sees
+// it. Composite or synthesized keys are not affected: their member columns
+// follow the regular fill, and an auto-increment key has already allocated a
+// value before the fill runs.
+func (preInsert *PreInsert) ignoreFillColumnAlignment() (colsByAttr []*plan.ColDef, skipAttr int) {
+	skipAttr = -1
+	if preInsert.TableDef == nil {
+		return nil, -1
+	}
+	name2Col := make(map[string]*plan.ColDef, len(preInsert.TableDef.Cols))
+	for _, col := range preInsert.TableDef.Cols {
+		if col != nil {
+			name2Col[col.Name] = col
+			name2Col[col.GetOriginCaseName()] = col
+		}
+	}
+	colsByAttr = make([]*plan.ColDef, len(preInsert.Attrs))
+	for i, attr := range preInsert.Attrs {
+		colsByAttr[i] = name2Col[attr]
+	}
+	pkey := preInsert.TableDef.Pkey
+	if pkey == nil || len(pkey.Names) != 1 ||
+		pkey.Names[0] == catalog.FakePrimaryKeyColName ||
+		pkey.Names[0] == catalog.CPrimaryKeyColName {
+		return colsByAttr, -1
+	}
+	for i, col := range colsByAttr {
+		if col == nil || (col.Name != pkey.Names[0] && col.GetOriginCaseName() != pkey.Names[0]) {
+			continue
+		}
+		if col.Typ.AutoIncr || (!col.NotNull && (col.Default == nil || col.Default.NullAbility)) {
+			return colsByAttr, -1
+		}
+		skipAttr = i
+	}
+	return colsByAttr, skipAttr
+}
+
+// dropNullPkRowsForIgnoreFill removes from the operator output every row
+// whose resolvable single-column primary-key cell (fillSkipAttr, with
+// fillCols carrying the aligned column definitions) still carries its
+// supplied NULL, publishing one ER_BAD_NULL_ERROR warning per dropped row.
+// The pre-insert fill deliberately left that cell untouched, and dropping
+// the row here keeps every downstream consumer (CHECK filter, unique-key
+// arbitration, the foreign-key check, the parent-key lock, index encoding,
+// the write) from evaluating a row that can never store. UPDATE pipelines
+// are excluded before the batch even reaches this point.
+func (preInsert *PreInsert) dropNullPkRowsForIgnoreFill(
+	proc *proc,
+	fillSkipAttr int,
+	fillCols []*plan.ColDef,
+) error {
+	if preInsert.IsNewUpdate {
+		return nil
+	}
+	if proc == nil || proc.GetStmtProfile() == nil || !proc.GetStmtProfile().GetStatementIgnore() {
+		return nil
+	}
+	if fillSkipAttr < 0 || fillSkipAttr >= len(fillCols) || fillCols[fillSkipAttr] == nil {
+		return nil
+	}
+	keyPos := int(preInsert.ColOffset) + fillSkipAttr
+	if keyPos < 0 || keyPos >= len(preInsert.ctr.buf.Vecs) {
+		return nil
+	}
+	_, err := colexec.DropNullPkRowsForIgnore(
+		proc, preInsert.ctr.buf.Vecs[keyPos], fillCols[fillSkipAttr].Name, preInsert.ctr.buf)
 	return err
 }
 
@@ -262,7 +413,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			return result, err
 		}
 		defer workBat.Clean(proc.Mp())
-		workBat.Shrink(selectedRows, false)
+		if err := workBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			return result, err
+		}
 		workBat.SetRowCount(len(selectedRows))
 	}
 	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {
@@ -270,6 +423,11 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	// constructColBuf copies the child vectors into the reusable output batch,
+	// but deliberately leaves its row count for this point.  Set it before
+	// capturing per-row ODKU provenance so the marker and ordinal slices cover
+	// the actual rows passed to the allocator.  The output batch is then not
+	// counted a second time below.
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
@@ -277,6 +435,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			convertZeroToNull(workBat, preInsert)
 		}
 		if err = preInsert.captureAutoIncrementGeneratedRows(workBat); err != nil {
+			return result, err
+		}
+		if err = preInsert.captureODKUInputOrdinals(proc, workBat); err != nil {
 			return result, err
 		}
 		start := time.Now()
@@ -302,11 +463,69 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 	// An unmatched target contributes no row to this UPDATE branch. Its outer
 	// join placeholders must not participate in target-table constraints.
+	var fillCols []*plan.ColDef
+	fillSkipAttr := -1
 	if !preInsert.HasTargetSelector || len(selectedRows) > 0 {
 		// check new rows not null
 		tempVecs := workBat.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
-		err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
-		if err != nil {
+		if proc != nil && proc.GetStmtProfile() != nil &&
+			proc.GetStmtProfile().GetStatementIgnore() && !preInsert.IsNewUpdate {
+			// IGNORE keeps the row and adjusts the value instead of failing
+			// the statement: set the implicit default of the column type and
+			// report one ER_BAD_NULL_ERROR warning per adjusted cell. UPDATE
+			// pipelines own their own rejection and never reach this fill.
+			fillCols, fillSkipAttr = preInsert.ignoreFillColumnAlignment()
+			fillVecs := tempVecs
+			fillAttrs := preInsert.Attrs
+			fillOpCols := fillCols
+			originIdx := []int(nil)
+			if fillSkipAttr >= 0 && fillSkipAttr < len(tempVecs) {
+				// A resolvable single-column NOT NULL primary key keeps its
+				// supplied NULL here and is dropped from the output below, so
+				// no insert leg can adjust the key cell and let several rows
+				// claim the same primary key inside one statement. The full
+				// aligned triplets stay in fillCols for that drop, which
+				// names the key from the pre-exclusion definition.
+				originIdx = make([]int, 0, len(tempVecs))
+				vecs2 := make([]*vector.Vector, 0, len(tempVecs))
+				attrs2 := make([]string, 0, len(preInsert.Attrs))
+				cols2 := make([]*plan.ColDef, 0, len(fillCols))
+				for j := range tempVecs {
+					if j == fillSkipAttr {
+						continue
+					}
+					originIdx = append(originIdx, j)
+					vecs2 = append(vecs2, tempVecs[j])
+					attrs2 = append(attrs2, preInsert.Attrs[j])
+					cols2 = append(cols2, fillCols[j])
+				}
+				fillVecs, fillAttrs, fillOpCols = vecs2, attrs2, cols2
+			}
+			filledVecIdx, ferr := colexec.BatchDataNotNullFillForIgnore(
+				fillVecs, fillAttrs, fillOpCols, proc)
+			if ferr != nil {
+				return result, ferr
+			}
+			if originIdx != nil {
+				for i, j := range filledVecIdx {
+					filledVecIdx[i] = originIdx[j]
+				}
+			}
+			if preInsert.HasTargetSelector && len(filledVecIdx) > 0 {
+				// The selector branch validates and fills the shrunk clone.
+				// Mirror the adjusted cells back so the full-width output
+				// batch carries them, exactly like the auto-increment column.
+				for _, j := range filledVecIdx {
+					vecIdx := int(preInsert.ColOffset) + j
+					for selectedIdx, inputIdx := range selectedRows {
+						if cerr := preInsert.ctr.buf.Vecs[vecIdx].Copy(
+							workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); cerr != nil {
+							return result, cerr
+						}
+					}
+				}
+			}
+		} else if err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx); err != nil {
 			return result, err
 		}
 	}
@@ -314,27 +533,75 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
 	}
-	if err = preInsert.constructAutoIncrementGeneratedCol(proc, bat, first); err != nil {
+	provenanceBat := bat
+	if preInsert.TrackODKUResult {
+		provenanceBat = workBat
+	}
+	if err = preInsert.constructAutoIncrementGeneratedCol(proc, provenanceBat, first); err != nil {
 		return result, err
+	}
+
+	// The pinned single-column NULL primary-key drop runs here, after the
+	// whole output row image (hidden helpers and provenance columns
+	// included) is materialized but before any downstream consumer
+	// evaluates the batch: the CHECK filter, unique-key arbitration, the
+	// foreign-key check, the parent-key lock, index encoding and the write
+	// never see a row whose resolvable key cell still carries its supplied
+	// NULL. The pre-insert fill above already published those rows' other
+	// per-cell warnings, so the only diagnostics published here are the
+	// per-row key warnings. Selector pipelines keep the write-side backstop,
+	// and UPDATE pipelines never reach this path.
+	if !preInsert.HasTargetSelector && fillSkipAttr >= 0 && fillCols != nil {
+		if err = preInsert.dropNullPkRowsForIgnoreFill(proc, fillSkipAttr, fillCols); err != nil {
+			return result, err
+		}
 	}
 
 	result.Batch = preInsert.ctr.buf
 	return result, nil
 }
 
-func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
-	if !preInsert.TrackAutoIncrementGenerated {
+func (preInsert *PreInsert) captureODKUInputOrdinals(proc *proc, bat *batch.Batch) error {
+	if !preInsert.TrackODKUResult {
 		return nil
 	}
-	autoCol := -1
-	for i, col := range preInsert.TableDef.Cols {
-		if !col.Typ.AutoIncr {
-			continue
+	if bat == nil {
+		return moerr.NewInternalError(proc.Ctx, "ODKU input ordinal capture received nil batch")
+	}
+	start, err := proc.NextODKUInputOrdinal(bat.RowCount())
+	if err != nil {
+		return err
+	}
+	preInsert.ctr.odkuOrdinals = make([]uint64, bat.RowCount())
+	for i := range preInsert.ctr.odkuOrdinals {
+		preInsert.ctr.odkuOrdinals[i] = start + uint64(i)
+	}
+	return nil
+}
+
+func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
+	if !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
+		return nil
+	}
+	autoCol := int(preInsert.ODKUAutoIncrementColumn)
+	if preInsert.TrackODKUResult {
+		// ODKU carries the selected user column explicitly. MatrixOne tables can
+		// also contain a hidden fake primary-key allocator, which must never be
+		// mistaken for the column whose generated value is published.
+		if autoCol < 0 || autoCol >= len(preInsert.TableDef.Cols) {
+			return moerr.NewInvalidInputNoCtx("invalid ODKU auto-increment source column")
 		}
-		if autoCol >= 0 {
-			return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+	} else {
+		autoCol = -1
+		for i, col := range preInsert.TableDef.Cols {
+			if !col.Typ.AutoIncr {
+				continue
+			}
+			if autoCol >= 0 {
+				return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+			}
+			autoCol = i
 		}
-		autoCol = i
 	}
 	if autoCol < 0 {
 		return moerr.NewInvalidInputNoCtx("auto-increment provenance has no auto-increment column")
@@ -359,7 +626,7 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 	bat *batch.Batch,
 	first bool,
 ) error {
-	if !preInsert.TrackAutoIncrementGenerated {
+	if !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
 		return nil
 	}
 	markerPos := int(preInsert.AutoIncrementGeneratedColumn)
@@ -373,9 +640,23 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 				markerPos, len(preInsert.ctr.buf.Vecs))
 		}
 		preInsert.ctr.canFreeVecIdx[markerPos] = true
+		preInsert.ctr.ownedVecSlots[markerPos] = true
 		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 			vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
+		if preInsert.TrackODKUResult {
+			ordinalPos := int(preInsert.ODKUOrdinalColumn)
+			if ordinalPos != len(preInsert.ctr.buf.Vecs) {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ODKU input ordinal column %d does not follow provenance output width %d",
+					ordinalPos, len(preInsert.ctr.buf.Vecs))
+			}
+			preInsert.ctr.canFreeVecIdx[ordinalPos] = true
+			preInsert.ctr.ownedVecSlots[ordinalPos] = true
+			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
+				vector.NewOffHeapVecWithType(types.T_uint64.ToType()))
+			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, odkuInputOrdinalAttr)
+		}
 	} else {
 		if markerPos >= len(preInsert.ctr.buf.Vecs) {
 			return moerr.NewInternalErrorf(proc.Ctx,
@@ -383,6 +664,15 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 				markerPos, len(preInsert.ctr.buf.Vecs))
 		}
 		preInsert.ctr.buf.Vecs[markerPos].CleanOnlyData()
+		if preInsert.TrackODKUResult {
+			ordinalPos := int(preInsert.ODKUOrdinalColumn)
+			if ordinalPos < 0 || ordinalPos >= len(preInsert.ctr.buf.Vecs) {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ODKU input ordinal column %d is outside PRE_INSERT output width %d",
+					ordinalPos, len(preInsert.ctr.buf.Vecs))
+			}
+			preInsert.ctr.buf.Vecs[ordinalPos].CleanOnlyData()
+		}
 	}
 	generated := preInsert.ctr.autoIncrementGenerated
 	preInsert.ctr.autoIncrementGenerated = nil
@@ -395,6 +685,22 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		if err := vector.AppendFixed(
 			preInsert.ctr.buf.Vecs[markerPos], value, false, proc.Mp()); err != nil {
 			return err
+		}
+	}
+	if preInsert.TrackODKUResult {
+		ordinals := preInsert.ctr.odkuOrdinals
+		preInsert.ctr.odkuOrdinals = nil
+		if len(ordinals) != bat.RowCount() {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"ODKU input ordinal rows %d do not match batch rows %d",
+				len(ordinals), bat.RowCount())
+		}
+		ordinalPos := int(preInsert.ODKUOrdinalColumn)
+		for _, ordinal := range ordinals {
+			if err := vector.AppendFixed(
+				preInsert.ctr.buf.Vecs[ordinalPos], ordinal, false, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -664,12 +970,21 @@ retryInsertValues:
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
+				if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+					refreshed, refreshErr := proc.GetIncrService().ReloadForPKRetry(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn)
+					if refreshErr != nil {
+						return refreshErr
+					}
+					if !refreshed {
+						return moerr.NewInternalError(proc.Ctx, "AUTO_INCREMENT PK history is unavailable for transaction-private state; roll back and retry the transaction")
+					}
+				}
 				return err
 			}
 		}
 	}
 
-	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated {
+	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
 		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
 		// all sharing the statement-wide process state.  Publish the smallest
 		// generated value through the shared coordinator so scheduling cannot make

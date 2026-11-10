@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -496,6 +498,7 @@ func TestDrainIndexCdcTaskConsumerRetriesNotReadyWithFreshRunner(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ddlTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	var commitStart client.TxnEventCallback
+	ddlTxn.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	ddlTxn.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).Times(1)
 	ddlTxn.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
@@ -567,6 +570,7 @@ func TestDrainIndexCdcTaskConsumerFencesRunnerChangeAfterSuccessfulDrain(t *test
 	ctrl := gomock.NewController(t)
 	ddlTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
+	ddlTxn.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	ddlTxn.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -657,6 +661,7 @@ func TestDrainIndexCdcTaskConsumerStartsLeaseBeforeSecondRunnerDrainCompletes(t 
 	ctrl := gomock.NewController(t)
 	ddlTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	var commitStart client.TxnEventCallback
+	ddlTxn.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	ddlTxn.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).Times(1)
 	ddlTxn.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
@@ -922,187 +927,196 @@ func TestISCPJobFenceLeaseStopCancelsAndJoinsInFlightRenew(t *testing.T) {
 }
 
 func TestDrainIndexCdcTaskConsumerRevalidatesAfterLongDrain(t *testing.T) {
-	oldTimeout := iscpDrainReadyTimeout
-	iscpDrainReadyTimeout = 20 * time.Millisecond
-	defer func() {
-		iscpDrainReadyTimeout = oldTimeout
-	}()
+	proc := testutil.NewProcess(t)
+	synctest.Test(t, func(t *testing.T) {
+		oldTimeout := iscpDrainReadyTimeout
+		iscpDrainReadyTimeout = 20 * time.Millisecond
+		defer func() {
+			iscpDrainReadyTimeout = oldTimeout
+		}()
 
-	var firstReadyDone <-chan struct{}
-	var runnerCalls int
-	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
-		return nil, false
-	}
-	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
-		require.Nil(t, txn)
-		runnerCalls++
-		switch runnerCalls {
-		case 1:
-			firstReadyDone = ctx.Done()
-		case 2:
-			require.NoError(t, ctx.Err(), "post-drain owner validation must use a new readiness generation")
-		default:
-			require.FailNow(t, "unexpected task-runner lookup")
+		var firstReadyDone <-chan struct{}
+		var runnerCalls int
+		iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+			return nil, false
 		}
-		return "runner-a", nil
-	}
-	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
-		return 0, 42, 7, true, true, nil
-	}
-	iscpGetCNQueryAddress = func(_ context.Context, _ string, runnerCN string) (string, error) {
-		return runnerCN + ":18101", nil
-	}
-	defer func() {
-		iscpGetExecutorFunc = iscp.GetExecutorRuntime
-		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
-		iscpLookupJobLogFunc = iscp.LookupJobLog
-		iscpGetCNQueryAddress = getCNQueryAddress
-	}()
-
-	c := &Compile{}
-	c.proc = testutil.NewProcess(t)
-	outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
-	defer cancel()
-	c.proc.Ctx = outerCtx
-	qc := &iscpDrainTestQueryClient{
-		serviceID: "ddl-cn",
-		sendFunc: func(ctx context.Context, _ string, req *query.Request) error {
-			require.False(t, req.ISCPDrainConsumerRequest.RemoveFenceOnly)
-			require.False(t, req.ISCPDrainConsumerRequest.RenewFenceOnly)
-			require.NotNil(t, firstReadyDone)
-			select {
-			case <-firstReadyDone:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
+		iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+			require.Nil(t, txn)
+			runnerCalls++
+			switch runnerCalls {
+			case 1:
+				firstReadyDone = ctx.Done()
+			case 2:
+				require.NoError(t, ctx.Err(), "post-drain owner validation must use a new readiness generation")
+			default:
+				require.FailNow(t, "unexpected task-runner lookup")
 			}
-		},
-	}
-	c.proc.Base.QueryClient = qc
-	tbldef := &plan.TableDef{
-		TblId: 42,
-		Indexes: []*plan.IndexDef{{
-			TableExist:      true,
-			IndexName:       "idx1",
-			IndexAlgo:       "hnsw",
-			IndexAlgoParams: `{"async":"true"}`,
-		}},
-	}
+			return "runner-a", nil
+		}
+		iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+			return 0, 42, 7, true, true, nil
+		}
+		iscpGetCNQueryAddress = func(_ context.Context, _ string, runnerCN string) (string, error) {
+			return runnerCN + ":18101", nil
+		}
+		defer func() {
+			iscpGetExecutorFunc = iscp.GetExecutorRuntime
+			iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+			iscpLookupJobLogFunc = iscp.LookupJobLog
+			iscpGetCNQueryAddress = getCNQueryAddress
+		}()
 
-	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
-	require.NoError(t, outerCtx.Err())
-	require.Equal(t, 2, runnerCalls)
-	require.Equal(t, []string{"runner-a:18101"}, qc.addresses)
-	require.Len(t, qc.requests, 1)
+		c := &Compile{}
+		c.proc = proc
+		outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
+		defer cancel()
+		c.proc.Ctx = outerCtx
+		qc := &iscpDrainTestQueryClient{
+			serviceID: "ddl-cn",
+			sendFunc: func(ctx context.Context, _ string, req *query.Request) error {
+				require.False(t, req.ISCPDrainConsumerRequest.RemoveFenceOnly)
+				require.False(t, req.ISCPDrainConsumerRequest.RenewFenceOnly)
+				require.NotNil(t, firstReadyDone)
+				select {
+				case <-firstReadyDone:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		}
+		c.proc.Base.QueryClient = qc
+		tbldef := &plan.TableDef{
+			TblId: 42,
+			Indexes: []*plan.IndexDef{{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			}},
+		}
+
+		require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+		require.NoError(t, outerCtx.Err())
+		require.Equal(t, 2, runnerCalls)
+		require.Equal(t, []string{"runner-a:18101"}, qc.addresses)
+		require.Len(t, qc.requests, 1)
+	})
 }
 
 func TestDrainIndexCdcTaskConsumerBoundsRunnerDiscovery(t *testing.T) {
-	oldTimeout := iscpDrainReadyTimeout
-	iscpDrainReadyTimeout = 20 * time.Millisecond
-	defer func() {
-		iscpDrainReadyTimeout = oldTimeout
-	}()
+	proc := testutil.NewProcess(t)
+	synctest.Test(t, func(t *testing.T) {
+		oldTimeout := iscpDrainReadyTimeout
+		iscpDrainReadyTimeout = 20 * time.Millisecond
+		defer func() {
+			iscpDrainReadyTimeout = oldTimeout
+		}()
 
-	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
-		return 0, 42, 7, true, true, nil
-	}
-	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
-		require.Nil(t, txn)
-		<-ctx.Done()
-		return "", ctx.Err()
-	}
-	defer func() {
-		iscpLookupJobLogFunc = iscp.LookupJobLog
-		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
-	}()
+		iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+			return 0, 42, 7, true, true, nil
+		}
+		iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+			require.Nil(t, txn)
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		defer func() {
+			iscpLookupJobLogFunc = iscp.LookupJobLog
+			iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		}()
 
-	c := &Compile{}
-	c.proc = testutil.NewProcess(t)
-	outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
-	defer cancel()
-	c.proc.Ctx = outerCtx
-	tbldef := &plan.TableDef{
-		TblId: 42,
-		Indexes: []*plan.IndexDef{{
-			TableExist:      true,
-			IndexName:       "idx1",
-			IndexAlgo:       "hnsw",
-			IndexAlgoParams: `{"async":"true"}`,
-		}},
-	}
+		c := &Compile{}
+		c.proc = proc
+		outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
+		defer cancel()
+		c.proc.Ctx = outerCtx
+		tbldef := &plan.TableDef{
+			TblId: 42,
+			Indexes: []*plan.IndexDef{{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			}},
+		}
 
-	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
-	require.ErrorContains(t, err, "ISCP executor on task runner <unknown> did not become ready")
-	require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
+		err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
+		require.ErrorContains(t, err, "ISCP executor on task runner <unknown> did not become ready")
+		require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
+	})
 }
 
 func TestDrainIndexCdcTaskConsumerBoundsPersistentNotReady(t *testing.T) {
-	oldTimeout, oldInterval := iscpDrainReadyTimeout, iscpDrainRetryInterval
-	iscpDrainReadyTimeout, iscpDrainRetryInterval = 30*time.Millisecond, time.Millisecond
-	defer func() {
-		iscpDrainReadyTimeout, iscpDrainRetryInterval = oldTimeout, oldInterval
-	}()
+	proc := testutil.NewProcess(t)
+	synctest.Test(t, func(t *testing.T) {
+		oldTimeout, oldInterval := iscpDrainReadyTimeout, iscpDrainRetryInterval
+		iscpDrainReadyTimeout, iscpDrainRetryInterval = 30*time.Millisecond, time.Millisecond
+		defer func() {
+			iscpDrainReadyTimeout, iscpDrainRetryInterval = oldTimeout, oldInterval
+		}()
 
-	var runnerCalls int
-	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
-		return nil, false
-	}
-	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
-		require.Nil(t, txn)
-		_, hasDeadline := ctx.Deadline()
-		require.True(t, hasDeadline)
-		runnerCalls++
-		return "runner-cn", nil
-	}
-	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
-		return 0, 42, 7, true, true, nil
-	}
-	iscpGetCNQueryAddress = func(ctx context.Context, _ string, _ string) (string, error) {
-		_, hasDeadline := ctx.Deadline()
-		require.True(t, hasDeadline)
-		return "runner-cn:18101", nil
-	}
-	defer func() {
-		iscpGetExecutorFunc = iscp.GetExecutorRuntime
-		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
-		iscpLookupJobLogFunc = iscp.LookupJobLog
-		iscpGetCNQueryAddress = getCNQueryAddress
-	}()
-
-	c := &Compile{}
-	c.proc = testutil.NewProcess(t)
-	outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
-	defer cancel()
-	c.proc.Ctx = outerCtx
-	qc := &iscpDrainTestQueryClient{
-		serviceID: "ddl-cn",
-		err:       moerr.NewRetryForCNRollingRestart(),
-	}
-	c.proc.Base.QueryClient = qc
-	tbldef := &plan.TableDef{
-		TblId: 42,
-		Indexes: []*plan.IndexDef{{
-			TableExist:      true,
-			IndexName:       "idx1",
-			IndexAlgo:       "hnsw",
-			IndexAlgoParams: `{"async":"true"}`,
-		}},
-	}
-
-	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
-	require.ErrorContains(t, err, "ISCP executor on task runner runner-cn did not become ready")
-	require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
-	require.Positive(t, runnerCalls)
-	require.NotEmpty(t, qc.requests)
-	var drainRequests int
-	for _, req := range qc.requests {
-		if !req.ISCPDrainConsumerRequest.RemoveFenceOnly &&
-			!req.ISCPDrainConsumerRequest.RenewFenceOnly {
-			drainRequests++
+		var runnerCalls int
+		iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+			return nil, false
 		}
-	}
-	require.GreaterOrEqual(t, runnerCalls, drainRequests)
-	require.Len(t, qc.addresses, len(qc.requests))
+		iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+			require.Nil(t, txn)
+			_, hasDeadline := ctx.Deadline()
+			require.True(t, hasDeadline)
+			runnerCalls++
+			return "runner-cn", nil
+		}
+		iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+			return 0, 42, 7, true, true, nil
+		}
+		iscpGetCNQueryAddress = func(ctx context.Context, _ string, _ string) (string, error) {
+			_, hasDeadline := ctx.Deadline()
+			require.True(t, hasDeadline)
+			return "runner-cn:18101", nil
+		}
+		defer func() {
+			iscpGetExecutorFunc = iscp.GetExecutorRuntime
+			iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+			iscpLookupJobLogFunc = iscp.LookupJobLog
+			iscpGetCNQueryAddress = getCNQueryAddress
+		}()
+
+		c := &Compile{}
+		c.proc = proc
+		outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
+		defer cancel()
+		c.proc.Ctx = outerCtx
+		qc := &iscpDrainTestQueryClient{
+			serviceID: "ddl-cn",
+			err:       moerr.NewRetryForCNRollingRestart(),
+		}
+		c.proc.Base.QueryClient = qc
+		tbldef := &plan.TableDef{
+			TblId: 42,
+			Indexes: []*plan.IndexDef{{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			}},
+		}
+
+		err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
+		require.ErrorContains(t, err, "ISCP executor on task runner runner-cn did not become ready")
+		require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
+		require.Positive(t, runnerCalls)
+		require.NotEmpty(t, qc.requests)
+		var drainRequests int
+		for _, req := range qc.requests {
+			if !req.ISCPDrainConsumerRequest.RemoveFenceOnly &&
+				!req.ISCPDrainConsumerRequest.RenewFenceOnly {
+				drainRequests++
+			}
+		}
+		require.GreaterOrEqual(t, runnerCalls, drainRequests)
+		require.Len(t, qc.addresses, len(qc.requests))
+	})
 }
 
 func TestDrainIndexCdcTaskConsumerRoutesToRemoteRunnerQueryService(t *testing.T) {
@@ -1170,7 +1184,7 @@ func TestDrainIndexCdcTaskConsumerRoutesToRemoteRunnerQueryService(t *testing.T)
 	require.False(t, localExec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)))
 }
 
-func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
+func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnStatementAbort(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return nil, false
 	}
@@ -1192,8 +1206,14 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var statementCleanup client.TxnEventCallback
 	var rollbackCleanup client.TxnEventCallback
 	var commitStart client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			statementCleanup = cb
+		},
+	).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -1225,11 +1245,18 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
 	require.NotNil(t, rollbackCleanup.Func)
 	require.NotNil(t, commitStart.Func)
-	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{CostEvent: true}, nil))
+	require.True(t, statementCleanup.StatementScoped)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, statementCleanup.Func(canceledCtx, txnOp,
+		client.TxnEvent{Txn: txn.TxnMeta{Status: txn.TxnStatus_Aborted}}, nil))
 
 	require.Len(t, qc.requests, 2)
 	require.False(t, qc.requests[0].ISCPDrainConsumerRequest.RemoveFenceOnly)
 	require.True(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
+	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp,
+		client.TxnEvent{CostEvent: true}, nil))
+	require.Len(t, qc.requests, 2, "old transaction callback must not remove a later fence")
 }
 
 func TestDrainIndexCdcTaskConsumerRemoteRollbackCleanupIgnoresCanceledCallerContext(t *testing.T) {
@@ -1256,6 +1283,7 @@ func TestDrainIndexCdcTaskConsumerRemoteRollbackCleanupIgnoresCanceledCallerCont
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
 	var commitStart client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -1408,6 +1436,7 @@ func TestDrainIndexCdcTaskConsumerBoundsRollbackCleanupLatency(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -1469,8 +1498,14 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var statementCleanup client.TxnEventCallback
 	var rollbackCleanup client.TxnEventCallback
 	var commitStart client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			statementCleanup = cb
+		},
+	).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -1500,15 +1535,23 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
 	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
 	require.True(t, exec.IsJobFenced(key))
+	require.True(t, statementCleanup.StatementScoped)
 	require.NotNil(t, rollbackCleanup.Func)
 	require.NotNil(t, commitStart.Func)
 
 	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{}, nil))
 	require.True(t, exec.IsJobFenced(key))
-	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{CostEvent: true}, nil))
+	require.NoError(t, statementCleanup.Func(context.Background(), txnOp,
+		client.TxnEvent{Txn: txn.TxnMeta{Status: txn.TxnStatus_Aborted}}, nil))
 	require.False(t, exec.IsJobFenced(key))
 	_, ok := exec.RegisterRunningConsumer(key, 7, 1, func() {}, nil)
 	require.True(t, ok)
+	exec.InstallJobFence(key, time.Minute)
+	// The failed statement's transaction-level callback remains attached until
+	// txn close. It must not remove a newer statement's fence for the same job.
+	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp,
+		client.TxnEvent{CostEvent: true}, nil))
+	require.True(t, exec.IsJobFenced(key))
 }
 
 func TestDrainIndexCdcTaskConsumerRenewsFenceUntilCommitStarts(t *testing.T) {
@@ -1538,6 +1581,7 @@ func TestDrainIndexCdcTaskConsumerRenewsFenceUntilCommitStarts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var commitStart client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {

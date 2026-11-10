@@ -59,7 +59,7 @@ func NewBufferPipe2CSVWorker(opt ...BufferOption) PipeImpl {
 
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
-	var opts []BufferOption
+	opts := make([]BufferOption, 0, 2+len(t.defaultOpts))
 	var f genBatchFunc = genETLData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
@@ -124,12 +124,6 @@ func (t batchETLHandler) NewAggregator(ctx context.Context, name string) table.A
 		logutil.Warnf("batchETLHandler handle new type: %s", name)
 	}
 	return nil
-}
-
-type WriteFactoryConfig struct {
-	Account     string
-	Ts          time.Time
-	PathBuilder table.PathBuilder
 }
 
 func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
@@ -350,12 +344,6 @@ func BufferWithType(name string) BufferOption {
 func BufferWithSizeThreshold(size int64) BufferOption {
 	return BufferOption(func(b *BufferConfig) {
 		b.sizeThreshold = int(size)
-	})
-}
-
-func BufferWithFilterItemFunc(f filterItemFunc) BufferOption {
-	return BufferOption(func(b *BufferConfig) {
-		b.filterItemFunc = f
 	})
 }
 

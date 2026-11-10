@@ -158,6 +158,20 @@ func VarlenSearchOffsetByGreat(lb []byte, closed bool, quick bool) func(*Vector)
 
 func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal | types.Uuid](
 	vals []T, cmp func(T, T) int) func(*Vector) []int64 {
+	if cmp == nil {
+		return func(vector *Vector) []int64 {
+			var sels []int64
+			for row, value := range MustFixedColNoTypeCheck[T](vector) {
+				for _, candidate := range vals {
+					if value == candidate {
+						sels = append(sels, int64(row))
+						break
+					}
+				}
+			}
+			return sels
+		}
+	}
 	return func(vector *Vector) []int64 {
 		var sels []int64
 		rows := MustFixedColNoTypeCheck[T](vector)
@@ -167,7 +181,7 @@ func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal | ty
 		// sort the rows first maybe better if there has many vals
 		for x := range rows {
 			for y := range vals {
-				if (cmp != nil && cmp(rows[x], vals[y]) == 0) || (cmp == nil && rows[x] == vals[y]) {
+				if cmp(rows[x], vals[y]) == 0 {
 					sels = append(sels, int64(x))
 					break
 				}
@@ -630,7 +644,7 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 		end := sort.Search(lvlen, func(i int) bool {
 			return types.PrefixCompare(lcol[i].GetByteSlice(larea), rval) > 0
 		})
-		if start == end {
+		if start >= end {
 			return nil
 		}
 		sels := make([]int64, end-start)

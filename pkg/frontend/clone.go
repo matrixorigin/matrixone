@@ -16,11 +16,11 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -82,6 +82,7 @@ type cloneReceipt struct {
 }
 
 type dataBranchCloneLockCtxKey struct{}
+type branchCloneComponentKey struct{}
 
 func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
 	// A named snapshot already publishes a durable historical owner before the
@@ -151,6 +152,8 @@ func lockNamedDataBranchCloneSnapshot(
 	if err != nil {
 		return err
 	}
+	// The snapshot row belongs to the account that resolved its name, which
+	// may differ from the account owning the historical source table.
 	records, err := getSnapshotRecords(ctx, bh, sql)
 	if err != nil {
 		return err
@@ -216,25 +219,23 @@ func revalidateTimestampDataBranchCloneSource(
 		return nil
 	}
 
-	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
-	tcc := ses.GetTxnCompileCtx()
-	originalCtx := tcc.GetContext()
-	tcc.SetContext(sourceCtx)
-	defer tcc.SetContext(originalCtx)
-
 	return validateTimestampDataBranchSourceAfterLock(
 		snapshot,
 		func(at *plan.Snapshot) (uint64, error) {
-			_, tableDef, err := tcc.Resolve(databaseName, tableName, at)
+			resolved, err := resolveBranchCloneSource(ctx, ses, bh, branchCloneSource{fromAccountID, databaseName, tableName, at})
 			if err != nil {
 				return 0, err
 			}
-			if tableDef == nil {
-				return 0, moerr.NewNoSuchTable(sourceCtx, databaseName, tableName)
-			}
-			return tableDef.TblId, nil
+			return resolved.def.TblId, nil
 		},
 		func() (*databranchutils.DataBranchDAG, error) {
+			if component, ok := ctx.Value(branchCloneComponentKey{}).(*databranchutils.BranchReclaimDag); ok {
+				rows := make([]databranchutils.DataBranchMetadata, 0, len(component.Info))
+				for id, node := range component.Info {
+					rows = append(rows, databranchutils.DataBranchMetadata{TableID: id, PTableID: node.ParentTableID, CloneTS: node.CloneTS, Creator: node.Creator, Level: node.Level, TableDeleted: node.Deleted})
+				}
+				return databranchutils.NewDAG(rows), nil
+			}
 			return constructBranchDAGForUpdate(ctx, ses, bh)
 		},
 	)
@@ -782,6 +783,16 @@ type cloneAccountResolution struct {
 	snapshot    *plan2.Snapshot
 }
 
+func shouldCheckPlainClonePrivileges(ses *Session) bool {
+	if skipDataBranchPrivilegeCheck(ses) {
+		return false
+	}
+	// Built-in administrators can clone the resolved historical source without
+	// planning a SELECT against its possibly deleted current database or UDFs.
+	// Account, system-database, and snapshot validation still belongs to CLONE.
+	return !ses.GetTenantInfo().IsAdminRole()
+}
+
 // create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
 func handleCloneTable(
@@ -809,6 +820,7 @@ func handleCloneTable(
 		reqCtx = execCtx.reqCtx
 
 		deferred      func(error) error
+		admission     *lifecycleRCAdmission
 		faultInjected bool
 
 		snapshot   *plan2.Snapshot
@@ -836,23 +848,22 @@ func handleCloneTable(
 	}
 
 	if bh == nil {
-		// Public clone owns this transaction. Admit it before source/target
-		// resolution because nested restore DDL can cross both lineage and
-		// view-metadata lifecycle gates.
-		if bh, deferred, err = getCloneMutationExecutor(
-			reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
-		); err != nil {
+		if op := ses.proc.GetTxnOperator(); op != nil && op.Txn().IsRCIsolation() {
+			bh, admission, deferred, err = getDataBranchComponentExecutor(reqCtx, ses, false)
+		} else {
+			bh, deferred, err = getCloneMutationExecutor(
+				reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+			)
+		}
+		if err != nil {
 			return
 		}
 
-		defer func() {
-			if deferred != nil {
-				//if r := recover(); r != nil {
-				//	err = moerr.ConvertPanicError(reqCtx, r)
-				//}
-				err = deferred(err)
-			}
-		}()
+		if admission != nil {
+			defer finishDataBranchComponent(reqCtx, deferred, &err)
+		} else {
+			defer func() { err = deferred(err) }()
+		}
 	}
 
 	if resolvedAccounts != nil {
@@ -924,7 +935,7 @@ func handleCloneTable(
 		bh.(*backExec).backSes.SetDatabaseName(oldDefault)
 	}()
 
-	if stmt.CreateTable.Table.SchemaName == moCatalog {
+	if isBannedDatabase(strings.ToLower(stmt.CreateTable.Table.SchemaName.String())) {
 		err = moerr.NewInternalErrorNoCtxf("cannot clone data into system database")
 		return
 	}
@@ -933,8 +944,40 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
+	if resolvedAccounts == nil && shouldCheckPlainClonePrivileges(ses) {
+		_, err = authenticateDataBranchCreateTable(reqCtx, ses, &tree.DataBranchCreateTable{
+			SrcTable: stmt.SrcTable, CreateTable: stmt.CreateTable, ToAccountOpt: stmt.ToAccountOpt,
+		})
+		if err != nil {
+			return
+		}
+	}
+	if resolvedAccounts == nil && stmt.ToAccountOpt != nil {
+		if err = checkCloneDestinationAtAccount(execCtx, ses, &stmt.CreateTable.Table, opAccountId, toAccountId); err != nil {
+			return
+		}
+	}
+	if admission != nil {
+		var dag databranchutils.BranchReclaimDag
+		dag, err = admission.admitBranchCloneRC(reqCtx, ses, bh,
+			[]branchCloneSource{{fromAccountId, stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(), snapshot}},
+			branchCloneDatabase{toAccountId, stmt.CreateTable.Table.SchemaName.String()}, stmt.CreateTable.Table.ObjectName.String(), false, nil)
+		if err != nil {
+			return
+		}
+		reqCtx = context.WithValue(reqCtx, branchCloneComponentKey{}, &dag)
+	}
+	namedSnapshotCtx := reqCtx
+	if admission != nil {
+		namedSnapshotCtx = context.WithValue(namedSnapshotCtx, dataBranchCloneLockCtxKey{}, true)
+		if shouldLockNamedDataBranchCloneSnapshot(namedSnapshotCtx, snapshot) {
+			if err = admission.lockSnapshotName(reqCtx, snapshot.ExtraInfo.Name, opAccountId); err != nil {
+				return
+			}
+		}
+	}
 	if err = lockNamedDataBranchCloneSnapshot(
-		defines.AttachAccountId(reqCtx, fromAccountId), bh, snapshot,
+		defines.AttachAccountId(namedSnapshotCtx, opAccountId), bh, snapshot,
 	); err != nil {
 		return
 	}
@@ -971,7 +1014,7 @@ func handleCloneTable(
 		}
 	}
 
-	ctx = defines.AttachAccountId(reqCtx, toAccountId)
+	ctx = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), toAccountId)
 
 	var sql string
 	var dstTableExistedBeforeRestore bool
@@ -1068,7 +1111,8 @@ func handleCloneDatabaseWithSource(
 	var (
 		reqCtx = execCtx.reqCtx
 
-		deferred func(error) error
+		deferred  func(error) error
+		admission *lifecycleRCAdmission
 
 		ctx1 context.Context
 
@@ -1078,6 +1122,7 @@ func handleCloneDatabaseWithSource(
 
 		snapshotTS int64
 		source     cloneDatabaseSource
+		sourceErr  error
 		accounts   cloneDatabaseAccountResolution
 	)
 
@@ -1091,29 +1136,27 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if bh == nil {
-		options := []*BackgroundExecOption{{forcePessimisticRC: true}}
-		if stmt.IfNotExists {
-			// The target lock must observe the holder's committed CREATE before
-			// deciding whether this statement is a no-op. A private pessimistic
-			// RC transaction refreshes after a lock wait; the retry below then
-			// re-checks the target with that fresh snapshot.
-			options[0].cloneSnapshotUsesBackgroundTxn = true
+		if op := ses.GetTxnHandler().GetTxn(); op != nil && op.Txn().IsRCIsolation() {
+			bh, admission, deferred, err = getDataBranchComponentExecutor(reqCtx, ses, true)
+		} else {
+			bh, deferred, err = getCloneMutationExecutor(reqCtx, ses, true,
+				&BackgroundExecOption{forcePessimisticRC: true, cloneSnapshotUsesBackgroundTxn: stmt.IfNotExists})
 		}
-		if bh, deferred, err = getCloneMutationExecutor(reqCtx, ses, true, options...); err != nil {
+		if err != nil {
 			return
 		}
 
-		defer func() {
-			if deferred != nil {
-				err = deferred(err)
-			}
-		}()
+		if admission != nil {
+			defer finishDataBranchComponent(reqCtx, deferred, &err)
+		} else {
+			defer func() { err = deferred(err) }()
+		}
 	}
 	if resolvedSource != nil {
 		accounts = cloneDatabaseAccountResolution{
 			opAccountId: resolvedSource.opAccountId,
 			toAccountId: resolvedSource.toAccountId,
-			snapshot:    resolvedSource.snapshot,
+			snapshot:    resolvedSource.requestSnapshot,
 		}
 	} else if accounts, err = resolveCloneDatabaseAccounts(reqCtx, ses, bh, stmt); err != nil {
 		return
@@ -1122,7 +1165,7 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 
-	if stmt.IfNotExists {
+	if stmt.IfNotExists && admission == nil {
 		var exists bool
 		if exists, err = checkCloneDatabaseTarget(
 			reqCtx, ses, bh, accounts.toAccountId, stmt.DstDatabase.String(),
@@ -1137,23 +1180,97 @@ func handleCloneDatabaseWithSource(
 	if resolvedSource != nil {
 		source = *resolvedSource
 	} else {
-		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt, &accounts); err != nil {
-			return
-		}
+		source, sourceErr = collectCloneDatabaseSource(reqCtx, ses, bh, stmt, &accounts)
 	}
 	// Source collection validates public clone requests. Keep the persistence
 	// boundary defensive too: resolved sources can come from data-branch flow,
 	// and no path may create a target database for an imported package UDF whose
 	// external lifecycle is unsupported by database clone.
-	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+	if sourceErr == nil {
+		sourceErr = validateCloneUserDefinedFunctions(source.userDefinedFuncs)
+	}
+	if admission != nil {
+		if sourceErr != nil && !stmt.IfNotExists {
+			err = sourceErr
+			return
+		}
+		var requests []branchCloneSource
+		if sourceErr == nil {
+			requests = cloneDatabaseAdmissionRequests(source, stmt)
+		}
+		noOp := false
+		var afterDomains func(error) (bool, error)
+		if stmt.IfNotExists {
+			afterDomains = func(discoveryErr error) (bool, error) {
+				exists, err := checkDatabaseExists(defines.AttachAccountId(reqCtx, accounts.toAccountId), bh, stmt.DstDatabase.String())
+				if err != nil {
+					return false, err
+				}
+				if exists {
+					noOp = true
+					return true, nil
+				}
+				if sourceErr != nil {
+					return true, sourceErr
+				}
+				if discoveryErr != nil {
+					return true, discoveryErr
+				}
+				return false, nil
+			}
+		}
+		var dag databranchutils.BranchReclaimDag
+		dag, err = admission.admitBranchCloneRC(reqCtx, ses, bh, requests,
+			branchCloneDatabase{accounts.toAccountId, stmt.DstDatabase.String()}, "", true, afterDomains)
+		if err != nil || noOp {
+			return
+		}
+		current, readErr := collectCloneDatabaseSource(reqCtx, ses, bh, stmt, &accounts)
+		if readErr != nil {
+			err = readErr
+			return
+		}
+		if !sameBranchCloneDatabaseSource(source, current) {
+			err = moerr.NewTxnNeedRetryWithDefChanged(reqCtx)
+			return
+		}
+		reqCtx = context.WithValue(reqCtx, branchCloneComponentKey{}, &dag)
+	} else if sourceErr != nil {
+		err = sourceErr
 		return
+	}
+	if resolvedSource == nil {
+		if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && source.opAccountId != sysAccountID {
+			err = moerr.NewInternalErrorNoCtxf("non-sys account cannot clone data from system database")
+			return
+		}
+		// Plain CLONE and DATA BRANCH authorize the same resolved source set.
+		if !skipDataBranchPrivilegeCheck(ses) {
+			if _, err = authenticateDataBranchCreateDatabase(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}); err != nil {
+				return
+			}
+		}
+		if shouldCheckPlainClonePrivileges(ses) {
+			if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
+				return
+			}
+		}
 	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
 	}
+	namedSnapshotCtx := reqCtx
+	if admission != nil {
+		namedSnapshotCtx = context.WithValue(namedSnapshotCtx, dataBranchCloneLockCtxKey{}, true)
+		if shouldLockNamedDataBranchCloneSnapshot(namedSnapshotCtx, source.snapshot) {
+			if err = admission.lockSnapshotName(reqCtx, source.snapshot.ExtraInfo.Name, source.opAccountId); err != nil {
+				return
+			}
+		}
+	}
 	if err = lockNamedDataBranchCloneSnapshot(
-		defines.AttachAccountId(reqCtx, fromAccountID), bh, source.snapshot,
+		defines.AttachAccountId(namedSnapshotCtx, source.opAccountId), bh, source.snapshot,
 	); err != nil {
 		return
 	}
@@ -1186,9 +1303,9 @@ func handleCloneDatabaseWithSource(
 		}()
 	}
 
-	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
+	ctx1 = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), source.toAccountId)
 	if err = bh.Exec(ctx1,
-		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
+		appendDatabaseDefaultsSQL(fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())), source.defaults),
 	); err != nil {
 		return
 	}
@@ -1413,7 +1530,7 @@ func handleCloneDatabaseWithSource(
 		// The function metadata above is intentionally still uncommitted: the
 		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
 		// same clone transaction and can bind newly restored functions.
-		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		if err = restoreViews(withResolveUdfInCallerTxn(ctx1), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
@@ -1464,12 +1581,16 @@ func rewriteCloneViewInfos(
 		} else if dbName == srcDBName {
 			key = genKey(dstDBName, tblName)
 		}
-		createSQL, err := rewriteCloneCreateSQL(
-			info.createSql,
-			srcDBName,
-			dstDBName,
-			lowerCaseTableNames,
-		)
+		mode, err := viewParserSQLModeForRestore(info.viewDef)
+		if err != nil {
+			return nil, nil, err
+		}
+		ctx := plan.WithRestoredViewDefinition(context.Background(), info.dbName, info.tblName, info.viewDef, info.createSql)
+		lower, err := plan.RestoredViewLowerCaseTableNames(ctx, info.createSql, lowerCaseTableNames)
+		if err != nil {
+			return nil, nil, err
+		}
+		createSQL, err := rewriteCloneCreateSQLWithMode(info.createSql, srcDBName, dstDBName, lower, mode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1477,21 +1598,56 @@ func rewriteCloneViewInfos(
 		clonedInfo := *info
 		clonedInfo.dbName = dstDBName
 		clonedInfo.createSql = createSQL
+		clonedInfo.viewDef, err = rebindCloneViewCreationDatabase(info.viewDef, srcDBName, dstDBName, lower)
+		if err != nil {
+			return nil, nil, err
+		}
 		rewrittenViewMap[key] = &clonedInfo
 	}
 
 	return rewrittenViewMap, rewrittenViews, nil
 }
 
+// Only the clone owner knows the logical database remapping. A creation database
+// outside that mapping is an external dependency, not the View's target database.
+func rebindCloneViewCreationDatabase(definition, source, target string, lowerCaseTableNames int64) (string, error) {
+	if definition == "" || source == "" || source == target {
+		return definition, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(definition), &fields); err != nil {
+		return "", err
+	}
+	value, present := fields["DefaultDatabase"]
+	if !present {
+		return definition, nil
+	}
+	var database string
+	if err := json.Unmarshal(value, &database); err != nil {
+		return "", err
+	}
+	if tree.NewCStr(database, lowerCaseTableNames).Compare() != tree.NewCStr(source, lowerCaseTableNames).Compare() {
+		return definition, nil
+	}
+	fields["DefaultDatabase"], _ = json.Marshal(target)
+	encoded, err := json.Marshal(fields)
+	return string(encoded), err
+}
+
 func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames int64) (string, error) {
+	return rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName, lowerCaseTableNames, "")
+}
+
+func rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName string, lowerCaseTableNames int64, sqlMode string) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return sql, nil
 	}
 
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames, sqlMode)
 	if err != nil {
 		return "", err
 	}
+	defer stmt.Free()
 	createView, ok := stmt.(*tree.CreateView)
 	if !ok {
 		return "", moerr.NewInternalErrorNoCtxf("clone view SQL is %T, expected *tree.CreateView", stmt)
@@ -1509,15 +1665,16 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		var localDDL string
 		switch {
 		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
-			localDDL = sysview.InformationSchemaTablesV41DDL
+			localDDL = sysview.InformationSchemaTablesLocalCurrentDDL
 		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
-			localDDL = sysview.InformationSchemaColumnsV41DDL
+			localDDL = sysview.InformationSchemaColumnsLocalCurrentDDL
 		}
 		if localDDL != "" {
 			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)
 			if parseErr != nil {
 				return "", parseErr
 			}
+			defer localStmt.Free()
 			localCreateView, localOK := localStmt.(*tree.CreateView)
 			if !localOK {
 				return "", moerr.NewInternalErrorNoCtxf(
@@ -1581,24 +1738,7 @@ func tryToIncreaseTxnPhysicalTS(
 		return curTxnPhysicalTS, nil
 	}
 
-	// a slight increase added to the physical to make sure
-	// the updated ts is greater than the old txn timestamp (physical + logic)
-	curTxnPhysicalTS += int64(time.Microsecond)
-	if err = txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
-		PhysicalTime: curTxnPhysicalTS,
-	}); err != nil {
-		return
-	}
-
-	updatedPhysical = txnOp.SnapshotTS().PhysicalTime
-	if updatedPhysical <= curTxnPhysicalTS {
-		return 0, moerr.NewInternalErrorNoCtxf("try to update the snapshot ts failed in clone database")
-	}
-
-	// return a nanosecond precision
-	updatedPhysical -= int64(time.Nanosecond)
-
-	return updatedPhysical, nil
+	return databranchutils.AdvanceLineageSnapshot(ctx, txnOp)
 }
 
 func updateBranchMetaTable(
@@ -1629,21 +1769,12 @@ func updateBranchMetaTable(
 		return nil
 	}
 
-	srcCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
-	tcc := ses.GetTxnCompileCtx()
-	origCtx := tcc.GetContext()
-	tcc.SetContext(srcCtx)
-	defer tcc.SetContext(origCtx)
-
-	// The metadata parent must be the physical generation that supplied the
-	// clone data. For snapshot clones that can differ from the table currently
-	// reachable by name after one or more copy-and-swap ALTERs.
-	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, receipt.snapshot); err != nil {
+	resolved, err := resolveBranchCloneSource(ctx, ses, bh, branchCloneSource{receipt.srcAccount, receipt.srcDb, receipt.srcTbl, receipt.snapshot})
+	if err != nil {
 		return err
 	}
-	if srcTblDef == nil {
-		return moerr.NewNoSuchTable(srcCtx, receipt.srcDb, receipt.srcTbl)
-	}
+	srcTblDef = resolved.def
+	receipt.srcAccount, receipt.srcDb, receipt.srcTbl = resolved.source.account, resolved.source.database, resolved.source.table
 
 	dstCtx := defines.AttachAccountId(ctx, receipt.toAccount)
 

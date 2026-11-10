@@ -37,7 +37,7 @@ func (child *terminalBudgetAdmissionChild) Call(*process.Process) (vm.CallResult
 }
 
 func TestDedupJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	admission := &process.ExecutionResourceError{

@@ -187,7 +187,7 @@ func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
 // weights independently of its final physical-write decision. REPLACE retains
 // the legacy delete+insert count; plain INSERT remains unchanged.
 func TestUpsertAffectRowsPlan(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	t.Run("INSERT IGNORE with ODKU keeps UPDATE action", func(t *testing.T) {
 		p, err := runOneStmt(mock, t,
@@ -209,6 +209,10 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			if preInsert := node.GetPreInsertCtx(); preInsert != nil {
 				require.False(t, preInsert.TrackAutoIncrementGenerated,
 					"ODKU must not carry INSERT IGNORE-only auto-increment provenance")
+				require.True(t, preInsert.TrackOdkuResult, "ODKU owns its own provenance contract")
+				require.GreaterOrEqual(t, preInsert.AutoIncrementGeneratedColumn, int32(0))
+				require.Greater(t, preInsert.OdkuOrdinalColumn, preInsert.AutoIncrementGeneratedColumn)
+				require.GreaterOrEqual(t, preInsert.OdkuAutoIncrementColumn, int32(0))
 			}
 		}
 	})
@@ -269,7 +273,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU unrelated update skips CHECK action stream", func(t *testing.T) {
-		m := NewMockOptimizer(true)
+		m := NewMockOptimizer(true, newPlanTestProcess(t))
 		addPositiveCheck(t, m, "emp", "deptno")
 		p, err := runOneStmt(m, t,
 			"insert into constraint_test.emp(empno, ename, job, deptno) values (1, 'A', 'B', 1) on duplicate key update sal = sal")
@@ -282,7 +286,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	t.Run("ODKU action checks remain independent when FK checks are disabled", func(t *testing.T) {
 		newMock := func(t *testing.T) *MockOptimizer {
 			t.Helper()
-			m := NewMockOptimizer(true)
+			m := NewMockOptimizer(true, newPlanTestProcess(t))
 			m.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				switch name {
 				case "foreign_key_checks":
@@ -422,16 +426,16 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU primary-key-only no-op filters conflicting rows", func(t *testing.T) {
-		// Flink emits id = VALUES(id) even when id is the only assignment. The
-		// planner removes that semantic no-op from the physical update set, so the
-		// resulting guard must keep only rows without an existing-row match. This
-		// also prevents implicit ON UPDATE expressions from firing on conflicts.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.t_on_update(id, val) values (1, 10) on duplicate key update id = values(id)")
-		require.NoError(t, err)
-		require.Empty(t, odkuDedupCtx(t, p).UpdateCheckColIdxList,
-			"removed PK self-assignment is always a no-op on a conflict")
-		require.NotNil(t, mainUpdateCtx(t, p).PhysicalChangedRowsCol)
+		for _, assignment := range []string{"id=values(id)", "id=id", "id=1"} {
+			t.Run(assignment, func(t *testing.T) {
+				p, err := runOneStmt(mock, t,
+					"insert into constraint_test.t_on_update(id,val) values (1,10) on duplicate key update "+assignment)
+				require.NoError(t, err)
+				require.Empty(t, odkuDedupCtx(t, p).UpdateCheckColIdxList,
+					"proven PK identities need no redundant change comparison")
+				require.NotNil(t, mainUpdateCtx(t, p).PhysicalChangedRowsCol)
+			})
+		}
 	})
 
 	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {

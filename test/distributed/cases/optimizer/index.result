@@ -245,8 +245,14 @@ select * from t1 where c2=1;
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
 1  ¦  1  ¦  1
 explain select * from t1 where c3<2000;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t1  𝄀
+        Filter Cond: (t1.c3 < 2000)  𝄀
+        Block Filter Cond: (t1.c3 < 2000)
+explain select * from t1 force index(id1) where c3<2000;
 -- @regex("Index", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -254,6 +260,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
               Filter Cond: (t1.c3 < 2000)  𝄀
+              Block Filter Cond: (t1.c3 < 2000)  𝄀
               Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
         ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
               Filter Cond: (__mo_index_idx_col < 2000)  𝄀
@@ -261,6 +268,40 @@ Project  𝄀
 select count(*) from t1 where c3<2000;
 ➤ count(*)[-5,64,0]  𝄀
 1999
+drop table if exists t1;
+create table t1(c1 int, c2 int, c3 int, key(c2), unique key id1(c3)) cluster by c1;
+insert into t1 select *,*,* from generate_series(1,50)g;
+select mo_ctl('dn','flush','d1.t1');
+➤ mo_ctl(dn, flush, d1.t1)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select * from t1 where c3<5;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
+              Filter Cond: (t1.c3 < 5)  𝄀
+              Block Filter Cond: (t1.c3 < 5)  𝄀
+              Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
+        ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
+              Filter Cond: (__mo_index_idx_col < 5)  𝄀
+              Block Filter Cond: (__mo_index_idx_col < 5)
+select * from t1 where c3<5;
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  𝄀
+4  ¦  4  ¦  4
 drop table if exists t1;
 drop database if exists d1;
 create database d1;
@@ -311,10 +352,10 @@ CREATE TABLE t14 (`pseudo` char(35) NOT NULL default '',`pseudo1` char(35) NOT N
 `same` tinyint(1) unsigned NOT NULL default '1',PRIMARY KEY  (`pseudo1`),KEY `pseudo` (`pseudo`));
 INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')
+  ->  Table Scan on d1.t14  𝄀
+        Filter Cond: (t14.pseudo = 'joce')
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀
@@ -326,7 +367,7 @@ delete from t1 where b = 1;
 drop table t1;
 create table t1(c1 int, c2 int, c3 int, key(c1));
 explain select * from t1 where c1=1;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -334,9 +375,11 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
               Filter Cond: (t1.c1 = 1)  𝄀
+              Block Filter Cond: (t1.c1 = 1)  𝄀
               Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
         ->  Index Table Scan on t1.c1 [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 drop table if exists t_repro;
 create table t_repro (id varchar(32) primary key, uid varchar(64) not null, typ varchar(20) not null, flag smallint not null default 1, index idx_uid_typ_flag (uid, typ, flag));
 insert into t_repro values ('id1', 'alice', 'semantic', 1);

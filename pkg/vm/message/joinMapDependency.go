@@ -41,9 +41,10 @@ const (
 // fresh moerr clone for substantive failures, while cancellation consumers
 // share only immutable context sentinels and a copied diagnostic string.
 type JoinMapBuildError struct {
-	err        *moerr.Error
-	contextErr error
-	message    string
+	err             *moerr.Error
+	contextErr      error
+	message         string
+	pipelineFailure bool
 }
 
 var _ error = new(JoinMapBuildError)
@@ -57,10 +58,12 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
+	marked := hasPipelineFailure(err) || hasQueryInterruption(err)
 	if contextErr, ok := snapshotContextCancellation(err); ok {
 		buildErr := &JoinMapBuildError{
-			contextErr: contextErr,
-			message:    err.Error(),
+			contextErr:      contextErr,
+			pipelineFailure: marked,
+			message:         err.Error(),
 		}
 		// Preserve stable moerr detail for compatibility even though cancellation
 		// identity, rather than the moerr itself, owns error unwrapping.
@@ -73,7 +76,55 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if me := firstSubstantiveMoErr(err); me != nil {
 		return &JoinMapBuildError{err: cloneMoErr(me)}
 	}
+	if _, pure := contextCancellationTreeKind(err); pure {
+		var me *moerr.Error
+		if errors.As(err, &me) {
+			return &JoinMapBuildError{err: cloneMoErr(me), pipelineFailure: marked}
+		}
+	}
 	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
+}
+
+// Structural provenance avoids an import cycle with process. Snapshot the fact,
+// never a mutable process/context, together with this immutable dependency error.
+func hasQueryInterruption(err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if hasQueryInterruption(child) {
+				return true
+			}
+		}
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasQueryInterruption(wrapped.Unwrap())
+	}
+	return false
+}
+
+func hasPipelineFailure(err error) bool {
+	if marker, ok := err.(interface{ IsPipelineFailure() bool }); ok && marker.IsPipelineFailure() {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if hasPipelineFailure(child) {
+				return true
+			}
+		}
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasPipelineFailure(wrapped.Unwrap())
+	}
+	return false
+}
+
+func (e *JoinMapBuildError) IsPipelineFailure() bool { return e != nil && e.pipelineFailure }
+func (e *JoinMapBuildError) PipelineFailureCause() error {
+	if e != nil && e.contextErr != nil {
+		return e.Unwrap()
+	}
+	return e.AsMoErr()
 }
 
 type contextCancellationKind uint8
@@ -97,7 +148,10 @@ func snapshotContextCancellation(err error) (error, bool) {
 		}
 		return context.DeadlineExceeded, true
 	}
-	return context.Canceled, true
+	if kind&contextCanceled != 0 {
+		return context.Canceled, true
+	}
+	return nil, false
 }
 
 func contextCancellationTreeKind(err error) (contextCancellationKind, bool) {
@@ -124,9 +178,16 @@ func contextCancellationTreeKind(err error) (contextCancellationKind, bool) {
 			return contextCancellationTreeKind(child)
 		}
 	}
+	// Snapshot consumer retirement as cancellation fallout. The scope still
+	// owns success certification; declared failure provenance is kept separately.
+	if stopped, ok := err.(interface{ IsPipelineStopped() bool }); ok && stopped.IsPipelineStopped() {
+		return contextCanceled, true
+	}
 	var me *moerr.Error
 	if errors.As(err, &me) {
-		return contextCancellationMoErrKind(me)
+		if kind, ok := contextCancellationMoErrKind(me); ok {
+			return kind, true
+		}
 	}
 
 	var kind contextCancellationKind
@@ -145,7 +206,7 @@ func contextCancellationMoErrKind(err *moerr.Error) (contextCancellationKind, bo
 	}
 	switch err.ErrorCode() {
 	case moerr.ErrQueryInterrupted:
-		return contextCanceled, true
+		return 0, true
 	case moerr.ErrQueryTimeout:
 		return contextDeadlineExceeded, true
 	default:
@@ -295,7 +356,7 @@ func (e *JoinMapBuildError) AsMoErr() *moerr.Error {
 // identity must survive errors.Is, or a fresh moerr clone for substantive
 // failures. Execution operators should propagate this value to their scope.
 func (e *JoinMapBuildError) AsError() error {
-	if e != nil && e.contextErr != nil {
+	if e != nil && (e.contextErr != nil || e.pipelineFailure) {
 		return e
 	}
 	return e.AsMoErr()

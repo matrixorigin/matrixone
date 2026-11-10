@@ -45,7 +45,8 @@ func encodeSQLIcebergTestManifest(entries []api.ManifestEntry) ([]byte, error) {
 		}
 	}
 	sort.Strings(names)
-	schemaFields := []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}
+	schemaFields := make([]api.SchemaField, 0, 1+len(names))
+	schemaFields = append(schemaFields, api.SchemaField{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}})
 	partitionFields := make([]api.PartitionField, 0, len(names))
 	for idx, name := range names {
 		sourceID := 100 + idx

@@ -4,6 +4,18 @@ DROP DATABASE IF EXISTS view_metadata_on_demand;
 CREATE DATABASE view_metadata_on_demand;
 USE view_metadata_on_demand;
 
+-- DESCRIBE types used by SQLAlchemy's MySQL view-reflection path (#30045).
+-- Keep the exact INT/VARCHAR/DECIMAL reproduction independent of BOOL aliases.
+CREATE TABLE reflection_t (i INT, s VARCHAR(8), a DECIMAL(24,6));
+CREATE VIEW reflection_v AS SELECT * FROM reflection_t;
+COMMIT;
+DESCRIBE reflection_t;
+DESCRIBE reflection_v;
+SHOW COLUMNS FROM reflection_v;
+SELECT column_name, column_type, is_nullable FROM information_schema.columns WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'reflection_v' ORDER BY ordinal_position;
+DROP VIEW reflection_v;
+DROP TABLE reflection_t;
+
 CREATE TABLE src (
   id INT,
   code VARCHAR(5),
@@ -26,9 +38,19 @@ ORDER BY ordinal_position;
 CREATE TABLE copied AS SELECT id, code, qty, price FROM v;
 DESC copied;
 
+-- An empty query still needs the current View schema, not its stored columns.
+CREATE VIEW nested_v AS SELECT code, qty, price FROM v;
+CREATE TABLE empty_copy AS SELECT * FROM nested_v LIMIT 0;
+SELECT column_name, column_type, is_nullable FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'empty_copy'
+ORDER BY ordinal_position;
+SHOW COLUMN_NUMBER FROM nested_v;
+
 DROP TABLE src;
 -- @pattern
 DESC v;
+-- @pattern
+SHOW COLUMN_NUMBER FROM nested_v;
 CREATE TABLE src (
   id BIGINT,
   code VARCHAR(90),
@@ -60,6 +82,39 @@ CREATE TABLE view_metadata_on_demand.metadata_target (code BIGINT);
 -- @session}
 EXECUTE show_target;
 DEALLOCATE PREPARE show_target;
+
+-- Restore replaces the source, not the dependent View. A new statement in
+-- another session must describe the restored schema without a recovery worker.
+DROP SNAPSHOT IF EXISTS view_metadata_restore;
+CREATE SNAPSHOT view_metadata_restore FOR ACCOUNT;
+ALTER TABLE src MODIFY COLUMN code VARCHAR(180);
+SELECT column_name, column_type
+FROM information_schema.columns {snapshot='view_metadata_restore'}
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v' AND column_name = 'code';
+-- @session:id=1{
+PREPARE restored_view FROM 'SHOW COLUMNS FROM view_metadata_on_demand.v';
+EXECUTE restored_view;
+-- @session}
+RESTORE TABLE view_metadata_on_demand.src {snapshot='view_metadata_restore'};
+-- @session:id=1{
+EXECUTE restored_view;
+SELECT column_name, column_type FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
+ORDER BY ordinal_position;
+DEALLOCATE PREPARE restored_view;
+-- @session}
+CREATE TABLE restored_copy AS SELECT code FROM v;
+DESC restored_copy;
+DROP SNAPSHOT view_metadata_restore;
+
+-- SHOW TABLE_VALUES must choose its projection using current column types.
+CREATE TABLE json_src (j JSON);
+CREATE VIEW values_v AS SELECT j FROM json_src;
+ALTER TABLE json_src MODIFY COLUMN j VARCHAR(60);
+INSERT INTO json_src VALUES ('a'), ('z');
+SHOW TABLE_VALUES FROM values_v;
+USE mo_catalog;
+SHOW TABLE_VALUES FROM view_metadata_on_demand.values_v;
 
 DROP DATABASE view_metadata_on_demand;
 -- @suite

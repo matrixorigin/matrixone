@@ -44,6 +44,26 @@ type Insert struct {
 	Returning         SelectExprs
 }
 
+// IsValuesSource retains the original statement source shape. The planner may
+// lower VALUES to a query, but its OK-packet fallback differs from INSERT SELECT.
+func (node *Insert) IsValuesSource() bool {
+	if node == nil || node.Rows == nil {
+		return false
+	}
+	source := node.Rows.Select
+	for {
+		paren, ok := source.(*ParenSelect)
+		if !ok {
+			_, values := source.(*ValuesClause)
+			return values
+		}
+		if paren.Select == nil {
+			return false
+		}
+		source = paren.Select.Select
+	}
+}
+
 func (node *Insert) Format(ctx *FmtCtx) {
 	if node.With != nil {
 		node.With.Format(ctx)

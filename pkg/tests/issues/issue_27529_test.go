@@ -21,9 +21,10 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
@@ -121,6 +122,16 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		require.True(t, castTrue)
 		require.False(t, castFalse)
 
+		// Numeric comparisons preserve the JSON string category in direct SQL
+		// and prepared execution; explicit CAST remains the conversion boundary.
+		var numericStringEqual, reversedNumericStringEqual bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_array('7'), '$[0]') = cast(7 as signed),
+			cast(7 as signed) = json_extract(json_array('7'), '$[0]')`).Scan(
+			&numericStringEqual, &reversedNumericStringEqual))
+		require.False(t, numericStringEqual)
+		require.False(t, reversedNumericStringEqual)
+
 		assertIDs := func(query string, expected ...int) {
 			t.Helper()
 			rows, queryErr := db.QueryContext(ctx, query)
@@ -138,6 +149,45 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = true order by id`, 1)
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = false order by id`, 2)
+
+		// Aggregation must preserve the same JSON boolean filtering as row
+		// projection, including when a prepared statement is rebound (#29034).
+		for _, projection := range []string{
+			"count(*)", "sum(id)", "group_concat(id)", "group_concat(id order by id)",
+		} {
+			t.Run("aggregate "+projection, func(t *testing.T) {
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				query := "select " + projection + " from " + dbName +
+					`.docs where json_extract(meta, '$.active') = ?`
+				stmt, err := conn.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				_, err = conn.ExecContext(ctx, `prepare json_bool_aggregate from "`+query+`"`)
+				require.NoError(t, err)
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare json_bool_aggregate")
+					require.NoError(t, cleanupErr)
+				}()
+				for _, value := range []bool{true, false, true} {
+					expected := "1"
+					if !value && projection != "count(*)" {
+						expected = "2"
+					}
+					var binaryResult, textResult string
+					require.NoError(t, stmt.QueryRowContext(ctx, value).Scan(&binaryResult))
+					require.Equal(t, expected, binaryResult, "binary protocol, parameter %v", value)
+					_, err = conn.ExecContext(ctx, fmt.Sprintf("set @json_bool_aggregate = %t", value))
+					require.NoError(t, err)
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"execute json_bool_aggregate using @json_bool_aggregate").Scan(&textResult))
+					require.Equal(t, expected, textResult, "SQL EXECUTE, parameter %v", value)
+				}
+			})
+		}
 
 		queryPreparedBool := func(query string, arg any) (bool, bool) {
 			t.Helper()
@@ -166,7 +216,9 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{name: "IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') in (?)`, arg: int64(9007199254740993), expected: false},
 			{name: "NOT IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') not in (?)`, arg: int64(9007199254740993), expected: true},
 			{name: "equality preserves max int64", query: `select json_extract(json_array(9223372036854775807), '$[0]') = ?`, arg: int64(9223372036854775807), expected: true},
-			{name: "integer parameter keeps numeric JSON string coercion", query: `select json_extract(json_array('7'), '$[0]') = ?`, arg: int64(7), expected: true},
+			{name: "integer parameter preserves JSON string category", query: `select json_extract(json_array('7'), '$[0]') = ?`, arg: int64(7), expected: false},
+			{name: "reversed integer parameter preserves JSON string category", query: `select ? = json_extract(json_array('7'), '$[0]')`, arg: int64(7), expected: false},
+			{name: "explicit cast converts numeric JSON string", query: `select cast(json_extract(json_array('7'), '$[0]') as signed) = ?`, arg: int64(7), expected: true},
 			{name: "float parameter preserves typed literal parity", query: `select json_extract(json_array(1.25), '$[0]') = ?`, arg: float64(1.25), expected: true},
 			{name: "null-safe equality JSON right boolean", query: `select ? <=> json_extract(json_object('v', true), '$.v')`, arg: true, expected: true},
 			{name: "null-safe equality boolean coerces to string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: true},
@@ -206,10 +258,13 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			`select json_extract('18446744073709551615', '$') = ?`)
 		require.NoError(t, err)
 		defer stmt.Close()
-		require.Error(t, db.QueryRowContext(ctx,
-			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(new(bool)))
-		require.Error(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(new(bool)),
-			"prepared BIGINT must retain the direct JSON-to-BIGINT overflow error")
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(&direct))
+		require.False(t, direct)
+		require.NoError(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(&prepared))
+		require.False(t, prepared, "prepared BIGINT must compare the wider JSON value without narrowing")
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('18446744073709551615', '$') as signed)`).Scan(new(int64)), "JSON -> BIGINT")
 
 		for _, query := range []string{
 			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
@@ -265,42 +320,47 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_signed")
 		execSQLRequire(t, ctx, db,
 			"set @issue_27529_signed = cast(9223372036854775807 as signed)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_signed using @issue_27529_signed")
-		require.Error(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_signed using @issue_27529_signed").Scan(&prepared))
+		require.False(t, prepared)
 
 		execSQLRequire(t, ctx, db,
 			`prepare issue_27529_tinyint from "select json_extract('128', '$') = ?"`)
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_tinyint")
-		directTinyintErr := db.QueryRowContext(ctx,
-			`select json_extract('128', '$') = cast(1 as tinyint)`).Scan(new(bool))
-		require.Error(t, directTinyintErr)
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('128', '$') = cast(1 as tinyint)`).Scan(&direct))
+		require.False(t, direct)
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
-		require.EqualError(t, err, directTinyintErr.Error(),
-			"SQL EXECUTE must preserve the direct TINYINT overflow behavior")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_tinyint using @issue_27529_narrow").Scan(&prepared))
+		require.False(t, prepared)
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('128', '$') as tinyint)`).Scan(new(int64)), "JSON -> TINYINT")
 
-		// Rebinding a reused EXECUTE statement must replace, not retain, the
-		// previous assignment type in both directions.
+		// Rebinding a reused EXECUTE across integer widths must not narrow
+		// the JSON row in either direction.
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as signed)")
 		var narrowEqual bool
 		require.NoError(t, db.QueryRowContext(
 			ctx, "execute issue_27529_tinyint using @issue_27529_narrow").Scan(&narrowEqual))
 		require.False(t, narrowEqual)
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
-		require.EqualError(t, err, directTinyintErr.Error(),
-			"a later TINYINT execution must not reuse BIGINT metadata")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_tinyint using @issue_27529_narrow").Scan(&narrowEqual))
+		require.False(t, narrowEqual)
 
 		execSQLRequire(t, ctx, db,
 			`prepare issue_27529_utinyint from "select json_extract('256', '$') = ?"`)
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_utinyint")
-		directUnsignedTinyintErr := db.QueryRowContext(ctx,
-			`select json_extract('256', '$') = cast(1 as tinyint unsigned)`).Scan(new(bool))
-		require.Error(t, directUnsignedTinyintErr)
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('256', '$') = cast(1 as tinyint unsigned)`).Scan(&direct))
+		require.False(t, direct)
 		execSQLRequire(t, ctx, db, "set @issue_27529_unsigned = cast(1 as tinyint unsigned)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_utinyint using @issue_27529_unsigned")
-		require.EqualError(t, err, directUnsignedTinyintErr.Error(),
-			"SQL EXECUTE must preserve the direct TINYINT UNSIGNED overflow behavior")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_utinyint using @issue_27529_unsigned").Scan(&prepared))
+		require.False(t, prepared)
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('256', '$') as tinyint unsigned)`).Scan(new(uint64)), "JSON -> TINYINT UNSIGNED")
 
 		var exactDecimalCast int64
 		require.NoError(t, db.QueryRowContext(ctx, `select cast(
@@ -319,5 +379,235 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			ctx, "execute issue_27529_decimal using @issue_27529_decimal").Scan(&decimalEqual))
 		require.False(t, decimalEqual,
 			"prepared DECIMAL comparison must distinguish adjacent exact values above 2^53")
+
+		t.Run("mixed numeric correlated partitions", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table "+dbName+".outer_float(f float)")
+			execSQLRequire(t, ctx, db, "create table "+dbName+".inner_json(id int primary key, j json)")
+			execSQLRequire(t, ctx, db, "insert into "+dbName+".outer_float values (16777216)")
+			execSQLRequire(t, ctx, db, "insert into "+dbName+".inner_json values (1, '16777216'), (2, '16777217')")
+			outer, inner := dbName+".outer_float o", dbName+".inner_json i"
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "i.j <=> o.f", "o.f <=> i.j"} {
+				t.Run(pred, func(t *testing.T) {
+					// The FLOAT32 peer matches both distinct JSON numbers. Ranking
+					// their raw JSON partitions separately would silently yield NULL.
+					query := "select (select i.id from " + inner + " where " + pred +
+						" order by i.id limit 1 offset 1) from " + outer
+					var got sql.NullInt64
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got))
+					require.Equal(t, sql.NullInt64{Int64: 2, Valid: true}, got)
+				})
+			}
+			for _, tc := range []struct {
+				name, query string
+				want        sql.NullInt64
+			}{
+				{"noncorrelated", "select i.id from " + inner + " join " + outer + " on i.j = o.f order by i.id limit 1 offset 1", sql.NullInt64{Int64: 2, Valid: true}},
+				{"explicit cast", "select (select i.id from " + inner + " where cast(i.j as float) = o.f order by i.id limit 1 offset 1) from " + outer, sql.NullInt64{Int64: 2, Valid: true}},
+				{"zero limit", "select (select i.id from " + inner + " where i.j = o.f limit 0) from " + outer, sql.NullInt64{}},
+				{"exists", "select exists(select 1 from " + inner + " where i.j = o.f limit 1) from " + outer, sql.NullInt64{Int64: 1, Valid: true}},
+				{"not exists", "select not exists(select 1 from " + inner + " where i.j = o.f limit 1) from " + outer, sql.NullInt64{Valid: true}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var got sql.NullInt64
+					require.NoError(t, db.QueryRowContext(ctx, tc.query).Scan(&got))
+					require.Equal(t, tc.want, got)
+				})
+			}
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "cast(i.j as float) = o.f"} {
+				t.Run("aggregate "+pred, func(t *testing.T) {
+					query := "select (select count(*) from " + inner + " where " + pred +
+						"), (select sum(i.id) from " + inner + " where " + pred + ") from " + outer
+					var count, sum int64
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count, &sum))
+					require.Equal(t, int64(2), count)
+					require.Equal(t, int64(3), sum)
+				})
+			}
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "i.j <=> o.f", "o.f <=> i.j", "i.id > 0 and i.j = o.f"} {
+				t.Run("window "+pred, func(t *testing.T) {
+					query := "select exists(select row_number() over(order by i.id) as rn from " + inner +
+						" where " + pred + " having rn=2) from " + outer
+					var got bool
+					err := db.QueryRowContext(ctx, query).Scan(&got)
+					if err == nil {
+						t.Logf("unrejected correlated window returned %t", got)
+					}
+					var sqlErr *mysqlDriver.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.Equal(t, uint16(moerr.ErrNYI), sqlErr.Number)
+					require.Contains(t, sqlErr.Message, "correlated window with mixed JSON/numeric predicates")
+				})
+			}
+			for _, query := range []string{
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " where cast(i.j as float)=o.f having rn=2) from " + outer,
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " join " + outer + " on i.j=o.f having rn=2)",
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " where cast('16777216' as json)=o.f having rn=2) from " + outer,
+			} {
+				t.Run("safe window "+query, func(t *testing.T) {
+					var got bool
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got))
+					require.True(t, got)
+				})
+			}
+			t.Run("single value group by proof", func(t *testing.T) {
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				var oldMode string
+				require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&oldMode))
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					_, restoreErr := conn.ExecContext(cleanupCtx, "set session sql_mode = ?", oldMode)
+					require.NoError(t, restoreErr)
+				}()
+				_, err = conn.ExecContext(ctx, "set session sql_mode='ONLY_FULL_GROUP_BY'")
+				require.NoError(t, err)
+				for _, pred := range []string{"j=cast(16777216 as float)", "cast(16777216 as float)=j", "cast(j as float)=cast(16777216 as float)"} {
+					t.Run(pred, func(t *testing.T) {
+						var value string
+						var count int64
+						err := conn.QueryRowContext(ctx, "select j,count(*) from "+dbName+".inner_json where "+pred).Scan(&value, &count)
+						if err == nil {
+							t.Logf("ambiguous projection returned (%s, %d)", value, count)
+						}
+						var sqlErr *mysqlDriver.MySQLError
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+					})
+				}
+				for _, pred := range []string{"j=?", "?=j"} {
+					t.Run("prepared "+pred, func(t *testing.T) {
+						query := "select j,count(*) from " + dbName + ".inner_json where " + pred
+						_, prepareErr := conn.ExecContext(ctx, `prepare json_group_value from "`+query+`"`)
+						var sqlErr *mysqlDriver.MySQLError
+						if prepareErr != nil {
+							require.ErrorAs(t, prepareErr, &sqlErr)
+							require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+							return
+						}
+						defer func() {
+							cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer cleanupCancel()
+							_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare json_group_value")
+							require.NoError(t, cleanupErr)
+						}()
+						_, err := conn.ExecContext(ctx, "set @json_group_peer=cast(16777216 as float)")
+						require.NoError(t, err)
+						var value string
+						var count int64
+						err = conn.QueryRowContext(ctx, "execute json_group_value using @json_group_peer").Scan(&value, &count)
+						if err == nil {
+							t.Logf("prepared ambiguous projection returned (%s, %d)", value, count)
+						}
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+					})
+				}
+				var value float64
+				var count int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast(j as float),count(*) from "+dbName+
+					".inner_json where j=cast(16777216 as float) group by cast(j as float)").Scan(&value, &count))
+				require.Equal(t, float64(16777216), value)
+				require.Equal(t, int64(2), count)
+				require.NoError(t, conn.QueryRowContext(ctx, "select id,count(*) from "+dbName+".inner_json where id=1").Scan(&value, &count))
+				require.Equal(t, float64(1), value)
+				require.Equal(t, int64(1), count)
+				var jsonValue string
+				require.NoError(t, conn.QueryRowContext(ctx, "select j,count(*) from "+dbName+
+					".inner_json where j=cast('16777216' as json)").Scan(&jsonValue, &count))
+				require.Equal(t, "16777216", jsonValue)
+				require.Equal(t, int64(1), count)
+				stmt, err := conn.PrepareContext(ctx, "select j,count(*) from "+dbName+".inner_json where j=cast(? as json)")
+				require.NoError(t, err)
+				defer stmt.Close()
+				require.NoError(t, stmt.QueryRowContext(ctx, "16777216").Scan(&jsonValue, &count))
+				require.Equal(t, "16777216", jsonValue)
+				require.Equal(t, int64(1), count)
+			})
+		})
+
+		t.Run("mixed_numeric_lock_keys", func(t *testing.T) {
+			table := dbName + ".lock_keys"
+			execSQLRequire(t, ctx, db, "create table "+table+" (id bigint primary key, v int)")
+			execSQLRequire(t, ctx, db, "insert into "+table+" values (9,0),(67849,0)")
+			type scenario struct {
+				name, query string
+				args        []any
+				read        bool
+				affected    int64
+				blockedKey  int64
+			}
+			cases := make([]scenario, 0, 11)
+			for _, operation := range []struct {
+				name, statement string
+				read            bool
+			}{
+				{"update", "update %s set v=1 where %s", false},
+				{"delete", "delete from %s where %s", false},
+				{"select_for_update", "select id from %s where %s for update", true},
+			} {
+				for _, predicate := range []string{"cast('1' as json)=id", "id=cast('1' as json)"} {
+					cases = append(cases, scenario{
+						name: operation.name + "/" + predicate, query: fmt.Sprintf(operation.statement, table, predicate), read: operation.read,
+					})
+				}
+			}
+			cases = append(cases,
+				scenario{name: "prepared_json_left", query: "update " + table + " set v=1 where cast(? as json)=id", args: []any{"1"}},
+				scenario{name: "prepared_json_right", query: "update " + table + " set v=1 where id=cast(? as json)", args: []any{"1"}},
+				scenario{name: "numeric_absent_key", query: "update " + table + " set v=1 where id=1", blockedKey: 1},
+				scenario{name: "explicit_numeric_cast", query: "update " + table + " set v=1 where id=cast(cast('1' as json) as signed)", blockedKey: 1},
+				scenario{name: "matching_json_locks_actual_row", query: "update " + table + " set v=1 where id=cast('9' as json)", affected: 1, blockedKey: 9},
+			)
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					owner, err := db.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer owner.Rollback()
+					if tc.read {
+						var id int64
+						require.ErrorIs(t, owner.QueryRowContext(ctx, tc.query).Scan(&id), sql.ErrNoRows)
+					} else {
+						result, err := owner.ExecContext(ctx, tc.query, tc.args...)
+						require.NoError(t, err)
+						changed, err := result.RowsAffected()
+						require.NoError(t, err)
+						require.Equal(t, tc.affected, changed)
+					}
+					contender, err := db.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer contender.Rollback()
+					var id int64
+					require.NoError(t, contender.QueryRowContext(ctx, "select id from "+table+
+						" where id=67849 for update nowait").Scan(&id), "an unrelated row must remain lockable")
+					require.Equal(t, int64(67849), id)
+					if tc.blockedKey != 0 {
+						err = contender.QueryRowContext(ctx, fmt.Sprintf("select id from %s where id=%d for update nowait", table, tc.blockedKey)).Scan(&id)
+						var sqlErr *mysqlDriver.MySQLError
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, uint16(3572), sqlErr.Number, "real rows and valid absent numeric keys must stay locked")
+					}
+					require.NoError(t, contender.Rollback())
+					require.NoError(t, owner.Rollback())
+					if tc.blockedKey != 0 {
+						probe, err := db.BeginTx(ctx, nil)
+						require.NoError(t, err)
+						defer probe.Rollback()
+						err = probe.QueryRowContext(ctx, fmt.Sprintf("select id from %s where id=%d for update nowait", table, tc.blockedKey)).Scan(&id)
+						if tc.blockedKey == 1 {
+							require.ErrorIs(t, err, sql.ErrNoRows)
+						} else {
+							require.NoError(t, err, "rollback must release the actual row lock")
+						}
+						require.NoError(t, probe.Rollback())
+					}
+				})
+			}
+			var count, total int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(v) from "+table).Scan(&count, &total))
+			require.Equal(t, 2, count)
+			require.Zero(t, total, "every scenario must roll back its writes")
+		})
 	})
 }

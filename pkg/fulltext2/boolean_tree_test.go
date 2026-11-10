@@ -54,13 +54,13 @@ func TestBooleanTreeStringWithPosition(t *testing.T) {
 		pattern string
 		expect  string
 	}{
-		{`"Ma'trix     Origin"`, "(phrase (text 0 0 ma'trix) (text 1 12 origin))"},
+		{`"Ma'trix     Origin"`, "(phrase (text 0 0 ma) (text 1 3 trix) (text 2 12 origin))"},
 		{`"Matrix Origin"`, "(phrase (text 0 0 matrix) (text 1 7 origin))"},
 		{`"Matrix"`, "(phrase (text 0 0 matrix))"},
 		{`"    Matrix     "`, "(phrase (text 0 0 matrix))"},
 		{`"Matrix     Origin"`, "(phrase (text 0 0 matrix) (text 1 11 origin))"},
 		{`"  你好嗎? Hello World  在一起  Happy  再见  "`,
-			"(phrase (text 0 0 你好嗎?) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (text 5 42 再见))"},
+			"(phrase (text 0 0 你好嗎) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (* 5 42 再见*))"},
 	}
 	for _, c := range cases {
 		got, err := BooleanTreeStringWithPosition(c.pattern)

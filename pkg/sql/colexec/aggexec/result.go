@@ -380,7 +380,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	r.nowIdx1 = 0
 
 	r.resultList[0] = vector.NewOffHeapVecWithType(r.resultType)
-	if err = r.resultList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+	if err = unmarshalAggregateVector(r.resultList[0], reader, r.mp); err != nil {
 		return err
 	}
 
@@ -396,7 +396,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 		r.emptyList = make([]*vector.Vector, 1)
 		r.bsFromEmptyList = make([][]bool, 1)
 		r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		if err = r.emptyList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+		if err = unmarshalAggregateVector(r.emptyList[0], reader, r.mp); err != nil {
 			return err
 		}
 		r.bsFromEmptyList[0] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[0])
@@ -550,6 +550,9 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 //
 // do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
+	if more == 0 {
+		return nil
+	}
 
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
@@ -562,11 +565,14 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 		r.setLengthPartK(r.nowIdx1, l1+more)
 		return nil
 	}
-	if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
-		return err
+	// PreExtend(0) reserves a row, so leave an already full chunk alone.
+	if maxToExtendWithinTheUsingPart > 0 {
+		if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
+			return err
+		}
+		r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
+		more -= maxToExtendWithinTheUsingPart
 	}
-	r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
-	more -= maxToExtendWithinTheUsingPart
 
 	// try to full the allocated part first.
 	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.chunkSize
@@ -587,6 +593,8 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 				return err
 			}
 			r.setLengthPartK(r.nowIdx1, rowMore)
+		} else {
+			r.nowIdx1 += fullPart - 1
 		}
 		return nil
 	}

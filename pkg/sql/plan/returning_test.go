@@ -60,7 +60,7 @@ func TestDMLReturningPlansUseDedicatedStep(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.True(t, query.HasReturning)
@@ -105,14 +105,14 @@ func TestDMLReturningRejectsPythonUdf(t *testing.T) {
 	require.NoError(t, err)
 	defer stmts[0].Free()
 
-	ctx := &returningPythonUdfCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
-	_, err = BuildPlan(ctx, stmts[0], false)
+	ctx := &returningPythonUdfCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	_, err = BuildPlan(ctx, stmts[0], false, nil)
 	require.ErrorContains(t, err, "DML RETURNING does not support external UDF in RETURNING expression")
 }
 
 func TestDeleteReturningSinkScanPositionsSurvivePruning(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"delete from nation where n_nationkey = 1 returning n_regionkey",
 	)
@@ -164,7 +164,7 @@ func TestRecordReturningIrregularMaintenance(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0},
 		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
 	}
-	builder := NewQueryBuilder(planpb.Query_DELETE, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_DELETE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.returningSourceStep = 7
 
 	require.NoError(t, builder.recordReturningIrregularMaintenance(nil, tableDef, objRef, 3, false))
@@ -186,6 +186,18 @@ func TestRecordReturningIrregularMaintenance(t *testing.T) {
 	require.Error(t, builder.recordReturningIrregularMaintenance(indexes, &missingPkColumn, objRef, 3, false))
 }
 
+func TestDMLReturningAcceptsResolvedCastPolicy(t *testing.T) {
+	for _, sql := range []string{
+		"update nation set n_name = 'x' returning cast(n_nationkey as signed)",
+		"update nation set n_name = 'x' returning cast(cast('2024-02-29 23:59:59.500000' as datetime(6)) as signed)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 	tests := []struct {
 		sql     string
@@ -199,6 +211,7 @@ func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 		{"update low_priority nation set n_name = 'x' returning n_name", "LOW_PRIORITY UPDATE"},
 		{"update nation set n_name = 'x' returning rand()", "volatile function in RETURNING expression"},
 		{"update nation set n_name = 'x' returning sleep(0)", "volatile function in RETURNING expression"},
+		{"update nation set n_name = 'x' returning now()", "volatile function in RETURNING expression"},
 		{"update nation join region on nation.n_regionkey = region.r_regionkey set nation.n_name = 'x' returning nation.n_name", "joined UPDATE"},
 		{"update nation, region set nation.n_name = 'x' returning nation.n_name", "multi-table UPDATE"},
 		{"update nation set n_name = 'x' from region where nation.n_regionkey = region.r_regionkey returning nation.n_name", "UPDATE FROM"},
@@ -219,7 +232,7 @@ func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.feature, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "DML RETURNING does not support "+test.feature)
 		})
@@ -240,7 +253,7 @@ func TestDMLReturningForeignKeyRoutesFailClosed(t *testing.T) {
 	}
 
 	t.Run("child insert remains on modern path", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(t, mock)
 		logicPlan, err := runOneStmt(mock, t, "insert into emp(empno, ename, deptno) values (1, 'e', 2) returning empno, deptno")
 		require.NoError(t, err)
@@ -249,7 +262,7 @@ func TestDMLReturningForeignKeyRoutesFailClosed(t *testing.T) {
 	})
 
 	t.Run("referenced parent update uses modern path", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(t, mock)
 		logicPlan, err := runOneStmt(mock, t, "update dept set deptno = 2 returning deptno")
 		require.NoError(t, err)
@@ -258,7 +271,7 @@ func TestDMLReturningForeignKeyRoutesFailClosed(t *testing.T) {
 	})
 
 	t.Run("referenced parent delete rejects legacy path", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(t, mock)
 		_, err := runOneStmt(mock, t, "delete from dept where deptno = 1 returning deptno")
 		require.ErrorContains(t, err, "DML RETURNING does not support legacy DELETE path")

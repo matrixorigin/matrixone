@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"strings"
 	"sync"
@@ -33,18 +32,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type wmMockSQLExecutor struct {
-	mp                        map[string]string
-	insertRe                  *regexp.Regexp
-	updateRe                  *regexp.Regexp
-	selectRe                  *regexp.Regexp
-	insertOnDuplicateUpdateRe *regexp.Regexp
+	mp       map[string]string
+	insertRe *regexp.Regexp
+	updateRe *regexp.Regexp
+	selectRe *regexp.Regexp
 }
 
 type retryableMockExecutor struct {
@@ -81,7 +78,37 @@ type blockingProgressWatermarkExecutor struct {
 	startOnce    sync.Once
 }
 
+// blockingWatermarkSQLExecutor pauses the first watermark update after the
+// updater has moved a batch into the committing tier. It keeps the
+// update-during-persistence boundary explicit without relying on a scheduler
+// tick or a timing window.
+type blockingWatermarkSQLExecutor struct {
+	*mockSQLExecutor
+	blockWatermarkWrite atomic.Bool
+	writeStarted        chan struct{}
+	releaseWrite        chan struct{}
+	startOnce           sync.Once
+}
+
+func (e *blockingWatermarkSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts ie.SessionOverrideOptions,
+) error {
+	if e.blockWatermarkWrite.Load() && IsInsertOnDuplicateUpdateClause(sql) {
+		e.startOnce.Do(func() { close(e.writeStarted) })
+		select {
+		case <-e.releaseWrite:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return e.mockSQLExecutor.Exec(ctx, sql, opts)
+}
+
 type watermarkProgressExecutor struct {
+	mu         sync.Mutex
+	onQuery    func()
 	watermark  string
 	generation string
 	queryErr   error
@@ -90,9 +117,15 @@ type watermarkProgressExecutor struct {
 
 type watermarkReadExecutor struct {
 	watermark string
+	onQuery   func()
+	onExec    func()
+	missing   bool
 }
 
 func (m *watermarkReadExecutor) Exec(context.Context, string, ie.SessionOverrideOptions) error {
+	if m.onExec != nil {
+		m.onExec()
+	}
 	return nil
 }
 
@@ -101,9 +134,14 @@ func (m *watermarkReadExecutor) Query(
 	_ string,
 	_ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
-	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{
-		{"7", "task", "db", "tbl", m.watermark},
-	}}}
+	if m.onQuery != nil {
+		m.onQuery()
+	}
+	rows := [][]interface{}{}
+	if !m.missing {
+		rows = append(rows, []interface{}{"7", "task", "db", "tbl", m.watermark})
+	}
+	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: rows}}
 }
 
 func (m *watermarkReadExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -113,21 +151,22 @@ func (m *watermarkProgressExecutor) Exec(context.Context, string, ie.SessionOver
 }
 
 func (m *watermarkProgressExecutor) Query(
-	_ context.Context,
-	sql string,
-	_ ie.SessionOverrideOptions,
+	_ context.Context, sql string, _ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
+	m.mu.Lock()
 	m.lastQuery = sql
-	if m.queryErr != nil {
-		return &InternalExecResultForTest{err: m.queryErr}
-	}
+	err := m.queryErr
 	data := make([][]interface{}, 0, 1)
 	if m.watermark != "" {
 		data = append(data, []interface{}{m.watermark, m.generation})
 	}
-	return &InternalExecResultForTest{
-		resultSet: &MysqlResultSetForTest{Data: data},
+	callback := m.onQuery
+	m.onQuery = nil
+	m.mu.Unlock()
+	if callback != nil {
+		callback()
 	}
+	return &InternalExecResultForTest{err: err, resultSet: &MysqlResultSetForTest{Data: data}}
 }
 
 func (m *watermarkProgressExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -270,10 +309,9 @@ func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp: make(map[string]string),
 		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
-		insertRe:                  regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
-		updateRe:                  regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		selectRe:                  regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		insertOnDuplicateUpdateRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\) ON DUPLICATE KEY UPDATE watermark \= VALUES\(watermark\)$`),
+		insertRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe: regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		selectRe: regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
 	}
 }
 
@@ -300,7 +338,6 @@ func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.Sessio
 	if strings.HasPrefix(sql, "SELECT") {
 		matches := m.selectRe.FindStringSubmatch(sql)
 		return &InternalExecResultForTest{
-			affectedRows: 1,
 			resultSet: &MysqlResultSetForTest{
 				Columns:    nil,
 				Name2Index: nil,
@@ -426,7 +463,7 @@ func TestWatermarkUpdater_BoundedBatchPartialFailureRetriesWithoutRegression(t *
 func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("delete-task", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -545,7 +582,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerPreservesReplacement(t *tes
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -591,7 +628,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -625,7 +662,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -741,7 +778,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 	// DELETE specifically so this test remains distinct from flush failures.
 	exec := &retryableMockExecutor{failOnCall: 2}
 	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -767,7 +804,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 func TestWatermarkUpdater_GetOrAddCommittedRejectsDeletedTask(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-deleted", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	key := &WatermarkKey{AccountId: 4, TaskId: "deleted-task", DBName: "db", TableName: "table"}
 	updater.MarkTaskDeleted(key.TaskId)
@@ -863,7 +900,7 @@ func TestWatermarkUpdater_ForceFlushWaitsForEarlierGuardedProgressWrite(t *testi
 		}
 		return err
 	}
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(exec.releaseWrite) }) }
@@ -1136,7 +1173,7 @@ func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("remove-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1188,7 +1225,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *testing.T) {
 	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	key := WatermarkKey{
@@ -1232,7 +1269,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *test
 func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("update-errmsg-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1263,7 +1300,7 @@ func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 func TestWatermarkUpdater_GetOrAddCommitted_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1300,7 +1337,7 @@ func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
 		u.customized.cronJob = func(ctx context.Context) {}
 	}
 	updater := NewCDCWatermarkUpdater("helper-circuit", exec, syncOption)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -1538,13 +1575,11 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 // 2. wait for the cron job to execute 3 times
 // 3. check the execution times: should be >= 3
 // 4. stop the CDCWatermarkUpdater
-// 5. get the execution times
-// 5. wait for 5ms
-// 6. check the execution times: should be the same as the previous value
-// 7. start the CDCWatermarkUpdater
+// 5. verify the callback exited and the execution count no longer changes
 func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	ie := newWmMockSQLExecutor()
 	var cronJobExecNum atomic.Int32
+	var cronJobExited atomic.Bool
 	var wg1 sync.WaitGroup
 	wg1.Add(1)
 	cronJob := func(ctx context.Context) {
@@ -1552,6 +1587,8 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		t.Logf("cronJobExecNum: %d", now)
 		if now == 3 {
 			wg1.Done()
+			<-ctx.Done()
+			cronJobExited.Store(true)
 		}
 	}
 
@@ -1560,14 +1597,16 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		ie,
 		WithCronJobInterval(time.Millisecond),
 		WithCustomizedCronJob(cronJob),
-		WithExportStatsInterval(time.Millisecond*5),
+		WithExportStatsInterval(time.Hour),
 	)
-	u.Start()
+	u.stats.lastExportTime = time.Now()
+	u.Start(context.Background())
+	defer u.Stop()
 	wg1.Wait()
 	assert.GreaterOrEqual(t, cronJobExecNum.Load(), int32(3))
 	u.Stop()
+	assert.True(t, cronJobExited.Load())
 	prevNum := cronJobExecNum.Load()
-	time.Sleep(time.Millisecond * 5)
 	assert.Equal(t, prevNum, cronJobExecNum.Load())
 }
 
@@ -1575,117 +1614,64 @@ func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
 	ie := newWmMockSQLExecutor()
 
 	executeError := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-execute-error", t.Name()))
-	scheduleErr := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-schedule-error", t.Name()))
 
 	var passTimes atomic.Uint64
-	passScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithResult(nil)
-		passTimes.Add(1)
-		return
-	}
 	var executeErrTimes atomic.Uint64
-	executeErrScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithErr(executeError)
-		executeErrTimes.Add(1)
-		return
-	}
-	var scheduleErrTimes atomic.Uint64
-	scheduleErrScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithErr(scheduleErr)
-		scheduleErrTimes.Add(1)
-		err = scheduleErr
-		return
-	}
-	_ = executeErrScheduler
-	_ = scheduleErrScheduler
-
-	implScheduler := passScheduler
+	phase := 0
 
 	scheduleJob := func(job *UpdaterJob) (err error) {
-		return implScheduler(job)
+		switch phase {
+		case 0:
+			job.DoneWithResult(nil)
+			passTimes.Add(1)
+		default:
+			job.DoneWithErr(executeError)
+			executeErrTimes.Add(1)
+		}
+		return nil
 	}
 	u := NewCDCWatermarkUpdater(
 		t.Name(),
 		ie,
-		WithCronJobInterval(time.Millisecond),
 		WithCronJobErrorSupressTimes(1),
 		WithCustomizedScheduleJob(scheduleJob),
 	)
-	u.Start()
 	defer u.Stop()
 
-	// check u.cacheUncommitted is empty logic
-	var wg1 sync.WaitGroup
-	wg1.Add(1)
-	go func() {
-		for {
-			if u.stats.skipTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
+	// An empty cache is skipped without invoking the scheduler.
+	u.cronRun(context.Background())
+	assert.Equal(t, uint64(1), u.stats.skipTimes.Load())
+	assert.Equal(t, uint64(0), passTimes.Load())
+	assert.Equal(t, uint64(0), executeErrTimes.Load())
 
 	ctx := context.Background()
 
-	// add 1 uncommitted watermark and check the execution logic
+	// Add one uncommitted watermark and synchronously exercise the successful
+	// move-to-committing path.
 	err := u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
+	u.cronRun(ctx)
 
-	// wait uncommitted watermark to be commtting
-	wg1.Add(2)
-	go func() {
-		for {
-			u.RLock()
-			l1 := len(u.cacheCommitting)
-			l2 := len(u.cacheUncommitted)
-			u.RUnlock()
-			if l1 == 1 && l2 == 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-		for {
-			if passTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
+	u.RLock()
+	committingCount := len(u.cacheCommitting)
+	uncommittedCount := len(u.cacheUncommitted)
+	u.RUnlock()
+	assert.Equal(t, 1, committingCount)
+	assert.Equal(t, 0, uncommittedCount)
 	assert.Equal(t, uint64(1), passTimes.Load())
+	assert.Equal(t, uint64(0), executeErrTimes.Load())
 
-	// clear cacheCommitting manually
+	// Clear the committing cache and exercise the error completion path. The
+	// direct cronRun calls make this phase change race-free.
 	u.Lock()
 	u.cacheCommitting = make(map[WatermarkKey]types.TS)
 	u.Unlock()
 
-	implScheduler = executeErrScheduler
+	phase = 1
 	err = u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
+	u.cronRun(ctx)
 
-	wg1.Add(2)
-	go func() {
-		for {
-			if executeErrTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-		for {
-			if u.stats.errorTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
 	assert.Equal(t, uint64(1), executeErrTimes.Load())
 	assert.Equal(t, uint64(1), u.stats.errorTimes.Load())
 }
@@ -1981,6 +1967,84 @@ func TestCDCWatermarkUpdaterLegacyReadMaintainsProgressTupleInvariant(t *testing
 		_, hasGeneration := updater.cacheCommittedGeneration[*key]
 		require.False(t, hasGeneration)
 	})
+	for _, old := range []types.TS{types.BuildTS(5, 0), types.BuildTS(50, 0)} {
+		t.Run("ACK supersedes delayed legacy read "+old.ToString(), func(t *testing.T) {
+			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var scratchSurvived bool
+			var updater *CDCWatermarkUpdater
+			exec := &watermarkReadExecutor{watermark: old.ToString(), onQuery: func() {
+				close(entered)
+				<-release
+				_, scratchSurvived = updater.readKeysBuffer[*key]
+			}}
+			updater = NewCDCWatermarkUpdater(t.Name(), exec)
+			fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+			updater.activeWatermarkFence[*key] = fence
+			job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			go func() { defer close(done); updater.onJobs(job) }()
+			t.Cleanup(func() {
+				unblock()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("watermark worker did not finish")
+				}
+			})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not start")
+			}
+			replay := types.BuildTS(20, 0)
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+			unblock()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not finish")
+			}
+			require.True(t, scratchSurvived, "ACK must not mutate worker scratch")
+			require.NoError(t, job.GetResult().Err)
+			require.Equal(t, replay, job.GetResult().Res)
+			require.Equal(t, replay, updater.cacheCommitted[*key])
+			require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+			require.Same(t, fence, updater.activeWatermarkFence[*key])
+			require.Empty(t, updater.readKeysBuffer)
+		})
+	}
+
+	t.Run("ACK supersedes completed legacy insert", func(t *testing.T) {
+		exec := &watermarkReadExecutor{missing: true}
+		updater := NewCDCWatermarkUpdater(t.Name(), exec)
+		fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+		updater.activeWatermarkFence[*key] = fence
+		replay := types.BuildTS(20, 0)
+		exec.onExec = func() {
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+		}
+		job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+		updater.onJobs(job)
+		require.NoError(t, job.GetResult().Err)
+		require.Equal(t, replay, job.GetResult().Res)
+		require.Equal(t, replay, updater.cacheCommitted[*key])
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
+	t.Run("closed queue preserves owned progress", func(t *testing.T) {
+		updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
+		updater.Start(context.Background())
+		updater.Stop()
+		replay, later := types.BuildTS(20, 0), types.BuildTS(50, 0)
+		updater.cacheCommitted[*key] = replay
+		updater.cacheCommittedGeneration[*key] = 42
+		actual, err := updater.GetOrAddCommitted(t.Context(), key, &later)
+		require.NoError(t, err)
+		require.Equal(t, replay, actual)
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
 }
 
 func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
@@ -1989,6 +2053,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 	t.Run("missing row is retryable", func(t *testing.T) {
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
 
@@ -1996,6 +2061,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 		backendErr := errors.New("catalog unavailable")
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{queryErr: backendErr})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, backendErr)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -2005,6 +2071,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 			queryErr: context.Canceled,
 		})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, context.Canceled)
 		require.False(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -2016,6 +2083,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 				generation: "19",
 			})
 			_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+			require.Empty(t, updater.progressReads)
 			require.Error(t, err)
 			require.False(t, IsRetryableSnapshotEpochError(err))
 		})
@@ -2243,7 +2311,7 @@ func TestCDCWatermarkUpdaterRejectsOwnerErrorWithoutDurableGeneration(t *testing
 func TestCDCWatermarkUpdaterOwnedErrorDoesNotReadMissingProgress(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), exec, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2372,7 +2440,7 @@ func TestCDCWatermarkUpdaterReplacementDropsPreviousErrorRetryState(t *testing.T
 func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	t.Cleanup(u.Stop)
 
 	key := &WatermarkKey{
@@ -2431,7 +2499,7 @@ func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing
 
 func TestCDCWatermarkUpdaterErrorMetricClassificationIsExclusive(t *testing.T) {
 	u := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2510,7 +2578,7 @@ func TestCDCWatermarkUpdater_GuardedWatermarkSQLSplitsOnBytes(t *testing.T) {
 func TestCDCWatermarkUpdater_ErrorMessageRespectsCatalogBound(t *testing.T) {
 	executor := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), executor, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "table"}
 	u.cacheCommitted[*key] = types.BuildTS(1, 1)
@@ -2717,7 +2785,11 @@ func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
 }
 
 func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
-	ie := NewMockSQLExecutor()
+	ie := &blockingWatermarkSQLExecutor{
+		mockSQLExecutor: NewMockSQLExecutor(),
+		writeStarted:    make(chan struct{}),
+		releaseWrite:    make(chan struct{}),
+	}
 	err := ie.CreateTable(
 		"mo_catalog",
 		"mo_cdc_watermark",
@@ -2728,10 +2800,20 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(),
 		ie,
-		WithCronJobInterval(time.Millisecond*1),
+		// Keep the real cron lifecycle and default callback wiring without
+		// allowing an unsynchronized scheduler tick to drive the assertions.
+		WithCronJobInterval(time.Hour),
 	)
-	u.Start()
-	defer u.Stop()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
+	u.Start(context.Background())
+	defer func() {
+		// Release a blocked persistence before waiting for the queue worker. This
+		// keeps timeout/failure cleanup from waiting on its own test barrier.
+		release()
+		u.Stop()
+	}()
+	cronRun := u.customized.cronJob
 
 	ctx := context.Background()
 
@@ -2784,27 +2866,21 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			&nts,
 		)
 		assert.NoError(t, err)
-		assert.NoError(t, err)
 		ret, err = u.GetFromCache(
 			ctx,
 			key,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, nts, ret)
-		time.Sleep(time.Millisecond * 1)
+		cronRun(ctx)
 	}
-	testutils.WaitExpect(
-		5000,
-		func() bool {
-			tuple, err := ie.GetTableDataByPK(
-				"mo_catalog",
-				"mo_cdc_watermark",
-				[]string{"1", "task1", "db1", "t1"},
-			)
-			t.Logf("tuple: %v", tuple)
-			return err == nil && tuple[4] == "5-1"
-		},
+	tuple, err := ie.GetTableDataByPK(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{"1", "task1", "db1", "t1"},
 	)
+	assert.NoError(t, err)
+	assert.Equal(t, "5-1", tuple[4])
 	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 
 	var tasksWg sync.WaitGroup
@@ -2815,7 +2891,6 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 		physicalStart int64,
 	) {
 		defer wg.Done()
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(4)))
 
 		logic := uint32(0)
 		candidateTS := types.BuildTS(physicalStart, logic)
@@ -2843,10 +2918,10 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			)
 			assert.NoError(t, err)
 			assert.True(t, ts.EQ(&cacheTS))
-			time.Sleep(time.Microsecond * time.Duration(rand.Intn(1000)))
 		}
 	}
 
+	start := make(chan struct{})
 	tasksWg.Add(5)
 	keys := make([]*WatermarkKey, 0, 5)
 	for i := 0; i < 5; i++ {
@@ -2857,34 +2932,62 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			TableName: "t1",
 		}
 		keys = append(keys, key)
-		go runTaskFunc(&tasksWg, key, int64(i+100000))
+		go func(key *WatermarkKey, physicalStart int64) {
+			<-start
+			runTaskFunc(&tasksWg, key, physicalStart)
+		}(key, int64(i+100000))
 	}
 
+	close(start)
 	tasksWg.Wait()
+
+	// Keep the producer-versus-persistence boundary from the original
+	// scheduler-driven test. The first flush is held in the executor, a newer
+	// watermark is buffered while the older batch is in flight, and a second
+	// flush proves that the newer value survives the first completion.
+	ie.blockWatermarkWrite.Store(true)
+	flushDone := make(chan struct{})
+	go func() {
+		cronRun(ctx)
+		close(flushDone)
+	}()
+	select {
+	case <-ie.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("watermark persistence did not start")
+	}
+	newest := types.BuildTS(100000, 21)
+	require.NoError(t, u.UpdateWatermarkOnly(ctx, keys[0], &newest))
+	release()
+	select {
+	case <-flushDone:
+	case <-time.After(time.Second):
+		t.Fatal("watermark persistence did not finish")
+	}
+
+	// The first flush must publish its snapshot while retaining the newer
+	// buffered update for the next flush.
+	cronRun(ctx)
 	assert.Equal(t, 6, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 	for _, key := range keys {
-		testutils.WaitExpect(
-			5000,
-			func() bool {
-				tuple, err := ie.GetTableDataByPK(
-					"mo_catalog",
-					"mo_cdc_watermark",
-					[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
-				)
-				t.Logf("tuple: %v", tuple)
-				if err != nil {
-					return false
-				}
-				ts := types.StringToTS(tuple[4])
-				return ts.Logical() >= 20
-			},
+		tuple, err := ie.GetTableDataByPK(
+			"mo_catalog",
+			"mo_cdc_watermark",
+			[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 		)
+		assert.NoError(t, err)
+		durableTS := types.StringToTS(tuple[4])
+		if key == keys[0] {
+			assert.Equal(t, uint32(21), durableTS.Logical())
+		} else {
+			assert.GreaterOrEqual(t, durableTS.Logical(), uint32(20))
+		}
 	}
 }
 
 func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{
@@ -2947,7 +3050,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	key := &WatermarkKey{
@@ -2970,7 +3073,7 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 // TestCDCWatermarkUpdater_MarkUnmarkTaskPaused tests pause state management
 func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-pause"
@@ -3005,7 +3108,7 @@ func TestCDCWatermarkUpdater_DeletedTaskDominatesConcurrentPause(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-block"
@@ -3058,7 +3161,7 @@ func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	task1 := "task-1"
@@ -3107,7 +3210,7 @@ func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseRestartCycle(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "lifecycle-task"
@@ -3163,7 +3266,6 @@ func (m *mockExecutorForScanErrors) Query(ctx context.Context, sql string, opts 
 		return m.queryFunc(ctx, sql, opts)
 	}
 	return &InternalExecResultForTest{
-		affectedRows: 0,
 		resultSet: &MysqlResultSetForTest{
 			Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 			Data:    [][]interface{}{},
@@ -3196,7 +3298,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyResult(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3221,7 +3322,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ParseAccountI
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3245,7 +3345,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyErrMsg(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3269,7 +3368,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_OrphanTable(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3294,7 +3392,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_LegacyFormat(
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3320,7 +3417,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_RetryableErro
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3347,7 +3443,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_NonRetryableE
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3389,7 +3484,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ErrorTypes(t 
 			mockExec := &mockExecutorForScanErrors{
 				queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 					return &InternalExecResultForTest{
-						affectedRows: 1,
 						resultSet: &MysqlResultSetForTest{
 							Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 							Data: [][]interface{}{
@@ -3420,7 +3514,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_DiffCleanup(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 2,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3461,7 +3554,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailedSk
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3494,7 +3586,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MultipleTable
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 3,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3527,7 +3618,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MixedScenario
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 4,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3571,7 +3661,6 @@ func (m *mockExecutorForWrapCronJob) Query(ctx context.Context, sql string, opts
 		return m.queryFunc(ctx, sql, opts)
 	}
 	return &InternalExecResultForTest{
-		affectedRows: 0,
 		resultSet: &MysqlResultSetForTest{
 			Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 			Data:    [][]interface{}{},
@@ -3609,7 +3698,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 			// Mock the JOIN query for valid watermarks
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3621,7 +3709,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 			}
 			// Mock the error scan query
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3645,7 +3732,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 	}
 
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10) // Ensure interval passed
 	wrappedJob(context.Background())
 
 	require.True(t, jobExecuted)
@@ -3684,7 +3770,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_QueryValidWatermarksFailed(t *testing.T
 	}
 
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	require.True(t, jobExecuted)
@@ -3702,7 +3787,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
 			if strings.Contains(sql, "INNER JOIN") {
 				// Only task1 is valid, task2 is orphan
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3714,7 +3798,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
 			}
 			// Error scan query
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3810,7 +3893,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -3819,7 +3901,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3839,7 +3920,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Empty watermark should be skipped (not processed for metrics)
@@ -3855,7 +3935,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3866,7 +3945,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3888,7 +3966,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Valid watermark should remain
@@ -3916,7 +3993,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
 				updater.activeWatermarkFence[key] = replacementFence
 				updater.Unlock()
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -3925,7 +4001,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3965,7 +4040,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 			if strings.Contains(sql, "INNER JOIN") {
 				// task1 and task3 are valid, task2 is orphan
 				return &InternalExecResultForTest{
-					affectedRows: 2,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3977,7 +4051,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4002,7 +4075,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// key1 and key3 should remain, key2 should be removed
@@ -4023,7 +4095,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -4032,7 +4103,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4058,7 +4128,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Verify stats are exported
@@ -4072,7 +4141,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -4083,7 +4151,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4104,7 +4171,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Key should remain (no orphans to remove)
@@ -4112,4 +4178,123 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 	_, exists := updater.cacheCommitted[key]
 	updater.RUnlock()
 	require.True(t, exists)
+}
+
+func TestDurableProgressConcurrentReadersDrainIndependently(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retire=%t", retire), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(cancel)
+			key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
+			exec := &watermarkProgressExecutor{watermark: "100-0", generation: "11"}
+			u := NewCDCWatermarkUpdater(t.Name(), exec)
+			owner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+			u.Lock()
+			require.True(t, u.activateWatermarkFenceLocked(*key, owner))
+			u.Unlock()
+			entered, release := make(chan struct{}), make(chan struct{})
+			exec.onQuery = func() {
+				close(entered)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			done := make(chan error, 1)
+			joined := false
+			t.Cleanup(func() {
+				unblock()
+				if !joined {
+					<-done
+				}
+			})
+			go func() {
+				watermark, generation, err := u.GetWatermarkProgress(ctx, key)
+				if retire {
+					if !IsRetryableSnapshotEpochError(err) {
+						err = fmt.Errorf("retired read returned %s/%d: %v", watermark.ToString(), generation, err)
+					} else {
+						err = nil
+					}
+				} else if err == nil && (watermark != types.BuildTS(20, 0) || generation != 12) {
+					err = fmt.Errorf("delayed read returned %s/%d", watermark.ToString(), generation)
+				}
+				done <- err
+			}()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if retire {
+				u.Lock()
+				u.retireWatermarkProgressLocked(*key)
+				u.Unlock()
+				// Hold the replacement observation open while the retired reader exits.
+				replacementEntered, replacementRelease, replacementDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.onQuery = func() {
+					close(replacementEntered)
+					select {
+					case <-replacementRelease:
+					case <-ctx.Done():
+					}
+				}
+				exec.mu.Unlock()
+				var replacementOnce sync.Once
+				unblockReplacement := func() { replacementOnce.Do(func() { close(replacementRelease) }) }
+				replacementJoined := false
+				t.Cleanup(func() {
+					unblockReplacement()
+					if !replacementJoined {
+						<-replacementDone
+					}
+				})
+				go func() { _, _, err := u.GetWatermarkProgress(ctx, key); replacementDone <- err }()
+				select {
+				case <-replacementEntered:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				unblock()
+				err := <-done
+				joined = true
+				require.NoError(t, err)
+				u.RLock()
+				observation := u.progressReads[*key]
+				readers := 0
+				if observation != nil {
+					readers = observation.readers
+				}
+				u.RUnlock()
+				require.Equal(t, 1, readers, "retired release must retain the replacement observation")
+				unblockReplacement()
+				err = <-replacementDone
+				replacementJoined = true
+				require.NoError(t, err)
+			} else {
+				// The second reader finishes while the first still owns an observation.
+				_, _, err := u.GetWatermarkProgress(ctx, key)
+				require.NoError(t, err)
+				u.RLock()
+				readers := u.progressReads[*key].readers
+				u.RUnlock()
+				require.Equal(t, 1, readers)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.mu.Unlock()
+				require.NoError(t, u.finishTargetAcknowledgement(ctx, key, owner, types.BuildTS(20, 0), 12))
+				unblock()
+				err = <-done
+				joined = true
+				require.NoError(t, err)
+			}
+			require.Empty(t, u.progressReads)
+			require.Equal(t, types.BuildTS(20, 0), u.cacheCommitted[*key])
+			require.Equal(t, uint64(12), u.cacheCommittedGeneration[*key])
+		})
+	}
 }

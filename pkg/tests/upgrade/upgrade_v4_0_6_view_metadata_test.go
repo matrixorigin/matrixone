@@ -174,13 +174,15 @@ func TestV406UpgradeCreatesViewMetadataCatalogTables(t *testing.T) {
 				}
 			})
 
+			// Channels establish the overlap phases; the existing context bounds
+			// progress without turning DDL completion into a latency assertion.
 			select {
 			case <-executed:
 			case upgradeErr := <-upgradeDone:
 				upgradeFinished = true
 				t.Fatalf("catalog upgrade ended before the overlap fence: %v", upgradeErr)
-			case <-time.After(time.Second):
-				t.Fatal("catalog upgrade did not reach the uncommitted refresh-table barrier")
+			case <-ctx.Done():
+				t.Fatalf("catalog upgrade did not reach the uncommitted refresh-table barrier: %v", ctx.Err())
 			}
 
 			fenceCtx, cancelFence := context.WithTimeout(ctx, 200*time.Millisecond)
@@ -194,8 +196,8 @@ func TestV406UpgradeCreatesViewMetadataCatalogTables(t *testing.T) {
 			case upgradeErr := <-upgradeDone:
 				upgradeFinished = true
 				require.NoError(t, upgradeErr)
-			case <-time.After(time.Second):
-				t.Fatal("catalog upgrade did not commit after releasing the overlap barrier")
+			case <-ctx.Done():
+				t.Fatalf("catalog upgrade did not commit after releasing the overlap barrier: %v", ctx.Err())
 			}
 			require.NoError(t, compile.RequireViewMetadataRevalidation(ctx, sqlExecutor))
 			requireViewMetadataCatalogState(t, ctx, sqlExecutor, map[string]bool{

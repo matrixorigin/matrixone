@@ -20,6 +20,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -164,7 +165,7 @@ func TestIntegerArgumentTextBits(t *testing.T) {
 		{input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), wantErr: true},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target, []uint64{}, nil)}, NewFunctionTestResult(target, tc.wantErr, tc.want, tc.nulls), NewTextIntegerBitsCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 }
@@ -175,7 +176,7 @@ func TestIntegerArgumentYear(t *testing.T) {
 		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{0, 1901, 2155, 0}, []bool{false, false, false, true}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1901, 2155, 0}, []bool{false, false, false, true}), NewIntegerArgumentCast)
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -183,7 +184,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []int64
 	}{
 		{"nearest even", NewIntegerArgumentCast, []int64{-2, -2, -2, 0, 0, 2, 2, 2}},
@@ -194,7 +195,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{-2.5, -1.9, -1.5, -0.5, 0.5, 1.5, 1.9, 2.5}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, nil), tc.fn)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -272,7 +273,7 @@ func TestIntegerArgumentExactDomains(t *testing.T) {
 				NewFunctionTestInput(types.New(types.T_decimal256, 40, 1), []types.Decimal256{d256}, nil),
 			} {
 				test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{expected}, nil), NewIntegerArgumentCast)
-				ok, info := test.Run()
+				ok, info := test.RunAndFree()
 				require.True(t, ok, info)
 			}
 		})
@@ -321,7 +322,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 	} {
 		t.Run(input.typ.Oid.String(), func(t *testing.T) {
 			test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2}, nil), NewIntegerArgumentCast)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -338,7 +339,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil), &FunctionSelectList{AllNull: true}, []int64{0}, []bool{true}},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	large, err := types.ParseDecimal256("10000000000000000000000000000000000000000000000000000000000000000000000", 76, 0)
@@ -347,7 +348,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		NewFunctionTestInput(types.New(types.T_decimal256, 76, 0), []types.Decimal256{large, {B0_63: 2}}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, []bool{true, false}), NewIntegerArgumentCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 	value, err := decimal256IntegerArgument(large, 0)
 	require.NoError(t, err)
@@ -439,4 +440,85 @@ func TestStringIntegerArgumentConsumers(t *testing.T) {
 			require.Equal(t, original, inputs)
 		})
 	}
+}
+
+// Integer consumers retain the same values while diagnosing discarded text.
+func TestIntegerArgumentTextWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fn          executeLogicOfOverload
+		target      types.Type
+		empty, want any
+	}{
+		{"signed", NewIntegerArgumentCast, types.T_int64.ToType(), []int64{}, []int64{3, 2, 2, 0, 3, 0}},
+		{"unsigned", NewIntegerArgumentCast, types.T_uint64.ToType(), []uint64{}, []uint64{3, 2, 2, 0, 3, 0}},
+		{"text_bits", NewTextIntegerBitsCast, types.T_uint64.ToType(), []uint64{}, []uint64{3, 2, 2, 0, 3, 0}},
+		{"truncate", NewTruncatedIntegerArgumentCast, types.T_int64.ToType(), []int64{}, []int64{3, 2, 2, 0, 3, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"3x", "2.9", "2e1", "bad", " 3 ", "bad"}, []bool{false, false, false, false, false, true}),
+				NewFunctionTestInput(tc.target, tc.empty, nil),
+			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, false, false, true}), tc.fn)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{
+				{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"},
+				{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '2.9'"},
+				{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '2e1'"},
+				{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: 'bad'"},
+			}, session.warnings)
+		})
+	}
+}
+
+func TestIntegerArgumentTextWarningControls(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		source          types.T
+		values          []string
+		want            []int64
+		nulls           []bool
+		mask            *FunctionSelectList
+		binary, wantErr bool
+		warnings        int
+	}{
+		{name: "ascii_whitespace_and_empty", source: types.T_char, values: []string{"  +3 ", "", " ", "-2"}, want: []int64{3, 0, 0, -2}},
+		{name: "unicode_preserves_value", source: types.T_text, values: []string{"\u00a03\u00a0"}, want: []int64{3}, warnings: 1},
+		{name: "binary_storage_text", source: types.T_varbinary, values: []string{"3x"}, want: []int64{3}, warnings: 1},
+		{name: "binary_literal_numeric", source: types.T_varbinary, values: []string{"3x"}, want: []int64{0x3378}, binary: true},
+		{name: "partial_selection", source: types.T_varchar, values: []string{"bad", "2x", "bad"}, want: []int64{0, 2, 0}, nulls: []bool{true, false, true}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
+		{name: "ignore_all", source: types.T_varchar, values: []string{"bad"}, want: []int64{0}, nulls: []bool{true}, mask: &FunctionSelectList{AllNull: true}},
+		{name: "overflow_stays_error", source: types.T_varchar, values: []string{"9223372036854775808x"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			// Masked outputs are NULL; the input itself remains non-NULL to prove
+			// that selection suppresses conversion diagnostics.
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.source.ToType(), tc.values, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
+			fc.parameters[0].SetIsBin(tc.binary)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, session.warnings, tc.warnings)
+		})
+	}
+	// The temporal-capable overload also delegates textual inputs to this owner.
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{"3x"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, nil), NewTemporalIntegerArgumentCast)
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
+	require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}}, session.warnings)
 }

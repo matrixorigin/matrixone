@@ -1,0 +1,96 @@
+set @bound_domain_s = _binary'你';
+prepare bound_domain_binary from 'select char_length(@bound_domain_s), hex(left(@bound_domain_s, 1)), ord(@bound_domain_s), @bound_domain_s + 0';
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+3  ¦  E4  ¦  228  ¦  0.0
+set @bound_domain_s = '你';
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+3  ¦  E4  ¦  228  ¦  0.0
+prepare bound_domain_text from 'select char_length(@bound_domain_s), hex(left(@bound_domain_s, 1)), ord(@bound_domain_s), @bound_domain_s + 0';
+execute bound_domain_text;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+1  ¦  E4BDA0  ¦  14990752  ¦  0.0
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+3  ¦  E4  ¦  228  ¦  0.0
+select char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+1  ¦  E4BDA0
+prepare bound_domain_marker from 'select char_length(?), hex(left(?, 1))';
+execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
+➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[-1,16383,0]  𝄀
+1  ¦  E4BDA0
+set @bound_domain_s = _binary'你';
+execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
+➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[12,6,0]  𝄀
+3  ¦  E4
+execute bound_domain_text;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+1  ¦  E4BDA0  ¦  14990752  ¦  0.0
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+3  ¦  E4  ¦  228  ¦  0.0
+set @bound_domain_s = NULL;
+execute bound_domain_text;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null
+set @bound_domain_s = '你';
+execute bound_domain_text;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+1  ¦  E4BDA0  ¦  14990752  ¦  0.0
+execute bound_domain_binary;
+➤ char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[12,6,0]  ¦  ord(@bound_domain_s)[-5,64,0]  ¦  @bound_domain_s + 0[8,53,31]  𝄀
+3  ¦  E4  ¦  228  ¦  0.0
+execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
+➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[-1,16383,0]  𝄀
+1  ¦  E4BDA0
+deallocate prepare bound_domain_marker;
+deallocate prepare bound_domain_text;
+deallocate prepare bound_domain_binary;
+set @bound_domain_s = if(false, X'ff', '你a');
+prepare bound_selected_text from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
+execute bound_selected_text;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+set @bound_domain_s = X'e4bda061';
+execute bound_selected_text;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  4  ¦  E4
+prepare bound_selected_binary from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
+execute bound_selected_binary;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  4  ¦  E4
+set @bound_domain_s = if(false, X'ff', '你a');
+execute bound_selected_binary;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  4  ¦  E4
+execute bound_selected_text;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  2  ¦  E4BDA0
+set @bound_domain_s = NULL;
+execute bound_selected_text;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  null  ¦  null
+execute bound_selected_binary;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  null  ¦  null
+set @bound_domain_s = '你a';
+execute bound_selected_text;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+execute bound_selected_binary;
+➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
+binary  ¦  binary  ¦  4  ¦  E4
+deallocate prepare bound_selected_text;
+deallocate prepare bound_selected_binary;
+set @bound_domain_s = NULL;

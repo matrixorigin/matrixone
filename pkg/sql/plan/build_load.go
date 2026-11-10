@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -41,13 +43,29 @@ const (
 	loadFirstLineSampleSize = 1 << 20
 )
 
+// Textual LOAD keeps TIME fields intact until the shared assignment cast owns
+// syntax, precision and range policy; attributed DECIMAL stages text on every
+// format (CSV raw field text, Parquet/Arrow mapper-rendered text) so the
+// shared admission boundary classifies the raw source. The scan's TableDef
+// retains the target type for field preprocessing; only its physical column
+// references are text.
+func loadTimeInputType(format string, typ plan.Type) plan.Type {
+	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	if isAttributedDecimalPlanType(typ) {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	return typ
+}
+
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	var externalProject []*Expr
 	colToIndex := make(map[string]int32, 0)
 	for i, col := range tableDef.Cols {
 		if col.Name != catalog.FakePrimaryKeyColName {
 			colExpr := &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -69,17 +87,23 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	// Legacy DML filters Cols without rebuilding Name2ColIndex. Resolve against
+	// the actual columns once instead of scanning the schema for every target.
+	columns := make(map[string]*ColDef, len(newTableDef.Cols))
+	for _, column := range newTableDef.Cols {
+		columns[column.Name] = column
+	}
 	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
-			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+			column := columns[colName]
+			if column == nil || column.Hidden {
 				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}
-			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: newTableDef.Cols[tbColIdx].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, column.Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -91,11 +115,10 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			colToIndex[colName] = int32(colPos)
 			colPos++
 			tbColToDataCol[colName] = int32(i)
-			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+			newCols = append(newCols, column)
 		case *tree.VarExpr:
-			//NOTE:variable like '@abc' will be passed by.
-			name := realCol.Name
-			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+			// Row-variable slots are recorded after target columns so referenced
+			// values can be exposed to the LOAD assignment projection.
 		default:
 			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
@@ -114,61 +137,11 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 }
 
 func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
-	fieldsEnclosedBy := "\""
-	fieldsEscapedBy := "\\"
-
-	linesTerminatedBy := "\n"
-	linesStartingBy := ""
-
-	if param.Tail.Fields != nil {
-		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
-			fieldsTerminatedBy = terminated.Value
-		}
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			fieldsEnclosedBy = string(enclosed.Value)
-		}
-		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
-			if escaped.Value == 0 {
-				fieldsEscapedBy = ""
-			} else {
-				fieldsEscapedBy = string(escaped.Value)
-			}
-		}
-	}
-
-	if param.Tail.Lines != nil {
-		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
-		}
-		if param.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Tail.Lines.StartingBy
-		}
-	}
-
-	if param.Format == tree.JSONLINE {
-		fieldsTerminatedBy = "\t"
-		fieldsEscapedBy = ""
-	}
-
-	config := csvparser.CSVConfig{
-		FieldsTerminatedBy: fieldsTerminatedBy,
-		FieldsEnclosedBy:   fieldsEnclosedBy,
-		FieldsEscapedBy:    fieldsEscapedBy,
-		LinesTerminatedBy:  linesTerminatedBy,
-		LinesStartingBy:    linesStartingBy,
-		NotNull:            false,
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		// Comment defaults to 0 (no comment marker): every line is data, matching
-		// MySQL LOAD DATA, which does not treat '#' lines as comments.
-		Comment: "",
-	}
-
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(CSVConfigForLoad(param), bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0, err
@@ -185,10 +158,10 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		},
 	}
 
-	param.Ctx = ctx.GetContext()
 	if err = fs.Read(param.Ctx, &vec); err != nil {
 		return 0, err
 	}
+	defer r.Close()
 
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
@@ -198,9 +171,8 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		return 0, err
 	}
 
-	var lastRow []csvparser.Field
 	for skipLines > 0 {
-		lastRow, err = csvReader.Read(lastRow)
+		err = csvReader.ScanRecord()
 		if err != nil {
 			if err == io.EOF {
 				param.Tail.IgnoredLines = 0
@@ -496,6 +468,9 @@ func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset 
 		return 0
 	}
 
+	oldCtx := param.Ctx
+	param.Ctx = ctx
+	defer func() { param.Ctx = oldCtx }()
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0
@@ -592,6 +567,25 @@ func totalLoadFileSize(fileSize []int64) int64 {
 	return total
 }
 
+// loadFieldDelimiters translates LOAD field options into scan delimiters.
+func loadFieldDelimiters(fields *tree.Fields) (string, []byte, []byte) {
+	terminated := tree.DefaultFieldsTerminated
+	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
+	escapedBy := []byte{0}
+	if fields != nil {
+		if fields.EnclosedBy != nil && fields.EnclosedBy.Value != 0 {
+			enclosedBy = []byte{fields.EnclosedBy.Value}
+		}
+		if fields.EscapedBy != nil && fields.EscapedBy.Value != 0 {
+			escapedBy = []byte{fields.EscapedBy.Value}
+		}
+		if fields.Terminated != nil {
+			terminated = fields.Terminated.Value
+		}
+	}
+	return terminated, enclosedBy, escapedBy
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -612,6 +606,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx, tblInfo.tableDefs[0]); err != nil {
+		return nil, err
+	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -644,63 +645,31 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, &externalProject,
+	)
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
 	}
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
-	var offset int64 = 0
-	// A pattern that survived checkFileExist matched more than one file, so the
-	// load fans out whole files and never splits one by byte offset.  The
-	// prescan exists only to seed that split: it would stamp one file's header
-	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
-	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
-		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
-		offset, err = IgnoredLines(stmt.Param, ctx)
-		if err != nil {
-			return nil, err
-		}
-		stmt.Param.FileStartOff = offset
+	offset, err := prepareLoadScan(stmt.Param, noCompress, ctx, tableDef)
+	if err != nil {
+		return nil, err
 	}
-	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
-		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
-
-	stmt.Param.Tail.ColumnList = nil
-	if stmt.Param.ScanType != tree.INLINE {
-		json_byte, err := json.Marshal(stmt.Param)
-		if err != nil {
-			return nil, err
-		}
-		tableDef.Createsql = string(json_byte)
-	}
-
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	bindCtx := NewBindContext(builder, nil)
-	terminated := ","
-	enclosedBy := []byte("\"")
-	escapedBy := []byte{0}
-	if stmt.Param.Tail.Fields != nil {
-		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
-				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.EscapedBy != nil {
-			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
-				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.Terminated != nil {
-			terminated = stmt.Param.Tail.Fields.Terminated.Value
-		}
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(ctx, stmt, originTableDef)
+	if err != nil {
+		return nil, err
 	}
+	bindCtx := NewBindContext(builder, nil)
+	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
@@ -725,7 +694,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		Stats:    &plan.Stats{},
 	}
 
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, 0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex, setExpressions)
 
 	if err != nil {
 		return nil, err
@@ -741,19 +716,47 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Parallel CSV staging converts file columns first. Enforce byte limits
-	// before defaults can read those assigned values, including the FK fallback.
+	// Enforce payload, TIME, MEDIUMINT and attributed DECIMAL assignment
+	// limits before defaults read assigned values, including parallel CSV
+	// staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
-			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+				!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt), col.Name)
 		if err != nil {
 			return nil, err
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	for target, expr := range setExpressions {
+		for i, col := range originTableDef.Cols {
+			if strings.EqualFold(col.Name, target) {
+				projectNode.ProjectList[i] = expr
+				break
+			}
+		}
+	}
+	// Under statement IGNORE the omitted defaults staged here read the fill
+	// adjustment through the same reference coalesce the INSERT pre-insert
+	// projection applies, so buildInsertPlans' later PRE_INSERT fill and the
+	// staged defaults observe one row image. The gate covers exactly the
+	// columns the row can still carry a NULL through: file-supplied columns
+	// and SET assignments (mirroring appendLoadDefaultProjections' own
+	// supplied test).
+	var ignoreSupplied map[string]*Expr
+	if tree.IsIgnoreStatement(stmt) {
+		ignoreSupplied = make(map[string]*Expr, len(colToIndex)+len(setExpressions))
+		for name := range colToIndex {
+			ignoreSupplied[name] = nil
+		}
+		for name := range setExpressions {
+			ignoreSupplied[name] = nil
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions, ignoreSupplied)
 	if err != nil {
 		return nil, err
 	}
@@ -786,7 +789,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil, tree.IsIgnoreStatement(stmt))
 		if err != nil {
 			return nil, err
 		}
@@ -878,9 +881,12 @@ func systemVariableInt64(value any) (int64, bool) {
 	}
 }
 
-func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
+func applyLoadParallelAdmission(param *tree.ExternParam, offset int64, service string) {
 	if param == nil {
 		return
+	}
+	if cfg, ok := moruntime.GetLoadDataTestConfig(service, param.Filepath); ok {
+		param.ParallelLoadMinSize = cfg.MinSize
 	}
 	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
 	minSize := int64(LoadParallelMinSize)
@@ -900,7 +906,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	if param.ScanType == tree.S3 {
+	if param.ScanType == tree.S3 && param.StageFilepath == "" {
 		if err := InitS3Param(param); err != nil {
 			return "", err
 		}
@@ -909,6 +915,10 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	if err := AuthorizeExternalFileAccess(param, ctx.GetProcess()); err != nil {
+		return "", err
+	}
+
 	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
 	// before ReadDir or StatFile can perform object-store I/O.
 	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
@@ -921,7 +931,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	param.Ctx = ctx.GetContext()
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
@@ -956,16 +966,31 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
+func getProjectNode(
+	stmt *tree.Load,
+	ctx CompilerContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	colToIndex map[string]int32,
+	setExpressions map[string]*plan.Expr,
+) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	ifExistAutoPkCol := false
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
 
 	for i := 0; i < len(tableDef.Cols); i++ {
+		if expr, ok := setExpressions[tableDef.Cols[i].Name]; ok {
+			node.ProjectList[i] = expr
+			if _, supplied := colToIndex[tableDef.Cols[i].Name]; !supplied &&
+				tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
+				ifExistAutoPkCol = true
+			}
+			continue
+		}
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
-				Typ: tableDef.Cols[i].Typ,
+				Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colListId),
@@ -977,7 +1002,7 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			continue
 		}
 
-		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], ctx.GetProcess(), loadAssignmentIgnore(stmt))
+		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], tableDef.DbName, ctx.GetProcess(), loadAssignmentIgnore(stmt))
 		if err != nil {
 			return false, err
 		}
@@ -994,12 +1019,25 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 // LOAD builds physical (child-batch) references directly, unlike INSERT's
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
+// Under statement IGNORE (ignoreSupplied non-nil, carrying the file-supplied
+// and SET-assigned columns) a staged omit-default expression reads its NOT
+// NULL sources through the fill adjustment: coalesceGeneratedColIgnoreFillRefs
+// rebuilds each such reference as coalesce(reference, implicit default), the
+// same rewrite the INSERT pre-insert projection applies, because the staged
+// defaults evaluate before the PRE_INSERT fill adjusts the batch.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
-	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+	bindCtx *BindContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	supplied map[string]int32,
+	setExpressions map[string]*plan.Expr,
+	ignoreSupplied map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
-		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if !sourceSupplied && !setSupplied && exprHasLocalColumnRef(node.ProjectList[i]) {
 			needed = true
 			break
 		}
@@ -1016,9 +1054,18 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		pos := int32(i)
 		positions[pos] = pos
 		expr := DeepCopyExpr(node.ProjectList[i])
-		if _, ok := supplied[col.Name]; ok {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
+			if ignoreSupplied != nil {
+				wrapped, wrapErr := builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, expr)
+				if wrapErr != nil {
+					return 0, wrapErr
+				}
+				expr = wrapped
+			}
 			materialize[pos] = true
 			order = append(order, pos)
 		}
@@ -1041,29 +1088,94 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 	return id, nil
 }
 
+// marshalLoadSourceParam serializes the parsed source param of a LOAD into the
+// execution-time transport (TableDef.Createsql). Both planner surfaces use it,
+// so file-backed and inline loads carry the same reader-visible options
+// (SET NULLIF sentinels, the FIELDS/LINES tails, ignored lines, format and
+// JSON type); options dropped here are silently ignored by execution. The
+// inline payload travels once, in ExternScan.Data: strip it instead of
+// duplicating it in the plan. The binding-consumed column list and assignment
+// trees stay out of the transport as well.
+//
+// The caller's AST outlives this serialization: PREPARE retains it and a
+// mode-driven rebuild (rebuildPreparePlan) replans that same object, and
+// InitNullMap keeps already-normalized rules only while the consumed
+// assignments stay attached to it. Strip the payload and the consumed trees on
+// a copy here instead of consuming the caller's binding state.
+func marshalLoadSourceParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	copied.Data = ""
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		copiedTail.Assignments = nil
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+// hasUnconsumedColumnNullIf reports whether an assignment still carries a
+// column-NULLIF expression awaiting consumption by InitNullMap. Row-variable
+// wrappers are excluded: they carry no NullMap rules, and binding must keep
+// them attached so a later plan of the same statement can rebind them.
+func hasUnconsumedColumnNullIf(assignments tree.UpdateExprs) bool {
+	for _, assignment := range assignments {
+		if assignment == nil || assignment.Expr == nil {
+			continue
+		}
+		expr, _ := loadNullIfFunction(assignment.Expr)
+		if expr == nil {
+			continue
+		}
+		if _, isVariable := expr.Exprs[0].(*tree.VarExpr); !isVariable {
+			return true
+		}
+	}
+	return false
+}
+
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
+	// Binding consumes column-NULLIF expressions before serializing
+	// ExternParam. The statement is already normalized when no column form
+	// remains unconsumed; keep its rules when PREPARE or a transaction retry
+	// builds another plan. A pass that failed after consuming some expressions
+	// does not count as normalized here, so every replan re-derives - and
+	// reproduces - the same result instead of skipping validation.
+	if param.NullMap != nil && len(param.Tail.Assignments) > 0 &&
+		!hasUnconsumedColumnNullIf(param.Tail.Assignments) {
+		return nil
+	}
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
-		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
-		if !ok {
+		expr, collated := loadNullIfFunction(param.Tail.Assignments[i].Expr)
+		if expr == nil {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
-		}
-		if len(expr.Exprs) != 2 {
-			param.Tail.Assignments[i].Expr = nil
-			return nil
-		}
-
-		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || expr2.ColName() != "nullif" {
-			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
+			if _, isVariable := expr.Exprs[0].(*tree.VarExpr); isVariable {
+				// The row-variable wrapper is the rebinding information for the
+				// projection: both planner surfaces re-derive the scan column
+				// and the NULLIF assignment expression from it on every pass.
+				// Consuming it here would leave a replan without a projection,
+				// and the insert would silently use the target column default.
+				continue
+			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
+		}
+
+		// NullMap stores raw field sentinels, not expression metadata. Row
+		// variables above have a projection owner that binds the full wrapper;
+		// column mappings cannot safely discard COLLATE's type validation.
+		if collated {
+			return moerr.NewNotSupported(ctx.GetContext(), "COLLATE on column NULLIF in LOAD/external SET requires an expression projection")
 		}
 
 		expr4, ok := expr.Exprs[1].(*tree.NumVal)
@@ -1162,10 +1274,10 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) {
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || typ.Id == int32(types.T_time) || isMediumIntPlanType(typ) {
 			// The following assignment projection owns both conversion and
-			// width enforcement. An ordinary TINYTEXT cast here would silently
-			// truncate before strict/IGNORE assignment can inspect the payload.
+			// domain enforcement. An ordinary cast here would truncate BLOB/TEXT
+			// or clamp TIME/MEDIUMINT before assignment sees the original value.
 			ret = append(ret, planExpr)
 			continue
 		}

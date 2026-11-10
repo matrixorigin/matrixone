@@ -38,7 +38,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[int8])
-		s, info := tc.Run()
+		s, info := tc.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -51,7 +51,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[uint8])
-		s, info := tc.Run()
+		s, info := tc.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -71,7 +71,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[types.BF16])
-		s, info := tc.Run()
+		s, info := tc.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -91,7 +91,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[types.Float16])
-		s, info := tc.Run()
+		s, info := tc.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -106,7 +106,7 @@ func TestInnerProductNarrowArray(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-32}, []bool{false}),
 		InnerProductArrayViaF32[int8])
-	s, info := tc.Run()
+	s, info := tc.RunAndFree()
 	require.True(t, s, fmt.Sprintf("inner_product int8: %s", info))
 
 	// uint8 sibling: same dot product over unsigned values.
@@ -117,6 +117,6 @@ func TestInnerProductNarrowArray(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-32}, []bool{false}),
 		InnerProductArrayViaF32[uint8])
-	s, info = tc.Run()
+	s, info = tc.RunAndFree()
 	require.True(t, s, fmt.Sprintf("inner_product uint8: %s", info))
 }

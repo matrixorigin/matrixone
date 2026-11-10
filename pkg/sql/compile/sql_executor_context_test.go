@@ -16,22 +16,30 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -192,14 +200,16 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 
 type recordingSessionCompilerContext struct {
 	*plan.MockCompilerContext
-	snapshot             *plan.Snapshot
-	subscription         *plan.SubscriptionMeta
-	queryingSubscription *plan.SubscriptionMeta
-	checkedSubscription  []string
-	resolvedDatabase     string
-	resolvedTable        string
-	resolvedTableDef     *plan.TableDef
-	proc                 *process.Process
+	snapshot              *plan.Snapshot
+	subscription          *plan.SubscriptionMeta
+	queryingSubscription  *plan.SubscriptionMeta
+	checkedSubscription   []string
+	resolvedDatabase      string
+	resolvedTable         string
+	resolvedTableDef      *plan.TableDef
+	resolvedIndexRef      *plan.ObjectRef
+	resolvedIndexSnapshot *plan.Snapshot
+	proc                  *process.Process
 }
 
 func (c *recordingSessionCompilerContext) GetProcess() *process.Process { return c.proc }
@@ -237,18 +247,26 @@ func (c *recordingSessionCompilerContext) GetQueryingSubscription() *plan.Subscr
 func (c *recordingSessionCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	_ *plan.Snapshot,
+	_ *plan.Snapshot, borrowOutput *plan.TableResolution,
 ) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	c.resolvedDatabase = databaseName
 	c.resolvedTable = tableName
 	return &plan.ObjectRef{}, c.resolvedTableDef, nil
+}
+
+func (c *recordingSessionCompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	c.resolvedIndexRef, c.resolvedIndexSnapshot = ref, snapshot
+	c.resolvedTable = tableName
+	return &plan.ObjectRef{NotLockMeta: ref.NotLockMeta}, c.resolvedTableDef, nil
 }
 
 func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	snapshot := &plan.Snapshot{}
 	subscription := &plan.SubscriptionMeta{Name: "pub", SubName: "sub"}
 	delegate := &recordingSessionCompilerContext{
-		MockCompilerContext: plan.NewMockCompilerContext(false),
+		MockCompilerContext: plan.NewMockCompilerContext(false, nil),
 		snapshot:            snapshot, subscription: subscription,
 		resolvedTableDef: &plan.TableDef{Name: "physical_source"},
 	}
@@ -268,16 +286,19 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	require.Equal(t, []string{"sub", "publisher", "pub"}, delegate.checkedSubscription)
 	c.SetQueryingSubscription(subscription)
 	require.Same(t, subscription, c.GetQueryingSubscription())
-	_, resolved, err := c.Resolve("subscription_db", "source", snapshot)
+	_, resolved, err := c.Resolve("subscription_db", "source", snapshot, nil)
 	require.NoError(t, err)
 	require.Same(t, delegate.resolvedTableDef, resolved)
 	require.Equal(t, "subscription_db", delegate.resolvedDatabase)
 	require.Equal(t, "source", delegate.resolvedTable)
 	for _, skipMeta := range []bool{false, true} {
-		indexRef, _, err := c.ResolveIndexTableByRef(&plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}, "hidden_index", nil)
+		baseRef := &plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}
+		indexRef, _, err := c.ResolveIndexTableByRef(baseRef, "hidden_index", snapshot, nil)
 		require.NoError(t, err)
 		require.Equal(t, skipMeta, indexRef.NotLockMeta)
 		require.Equal(t, "hidden_index", delegate.resolvedTable)
+		require.Same(t, baseRef, delegate.resolvedIndexRef)
+		require.Same(t, snapshot, delegate.resolvedIndexSnapshot)
 	}
 }
 
@@ -302,10 +323,10 @@ func TestInternalExecutorViewChildDoesNotMutateParent(t *testing.T) {
 	parentSubscription := &plan.SubscriptionMeta{Name: "parent"}
 	delegate := &isolatedViewTestDelegate{
 		recordingSessionCompilerContext: &recordingSessionCompilerContext{
-			MockCompilerContext:  plan.NewMockCompilerContext(false),
+			MockCompilerContext:  plan.NewMockCompilerContext(false, nil),
 			queryingSubscription: parentSubscription,
 		},
-		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	childContext := context.WithValue(original, struct{}{}, "child")
@@ -334,9 +355,9 @@ func TestInternalExecutorViewChildUsesDelegateProcess(t *testing.T) {
 	separate := proc.NewViewBindingProcess(original)
 	defer separate.Free()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		child: &recordingSessionCompilerContext{
-			MockCompilerContext: plan.NewMockCompilerContext(false), proc: separate,
+			MockCompilerContext: plan.NewMockCompilerContext(false, nil), proc: separate,
 		},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -354,7 +375,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		err:                             errors.New("cannot create child"),
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -368,7 +389,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 func TestInternalExecutorViewChildRejectsUnisolatedDelegate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
-	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)}
+	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
 	require.ErrorContains(t, err, "cannot isolate view binding")
@@ -397,7 +418,7 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 
 func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
@@ -428,7 +449,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 		engine: engine,
 	}
 
@@ -444,7 +465,7 @@ func TestCompilerContext_Database(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	tableDef := &plan.TableDef{
 		Name: "src",
 		Cols: []*plan.ColDef{
@@ -471,9 +492,46 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	require.NotSame(t, tableDef, actual)
 }
 
+func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
+	data, err := os.ReadFile("../plan/testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	catalogDef := new(plan.TableDef)
+	require.NoError(t, catalogDef.Unmarshal(fixtures["signed_compare"]))
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	requestCtx := proc.GetTopContext()
+	pipelineCtx, cancel := context.WithCancel(requestCtx)
+	cancel()
+	proc.Ctx = pipelineCtx
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(2)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "legacy_cmp", nil).Return(relation, nil).Times(2)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
+	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
+	for range 2 {
+		_, resolved, err := c.Resolve("db", "legacy_cmp", nil, nil)
+		require.NoError(t, err)
+		require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
+		for _, arg := range resolved.Checks[0].Check.GetF().Args {
+			require.Equal(t, int32(types.T_decimal128), arg.Typ.Id)
+			require.Equal(t, int32(19), arg.Typ.Width)
+		}
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
+}
+
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
 
 	database := mock_frontend.NewMockDatabase(ctrl)
@@ -493,7 +551,7 @@ func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testi
 
 func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	database := mock_frontend.NewMockDatabase(ctrl)
 	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, nil)
@@ -529,7 +587,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, tc.databaseErr)
 
@@ -538,7 +596,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 				engine:    eng,
 				proc:      proc,
 			}
-			obj, tableDef, err := c.Resolve("db", "missing", nil)
+			obj, tableDef, err := c.Resolve("db", "missing", nil, nil)
 			if tc.wantMissing {
 				require.NoError(t, err)
 				require.Nil(t, obj)
@@ -554,7 +612,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 
 func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "gone", gomock.Any()).
 		Return(nil, moerr.GetOkExpectedEOB())
@@ -565,7 +623,7 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := plan.BuildPlan(c, stmt, false)
+	p, err := plan.BuildPlan(c, stmt, false, nil)
 	require.NoError(t, err)
 	drop := p.GetDdl().GetDropTable()
 	require.Equal(t, "gone", drop.GetDatabase())
@@ -581,7 +639,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		isSystem, isGlobal bool
 	}
 	var seen []resolved
-	delegate := plan.NewMockCompilerContext(false)
+	delegate := plan.NewMockCompilerContext(false, nil)
 	delegate.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
 		if name == "sql_mode" {
@@ -634,7 +692,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Equal(t, int64(10), value)
 	// Internal SQL callers can install a resolver for only a subset of
 	// session variables. Unrelated planner lookups retain their nil default.
-	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	value, err = processOnly.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
 	value, err = processOnly.ResolveVariable("other", false, true)
@@ -668,4 +726,381 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Type{}, declared)
+}
+
+func TestCompilerContextDelegatesRegexpNullHistory(t *testing.T) {
+	delegate := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	delegate.ResolveVariableRegexpStringResultFunc = func(name string) (bool, error) {
+		if name == "history" {
+			return true, nil
+		}
+		return false, moerr.NewInternalErrorNoCtx("history resolver failed")
+	}
+	attached := &compilerContext{ctx: attachInternalExecutorCompilerContext(context.Background(), delegate)}
+	stringResult, err := attached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.True(t, stringResult)
+	_, err = attached.ResolveVariableRegexpStringResult("other")
+	require.ErrorContains(t, err, "history resolver failed")
+	detached := &compilerContext{ctx: context.Background()}
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+	detached.ctx = attachInternalExecutorCompilerContext(context.Background(), detached)
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+}
+
+func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 0)
+	proc := testutil.NewProcess(t)
+	compiler := &compilerContext{ctx: ctx, proc: proc}
+	build := func(c plan.CompilerContext, sql string) *plan.Plan {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		result, err := plan.BuildPlan(c, stmt, false, nil)
+		require.NoError(t, err)
+		return result
+	}
+	for _, tc := range []struct {
+		value interface{}
+		want  int64
+	}{
+		{int64(1), 1}, {int64(3), 3}, {int64(0), 0}, {int(1), 0}, {nil, 0},
+	} {
+		if tc.value == nil {
+			proc.SetResolveVariableFunc(nil)
+		} else {
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				if system && !global && strings.EqualFold(name, "max_dop") {
+					return tc.value, nil
+				}
+				return nil, nil
+			})
+		}
+		require.Equal(t, tc.want, build(compiler, "select 1").GetQuery().MaxDop)
+	}
+	// Precision continues to shape real expression binding alongside DOP.
+	var seen []string
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		seen = append(seen, name)
+		if strings.EqualFold(name, "max_dop") {
+			return int64(1), nil
+		}
+		if strings.EqualFold(name, "div_precision_increment") {
+			return int64(10), nil
+		}
+		return nil, errors.New("unexpected variable")
+	})
+	query := build(compiler, "select cast(1.23 as decimal(10,2)) / cast(3.45 as decimal(10,2))").GetQuery()
+	require.Equal(t, int64(1), query.MaxDop)
+	require.Equal(t, int32(12), query.Nodes[query.Steps[0]].ProjectList[0].Typ.Scale)
+	for _, name := range []string{"MAX_DOP", "DIV_PRECISION_INCREMENT"} {
+		_, err := compiler.ResolveVariable(name, true, false)
+		require.NoError(t, err)
+	}
+	seen = nil
+	for _, tc := range []struct {
+		name           string
+		system, global bool
+	}{
+		{"max_dop", false, false}, {"max_dop", true, true},
+		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
+		{"sql_mode", true, false},
+	} {
+		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
+		require.NoError(t, err)
+		require.Nil(t, v)
+	}
+	require.Empty(t, seen)
+	empty := &compilerContext{ctx: ctx}
+	v, err := empty.ResolveVariable("max_dop", true, false)
+	require.NoError(t, err)
+	require.Nil(t, v)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return nil, errors.New("resolver failed") })
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "resolver failed")
+	// An attached frontend delegate controls replay even when the process disagrees.
+	delegate := plan.NewMockCompilerContext(false, nil)
+	delegate.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+		if name == "max_dop" {
+			return int64(2), nil
+		}
+		return nil, nil
+	}
+	compiler.ctx = attachInternalExecutorCompilerContext(ctx, delegate)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		t.Fatal("process resolver must not override frontend delegate")
+		return nil, nil
+	})
+	require.Equal(t, int64(2), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, nil }
+	require.Equal(t, int64(0), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, errors.New("delegate failed") }
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "delegate failed")
+}
+
+func TestInternalCompilerStatsCacheObservations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = op
+	readonly := true
+	ws := mock_frontend.NewMockWorkspace(ctrl)
+	ws.EXPECT().Readonly().DoAndReturn(func() bool { return readonly }).AnyTimes()
+	op.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+	op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "d", op).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(rel, nil).AnyTimes()
+	current := &pbstats.StatsInfo{TableName: "t", TableCnt: 5, NdvMap: map[string]float64{"v": 5}}
+	observed := current
+	calls := 0
+	rel.EXPECT().Stats(gomock.Any(), true).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) {
+		calls++
+		return observed, nil
+	}).AnyTimes()
+	ctx := &compilerContext{ctx: context.Background(), proc: proc, engine: eng, statsCache: plan.NewStatsCache()}
+	obj := &plan.ObjectRef{Obj: 42, SchemaName: "d", ObjName: "t"}
+	tableDef := &plan.TableDef{Version: 7}
+	got, err := ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, current, got)
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "completed readonly observation is reused")
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	for _, count := range []float64{2, 0} {
+		observed = &pbstats.StatsInfo{TableName: "t", TableCnt: count, NdvMap: map[string]float64{"v": count}}
+		got, err = ctx.StatsWithTableDef(obj, tableDef, snapshot)
+		require.NoError(t, err)
+		require.Same(t, observed, got)
+		wrapper := ctx.GetStatsCache().Get(42)
+		require.Equal(t, observed.NdvMap, wrapper.GetStats().NdvMap)
+		require.Empty(t, wrapper.GetStats().TableName)
+		require.Equal(t, "t", observed.TableName)
+		observed = current
+		before := calls
+		got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before+1, calls, "historical maps cannot serve the current fast cache")
+	}
+	readonly = false
+	observed = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+	got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, observed, got)
+	readonly = true
+	before := calls
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
+}
+
+type failingStatementWorkspace struct {
+	Ws
+	err      error
+	prepared int
+}
+
+func (w *failingStatementWorkspace) IncrStatementID(context.Context, bool) error {
+	w.prepared++
+	return w.err
+}
+
+type deferredRollbackTxn struct {
+	client.TxnOperator
+	sealed error
+}
+
+func (op *deferredRollbackTxn) RollbackAfterRunningSQL(err error) { op.sealed = err }
+
+func (op *deferredRollbackTxn) TryEnterRunSqlWithTokenAndSQL(context.CancelFunc, string) (uint64, error) {
+	if op.sealed != nil {
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return 1, nil
+}
+func (op *deferredRollbackTxn) ExitRunSqlWithToken(uint64) {}
+
+func TestBorrowedExecutorSealsFatalErrorBeforeCallbackCanSuppressIt(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "statement error", true: "joined fatal error"}[fatal], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mock := mock_frontend.NewMockTxnOperator(ctrl)
+			failure := error(moerr.NewInternalErrorNoCtx("statement failed"))
+			if fatal {
+				failure = errors.Join(failure, fmt.Errorf("lock owner: %w", moerr.NewLockConflictNoCtx()))
+			}
+			mock.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+			workspace := &failingStatementWorkspace{err: failure}
+			mock.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			owner := &deferredRollbackTxn{TxnOperator: mock}
+			exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithTxn(owner)}
+			// Simulate a callback that catches Exec's error and returns success.
+			callback := func() error {
+				_, err := exec.Exec("select 1", executor.StatementOption{})
+				require.ErrorIs(t, err, failure)
+				if fatal {
+					require.ErrorIs(t, owner.sealed, failure)
+				} else {
+					require.NoError(t, owner.sealed)
+				}
+				if fatal {
+					_, nextErr := exec.Exec("select 2", executor.StatementOption{})
+					require.True(t, moerr.IsMoErrCode(nextErr, moerr.ErrTxnClosed))
+					require.Equal(t, 1, workspace.prepared, "sealed transaction cannot prepare another statement")
+				}
+				return nil
+			}
+			require.NoError(t, callback())
+		})
+	}
+}
+
+// Internal COPY INSERT compilation must use the session's FK-check mode,
+// while absent resolvers keep the enabled default and resolution errors fail.
+func TestInternalCompilerForeignKeyChecks(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{int64(0), int64(1), int8(0), int8(1), nil} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "foreign_key_checks", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+		require.NoError(t, err)
+		require.Equal(t, value != int64(0) && value != int8(0), enabled)
+	}
+	proc.SetResolveVariableFunc(nil)
+	enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	sentinel := errors.New("foreign key mode unavailable")
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return nil, sentinel })
+	_, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.ErrorIs(t, err, sentinel)
+	proc.ReplaceTopCtx(context.WithValue(proc.GetTopContext(), defines.IgnoreForeignKey{}, true))
+	enabled, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.False(t, enabled, "explicit internal ignore takes precedence over session resolver")
+}
+
+func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{nil, int8(0), int8(1)} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "mo_pk_check_by_cn", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		got, err := compiler.ResolveVariable("mo_pk_check_by_cn", true, false)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+	}
+}
+
+type namespaceDelegate struct {
+	*plan.MockCompilerContext
+	t        *testing.T
+	snapshot *plan.Snapshot
+}
+
+func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
+}
+
+func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	id, err := d.GetAccountId()
+	require.NoError(d.t, err)
+	return &plan.ObjectRef{Obj: 11, PubInfo: &pbplan.PubInfo{TenantId: int32(id)}}, &plan.TableDef{TblId: 11}, nil
+}
+
+func (d *namespaceDelegate) ResolveTemporaryTable(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	return &plan.ObjectRef{Obj: 22}, &plan.TableDef{TblId: 22, IsTemporary: true}, nil
+}
+
+func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
+	delegate := &namespaceDelegate{MockCompilerContext: plan.NewMockCompilerContext(false, proc), t: t, snapshot: snapshot}
+	for _, viewChild := range []bool{false, true} {
+		c := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(proc.Ctx, delegate), viewChild: viewChild, viewDelegate: delegate}
+		obj, def, err := c.ResolveWithoutTemporaryAlias("subscription_db", "source", snapshot, nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(11), def.TblId)
+		id, err := delegate.GetAccountId()
+		require.NoError(t, err)
+		require.Equal(t, int32(id), obj.PubInfo.TenantId)
+		_, def, err = c.Resolve("subscription_db", "source", snapshot, nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), def.TblId)
+		obj, def, err = c.ResolveTemporaryTable("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, int64(22), obj.Obj)
+		require.Equal(t, uint64(22), def.TblId)
+	}
+}
+
+func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	owner.AddTempTable("db", "t", "physical")
+	proc.Session = owner
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(database, nil).AnyTimes()
+	for i, name := range []string{"t", "physical"} {
+		def := &plan.TableDef{Name: name, TblId: uint64(i + 11), TableType: catalog.SystemOrdinaryRel}
+		if name == "physical" {
+			def.TableType = catalog.SystemTemporaryTable
+		}
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), name, nil).Return(relation, nil).AnyTimes()
+	}
+	c := &compilerContext{engine: eng, proc: proc, ctx: proc.Ctx}
+	for _, skipAlias := range []bool{false, true, false} {
+		resolve := c.Resolve
+		if skipAlias {
+			resolve = c.ResolveWithoutTemporaryAlias
+		}
+		obj, def, err := resolve("db", "t", nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, !skipAlias, def.IsTemporary)
+		require.Equal(t, !skipAlias, obj.NotLockMeta)
+		if skipAlias {
+			require.Equal(t, uint64(11), def.TblId)
+		} else {
+			require.Equal(t, uint64(12), def.TblId)
+		}
+	}
+	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil, nil)
+	require.NoError(t, err)
+	require.True(t, def.IsTemporary)
+	require.True(t, obj.NotLockMeta)
+	_, _, err = (&recoveryCompilerContext{compilerContext: c}).ResolveWithoutTemporaryAlias("db", "t", nil, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

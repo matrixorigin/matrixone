@@ -29,13 +29,13 @@ explain select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
@@ -43,13 +43,13 @@ explain select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 set @entries = (
     select index_table_name
@@ -123,13 +123,13 @@ explain select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 drop table phase8_main;
 
@@ -149,12 +149,12 @@ lists=2 op_type "vector_l2_ops" include(title, category);
 explain select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 drop table phase8_empty;
 
@@ -177,7 +177,7 @@ lists=2 op_type "vector_l2_ops" include(title, category);
 select id, title, category
 from phase8_nulls
 order by l2_distance(embedding, "[1,1,1]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 drop table phase8_nulls;
 
@@ -206,7 +206,7 @@ show index from phase8_many_include;
 select id, c1, c2, c3, c4, c5, c6
 from phase8_many_include
 order by l2_distance(embedding, "[1,0,0]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 drop table phase8_many_include;
 
@@ -257,7 +257,7 @@ explain select id, title, category
 from phase8_perf_include
 where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
-limit 20 by rank with option 'mode=include';
+limit 20 by rank with option 'mode=iterative';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
@@ -272,7 +272,7 @@ select count(*) from (
     from phase8_perf_include
     where category between 20 and 120
     order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
-    limit 20 by rank with option 'mode=include'
+    limit 20 by rank with option 'mode=iterative'
 ) as t;
 
 select count(*) from (

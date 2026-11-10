@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -48,7 +49,7 @@ func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) 
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil, mock.mp)
 	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil, mock.mp)
 	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil, mock.mp)
-	bat.Vecs[4] = testutil.MakeScalarNull(nil, types.T_timestamp, 1, mock.mp)
+	bat.Vecs[4] = vector.NewConstNull(types.T_timestamp.ToType(), 1, mock.mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
@@ -314,6 +315,16 @@ func TestJoinAccountIds(t *testing.T) {
 			wantS: "",
 		},
 		{
+			name:  "nil",
+			args:  args{accIds: nil},
+			wantS: "",
+		},
+		{
+			name:  "signed boundaries and duplicate",
+			args:  args{accIds: []int32{0, -1, -2147483648, 2147483647, 0}},
+			wantS: "0,-1,-2147483648,2147483647,0",
+		},
+		{
 			args: args{
 				accIds: []int32{1},
 			},
@@ -346,4 +357,33 @@ func TestGetAccounts(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nameInfoMap))
 	assert.Equal(t, 1, len(idInfoMap))
+}
+
+func TestMembershipListEdgeCases(t *testing.T) {
+	for _, tc := range []struct {
+		name, list, needle       string
+		allow, table, subscriber bool
+	}{
+		{"empty list and name", "", "", false, true, true},
+		{"trimmed privilege only", "a, b,", "b", true, false, false},
+		{"trailing empty member", "a, b,", "", true, true, true},
+		{"whitespace preserved for catalog lists", "a, b", " b", false, true, true},
+		{"all subscribers is case insensitive", "ALL", "missing", false, false, true},
+		{"wildcard tables and privilege", "*", "missing", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CanPubToAll(tc.needle, tc.list); got != tc.allow {
+				t.Errorf("CanPubToAll = %v, want %v", got, tc.allow)
+			}
+			if got := InSubMetaTables(&plan.SubscriptionMeta{Tables: tc.list}, tc.needle); got != tc.table {
+				t.Errorf("InSubMetaTables = %v, want %v", got, tc.table)
+			}
+			if got := (&PubInfo{SubAccountsStr: tc.list}).InSubAccounts(tc.needle); got != tc.subscriber {
+				t.Errorf("InSubAccounts = %v, want %v", got, tc.subscriber)
+			}
+		})
+	}
+	if got := SplitAccounts(" ,a, "); !reflect.DeepEqual(got, []string{"", "a", ""}) {
+		t.Errorf("SplitAccounts = %#v", got)
+	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +30,6 @@ import (
 // narrow vector array column (vecint8 here). The array case compares raw bytes;
 // it previously listed only vecf32/vecf64, so a narrow array fell through.
 func TestGetOffsetByValNarrowArray(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	mp := mpool.MustNewZero()
 	typ := types.New(types.T_array_int8, 2, 0)
 	vec := containers.MakeVector(typ, mp)
@@ -50,7 +48,6 @@ func TestGetOffsetByValNarrowArray(t *testing.T) {
 }
 
 func TestSortAndDedup(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vals := []int{2, 1, 3, 4, 5, 1, 2, 3, 4, 5}
 	vals = SortAndDedup(vals, func(a, b *int) bool {
 		return *a < *b
@@ -63,7 +60,6 @@ func TestSortAndDedup(t *testing.T) {
 }
 
 func TestShuffleByDeletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	origMask := roaring.New()
 	origVals := make(map[uint32]any)
 	origMask.Add(1)
@@ -85,7 +81,6 @@ func TestShuffleByDeletes(t *testing.T) {
 }
 
 func TestCheckRowExists(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	typ := types.T_int32.ToType()
 	vec := containers.MockVector2(typ, 100, 0)
 	_, exist := GetOffsetByVal(vec, int32(55), nil)
@@ -109,7 +104,6 @@ func TestCheckRowExists(t *testing.T) {
 }
 
 func TestAppendNull(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	colTypes := types.MockColTypes()
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)

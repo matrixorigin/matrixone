@@ -249,7 +249,7 @@ func (r *fullGroupByRelation) equality(expr *Expr) (fullGroupByColumn, fullGroup
 }
 
 func fullGroupBySameValueType(a, b pbplan.Type) bool {
-	return a.Id == b.Id && a.Scale == b.Scale && a.Charset == b.Charset && a.Enumvalues == b.Enumvalues
+	return a.Id == b.Id && a.Scale == b.Scale && a.SameCollation(b) && a.Enumvalues == b.Enumvalues
 }
 
 func (r *fullGroupByRelation) addPredicates(predicates []*Expr, nonNull bool) {
@@ -305,7 +305,7 @@ func fullGroupByStableReferences(expr *Expr, columns map[fullGroupByColumn]pbpla
 			return false
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
-		if !ok || overload.CannotFold() {
+		if !ok || overload.IsVolatile() {
 			return false
 		}
 		for _, arg := range f.Args {

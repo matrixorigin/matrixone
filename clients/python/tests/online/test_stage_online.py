@@ -23,6 +23,8 @@ from matrixone import Client, AsyncClient, Stage, JsonDataStructure
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL
 
+from .test_config import online_config
+
 # Create Base for model definitions
 Base = declarative_base()
 
@@ -35,7 +37,7 @@ os.makedirs(TMPFILES_DIR, exist_ok=True)
 def test_client():
     """Fixture for test client"""
     client = Client()
-    client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+    client.connect(**online_config.get_connection_kwargs())
     yield client
     client.disconnect()
 
@@ -312,7 +314,7 @@ class TestAsyncStageOperations:
     async def test_async_create_and_list(self):
         """Test async stage creation and listing"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Create stage
@@ -338,7 +340,7 @@ class TestAsyncStageOperations:
     async def test_async_load_from_stage(self):
         """Test async loading data from stage"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Create stage
@@ -382,7 +384,7 @@ class TestAsyncStageOperations:
     async def test_async_create_local(self):
         """Test async create_local stage"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Test create_local
@@ -398,7 +400,7 @@ class TestAsyncStageOperations:
     async def test_async_create_s3_with_env(self):
         """Test async create_s3 with environment variables"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Set environment variables
@@ -648,7 +650,7 @@ class TestAsyncStageExtendedOperations:
     async def test_async_stage_show(self):
         """Test async show stages"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Create stage
@@ -670,7 +672,7 @@ class TestAsyncStageExtendedOperations:
     async def test_async_session_stage_operations(self):
         """Test async stage operations within session"""
         client = AsyncClient()
-        await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+        await client.connect(**online_config.get_connection_kwargs())
 
         try:
             # Create stage

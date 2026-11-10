@@ -96,6 +96,15 @@ str2,2,2.2,2,2023-05-16T00:00:00Z,"{""key2"":""value2""}"
 }
 
 func TestIsRecordExisted(t *testing.T) {
+	t.Run("other tables do not query statement storage", func(t *testing.T) {
+		exists, err := IsRecordExisted(context.Background(), []string{"row1"}, &table.Table{Table: "other"}, func(bool, bool) (*sql.DB, error) {
+			t.Fatal("non-statement table must not acquire a database connection")
+			return nil, nil
+		})
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
 	// Create a new instance of sqlmock
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -689,7 +698,7 @@ func Test_WriteRowRecords2(t *testing.T) {
 ' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
 		SetDBConn(db)
 
-		// set up your DefaultSqlWriter and records
+		// Build the table and records passed to WriteRowRecords.
 		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 		tbl := &table.Table{
@@ -719,7 +728,7 @@ func TestWriteRowRecords_WithBackoff(t *testing.T) {
 			DBConnErrCount = old
 		}()
 
-		// set up your DefaultSqlWriter and records
+		// Build the table and records passed to WriteRowRecords.
 		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 		tbl := &table.Table{

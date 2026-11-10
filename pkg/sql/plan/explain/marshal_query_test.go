@@ -19,12 +19,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetLabelOrTitle(t *testing.T) {
@@ -97,7 +100,7 @@ func TestSimpleQueryToJson(t *testing.T) {
 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
 
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -168,7 +171,7 @@ func TestSingleTableQueryToJson(t *testing.T) {
 		//"delete from nation",
 		//"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 	}
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -190,7 +193,7 @@ func TestJoinQueryToJson(t *testing.T) {
 		"select n_name from nation intersect select n_name from nation2",
 		"select n_name from nation minus select n_name from nation2",
 	}
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -221,7 +224,7 @@ func TestNestedQueryToJson(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 	}
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -243,7 +246,7 @@ func TestCollectionQueryToJson(t *testing.T) {
 		"SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
 	}
 
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -259,7 +262,7 @@ func TestDerivedTableQueryToJson(t *testing.T) {
 		"select a.* from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 		"select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -271,7 +274,7 @@ func TestDMLToJson(t *testing.T) {
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		"DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
 	}
-	mock := plan.NewMockOptimizer(true)
+	mock := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -319,7 +322,7 @@ func runSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, err
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], false)
+	return plan.BuildPlan(ctx, stmts[0], false, nil)
 }
 
 func TestMarshalNodeImpl_GetStatistics_ReadSize(t *testing.T) {
@@ -477,4 +480,35 @@ func getKeys(m map[string]int64) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// A statistics refresh can outlive planning and still update the request's
+// counters when its JSON plan is captured. Exercise the real serialization
+// boundary without needing a background engine or external file service.
+func TestBuildJsonPlanConcurrentStats(t *testing.T) {
+	stats := statistic.NewStatsInfo()
+	ctx := statistic.ContextWithStatsInfo(context.Background(), stats)
+	query := &plan2.Query{}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		<-start
+		for i := 0; i < 100; i++ {
+			stats.AddBuildPlanStatsS3Request(statistic.S3Request{List: 1, Head: 2, Put: 3, Get: 4, Delete: 5, DeleteMul: 6})
+		}
+	}()
+	defer workers.Wait()
+	close(start)
+	for i := 0; i < 100; i++ {
+		data := BuildJsonPlan(ctx, uuid.New(), &MarshalPlanOptions, query)
+		_, err := json.Marshal(data)
+		require.NoError(t, err)
+	}
+	workers.Wait()
+	data := BuildJsonPlan(ctx, uuid.New(), &MarshalPlanOptions, query)
+	require.Equal(t, statistic.S3Request{List: 100, Head: 200, Put: 300, Get: 400, Delete: 500, DeleteMul: 600}, data.NewPlanStats.PlanStage.BuildPlanStatsS3)
+	stats.AddBuildPlanStatsS3Request(statistic.S3Request{Get: 1})
+	require.Equal(t, int64(400), data.NewPlanStats.PlanStage.BuildPlanStatsS3.Get)
 }

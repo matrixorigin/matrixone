@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -46,14 +45,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -78,6 +74,7 @@ var (
 
 type Service interface {
 	Start() error
+	StartContext(context.Context) error
 	Close() error
 	// ID returns UUID of the service.
 	ID() string
@@ -101,36 +98,14 @@ const (
 	ReservedTasks = 2
 )
 
-// SiriusConfig enables the explicit /*+ SIDECAR */ Substrait/Flight path.
-// Certificate files are deliberately separate for the two mTLS directions:
-// CN -> Flight and sidecar -> CN read resolver.
+// SiriusConfig configures the process-owned GPU engine and normal MO readers.
 type SiriusConfig struct {
-	Enabled bool `toml:"enabled"`
-	// Backend defaults to Flight during migration. Embedded selection remains
-	// fail-closed until the native backend and its build capability are present.
-	Backend string `toml:"backend"`
-	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
-	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
-	// startup keeps requiring durable GC-protected lease dependencies.
-	BenchmarkNoGC bool `toml:"benchmark-no-gc"`
-	// benchmarkGCDisabled is set by the top-level launcher after it verifies
-	// the paired TN configuration. It is intentionally not user-configurable.
-	benchmarkGCDisabled    bool
-	FlightAddress          string        `toml:"flight-address"`
-	FlightServerName       string        `toml:"flight-server-name"`
-	FlightClientCertPath   string        `toml:"flight-client-cert-path"`
-	FlightClientKeyPath    string        `toml:"flight-client-key-path"`
-	FlightServerCAPath     string        `toml:"flight-server-ca-path"`
-	ResolverAddress        string        `toml:"resolver-address"`
-	ResolverServerCertPath string        `toml:"resolver-server-cert-path"`
-	ResolverServerKeyPath  string        `toml:"resolver-server-key-path"`
-	ResolverClientCAPath   string        `toml:"resolver-client-ca-path"`
-	ResolverClientCertPath string        `toml:"resolver-client-cert-path"`
-	DataDir                string        `toml:"data-dir"`
-	MaxBatchBytes          uint64        `toml:"max-batch-bytes"`
-	RequestTimeout         toml.Duration `toml:"request-timeout"`
-	CleanupTimeout         toml.Duration `toml:"cleanup-timeout"`
-	LeaseTTL               toml.Duration `toml:"lease-ttl"`
+	Enabled           bool          `toml:"enabled"`
+	NativeConfigPath  string        `toml:"native-config-path"`
+	GPUStreams        uint32        `toml:"gpu-streams"`
+	MaxWaitingQueries uint32        `toml:"max-waiting-queries"`
+	RequestTimeout    toml.Duration `toml:"request-timeout"`
+	CleanupTimeout    toml.Duration `toml:"cleanup-timeout"`
 }
 
 // Config cn service
@@ -225,6 +200,12 @@ type Config struct {
 		HeartbeatTimeout  toml.Duration `toml:"task-heartbeat-timeout"`
 	}
 
+	// ISCP startup cadences. Zero inherits the executor's production default.
+	ISCP struct {
+		SyncTaskInterval            toml.Duration `toml:"sync-task-interval"`
+		IndexFlushWatermarkInterval toml.Duration `toml:"index-flush-watermark-interval"`
+	} `toml:"iscp"`
+
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 
@@ -299,7 +280,11 @@ type Config struct {
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
 
-		// Trace trace
+		// Trace is retained for stopped-version rollback configuration.
+		// The transaction data collector is retired; every field is inert.
+		// TODO(retire-txn-trace, #29249): remove this block and its parsing tests
+		// after the rollback window excludes collector-bearing versions and
+		// deployed service TOMLs no longer contain these keys. Do not add readers.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
@@ -320,7 +305,8 @@ type Config struct {
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
-	// LargestEntryLimit is the max size for reading file to buf
+	// LargestEntryLimit is the max raw size of one CSV record readable by the
+	// LOAD DATA / external-table CSV parser; see config.LargestEntryLimit.
 	LargestEntryLimit int `toml:"largest-entry-limit"`
 
 	// MaxPreparedStmtCount
@@ -339,36 +325,30 @@ type Config struct {
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
+	// UpgradeCatalogObjectLimit bounds one indivisible catalog input in bytes.
+	UpgradeCatalogObjectLimit uint64 `toml:"upgrade-catalog-object-limit"`
 }
 
 func (c *Config) Validate() error {
-	foundMachineHost := ""
+	if c.UpgradeCatalogObjectLimit == 0 {
+		c.UpgradeCatalogObjectLimit = bootstrap.DefaultCatalogUpgradeObjectBytes
+	} else if c.UpgradeCatalogObjectLimit < bootstrap.CatalogUpgradePageBytes {
+		return moerr.NewBadConfigNoCtxf("cn.upgrade-catalog-object-limit must be at least %d bytes", bootstrap.CatalogUpgradePageBytes)
+	}
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
 	if err := validateCNServiceUUID(c.UUID); err != nil {
 		return err
 	}
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
+	if c.ISCP.SyncTaskInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("cn.iscp.sync-task-interval must be non-negative")
 	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	if c.ISCP.IndexFlushWatermarkInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("cn.iscp.index-flush-watermark-interval must be non-negative")
 	}
-	if c.Role == "" {
-		c.Role = metadata.CNRole_TP.String()
-	}
-	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
-		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
-	}
-	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
-		c.HAKeeper.HeatbeatInterval.Duration = time.Second
-	}
-	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
-	}
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
 	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
 	}
@@ -381,30 +361,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
-	if c.TaskRunner.Parallelism == 0 {
-		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism <= ReservedTasks {
-			c.TaskRunner.Parallelism = 1 + ReservedTasks
-		}
-	}
-	if c.TaskRunner.FetchInterval.Duration == 0 {
-		c.TaskRunner.FetchInterval.Duration = time.Second * 10
-	}
-	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
-	}
-	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
-		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
-	}
-	if c.TaskRunner.MaxWaitTasks == 0 {
-		c.TaskRunner.MaxWaitTasks = 256
-	}
-	if c.TaskRunner.QueryLimit == 0 {
-		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
-	}
-	if c.TaskRunner.RetryInterval.Duration == 0 {
-		c.TaskRunner.RetryInterval.Duration = time.Second
-	}
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -433,39 +390,7 @@ func (c *Config) Validate() error {
 		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
 
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -520,82 +445,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func validateCNServiceUUID(serviceID string) error {
-	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
-		return moerr.NewBadConfigNoCtxf(
-			"CN service UUID %q must be a single path component",
-			serviceID,
-		)
-	}
-	return nil
-}
-
-func (c *SiriusConfig) validate() error {
-	if c == nil {
-		return nil
-	}
-	if c.BenchmarkNoGC && !c.Enabled {
-		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires Sirius enabled")
-	}
-	if !c.Enabled {
-		return nil
-	}
-	if err := c.validateBackend(); err != nil {
-		return err
-	}
-	if c.MaxBatchBytes == 0 {
-		c.MaxBatchBytes = 64 << 20
-	}
-	if c.RequestTimeout.Duration == 0 {
-		c.RequestTimeout.Duration = 15 * time.Minute
-	}
-	if c.CleanupTimeout.Duration == 0 {
-		c.CleanupTimeout.Duration = 30 * time.Second
-	}
-	if c.MaxBatchBytes > 512<<20 || c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 ||
-		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
-		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
-	}
-	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
-	if c.LeaseTTL.Duration == 0 {
-		c.LeaseTTL.Duration = minimumLeaseTTL
-	}
-	if c.LeaseTTL.Duration < minimumLeaseTTL || c.LeaseTTL.Duration > substrait.MaxLeaseTTL {
-		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
-	}
-	for _, setting := range []struct{ name, value string }{
-		{"flight-address", c.FlightAddress}, {"flight-server-name", c.FlightServerName},
-		{"flight-client-cert-path", c.FlightClientCertPath}, {"flight-client-key-path", c.FlightClientKeyPath},
-		{"flight-server-ca-path", c.FlightServerCAPath}, {"resolver-address", c.ResolverAddress},
-		{"resolver-server-cert-path", c.ResolverServerCertPath}, {"resolver-server-key-path", c.ResolverServerKeyPath},
-		{"resolver-client-ca-path", c.ResolverClientCAPath}, {"resolver-client-cert-path", c.ResolverClientCertPath},
-		{"data-dir", c.DataDir},
-	} {
-		if setting.value == "" {
-			return moerr.NewBadConfigNoCtx("missing Sirius " + setting.name)
-		}
-	}
-	return nil
-}
-
-func (c *SiriusConfig) validateBackend() error {
-	switch c.Backend {
-	case "":
-		c.Backend = "flight"
-	case "flight":
-	case "embedded":
-		return moerr.NewBadConfigNoCtx("Sirius embedded backend is not available in this build")
-	default:
-		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
-	}
-	return nil
-}
-
-// SetDefaultValue setups the default of the config.
-// most of the code are copied from the Validate.
-// But, the Validate may change some global variables that the SetDefaultValue does not need.
-// So, need a different function.
-func (c *Config) SetDefaultValue() {
+func (c *Config) setServiceDefaults() string {
 	foundMachineHost := ""
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
@@ -608,6 +458,10 @@ func (c *Config) SetDefaultValue() {
 	if c.Role == "" {
 		c.Role = metadata.CNRole_TP.String()
 	}
+	return foundMachineHost
+}
+
+func (c *Config) setHAKeeperDefaults() {
 	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
 		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
 	}
@@ -617,6 +471,9 @@ func (c *Config) SetDefaultValue() {
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
 	}
+}
+
+func (c *Config) setTaskRunnerDefaults() {
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
 		if c.TaskRunner.Parallelism <= ReservedTasks {
@@ -641,6 +498,69 @@ func (c *Config) SetDefaultValue() {
 	if c.TaskRunner.RetryInterval.Duration == 0 {
 		c.TaskRunner.RetryInterval.Duration = time.Second
 	}
+}
+
+func (c *Config) setTxnFeatureDefaults() {
+	// Resolve the mode before modifying fields so invalid modes still panic without mutation.
+	pessimistic := txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic
+	if c.Txn.EnableSacrificingFreshness == 0 {
+		c.Txn.EnableSacrificingFreshness = 1
+	}
+	if c.Txn.EnableCNBasedConsistency == 0 {
+		if pessimistic {
+			c.Txn.EnableCNBasedConsistency = -1
+		} else {
+			c.Txn.EnableCNBasedConsistency = 1
+		}
+	}
+	// Refresh expressions are not supported in either transaction mode.
+	c.Txn.EnableRefreshExpression = -1
+	if c.Txn.EnableLeakCheck == 0 {
+		c.Txn.EnableLeakCheck = -1
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 10
+	}
+}
+
+func validateCNServiceUUID(serviceID string) error {
+	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
+		return moerr.NewBadConfigNoCtxf(
+			"CN service UUID %q must be a single path component",
+			serviceID,
+		)
+	}
+	return nil
+}
+
+func (c *SiriusConfig) validate() error {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+	if err := validateSiriusEmbeddedBuild(); err != nil {
+		return err
+	}
+	if c.RequestTimeout.Duration == 0 {
+		c.RequestTimeout.Duration = 15 * time.Minute
+	}
+	if c.CleanupTimeout.Duration == 0 {
+		c.CleanupTimeout.Duration = 30 * time.Second
+	}
+	if c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 || c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
+		return moerr.NewBadConfigNoCtx("invalid Sirius request or cleanup timeout")
+	}
+	return validateSiriusEmbeddedConfig(c)
+}
+
+// SetDefaultValue applies defaults without Validate's checks or global side effects.
+func (c *Config) SetDefaultValue() {
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -659,39 +579,7 @@ func (c *Config) SetDefaultValue() {
 			c.Txn.Isolation = txn.TxnIsolation_SI.String()
 		}
 	}
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = c.UUID
 
@@ -756,6 +644,7 @@ const (
 )
 
 type service struct {
+	rt             moruntime.Runtime
 	metadata       metadata.CNStore
 	cfg            *Config
 	responsePool   *sync.Pool
@@ -785,8 +674,6 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
-	colexecServer          *colexec.Server
-	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService
@@ -814,7 +701,6 @@ type service struct {
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
-	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
 	stopper                         *stopper.Stopper
@@ -849,6 +735,12 @@ type service struct {
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
+	startMu             sync.Mutex
+	startCtx            context.Context
+	startCancel         context.CancelCauseFunc
+	startInProgress     bool
+	startUpgradeActive  bool
+	startClosing        bool
 	lifecycleMu         sync.Mutex
 	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState
@@ -871,9 +763,6 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
-		traceDataPath    string
-		siriusLeases     *substrait.LeaseManager
-		siriusAuditor    substrait.ResolveAuditRecorder
 	}
 
 	// pipelines record running pipelines in the service, used for monitoring.

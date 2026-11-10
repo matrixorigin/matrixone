@@ -27,15 +27,17 @@ import (
 
 func TestIvfflatHiddenTableTypes(t *testing.T) {
 	got := CatalogHooks{}.HiddenTableTypes()
-	require.Len(t, got, 3)
+	require.Len(t, got, 4)
 	require.Contains(t, got, catalog.SystemSI_IVFFLAT_TblType_Metadata)
 	require.Contains(t, got, catalog.SystemSI_IVFFLAT_TblType_Centroids)
 	require.Contains(t, got, catalog.SystemSI_IVFFLAT_TblType_Entries)
+	require.Contains(t, got, catalog.IndexIgnored_TblType)
 }
 
 func TestIvfflatShouldTruncateHiddenTable(t *testing.T) {
 	h := CatalogHooks{}
 	require.True(t, h.ShouldTruncateHiddenTable(catalog.SystemSI_IVFFLAT_TblType_Entries))
+	require.True(t, h.ShouldTruncateHiddenTable(catalog.IndexIgnored_TblType))
 	require.False(t, h.ShouldTruncateHiddenTable(catalog.SystemSI_IVFFLAT_TblType_Metadata))
 	require.False(t, h.ShouldTruncateHiddenTable(catalog.SystemSI_IVFFLAT_TblType_Centroids))
 }
@@ -73,8 +75,9 @@ func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
 		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestIvfflatDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
+func TestIvfflatParamsWithoutOptions(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
 	require.Equal(t, "1", got[catalog.IndexAlgoParamLists])
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 }
@@ -270,4 +273,13 @@ func TestIvfflatValidQuantization(t *testing.T) {
 		require.Errorf(t, h.ValidQuantization(q, "vector_future_ops"),
 			"quant=%s unknown op must be rejected", q)
 	}
+}
+
+func TestIvfflatParamsFromTreeMaxBadRecords(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{MaxBadRecords: 4, MaxBadRecordsSet: true}})
+	require.NoError(t, err)
+	require.Equal(t, "4", got[catalog.IndexAlgoParamMaxBadRecords])
+	got, err = CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
+	require.NotContains(t, got, catalog.IndexAlgoParamMaxBadRecords)
 }

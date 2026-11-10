@@ -25,7 +25,7 @@ func BenchmarkExistentialPlanningControls(b *testing.B) {
 		{"scalar", `select (select max(i.n_nationkey) from nation i where i.n_regionkey=o.n_regionkey) from nation o`},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			opt := NewMockOptimizer(false)
+			opt := NewMockOptimizer(false, newPlanTestProcess(b))
 			ctx := opt.CurrentContext()
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -34,7 +34,7 @@ func BenchmarkExistentialPlanningControls(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				_, err = BuildPlan(ctx, stmts[0], false)
+				_, err = BuildPlan(ctx, stmts[0], false, nil)
 				stmts[0].Free()
 				if err != nil {
 					b.Fatal(err)

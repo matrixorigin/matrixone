@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -66,16 +67,13 @@ var (
 	//mempool factor.
 	defaultMempoolFactor = 8
 
-	//process.Limitation.Size.  10 << 32 = 42949672960
-	defaultProcessLimitationSize = 42949672960
-
 	//process.Limitation.BatchRows.  10 << 32 = 42949672960
 	defaultProcessLimitationBatchRows = 42949672960
 
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
 
-	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
+	defaultServerVersionPrefix = version.MySQLCompatibilityVersionString + "-MatrixOne-v"
 
 	defaultVersionComment = "MatrixOne"
 
@@ -134,8 +132,9 @@ var (
 
 	// defaultWaitTimeoutMin default: 1 second
 	defaultWaitTimeoutMin int64 = 1
-	// defaultWaitTimeoutMax default: 24 hours (in seconds)
-	defaultWaitTimeoutMax int64 = 24 * 60 * 60
+	// defaultWaitTimeoutMax default: 1 year (31536000 seconds), matching the
+	// MySQL documented non-Windows wait_timeout ceiling.
+	defaultWaitTimeoutMax int64 = 365 * 24 * 60 * 60
 
 	// defaultInteractiveTimeoutMin default: 1 second
 	defaultInteractiveTimeoutMin int64 = 1
@@ -203,8 +202,15 @@ var (
 
 	defaultMaxLogMessageSize = 16 << 10
 
-	// largestEntryLimit is the max size for reading file to csv buf
-	LargestEntryLimit = 10 * 1024 * 1024
+	// LargestEntryLimit is the default max weight of one CSV record read by
+	// the LOAD DATA / external-table parser (see csvparser CSVConfig
+	// MaxRecordSize, which can override it per parser): raw field content
+	// bytes plus one per framed field, so separator-only rows cannot grow
+	// field indexes without limit. The 64MiB default matches MySQL 8.0's
+	// default max_allowed_packet so multi-MiB MEDIUMTEXT/LONGTEXT rows that
+	// are legal to INSERT also load from CSV. CN toml `largest-entry-limit`
+	// overrides it server-wide.
+	LargestEntryLimit = 64 * 1024 * 1024
 
 	CNPrimaryCheck atomic.Bool
 
@@ -609,7 +615,8 @@ type FrontendParameters struct {
 	//mempool factor. default: 8
 	MempoolFactor int64 `toml:"mempoolFactor"`
 
-	//process.Limitation.Size. default: 10 << 32 = 42949672960
+	// ProcessLimitationSize is an optional per-query execution-memory cap.
+	// Zero leaves the cgroup/host/mpool-derived CN ceiling authoritative.
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
 
 	// process.Limitation.SpillSize. Zero selects the bounded query default.
@@ -752,13 +759,6 @@ type FrontendParameters struct {
 	// including mysql protocol handshake, checking user, loading session variables
 	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
 
-	// SidecarURL is the DuckDB sidecar HTTP endpoint for offloading queries
-	// via /*+ SIDECAR */ or /*+ SIDECAR GPU */ hints.
-	// When set, this becomes the default for the sidecar_url session variable.
-	// Can be overridden per-session with SET sidecar_url = '...' or
-	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
-	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
-
 	Iceberg   IcebergParameters   `toml:"iceberg" user_setting:"advanced"`
 	MongoDB   MongoDBParameters   `toml:"mongodb" user_setting:"advanced"`
 	ArrowLoad ArrowLoadParameters `toml:"arrow-load" user_setting:"advanced"`
@@ -788,10 +788,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.MempoolFactor == 0 {
 		fp.MempoolFactor = int64(defaultMempoolFactor)
-	}
-
-	if fp.ProcessLimitationSize == 0 {
-		fp.ProcessLimitationSize = int64(toml.ByteSize(defaultProcessLimitationSize))
 	}
 
 	if fp.ProcessLimitationBatchRows == 0 {
@@ -1014,6 +1010,9 @@ type ObservabilityParameters struct {
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
 	LongQueryTime float64 `toml:"long-query-time" user_setting:"advanced"`
 
+	// Legacy keeps old readers usable during a rolling upgrade.
+	StatementDiagnosticsFormat string `toml:"statement-diagnostics-format" user_setting:"advanced"`
+
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metric-export-interval"`
 
@@ -1127,6 +1126,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableTraceDebug:                   false,
 		TraceExportInterval:                defaultTraceExportInterval,
 		LongQueryTime:                      defaultLongQueryTime,
+		StatementDiagnosticsFormat:         "compact-v1",
 		MetricExportInterval:               defaultMetricExportInterval,
 		MetricGatherInterval:               defaultMetricGatherInterval,
 		MetricInternalGatherInterval:       toml.Duration{},
@@ -1294,6 +1294,9 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 		defaultMetricUpdateStorageUsageInterval,
 		op.MetricUpdateStorageUsageIntervalV12.Duration)
 	// part statement_info
+	if op.StatementDiagnosticsFormat == "" {
+		op.StatementDiagnosticsFormat = "compact-v1"
+	}
 	resetBoolConfig(&op.EnableStmtMerge, false, op.EnableStmtMergeV12)
 	resetBoolConfig(&op.DisableStmtAggregation, false, op.DisableStmtAggregationV12)
 	resetDurationConfig(&op.AggregationWindow.Duration, defaultAggregationWindow, op.AggregationWindowV12.Duration)

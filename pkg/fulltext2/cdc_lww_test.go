@@ -266,7 +266,7 @@ func TestDirtyVsCompactedScoreParity(t *testing.T) {
 		run  func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32
 	}{
 		{"wand-bag", func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32 { // WAND disjunction -> df()
-			return scoresOf(idx.SearchBagOfWords([]byte(q), ParserDefault, algo, 100, nil))
+			return scoresOf(idx.SearchBagOfWords([]byte(q), ParserDefault, algo, 100, nil, 0))
 		}},
 		{"bool-or", func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32 { // boolean OR -> WAND -> df()
 			return scoresOf(idx.SearchQuery([]byte(q), true, ParserDefault, algo, 100, nil))

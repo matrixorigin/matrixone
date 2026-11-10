@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -358,49 +359,43 @@ func (x Decimal256) Right(n int) (y Decimal256) {
 }
 
 func (x Decimal64) Scale(n int32) (Decimal64, error) {
+	return x.scaleWithContext(defaultParseContext, n)
+}
+
+func (x Decimal64) scaleWithContext(ctx context.Context, n int32) (Decimal64, error) {
+	if n == 0 || x == 0 {
+		return x, nil
+	}
+	if n < -19 {
+		return 0, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
 		x1 = x1.Minus()
 	}
-	err := error(nil)
-	m := int32(0)
-	for n-m > 19 || n-m < -19 {
-		if n > 0 {
-			m += 19
-			x1, err = x1.Mul64(Decimal64(Pow10[19]))
-		} else {
-			m -= 19
-			x1, err = x1.Div64(Decimal64(Pow10[19]))
-		}
-		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", x.Format(n))
-			return x, err
-		}
-	}
-	if n == m {
+	if n > 0 {
+		// Even 1 * 10^19 exceeds the signed coefficient range. Check before
+		// multiplication; Mul64 deliberately accepts unsigned magnitudes.
+		limit := Decimal64Max
 		if signx {
-			x1 = x1.Minus()
+			limit = Decimal64Min
 		}
-		return x1, nil
-	}
-	if n-m > 0 {
-		x1, err = x1.Mul64(Decimal64(Pow10[n-m]))
+		if n >= 19 || x1 > limit/Decimal64(Pow10[n]) {
+			return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
+		}
+		x1 *= Decimal64(Pow10[n])
 	} else {
-		x1, err = x1.Div64(Decimal64(Pow10[m-n]))
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", x.Format(n))
-		return x, err
+		x1, _ = x1.div64WithContext(ctx, Decimal64(Pow10[-n]))
 	}
 	if signx {
 		x1 = x1.Minus()
 	}
-	return x1, err
+	return x1, nil
 }
 
 func (x *Decimal128) ScaleInplace(n int32) error {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return nil
 	}
 	if n < -38 {
@@ -422,7 +417,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 			*x, err = x.Div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return err
 		}
 	}
@@ -435,10 +430,10 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 	if n-m > 0 {
 		err = x.Mul64InPlace(Decimal64(Pow10[n-m]))
 	} else {
-		err = x.Div128InPlace(&Decimal128{Pow10[m-n], 0})
+		*x, err = x.Div128(Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return err
 	}
 	if signx {
@@ -448,7 +443,11 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 }
 
 func (x Decimal128) Scale(n int32) (Decimal128, error) {
-	if n == 0 {
+	return x.scaleWithContext(defaultParseContext, n)
+}
+
+func (x Decimal128) scaleWithContext(ctx context.Context, n int32) (Decimal128, error) {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return x, nil
 	}
 	if n < -38 {
@@ -464,13 +463,13 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 	for n-m > 19 || n-m < -19 {
 		if n > 0 {
 			m += 19
-			x1, err = x1.Mul128(Decimal128{Pow10[19], 0})
+			x1, err = x1.mul128WithContext(ctx, Decimal128{Pow10[19], 0})
 		} else {
 			m -= 19
-			x1, err = x1.Div128Trunc(Decimal128{Pow10[19], 0})
+			x1, err = x1.div128TruncWithContext(ctx, Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -481,12 +480,12 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 		return x1, nil
 	}
 	if n-m > 0 {
-		x1, err = x1.Mul128(Decimal128{Pow10[n-m], 0})
+		x1, err = x1.mul128WithContext(ctx, Decimal128{Pow10[n-m], 0})
 	} else {
-		x1, err = x1.Div128(Decimal128{Pow10[m-n], 0})
+		x1, err = x1.div128WithContext(ctx, Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -496,7 +495,7 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 }
 
 func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return x, nil
 	}
 	if n < -38 {
@@ -518,7 +517,7 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 			x1, err = x1.div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -534,7 +533,7 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 		x1, err = x1.div128Trunc(Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -556,6 +555,10 @@ func div256ByUint64(x Decimal256, d uint64) (Decimal256, uint64) {
 }
 
 func (x Decimal256) Scale(n int32) (Decimal256, error) {
+	return x.scaleWithContext(defaultParseContext, n)
+}
+
+func (x Decimal256) scaleWithContext(ctx context.Context, n int32) (Decimal256, error) {
 	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0 && x.B128_191 == 0 && x.B192_255 == 0) {
 		return x, nil
 	}
@@ -572,13 +575,13 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 	for remaining > 19 || remaining < -19 {
 		if remaining > 0 {
 			remaining -= 19
-			x1, err = x1.Mul256(Decimal256{Pow10[19], 0, 0, 0})
+			x1, err = x1.mul256WithContext(ctx, Decimal256{Pow10[19], 0, 0, 0})
 		} else {
 			remaining += 19
 			x1, _ = div256ByUint64(x1, Pow10[19])
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal256 scale overflow: target scale=%d", n)
 			return x, err
 		}
 	}
@@ -589,17 +592,17 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 		return x1, nil
 	}
 	if remaining > 0 {
-		x1, err = x1.Mul256(Decimal256{Pow10[remaining], 0, 0, 0})
+		x1, err = x1.mul256WithContext(ctx, Decimal256{Pow10[remaining], 0, 0, 0})
 	} else {
 		divisor := Pow10[-remaining]
 		var remainder uint64
 		x1, remainder = div256ByUint64(x1, divisor)
 		if remainder >= (divisor+1)/2 {
-			x1, err = x1.Add256(Decimal256{1, 0, 0, 0})
+			x1, err = x1.add256WithContext(ctx, Decimal256{1, 0, 0, 0})
 		}
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal256 scale overflow: target scale=%d", n)
 		return x, err
 	}
 	if signx {
@@ -609,7 +612,7 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 }
 
 func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0 && x.B128_191 == 0 && x.B192_255 == 0) {
 		return x, nil
 	}
 	if n < -77 {
@@ -631,7 +634,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 			x1, _ = div256ByUint64(x1, Pow10[19])
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -647,7 +650,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 		x1, _ = div256ByUint64(x1, Pow10[m-n])
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -657,11 +660,15 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 }
 
 func (x Decimal64) Add64(y Decimal64) (Decimal64, error) {
+	return x.add64WithContext(defaultParseContext, y)
+}
+
+func (x Decimal64) add64WithContext(ctx context.Context, y Decimal64) (Decimal64, error) {
 	signx := x.Sign()
 	err := error(nil)
 	z := x + y
 	if signx == y.Sign() && signx != z.Sign() {
-		err = moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", x.Format(0), y.Format(0))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal64 Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return z, err
 }
@@ -677,6 +684,10 @@ func (x Decimal128) Add128Unchecked(y Decimal128) Decimal128 {
 }
 
 func (x Decimal128) Add128(y Decimal128) (Decimal128, error) {
+	return x.add128WithContext(defaultParseContext, y)
+}
+
+func (x Decimal128) add128WithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
 	signx := x.Sign()
 	err := error(nil)
 	if signx == y.Sign() {
@@ -684,7 +695,7 @@ func (x Decimal128) Add128(y Decimal128) (Decimal128, error) {
 		z.B0_63, z.B64_127 = bits.Add64(x.B0_63, y.B0_63, 0)
 		z.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, z.B64_127)
 		if signx != z.Sign() {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
 		}
 		return z, err
 	} else {
@@ -695,6 +706,10 @@ func (x Decimal128) Add128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Add256(y Decimal256) (Decimal256, error) {
+	return x.add256WithContext(defaultParseContext, y)
+}
+
+func (x Decimal256) add256WithContext(ctx context.Context, y Decimal256) (Decimal256, error) {
 	signx := x.Sign()
 	err := error(nil)
 	if signx == y.Sign() {
@@ -704,7 +719,7 @@ func (x Decimal256) Add256(y Decimal256) (Decimal256, error) {
 		z.B128_191, z.B192_255 = bits.Add64(x.B128_191, y.B128_191, z.B128_191)
 		z.B192_255, _ = bits.Add64(x.B192_255, y.B192_255, z.B192_255)
 		if signx != z.Sign() {
-			err = moerr.NewInvalidInputNoCtxf("Decimal256 Add overflow: %s+%s", x.Format(0), y.Format(0))
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal256 Add overflow: %s+%s", x.Format(0), y.Format(0))
 		}
 		return z, err
 	} else {
@@ -725,17 +740,25 @@ func (x Decimal64) Sub64(y Decimal64) (Decimal64, error) {
 }
 
 func (x Decimal128) Sub128(y Decimal128) (Decimal128, error) {
-	z, err := x.Add128(y.Minus())
+	return x.sub128WithContext(defaultParseContext, y)
+}
+
+func (x Decimal128) sub128WithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
+	z, err := x.add128WithContext(ctx, y.Minus())
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", x.Format(0), y.Format(0))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Sub overflow: %s-%s", x.Format(0), y.Format(0))
 	}
 	return z, err
 }
 
 func (x Decimal256) Sub256(y Decimal256) (Decimal256, error) {
-	z, err := x.Add256(y.Minus())
+	return x.sub256WithContext(defaultParseContext, y)
+}
+
+func (x Decimal256) sub256WithContext(ctx context.Context, y Decimal256) (Decimal256, error) {
+	z, err := x.add256WithContext(ctx, y.Minus())
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", x.Format(0), y.Format(0))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal256 Sub overflow: %s-%s", x.Format(0), y.Format(0))
 	}
 	return z, err
 }
@@ -796,7 +819,8 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	return
 }
 
-func decimal256MagnitudeBigInt(x Decimal256) *big.Int {
+// MagnitudeBigInt returns the absolute coefficient as a newly allocated integer.
+func (x Decimal256) MagnitudeBigInt() *big.Int {
 	if x.Sign() {
 		x = x.Minus()
 	}
@@ -826,12 +850,12 @@ func decimal256FromMagnitudeBigInt(value *big.Int) Decimal256 {
 // rejects the normal, allocation-free path; the modular exponent keeps memory
 // bounded even when a caller supplies a large scale difference.
 func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
-	modulus := decimal256MagnitudeBigInt(y)
+	modulus := y.MagnitudeBigInt()
 	if modulus.Sign() == 0 {
 		return Decimal256{}, moerr.NewDivByZeroNoCtx()
 	}
 	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), modulus)
-	value := decimal256MagnitudeBigInt(x)
+	value := x.MagnitudeBigInt()
 	value.Mul(value, power)
 	value.Mod(value, modulus)
 	return decimal256FromMagnitudeBigInt(value), nil
@@ -841,7 +865,7 @@ func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) 
 // overflows. For scaleDiff>=77, 10^scaleDiff is already greater than the
 // largest unsigned Decimal256 magnitude, so the positive remainder is x.
 func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
-	divisor := decimal256MagnitudeBigInt(y)
+	divisor := y.MagnitudeBigInt()
 	if divisor.Sign() == 0 {
 		return Decimal256{}, moerr.NewDivByZeroNoCtx()
 	}
@@ -850,7 +874,7 @@ func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256,
 	}
 	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
 	divisor.Mul(divisor, power)
-	value := decimal256MagnitudeBigInt(x)
+	value := x.MagnitudeBigInt()
 	value.Mod(value, divisor)
 	return decimal256FromMagnitudeBigInt(value), nil
 }
@@ -899,13 +923,17 @@ func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 }
 
 func (x Decimal64) Mul64(y Decimal64) (Decimal64, error) {
+	return x.mul64WithContext(defaultParseContext, y)
+}
+
+func (x Decimal64) mul64WithContext(ctx context.Context, y Decimal64) (Decimal64, error) {
 	err := error(nil)
 	if x == 0 || y == 0 {
 		return Decimal64(0), err
 	}
 	z := x * y
 	if z/x != y {
-		err = moerr.NewInvalidInputNoCtxf("Decimal64 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal64 Mul overflow: %s*%s", x.Format(0), y.Format(0))
 	}
 	return z, err
 }
@@ -928,32 +956,13 @@ func (x *Decimal128) Mul64InPlace(y Decimal64) error {
 	return nil
 }
 
-func (x *Decimal128) Mul128InPlace(y *Decimal128) error {
-	if x.B64_127 != 0 && y.B64_127 != 0 {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	z := Decimal128{0, 0}
-	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, y.B0_63)
-	w := Decimal128{0, 0}
-	if x.B64_127 == 0 {
-		w.B0_63, w.B64_127 = bits.Mul64(x.B0_63, y.B64_127)
-	} else {
-		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, y.B0_63)
-	}
-	if w.B0_63 != 0 || w.Sign() || z.Sign() {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	z.B64_127 += w.B64_127
-	if z.Sign() {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	*x = z
-	return nil
+func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
+	return x.mul128WithContext(defaultParseContext, y)
 }
 
-func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
+func (x Decimal128) mul128WithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
 	if x.B64_127 != 0 && y.B64_127 != 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+		return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
 	}
 	z := Decimal128{0, 0}
 	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, y.B0_63)
@@ -964,24 +973,28 @@ func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
 		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, y.B0_63)
 	}
 	if w.B0_63 != 0 || w.Sign() || z.Sign() {
-		return z, moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+		return z, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
 	}
 	z.B64_127 += w.B64_127
 	if z.Sign() {
-		return z, moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+		return z, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
 	}
 	return z, nil
 }
 
 func (x Decimal256) Mul256(y Decimal256) (Decimal256, error) {
+	return x.mul256WithContext(defaultParseContext, y)
+}
+
+func (x Decimal256) mul256WithContext(ctx context.Context, y Decimal256) (Decimal256, error) {
 	if x.B192_255 != 0 && (y.B192_255 != 0 || y.B128_191 != 0 || y.B64_127 != 0) {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	if x.B128_191 != 0 && (y.B192_255 != 0 || y.B128_191 != 0) {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	if x.B64_127 != 0 && y.B192_255 != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	z := Decimal256{0, 0, 0, 0}
 	var hi, lo, ca uint64
@@ -995,106 +1008,78 @@ func (x Decimal256) Mul256(y Decimal256) (Decimal256, error) {
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, ca)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B64_127, y.B64_127)
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, 0)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B0_63, y.B128_191)
 	z.B128_191, ca = bits.Add64(z.B128_191, lo, 0)
 	z.B192_255, ca = bits.Add64(z.B192_255, hi, ca)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B192_255, y.B0_63)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B128_191, y.B64_127)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B64_127, y.B128_191)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	hi, lo = bits.Mul64(x.B0_63, y.B192_255)
 	if hi != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	z.B192_255, ca = bits.Add64(z.B192_255, lo, 0)
 	if ca != 0 || z.B192_255>>63 != 0 {
-		return x, moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow")
+		return x, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Mul overflow")
 	}
 	return z, nil
 }
 
 func (x Decimal64) Div64(y Decimal64) (Decimal64, error) {
+	return x.div64WithContext(defaultParseContext, y)
+}
+
+func (x Decimal64) div64WithContext(ctx context.Context, y Decimal64) (Decimal64, error) {
 	if y == 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal64 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+		return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal64 Div by Zero: %s/%s", x.Format(0), y.Format(0))
 	}
 	z := x / y
-	if (x-z*y)*2 >= y {
+	// Compare with the half divisor without overflowing a doubled remainder.
+	if x-z*y >= y/2+y%2 {
 		z++
 	}
 	return z, nil
 }
 
-func (x *Decimal128) Div128InPlace(y *Decimal128) error {
-	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
-	}
-	if y.B64_127 == 0 {
-		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
-		x.B0_63, y.B64_127 = bits.Div64(y.B64_127, x.B0_63, y.B0_63)
-		if y.B64_127*2 >= y.B0_63 || y.B64_127>>63 != 0 {
-			x.B0_63++
-			if x.B0_63 == 0 {
-				x.B64_127++
-			}
-		}
-	} else {
-		if x.Less(*y) {
-			x.B64_127 = 0
-			x.B0_63 = 0
-		} else {
-			n := bits.LeadingZeros64(y.B64_127)
-			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-			v >>= 63 - n
-			if v&1 == 0 {
-				x.B0_63 = v >> 1
-			} else {
-				z, _ := y.Mul128(Decimal128{v, 0})
-				if x.Left(1).Less(z) {
-					x.B0_63 = v >> 1
-				} else {
-					x.B0_63 = (v >> 1) + 1
-				}
-			}
-			x.B64_127 = 0
-		}
-	}
-	return nil
+func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
+	return x.div128WithContext(defaultParseContext, y)
 }
 
-func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
+func (x Decimal128) div128WithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+		return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
 	}
 	if y.B64_127 == 0 {
 		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
@@ -1108,21 +1093,22 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 	} else {
 		// Avoid doubling x and y*q to decide rounding: either intermediate can
 		// overflow even when x, y, and the rounded quotient all fit in D128.
-		q, remainder, err := x.div128TruncQuoRem(y)
+		q, remainder, err := x.div128TruncQuoRemWithContext(ctx, y)
 		if err != nil {
 			return x, err
 		}
 
 		// Round half-up iff remainder >= ceil(y/2), without forming 2*remainder.
-		threshold := y.Right(1)
+		threshold := Decimal128{B0_63: y.B0_63>>1 | y.B64_127<<63, B64_127: y.B64_127 >> 1}
 		if y.B0_63&1 != 0 {
 			var carry uint64
 			threshold.B0_63, carry = bits.Add64(threshold.B0_63, 1, 0)
 			threshold.B64_127 += carry
 		}
-		if remainder.Compare(threshold) >= 0 {
-			// Here y >= 2^64 and x < 2^127, so the rounded quotient fits in B0_63.
-			q.B0_63++
+		if remainder.B64_127 > threshold.B64_127 || remainder.B64_127 == threshold.B64_127 && remainder.B0_63 >= threshold.B0_63 {
+			var carry uint64
+			q.B0_63, carry = bits.Add64(q.B0_63, 1, 0)
+			q.B64_127 += carry
 		}
 		return q, nil
 	}
@@ -1130,55 +1116,60 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal128) div128Trunc(y Decimal128) (Decimal128, error) {
-	q, _, err := x.div128TruncQuoRem(y)
+	return x.div128TruncWithContext(defaultParseContext, y)
+}
+
+func (x Decimal128) div128TruncWithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
+	q, _, err := x.div128TruncQuoRemWithContext(ctx, y)
 	return q, err
 }
 
-// div128TruncQuoRem returns an exact quotient and remainder for positive
-// operands. The normalized high-limb estimate can be one too large because
-// normalization discards low divisor bits; correct it before multiplying so
-// an otherwise representable quotient is not mistaken for overflow.
-func (x Decimal128) div128TruncQuoRem(y Decimal128) (Decimal128, Decimal128, error) {
+// div128TruncQuoRem operates on unsigned magnitudes, including the absolute
+// value of the signed minimum. Its normalized quotient estimate can exceed the
+// exact quotient by one because normalization discards low divisor bits.
+func (x Decimal128) div128TruncQuoRemWithContext(ctx context.Context, y Decimal128) (Decimal128, Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return x, Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+		return x, Decimal128{}, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
 	}
 	if y.B64_127 == 0 {
 		qHi, remainderHi := bits.Div64(0, x.B64_127, y.B0_63)
 		qLo, remainder := bits.Div64(remainderHi, x.B0_63, y.B0_63)
 		return Decimal128{B0_63: qLo, B64_127: qHi}, Decimal128{B0_63: remainder}, nil
 	}
-	if x.Less(y) {
+	if x.B64_127 < y.B64_127 || x.B64_127 == y.B64_127 && x.B0_63 < y.B0_63 {
 		return Decimal128{}, x, nil
 	}
 
 	n := bits.LeadingZeros64(y.B64_127)
-	v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-	v >>= 63 - n
-	q := Decimal128{B0_63: v >> 1}
-	product, mulErr := y.Mul128(q)
-	if mulErr != nil || product.Compare(x) > 0 {
-		var err error
-		q, err = q.Sub128(Decimal128{B0_63: 1})
-		if err != nil {
-			return Decimal128{}, Decimal128{}, err
-		}
-		product, err = y.Mul128(q)
-		if err != nil {
-			return Decimal128{}, Decimal128{}, err
-		}
-		if product.Compare(x) > 0 {
-			return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
+	// Halve the dividend logically before estimation so bits.Div64's high
+	// limb is below the normalized divisor even when magnitude bit 127 is set.
+	denominator := y.B64_127<<n | y.B0_63>>(64-n)
+	v, _ := bits.Div64(x.B64_127>>1, x.B0_63>>1|x.B64_127<<63, denominator)
+	q := Decimal128{B0_63: v >> (63 - n)}
+	// The wide divisor makes the quotient one limb. Keep its product unsigned;
+	// signed Mul128 would reject a valid product equal to 2^127.
+	productHi, productLo := bits.Mul64(y.B0_63, q.B0_63)
+	overflow, cross := bits.Mul64(y.B64_127, q.B0_63)
+	var carry uint64
+	productHi, carry = bits.Add64(productHi, cross, 0)
+	overflow += carry
+	if overflow != 0 || productHi > x.B64_127 || productHi == x.B64_127 && productLo > x.B0_63 {
+		q.B0_63--
+		var borrow uint64
+		productLo, borrow = bits.Sub64(productLo, y.B0_63, 0)
+		productHi, borrow = bits.Sub64(productHi, y.B64_127, borrow)
+		overflow -= borrow
+		if overflow != 0 || productHi > x.B64_127 || productHi == x.B64_127 && productLo > x.B0_63 {
+			return Decimal128{}, Decimal128{}, moerr.NewInternalError(parseErrorContext(ctx), "Decimal128 division quotient correction failed")
 		}
 	}
 
-	remainder, err := x.Sub128(product)
-	if err != nil {
-		return Decimal128{}, Decimal128{}, err
-	}
-	// The normalized divisor is rounded down, so the quotient estimate cannot
-	// undershoot. After the optional decrement above, remainder must be < y.
-	if remainder.Compare(y) >= 0 {
-		return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
+	var remainder Decimal128
+	var borrow uint64
+	remainder.B0_63, borrow = bits.Sub64(x.B0_63, productLo, 0)
+	remainder.B64_127, _ = bits.Sub64(x.B64_127, productHi, borrow)
+	if remainder.B64_127 > y.B64_127 || remainder.B64_127 == y.B64_127 && remainder.B0_63 >= y.B0_63 {
+		return Decimal128{}, Decimal128{}, moerr.NewInternalError(parseErrorContext(ctx), "Decimal128 division quotient correction failed")
 	}
 	return q, remainder, nil
 }
@@ -1186,114 +1177,140 @@ func (x Decimal128) div128TruncQuoRem(y Decimal128) (Decimal128, Decimal128, err
 // Div128Trunc is the exported version of div128Trunc for integer division (DIV)
 // which truncates toward zero instead of rounding half-up.
 func (x Decimal128) Div128Trunc(y Decimal128) (Decimal128, error) {
-	return x.div128Trunc(y)
+	return x.div128TruncWithContext(defaultParseContext, y)
 }
 
+// Div256 rounds unsigned coefficient magnitudes half up using the shared owner.
 func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
-	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
-		if y.B0_63 == 0 {
-			return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
-		}
-		x = x.Left(1)
-		z := Decimal256{0, 0, 0, 0}
-		z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
-		z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
-		z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
-		z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
-		if z.B0_63&1 == 0 {
-			z = z.Right(1)
-		} else {
-			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
-		}
-		return z, nil
-	} else {
-		x = x.Left(1)
-		w := Decimal256{1, 0, 0, 0}
-		z := Decimal256{0, 0, 0, 0}
-		for y.Compare(x) <= 0 {
-			y = y.Left(1)
-			w = w.Left(1)
-		}
-		for y.B0_63 != 0 || y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
-			y = y.Right(1)
-			w = w.Right(1)
-			if y.Compare(x) <= 0 {
-				z, _ = z.Add256(w)
-				x, _ = x.Sub256(y)
-			}
-		}
-		if z.B0_63&1 == 0 {
-			z = z.Right(1)
-		} else {
-			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
-		}
-		return z, nil
+	quotient, remainder, err := x.div256TruncQuoRem(y)
+	if err != nil {
+		return quotient, err
 	}
+	// Compare with floor(y/2); an odd divisor has no exact integer half.
+	// Doubling the dividend or remainder would lose the top magnitude bit.
+	half := Decimal256{
+		B0_63:    y.B0_63>>1 | y.B64_127<<63,
+		B64_127:  y.B64_127>>1 | y.B128_191<<63,
+		B128_191: y.B128_191>>1 | y.B192_255<<63,
+		B192_255: y.B192_255 >> 1,
+	}
+	var borrow uint64
+	_, borrow = bits.Sub64(remainder.B0_63, half.B0_63, 0)
+	_, borrow = bits.Sub64(remainder.B64_127, half.B64_127, borrow)
+	_, borrow = bits.Sub64(remainder.B128_191, half.B128_191, borrow)
+	_, borrow = bits.Sub64(remainder.B192_255, half.B192_255, borrow)
+	if borrow == 0 && (remainder != half || y.B0_63&1 == 0) {
+		var carry uint64
+		quotient.B0_63, carry = bits.Add64(quotient.B0_63, 1, 0)
+		quotient.B64_127, carry = bits.Add64(quotient.B64_127, 0, carry)
+		quotient.B128_191, carry = bits.Add64(quotient.B128_191, 0, carry)
+		quotient.B192_255, _ = bits.Add64(quotient.B192_255, 0, carry)
+	}
+	return quotient, nil
 }
 
-func (x Decimal256) div256Trunc(y Decimal256) (Decimal256, error) {
-	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
-		if y.B0_63 == 0 {
-			return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
-		}
-		x = x.Left(1)
-		z := Decimal256{0, 0, 0, 0}
-		z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
-		z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
-		z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
-		z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
-		return z.Right(1), nil
-	}
-
-	x = x.Left(1)
-	w := Decimal256{1, 0, 0, 0}
-	z := Decimal256{0, 0, 0, 0}
-	for y.Compare(x) <= 0 {
-		y = y.Left(1)
-		w = w.Left(1)
-	}
-	for y.B0_63 != 0 || y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
-		y = y.Right(1)
-		w = w.Right(1)
-		if y.Compare(x) <= 0 {
-			z, _ = z.Add256(w)
-			x, _ = x.Sub256(y)
-		}
-	}
-	return z.Right(1), nil
+// div256TruncQuoRem divides unsigned 256-bit magnitudes. Signed callers
+// normalize operands and restore the sign themselves, including the 2^255
+// magnitude of MinInt256. Neither alignment nor subtraction uses signed math.
+func (x Decimal256) div256TruncQuoRem(y Decimal256) (Decimal256, Decimal256, error) {
+	return x.div256TruncQuoRemWithContext(defaultParseContext, y)
 }
 
-// Div256Trunc is the exported version of div256Trunc for integer division (DIV)
-// which truncates toward zero instead of rounding half-up.
+func (x Decimal256) div256TruncQuoRemWithContext(ctx context.Context, y Decimal256) (Decimal256, Decimal256, error) {
+	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
+		if y.B0_63 == 0 {
+			return x, Decimal256{}, moerr.NewInvalidInput(parseErrorContext(ctx), "Decimal256 Div by Zero")
+		}
+		q, r := div256ByUint64(x, y.B0_63)
+		return q, Decimal256{B0_63: r}, nil
+	}
+
+	bitLen := func(v Decimal256) int {
+		switch {
+		case v.B192_255 != 0:
+			return 192 + bits.Len64(v.B192_255)
+		case v.B128_191 != 0:
+			return 128 + bits.Len64(v.B128_191)
+		case v.B64_127 != 0:
+			return 64 + bits.Len64(v.B64_127)
+		default:
+			return bits.Len64(v.B0_63)
+		}
+	}
+	shift := bitLen(x) - bitLen(y)
+	if shift < 0 {
+		return Decimal256{}, x, nil
+	}
+	// The aligned highest bit stays within x's bit length. A wide divisor
+	// has at least 65 bits, so this loop processes at most 192 quotient bits.
+	d := y.Left(shift)
+	q := Decimal256{}
+	for i := shift; i >= 0; i-- {
+		q = q.Left(1)
+		var candidate Decimal256
+		var borrow uint64
+		candidate.B0_63, borrow = bits.Sub64(x.B0_63, d.B0_63, 0)
+		candidate.B64_127, borrow = bits.Sub64(x.B64_127, d.B64_127, borrow)
+		candidate.B128_191, borrow = bits.Sub64(x.B128_191, d.B128_191, borrow)
+		candidate.B192_255, borrow = bits.Sub64(x.B192_255, d.B192_255, borrow)
+		if borrow == 0 {
+			x = candidate
+			q.B0_63 |= 1
+		}
+		d = Decimal256{
+			B0_63:    d.B0_63>>1 | d.B64_127<<63,
+			B64_127:  d.B64_127>>1 | d.B128_191<<63,
+			B128_191: d.B128_191>>1 | d.B192_255<<63,
+			B192_255: d.B192_255 >> 1,
+		}
+	}
+	return q, x, nil
+}
+
+// Div256Trunc truncates the quotient of unsigned coefficient magnitudes.
 func (x Decimal256) Div256Trunc(y Decimal256) (Decimal256, error) {
-	return x.div256Trunc(y)
+	quotient, _, err := x.div256TruncQuoRem(y)
+	return quotient, err
 }
 
 func (x Decimal64) Mod64(y Decimal64) (Decimal64, error) {
+	return x.mod64WithContext(defaultParseContext, y)
+}
+
+func (x Decimal64) mod64WithContext(ctx context.Context, y Decimal64) (Decimal64, error) {
 	if y == 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal64 Mod by Zero: %s%%%s", x.Format(0), y.Format(0))
+		return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal64 Mod by Zero: %s%%%s", x.Format(0), y.Format(0))
 	}
 	return x % y, nil
 }
 
+// Mod128 computes the remainder of unsigned coefficient magnitudes.
+// Signed callers take absolute values and restore the dividend's sign.
 func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
+	return x.mod128WithContext(defaultParseContext, y)
+}
+
+func (x Decimal128) mod128WithContext(ctx context.Context, y Decimal128) (Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Mod by Zero: %s%%%s", x.Format(0), y.Format(0))
+		return x, moerr.NewInvalidInputf(parseErrorContext(ctx), "Decimal128 Mod by Zero: %s%%%s", x.Format(0), y.Format(0))
 	}
 	if y.B64_127 == 0 {
 		_, x.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
 		_, x.B0_63 = bits.Div64(x.B64_127, x.B0_63, y.B0_63)
 		x.B64_127 = 0
 	} else {
-		if !x.Less(y) {
+		if x.B64_127 > y.B64_127 || (x.B64_127 == y.B64_127 && x.B0_63 >= y.B0_63) {
 			n := bits.LeadingZeros64(y.B64_127)
-			x1 := x.Right(1)
-			v, _ := bits.Div64(x1.B64_127, x1.B0_63, y.Right(64-n).B0_63)
+			// These are magnitudes, so normalization must use logical shifts.
+			// Right applies signed decimal semantics, including at bit 127.
+			x1 := Decimal128{B0_63: x.B0_63>>1 | x.B64_127<<63, B64_127: x.B64_127 >> 1}
+			y1 := y.B0_63>>(64-n) | y.B64_127<<n
+			v, _ := bits.Div64(x1.B64_127, x1.B0_63, y1)
 			v >>= 63 - n
-			x1, _ = y.Mul128(Decimal128{v - 1, 0})
-			x, _ = x.Sub128(x1)
-			if !x.Less(y) {
-				x, _ = x.Sub128(y)
+			x1, _ = y.mul128WithContext(ctx, Decimal128{v - 1, 0})
+			x, _ = x.sub128WithContext(ctx, x1)
+			if x.B64_127 > y.B64_127 || (x.B64_127 == y.B64_127 && x.B0_63 >= y.B0_63) {
+				x, _ = x.sub128WithContext(ctx, y)
 			}
 		}
 	}
@@ -1301,16 +1318,15 @@ func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Mod256(y Decimal256) (Decimal256, error) {
-	z, err := x.div256Trunc(y)
+	return x.mod256WithContext(defaultParseContext, y)
+}
+
+func (x Decimal256) mod256WithContext(ctx context.Context, y Decimal256) (Decimal256, error) {
+	_, r, err := x.div256TruncQuoRemWithContext(ctx, y)
 	if err != nil {
 		return x, err
 	}
-	z, err = z.Mul256(y)
-	if err != nil {
-		return x, err
-	}
-	z, err = x.Sub256(z)
-	return z, err
+	return r, nil
 }
 
 func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale int32, err error) {
@@ -1344,24 +1360,6 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 		err = moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return z, err
-}
-
-// for performance sake, must make sure x and y has same scale, then call this function
-func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
-	signx := x.Sign()
-	var carryout uint64
-	if signx == y.Sign() {
-		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-		if signx != x.Sign() {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
-			return
-		}
-	} else {
-		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-	}
-	return
 }
 
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
@@ -1444,12 +1442,12 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 		y1 = y1.Minus()
 	}
 	z, err = x1.Mul64(y1)
-	if err != nil {
+	if err != nil || z.Sign() {
 		x2 := Decimal128{uint64(x1), 0}
 		y2 := Decimal128{uint64(y1), 0}
 		x2, _ = x2.Mul128(y2)
 		x2, _ = x2.Scale(scale - scale1 - scale2)
-		if x2.B64_127 != 0 || x2.B0_63>>63 != 0 {
+		if x2.B64_127 != 0 || (x2.B0_63>>63 != 0 && (signx == signy || x2.B0_63 != uint64(1)<<63)) {
 			err = moerr.NewInvalidInputNoCtxf("Decimal64 Mul overflow: %s*%s", x.Format(scale1), y.Format(scale2))
 			return
 		} else {
@@ -1460,6 +1458,12 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 			z = z.Minus()
 		}
 		return
+	}
+	if scale != scale1+scale2 {
+		z, err = z.Scale(scale - scale1 - scale2)
+		if err != nil {
+			return
+		}
 	}
 	if signx != signy {
 		z = z.Minus()
@@ -1544,13 +1548,21 @@ func (x Decimal64) Div(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 			return
 		}
 		x2, err = x2.Div128(y2)
-		if err != nil || x2.B64_127 != 0 || x2.B0_63>>63 != 0 {
+		if err != nil || x2.B64_127 != 0 {
 			err = moerr.NewInvalidInputNoCtxf("Decimal64 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+			return
 		}
 		z = Decimal64(x2.B0_63)
+	} else {
+		z, err = z.Div64(y1)
+	}
+	if err != nil {
 		return
 	}
-	z, err = z.Div64(y1)
+	if z.Sign() && (signx == signy || z != Decimal64Min) {
+		err = moerr.NewInvalidInputNoCtxf("Decimal64 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		return
+	}
 	if signx != signy {
 		z = z.Minus()
 	}
@@ -1747,39 +1759,60 @@ func Decimal128ToFloat64(x Decimal128, scale int32) float64 {
 }
 
 func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error) {
-	err = nil
 	if x != x || x+1 == x || width > 18 || width < 1 || scale > width || scale < 0 {
 		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
 		return
 	}
-	z := x
-	signx := false
+	magnitude, err := decimal128FromFloat64Magnitude(x, scale)
+	if err != nil || magnitude.B64_127 != 0 || magnitude.B0_63 >= Pow10[width] {
+		return 0, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
+	}
+	y = Decimal64(magnitude.B0_63)
 	if x < 0 {
-		z = -z
-		signx = true
-	}
-	for scale > 19 {
-		scale -= 19
-		z *= float64(Pow10[19])
-	}
-	z *= float64(Pow10[scale])
-	if z > float64(Pow10[width]) {
-		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
-		return
-	}
-	y = Decimal64(uint64(z * 2))
-	if y&1 == 1 {
-		y++
-	}
-	y >>= 1
-	if uint64(y) >= Pow10[width] {
-		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
-		return
-	}
-	if signx {
 		y = y.Minus()
 	}
-	return
+	return y, nil
+}
+
+// decimal128FromFloat64Magnitude rounds the shortest decimal representation,
+// rather than a binary product. Callers validate finite inputs and the target.
+// The numerical shortest pair bounds the coefficient to 17 significant digits
+// without formatting and reparsing a decimal string.
+func decimal128FromFloat64Magnitude(x float64, scale int32) (Decimal128, error) {
+	if scale >= 0 && scale <= 19 {
+		// These powers of ten are exact binary64 integers. In this range,
+		// the shortest decimal, scaled exactly, differs from z by < 3*u*z
+		// (u = 2^-53), including the binary multiplication's rounding.
+		z := float64(math.Abs(x) * float64(Pow10[scale]))
+		if z >= 0.25 && z < 0x1p52 {
+			n := uint64(z)
+			fraction := z - float64(n) // Exact subtraction in this range.
+			// The 8*u*z allowance also covers rounding in distance. Only
+			// accept when decimal and binary rounding cannot cross a tie.
+			distance := math.Abs(fraction - 0.5)
+			if distance > z*0x1p-50 {
+				if fraction > 0.5 {
+					n++
+				}
+				return Decimal128{B0_63: n}, nil
+			}
+		}
+	}
+	coefficient, exponent := float64ShortestDecimal(x)
+	power := exponent + scale
+	if power < 0 {
+		drop := -power
+		if drop > 17 {
+			return Decimal128{}, nil
+		}
+		divisor := Pow10[drop]
+		quotient := coefficient / divisor
+		if coefficient%divisor >= divisor/2 {
+			quotient++
+		}
+		return Decimal128{B0_63: quotient}, nil
+	}
+	return (Decimal128{B0_63: coefficient}).Scale(power)
 }
 
 func decimal128WidthLimit(width int32) Decimal128 {
@@ -1852,44 +1885,11 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 		return magnitude, nil
 	}
 
-	z := x
-	signx := false
-	n := scale
-	if x < 0 {
-		z = -z
-		signx = true
-	}
-	for n > 19 {
-		n -= 19
-		z *= float64(Pow10[19])
-	}
-	z *= float64(Pow10[n])
-	if z > FloatHigh {
-		n = 0
-		for z > FloatHigh {
-			z /= 10
-			n++
-		}
-		if z < float64(Pow10[19]) {
-			if n > 19 || width-n < 19 {
-				return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-			}
-		} else if n > 18 || width-n < 20 {
-			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-		}
-		y.B0_63 = uint64(z)
-		y, _ = y.Scale(n)
-	} else {
-		if z*2 > FloatHigh || uint64(z*2)&1 == 0 {
-			y.B0_63 = uint64(z)
-		} else {
-			y.B0_63 = uint64(z) + 1
-		}
-	}
-	if !y.Less(limit) {
+	y, err = decimal128FromFloat64Magnitude(x, scale)
+	if err != nil || !y.Less(limit) {
 		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
-	if signx {
+	if x < 0 {
 		y = y.Minus()
 	}
 	return y, nil
@@ -1959,9 +1959,111 @@ func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
 	return y
 }
 
+func appendDecimal64Digit(x Decimal64, digit byte) (Decimal64, bool) {
+	y := x*10 + Decimal64(digit-'0')
+	return y, y>>63 == 0 && y/10 == x
+}
+
+func appendDecimal128Digit(x Decimal128, digit byte) (Decimal128, error) {
+	return appendDecimal128DigitWithContext(defaultParseContext, x, digit)
+}
+
+func appendDecimal128DigitWithContext(ctx context.Context, x Decimal128, digit byte) (Decimal128, error) {
+	y, err := x.mul128WithContext(ctx, Decimal128{10, 0})
+	if err != nil {
+		return Decimal128{}, err
+	}
+	return y.add128WithContext(ctx, Decimal128{uint64(digit - '0'), 0})
+}
+
+func appendDecimal256Digit(x Decimal256, digit byte) (Decimal256, error) {
+	return appendDecimal256DigitWithContext(defaultParseContext, x, digit)
+}
+
+func appendDecimal256DigitWithContext(ctx context.Context, x Decimal256, digit byte) (Decimal256, error) {
+	y, err := x.mul256WithContext(ctx, Decimal256{10, 0, 0, 0})
+	if err != nil {
+		return Decimal256{}, err
+	}
+	return y.add256WithContext(ctx, Decimal256{uint64(digit - '0'), 0, 0, 0})
+}
+
+// Decimal64FromCoefficient consumes unsigned decimal digits without interpreting
+// a sign, exponent or scale. Empty digits represent zero; the input is not retained.
+func Decimal64FromCoefficient(digits []byte) (Decimal64, error) {
+	if len(digits) > 18 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid Decimal64 coefficient")
+	}
+	var value Decimal64
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid Decimal64 coefficient")
+		}
+		// At most 18 decimal digits are strictly below 10^18 and cannot
+		// overflow the signed storage range. The parser's range check is redundant here.
+		value, _ = appendDecimal64Digit(value, digit)
+	}
+	return value, nil
+}
+
+// Decimal128FromCoefficient is the 38-digit counterpart of Decimal64FromCoefficient.
+func Decimal128FromCoefficient(digits []byte) (Decimal128, error) {
+	if len(digits) > 38 {
+		return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+	}
+	if len(digits) <= 18 {
+		// An unsigned coefficient below 10^18 fits in the low word without
+		// overflow. Token syntax, sign, scale and precision remain the callers'
+		// responsibility; retain this helper's digit validation and error.
+		var value uint64
+		for _, digit := range digits {
+			if digit < '0' || digit > '9' {
+				return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+			}
+			value = value*10 + uint64(digit-'0')
+		}
+		return Decimal128{B0_63: value}, nil
+	}
+	var value Decimal128
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+		}
+		var err error
+		value, err = appendDecimal128Digit(value, digit)
+		if err != nil {
+			return Decimal128{}, err
+		}
+	}
+	return value, nil
+}
+
+// Decimal256FromCoefficient is the 76-digit counterpart of Decimal64FromCoefficient.
+func Decimal256FromCoefficient(digits []byte) (Decimal256, error) {
+	if len(digits) > 76 {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("invalid Decimal256 coefficient")
+	}
+	var value Decimal256
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return Decimal256{}, moerr.NewInvalidInputNoCtx("invalid Decimal256 coefficient")
+		}
+		var err error
+		value, err = appendDecimal256Digit(value, digit)
+		if err != nil {
+			return Decimal256{}, err
+		}
+	}
+	return value, nil
+}
+
 func Parse64(x string) (y Decimal64, scale int32, err error) {
+	return parse64WithContext(defaultParseContext, x)
+}
+
+func parse64WithContext(ctx context.Context, x string) (y Decimal64, scale int32, err error) {
 	if x == "" {
-		return 0, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
+		return 0, 0, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal64")
 	}
 	y = Decimal64(0)
 	z := Decimal64(0)
@@ -1972,7 +2074,6 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	t := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	err = nil
 	if x[0] == '-' {
@@ -2000,16 +2101,16 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 					xx = uint64(x[i]-'A') + 10
 				}
 				flag = true
-				z, err = y.Mul64(Decimal64(16))
+				z, err = y.mul64WithContext(ctx, Decimal64(16))
 				if err == nil {
-					y, err = z.Add64(Decimal64(xx))
+					y, err = z.add64WithContext(ctx, Decimal64(xx))
 				}
 				if err != nil {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64.", x)
 					return
 				}
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal64.", x)
 				return
 			}
 			i++
@@ -2019,74 +2120,73 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 			if scale == -1 {
 				scale = 0
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal64.", x)
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s has an invalid Decimal64 exponent.", x)
+					return
+				}
+				scalecount = int32(exponent)
 				floatflag = true
-				i++
-				continue
+				break
 			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
-				continue
-			}
-			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal64.", x)
 			return
-		} else if !floatflag {
+		} else {
 			if width == 18 {
 				if scale == -1 {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64.", x)
 					return
 				}
 				if x[i] >= '5' {
-					y, _ = y.Add64(1)
-					if y1, _ := y.Mod64(10); y1 == 0 {
+					y, _ = y.add64WithContext(ctx, 1)
+					if y1, _ := y.mod64WithContext(ctx, 10); y1 == 0 {
 						scale--
-						y, _ = y.Scale(-1)
+						y, _ = y.scaleWithContext(ctx, -1)
 					}
 				}
 				break
 			}
 			flag = true
-			z = y
-			y = y*10 + Decimal64(x[i]-'0')
-			if y>>63 != 0 || y/10 != z {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+			var ok bool
+			y, ok = appendDecimal64Digit(y, x[i])
+			if !ok {
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64.", x)
 				return
 			}
 			width++
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
-		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal64.", x)
 		return
 	}
 	if scale == -1 {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
+		nextScale := int64(scale) - int64(scalecount)
+		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64.", x)
+			return
 		}
-		scale -= scalecount
+		scale = int32(nextScale)
 		if scale < 0 {
-			y, err = y.Scale(-scale)
+			y, err = y.scaleWithContext(ctx, -scale)
 			scale = 0
 			if err != nil {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64.", x)
 			}
 		}
 	}
@@ -2097,24 +2197,29 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 }
 
 func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
+	return ParseDecimal64WithContext(defaultParseContext, x, width, scale)
+}
+
+// ParseDecimal64WithContext parses with the caller's error reporting context.
+func ParseDecimal64WithContext(ctx context.Context, x string, width, scale int32) (y Decimal64, err error) {
 	if x == "" {
-		return 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
+		return 0, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal64")
 	}
 	if width > 18 {
 		width = 18
 	}
 	n := int32(0)
-	y, n, err = Parse64(x)
+	y, n, err = parse64WithContext(ctx, x)
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
 		return
 	}
 	if n > scale {
-		y, _ = y.Scale(scale - n)
+		y, _ = y.scaleWithContext(ctx, scale-n)
 	} else {
-		y, err = y.Scale(scale - n)
+		y, err = y.scaleWithContext(ctx, scale-n)
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
 			return
 		}
 	}
@@ -2122,12 +2227,12 @@ func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
 		// DECIMAL(p,s) is bounded by -10^p < value < 10^p. The
 		// negative endpoint itself is out of range, just like +10^p.
 		if !Decimal64(Pow10[width]).Minus().Less(y) {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
 			return
 		}
 	} else {
 		if !y.Less(Decimal64(Pow10[width])) {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
 			return
 		}
 	}
@@ -2155,18 +2260,32 @@ func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err erro
 }
 
 func Parse128(x string) (y Decimal128, scale int32, err error) {
+	y, scale, _, err = parse128(x, false)
+	return
+}
+
+// parse128 is the Decimal128 text parser. Once 38 digits are kept, Parse128
+// rounds at that limit. With exactTail (used by ParseDecimal128, which rounds
+// again to the column scale) leading zeros are not counted as digits, nothing
+// is rounded here and the first dropped digit is returned in next, so the
+// caller rounds exactly once to its final scale.
+func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, err error) {
+	return parse128WithContext(defaultParseContext, x, exactTail)
+}
+
+func parse128WithContext(ctx context.Context, x string, exactTail bool) (y Decimal128, scale int32, next byte, err error) {
 	if x == "" {
-		return Decimal128{0, 0}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+		return Decimal128{0, 0}, 0, 0, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal128")
 	}
 	var z Decimal128
 	width := 0
+	dropped := false
 	t := false
 	scale = -1
 	i := 0
 	flag := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	if x[0] == '-' {
 		i++
@@ -2193,16 +2312,16 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 					xx = uint64(x[i]-'A') + 10
 				}
 				flag = true
-				z, err = y.Mul128(Decimal128{16, 0})
+				z, err = y.mul128WithContext(ctx, Decimal128{16, 0})
 				if err == nil {
-					y, err = z.Add128(Decimal128{xx, 0})
+					y, err = z.add128WithContext(ctx, Decimal128{xx, 0})
 				}
 				if err != nil {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128.", x)
 					return
 				}
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal128.", x)
 				return
 			}
 			i++
@@ -2212,72 +2331,95 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 			if scale == -1 {
 				scale = 0
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal128.", x)
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
-				floatflag = true
-				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
-			return
-		} else if !floatflag {
-			if width == 38 {
-				if scale == -1 {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s has an invalid Decimal128 exponent.", x)
 					return
 				}
-				if x[i] >= '5' {
-					y, err = y.Add128(Decimal128{1, 0})
-					if y1, _ := y.Mod128(Decimal128{10, 0}); y1.B0_63 == 0 {
-						scale--
-						y, _ = y.Scale(-1)
+				scalecount = int32(exponent)
+				floatflag = true
+				break
+			}
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal128.", x)
+			return
+		} else {
+			if (scale == -1 || exactTail) && x[i] == '0' && y.B0_63 == 0 && y.B64_127 == 0 {
+				// Leading zeros are not significant digits; counting them would
+				// push the last fractional digit of a DECIMAL(38,38) literal such
+				// as 0.000...01 past the 38-digit limit.
+				flag = true
+				if scale != -1 {
+					scale++
+				}
+				i++
+				continue
+			}
+			if width == 38 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128.", x)
+					return
+				}
+				if exactTail {
+					if !dropped {
+						next = x[i] - '0'
+						dropped = true
 					}
+				} else if x[i] >= '5' {
+					y, err = y.add128WithContext(ctx, Decimal128{1, 0})
+					if y1, _ := y.mod128WithContext(ctx, Decimal128{10, 0}); y1.B0_63 == 0 {
+						scale--
+						y, _ = y.scaleWithContext(ctx, -1)
+					}
+				}
+				// Skip the dropped digit span. Exact mode resumes the existing
+				// token loop for separators, exponents and invalid trailing tokens.
+				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
+				}
+				if exactTail || (i < len(x) && (x[i] == 'e' || x[i] == 'E')) {
+					continue
 				}
 				break
 			}
 			flag = true
-			z, err = y.Mul128(Decimal128{Pow10[1], 0})
-			if err == nil {
-				y, err = z.Add128(Decimal128{uint64(x[i] - '0'), 0})
-			}
+			y, err = appendDecimal128DigitWithContext(ctx, y, x[i])
 			if err != nil {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128.", x)
 				return
 			}
 			width++
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
-		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal128.", x)
 		return
 	}
 	if scale == -1 {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
+		nextScale := int64(scale) - int64(scalecount)
+		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128.", x)
+			return
 		}
-		scale -= scalecount
+		scale = int32(nextScale)
 		if scale < 0 {
-			y, err = y.Scale(-scale)
+			y, err = y.scaleWithContext(ctx, -scale)
 			scale = 0
 			if err != nil {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128.", x)
 			}
 		}
 	}
@@ -2288,18 +2430,32 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 }
 
 func Parse256(x string) (y Decimal256, scale int32, err error) {
+	y, scale, _, err = parse256(x, false)
+	return
+}
+
+// parse256 is the Decimal256 text parser. Once 76 digits are kept, Parse256
+// rounds at that limit. With exactTail (used by ParseDecimal256, which rounds
+// again to the column scale) leading zeros are not counted as digits, nothing
+// is rounded here and the first dropped digit is returned in next, so the
+// caller rounds exactly once to its final scale.
+func parse256(x string, exactTail bool) (y Decimal256, scale int32, next byte, err error) {
+	return parse256WithContext(defaultParseContext, x, exactTail)
+}
+
+func parse256WithContext(ctx context.Context, x string, exactTail bool) (y Decimal256, scale int32, next byte, err error) {
 	if x == "" {
-		return Decimal256{}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+		return Decimal256{}, 0, 0, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal256")
 	}
 	var z Decimal256
 	width := 0
+	dropped := false
 	t := false
 	scale = -1
 	i := 0
 	flag := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	if x[0] == '-' {
 		i++
@@ -2327,16 +2483,16 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 					xx = uint64(x[i]-'A') + 10
 				}
 				flag = true
-				z, err = y.Mul256(Decimal256{16, 0, 0, 0})
+				z, err = y.mul256WithContext(ctx, Decimal256{16, 0, 0, 0})
 				if err == nil {
-					y, err = z.Add256(Decimal256{xx, 0, 0, 0})
+					y, err = z.add256WithContext(ctx, Decimal256{xx, 0, 0, 0})
 				}
 				if err != nil {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
 					return
 				}
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal256.", x)
 				return
 			}
 			i++
@@ -2346,86 +2502,98 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 			if scale == -1 {
 				scale = 0
 			} else {
-				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal256.", x)
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
-				floatflag = true
-				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
-			return
-		} else if !floatflag {
-			if width == 76 {
-				if scale == -1 {
-					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s has an invalid Decimal256 exponent.", x)
 					return
 				}
-				if x[i] >= '5' {
-					y, err = y.Add256(Decimal256{1, 0, 0, 0})
+				scalecount = int32(exponent)
+				floatflag = true
+				break
+			}
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal256.", x)
+			return
+		} else {
+			if (scale == -1 || exactTail) && x[i] == '0' &&
+				y.B0_63 == 0 && y.B64_127 == 0 && y.B128_191 == 0 && y.B192_255 == 0 {
+				// Leading zeros are not significant digits and must not count
+				// toward the 76-digit limit.
+				flag = true
+				if scale != -1 {
+					scale++
+				}
+				i++
+				continue
+			}
+			if width == 76 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
+					return
+				}
+				if exactTail {
+					if !dropped {
+						next = x[i] - '0'
+						dropped = true
+					}
+				} else if x[i] >= '5' {
+					y, err = y.add256WithContext(ctx, Decimal256{1, 0, 0, 0})
 					if err != nil {
-						err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+						err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
 						return
 					}
-					if y1, _ := y.Mod256(Decimal256{10, 0, 0, 0}); y1.B0_63 == 0 && y1.B64_127 == 0 && y1.B128_191 == 0 && y1.B192_255 == 0 {
+					if y1, _ := y.mod256WithContext(ctx, Decimal256{10, 0, 0, 0}); y1.B0_63 == 0 && y1.B64_127 == 0 && y1.B128_191 == 0 && y1.B192_255 == 0 {
 						scale--
-						y, _ = y.Scale(-1)
+						y, _ = y.scaleWithContext(ctx, -1)
 					}
+				}
+				// Exact mode validates the whole tail after skipping dropped digits.
+				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
+				}
+				if exactTail || (i < len(x) && (x[i] == 'e' || x[i] == 'E')) {
+					continue
 				}
 				break
 			}
 			flag = true
-			z, err = y.Mul256(Decimal256{Pow10[1], 0, 0, 0})
-			if err == nil {
-				y, err = z.Add256(Decimal256{uint64(x[i] - '0'), 0, 0, 0})
-			}
+			y, err = appendDecimal256DigitWithContext(ctx, y, x[i])
 			if err != nil {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
 				return
 			}
 			width++
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			digit := int32(x[i] - '0')
-			if scalecount > (math.MaxInt32-digit)/10 {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
-				return
-			}
-			scalecount = scalecount*10 + digit
 		}
 		i++
 	}
 	if !flag {
-		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s is illegal string, can't be converted to Decimal256.", x)
 		return
 	}
 	if scale == -1 {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
-		}
 		nextScale := int64(scale) - int64(scalecount)
 		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
 			return
 		}
 		scale = int32(nextScale)
 		if scale < 0 {
-			y, err = y.Scale(int32(-int64(scale)))
+			y, err = y.scaleWithContext(ctx, int32(-int64(scale)))
 			scale = 0
 			if err != nil {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256.", x)
 			}
 		}
 	}
@@ -2436,24 +2604,44 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 }
 
 func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
+	return ParseDecimal128WithContext(defaultParseContext, x, width, scale)
+}
+
+// ParseDecimal128WithContext parses with the caller's error reporting context.
+func ParseDecimal128WithContext(ctx context.Context, x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
-		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+		return Decimal128{0, 0}, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal128")
 	}
 	if width > 38 {
 		width = 38
 	}
 	n := int32(0)
-	y, n, err = Parse128(x)
+	next := byte(0)
+	y, n, next, err = parse128WithContext(ctx, x, true)
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 		return
 	}
+	// Round once to the final scale: when n > scale the deciding digit is
+	// still in y, otherwise it is the first digit parse128 dropped.
 	if n > scale {
-		y, _ = y.Scale(scale - n)
+		y, _ = y.scaleWithContext(ctx, scale-n)
+	} else if n == scale {
+		if next >= 5 {
+			if y.Sign() {
+				y, err = y.sub128WithContext(ctx, Decimal128{1, 0})
+			} else {
+				y, err = y.add128WithContext(ctx, Decimal128{1, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+				return
+			}
+		}
 	} else {
-		y, err = y.Scale(scale - n)
+		y, err = y.scaleWithContext(ctx, scale-n)
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 			return
 		}
 	}
@@ -2461,26 +2649,26 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	if width <= 19 {
 		z = Decimal128{Pow10[width], 0}
 	} else {
-		z, _ = Decimal128{Pow10[19], 0}.Mul128(Decimal128{Pow10[width-19], 0})
+		z, _ = Decimal128{Pow10[19], 0}.mul128WithContext(ctx, Decimal128{Pow10[width-19], 0})
 	}
 	if y.Sign() {
 		if !z.Minus().Less(y) {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 			return
 		}
 	} else {
 		if !y.Less(z) {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 			return
 		}
 	}
 	return
 }
 
-func decimal256Pow10(width int32) (Decimal256, error) {
+func decimal256Pow10WithContext(ctx context.Context, width int32) (Decimal256, error) {
 	result := Decimal256{1, 0, 0, 0}
 	for width > 19 {
-		next, err := result.Mul256(Decimal256{Pow10[19], 0, 0, 0})
+		next, err := result.mul256WithContext(ctx, Decimal256{Pow10[19], 0, 0, 0})
 		if err != nil {
 			return Decimal256{}, err
 		}
@@ -2488,7 +2676,7 @@ func decimal256Pow10(width int32) (Decimal256, error) {
 		width -= 19
 	}
 	if width > 0 {
-		next, err := result.Mul256(Decimal256{Pow10[width], 0, 0, 0})
+		next, err := result.mul256WithContext(ctx, Decimal256{Pow10[width], 0, 0, 0})
 		if err != nil {
 			return Decimal256{}, err
 		}
@@ -2498,39 +2686,59 @@ func decimal256Pow10(width int32) (Decimal256, error) {
 }
 
 func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
+	return ParseDecimal256WithContext(defaultParseContext, x, width, scale)
+}
+
+// ParseDecimal256WithContext parses with the caller's error reporting context.
+func ParseDecimal256WithContext(ctx context.Context, x string, width, scale int32) (y Decimal256, err error) {
 	if x == "" {
-		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+		return Decimal256{}, moerr.NewInvalidInput(parseErrorContext(ctx), "can't cast empty string to Decimal256")
 	}
 	if width > 76 {
 		width = 76
 	}
 	n := int32(0)
-	y, n, err = Parse256(x)
+	next := byte(0)
+	y, n, next, err = parse256WithContext(ctx, x, true)
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 		return
 	}
+	// Round once to the final scale: when n > scale the deciding digit is
+	// still in y, otherwise it is the first digit parse256 dropped.
 	if n > scale {
-		y, _ = y.Scale(scale - n)
+		y, _ = y.scaleWithContext(ctx, scale-n)
+	} else if n == scale {
+		if next >= 5 {
+			if y.Sign() {
+				y, err = y.sub256WithContext(ctx, Decimal256{1, 0, 0, 0})
+			} else {
+				y, err = y.add256WithContext(ctx, Decimal256{1, 0, 0, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+				return
+			}
+		}
 	} else {
-		y, err = y.Scale(scale - n)
+		y, err = y.scaleWithContext(ctx, scale-n)
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 			return
 		}
 	}
-	z, err := decimal256Pow10(width)
+	z, err := decimal256Pow10WithContext(ctx, width)
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 		return
 	}
 	if y.Sign() {
 		if !z.Minus().Less(y) {
-			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 			return
 		}
 	} else if !y.Less(z) {
-		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 		return
 	}
 	return
@@ -2648,17 +2856,12 @@ func (x Decimal256) Format(scale int32) string {
 	const decimal256FormatBufSize = 80
 	var buf [decimal256FormatBufSize]byte
 	i := len(buf)
-	one := Decimal256{1, 0, 0, 0}
-	ten := Decimal256{10, 0, 0, 0}
 
 	for x.B0_63 != 0 || x.B64_127 != 0 || x.B128_191 != 0 || x.B192_255 != 0 {
-		y, _ := x.Mod256(ten)
+		var remainder uint64
+		x, remainder = div256ByUint64(x, 10)
 		i--
-		buf[i] = byte(y.B0_63) + '0'
-		x, _ = x.Div256(ten)
-		if y.B0_63 >= 5 {
-			x, _ = x.Sub256(one)
-		}
+		buf[i] = byte(remainder) + '0'
 		scale--
 		if scale == 0 {
 			i--
@@ -2686,44 +2889,76 @@ func (x Decimal256) Format(scale int32) string {
 }
 
 func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {
-	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 18 {
-			k = 18
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
-		y, _, _ := x.Mod(Decimal64(1), k, 0)
-		if y != 0 {
-			x, _ = x.Sub64(y)
-			x, _, _ = x.Add(Decimal64(1), k, 0)
+		return magnitude.Floor(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 18 {
+		k = 18
+	}
+	y, _, err := x.Mod(Decimal64(1), k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
+	}
+	if y != 0 {
+		x, err = x.Sub64(y)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		x, _, err = x.Add(Decimal64(1), k, 0)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
+		}
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
 	}
 	return x
 }
+
 func (x Decimal64) Floor(scale1, scale2 int32, isConst bool) Decimal64 {
-	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 18 {
-			k = 18
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
 		}
-		y, _, _ := x.Mod(Decimal64(1), k, 0)
-		x, _ = x.Sub64(y)
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		return magnitude.Ceil(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 18 {
+		k = 18
+	}
+	y, _, err := x.Mod(Decimal64(1), k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
+	}
+	x, err = x.Sub64(y)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
 		}
 	}
 	return x
@@ -2733,58 +2968,98 @@ func (x Decimal64) Round(scale1, scale2 int32, isConst bool) Decimal64 {
 	if scale2 >= scale1 {
 		return x
 	}
+	negative := x.Sign()
 	k := scale1 - scale2
 	if k > 18 {
 		k = 18
 	}
-	x, _ = x.Scale(-k)
+	var err error
+	x, err = x.Scale(-k)
+	if err != nil || (x != 0 && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "ROUND"))
+	}
 	if !isConst {
-		x, _ = x.Scale(k)
+		x, err = x.Scale(k)
 	} else if scale2 < 0 {
-		x, _ = x.Scale(-scale2)
+		x, err = x.Scale(-scale2)
+	}
+	if err != nil || (x != 0 && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "ROUND"))
 	}
 	return x
 }
 
 func (x Decimal128) Ceil(scale1, scale2 int32, isConst bool) Decimal128 {
-	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 38 {
-			k = 38
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
-		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
-		if y.B0_63 != 0 || y.B64_127 != 0 {
-			x, _ = x.Sub128(y)
-			x, _, _ = x.Add(Decimal128{1, 0}, k, 0)
+		return magnitude.Floor(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 38 {
+		k = 38
+	}
+	y, _, err := x.Mod(Decimal128{1, 0}, k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
+	}
+	if y.B0_63 != 0 || y.B64_127 != 0 {
+		x, err = x.Sub128(y)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		x, _, err = x.Add(Decimal128{1, 0}, k, 0)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
+		}
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
 	}
 	return x
 }
+
 func (x Decimal128) Floor(scale1, scale2 int32, isConst bool) Decimal128 {
-	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 38 {
-			k = 38
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
 		}
-		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
-		x, _ = x.Sub128(y)
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		return magnitude.Ceil(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 38 {
+		k = 38
+	}
+	y, _, err := x.Mod(Decimal128{1, 0}, k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
+	}
+	x, err = x.Sub128(y)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
 		}
 	}
 	return x
@@ -2794,15 +3069,23 @@ func (x Decimal128) Round(scale1, scale2 int32, isConst bool) Decimal128 {
 	if scale2 >= scale1 {
 		return x
 	}
+	negative := x.Sign()
 	k := scale1 - scale2
 	if k > 38 {
 		k = 38
 	}
-	x, _ = x.Scale(-k)
+	var err error
+	x, err = x.Scale(-k)
+	if err != nil || ((x.B0_63 != 0 || x.B64_127 != 0) && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "ROUND"))
+	}
 	if !isConst {
-		x, _ = x.Scale(k)
+		x, err = x.Scale(k)
 	} else if scale2 < 0 {
-		x, _ = x.Scale(-scale2)
+		x, err = x.Scale(-scale2)
+	}
+	if err != nil || ((x.B0_63 != 0 || x.B64_127 != 0) && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "ROUND"))
 	}
 	return x
 }

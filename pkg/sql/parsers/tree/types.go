@@ -149,6 +149,12 @@ type InternalType struct {
 	//type id
 	Oid uint32
 
+	// CastCharsetSpecified distinguishes an omitted CHARACTER SET clause from
+	// an explicitly empty name on expression CHAR casts. CastCharsetName is
+	// resolved through the same admission policy as CONVERT(... USING charset).
+	CastCharsetSpecified bool
+	CastCharsetName      string
+
 	EnumValues []string
 
 	//the type of array elements.
@@ -218,7 +224,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')
 		}
-	case "vecf32", "vecf64", "vecbf16", "vecf16", "vecint8", "vecuint8":
+	case "vecf32", "vecf64", "vecbf16", "vecf16", "vecint8", "vecuint8", "vecf8", "vecf4":
 		if node.DisplayWith >= 0 {
 			// Prints 'vecf32(4)'
 			ctx.WriteByte('(')

@@ -64,6 +64,60 @@ func TestNewMemPKFilter_WithBF(t *testing.T) {
 	require.Equal(t, int16(1), filter.BFSeqNum)
 }
 
+func TestIvfEntriesMembershipUsesOriginPrimaryKey(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "__mo_index_ivf_entries",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		Name2ColIndex: map[string]int32{
+			"version": 0, "centroid": 1,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk:    2,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry: 3,
+			catalog.CPrimaryKeyColName:                    4,
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
+			PkeyColName: catalog.CPrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "version", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "centroid", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: catalog.CPrimaryKeyColName, Seqnum: 4, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	packerPool := fileservice.NewPool(1, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	member := bloomfilter.NewCBloomFilterWithProbability(8, 0.01)
+	defer member.Free()
+	filter, err := NewMemPKFilter(tableDef, types.MaxTs().ToTimestamp(), packerPool, BasePKFilter{}, engine.FilterHint{BF: member})
+	require.NoError(t, err)
+	require.Equal(t, int16(2), filter.BFSeqNum, "membership probes the source origin PK")
+
+	mixin := withFilterMixin{tableDef: tableDef}
+	mixin.filterState.hasBF = true
+	mixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
+	require.Equal(t, []uint16{4, 2}, mixin.filterState.seqnums)
+	require.Equal(t, int32(4), mixin.filterState.pkSeqNum)
+
+	// Physical copies may expose only the hidden composite key in Pkey.Names;
+	// the source-key binding must still be retained.
+	copied := *tableDef
+	copied.Pkey = &plan.PrimaryKeyDef{Names: []string{catalog.CPrimaryKeyColName}, PkeyColName: catalog.CPrimaryKeyColName}
+	copiedMixin := withFilterMixin{tableDef: &copied}
+	copiedMixin.filterState.hasBF = true
+	copiedMixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
+	require.Equal(t, []uint16{4, 2}, copiedMixin.filterState.seqnums)
+	require.Equal(t, int32(4), copiedMixin.filterState.pkSeqNum)
+
+	for _, hasBF := range []bool{false, true} {
+		physicalOnly := withFilterMixin{tableDef: &copied}
+		physicalOnly.filterState.hasBF = hasBF
+		physicalOnly.tryUpdateColumns([]string{catalog.CPrimaryKeyColName})
+		require.Equal(t, []uint16{4}, physicalOnly.filterState.seqnums)
+		require.Equal(t, int32(4), physicalOnly.filterState.pkSeqNum)
+	}
+}
+
 func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:      "__mo_index_secondary_fulltext",
@@ -395,6 +449,28 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		require.Equal(t, skipCnt[i], skipMask.Count(), filter.String())
 
 		skipMask.Release()
+	}
+}
+
+func TestMemPKFilterINWorkspaceRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	vec := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+	for _, value := range []int64{9, -1, 3, 7, 3, 10} {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
+	var filter MemPKFilter
+	filter.SetFullData(function.IN, true,
+		EncodePrimaryKey(int64(7), packer), EncodePrimaryKey(int64(3), packer),
+		EncodePrimaryKey(int64(-1), packer), EncodePrimaryKey(int64(3), packer))
+	skip := objectio.GetReusableBitmap()
+	t.Cleanup(skip.Release)
+	filter.FilterVector(vec, packer, &skip)
+	for row, wantSkip := range []bool{true, false, false, false, false, true} {
+		require.Equal(t, wantSkip, skip.Contains(uint64(row)), "row %d", row)
 	}
 }
 
@@ -747,4 +823,67 @@ func BenchmarkMemPKFilterPrefixIn(b *testing.B) {
 			benchmarkMemPKFilterMatches = matched
 		})
 	}
+}
+
+func TestMemPKFilterINConcurrentFirstUseAndReplacement(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	input := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { input.Free(mp) })
+	for _, value := range []int64{1, 2, 2, 3} {
+		require.NoError(t, vector.AppendFixed(input, value, false, mp))
+	}
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
+	var filter MemPKFilter
+	filter.SetFullData(function.IN, true, EncodePrimaryKey(int64(2), packer))
+	require.Nil(t, filter.lookup.set)
+	// Value copies share a holder; all first probes race at the same barrier.
+	require.False(t, filter.MayMatchKeyRange(EncodePrimaryKey(int64(99), packer), EncodePrimaryKey(int64(100), packer)))
+	require.Nil(t, filter.lookup.set, "range pruning must not initialize workspace lookup")
+	var equal MemPKFilter
+	equal.SetFullData(function.EQUAL, false, EncodePrimaryKey(int64(1), packer))
+	copied := MemPKFilter{disjuncts: []MemPKFilter{filter, equal}}
+	start := make(chan struct{})
+	counts := make(chan int, 16)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p := types.NewPacker()
+			defer p.Close()
+			skip := objectio.GetReusableBitmap()
+			defer skip.Release()
+			<-start
+			copied.FilterVector(input, p, &skip)
+			signature := 0
+			for row := 0; row < input.Length(); row++ {
+				if skip.Contains(uint64(row)) {
+					signature |= 1 << row
+				}
+			}
+			counts <- signature
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(counts)
+	for count := range counts {
+		require.Equal(t, 8, count, "only row 3 lies outside IN(2) OR =1")
+	}
+	old := filter.lookup
+	require.Len(t, old.set, 1)
+	filter.SetFullData(function.IN, true, EncodePrimaryKey(int64(1), packer))
+	require.NotSame(t, old, filter.lookup)
+	require.Nil(t, filter.lookup.set)
+	skip := objectio.GetReusableBitmap()
+	defer skip.Release()
+	filter.FilterVector(input, packer, &skip)
+	require.Equal(t, 3, skip.Count())
+	filter.SetFullData(function.IN, true)
+	require.Nil(t, filter.lookup)
+	skip.Clear()
+	filter.FilterVector(input, packer, &skip)
+	require.Equal(t, 4, skip.Count())
 }

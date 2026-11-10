@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 
@@ -98,7 +99,7 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 }
 
 func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
-	ctx := NewEmptyCompilerContext()
+	ctx := NewEmptyCompilerContext(nil)
 	ctx.tables[catalog.MOForeignKeys] = &TableDef{
 		Name: catalog.MOForeignKeys,
 		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
@@ -212,7 +213,7 @@ func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
 func TestGetSqlForUpdateFkReferencedIndexEscapesCatalogValues(t *testing.T) {
 	require.Equal(t,
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'uk\\'parent' where db_name = 'child\\'db' and table_name = 'child\\\\table' and constraint_name = 'fk\\'child'",
-		getSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
+		GetSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
 	)
 }
 
@@ -220,6 +221,8 @@ func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
 	require.Contains(t, sql, "db_name != 'db\\'name'")
+	require.Contains(t, sql, "refer_table_name in (select relname from `mo_catalog`.`mo_tables`")
+	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name' and relkind != '"+catalog.SystemViewRel+"'")
 }
 
 func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
@@ -292,7 +295,9 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		"update `mo_catalog`.`mo_foreign_keys` set refer_column_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'table\\'name\\\\part' and refer_column_name = 'old\\'name\\\\part' ; ",
 	}, getSqlForRenameColumn(db, table, oldName, newName))
 	require.Equal(t,
-		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part';",
+		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part' "+
+			"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
+			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part' and relkind != '"+catalog.SystemViewRel+"');",
 		getSqlForCheckHasDBRefersTo(db))
 }
 
@@ -498,21 +503,18 @@ func TestMakeInsertIgnoreMySQLSpecialTypeConstExpr(t *testing.T) {
 		target   plan.Type
 		value    *tree.NumVal
 		wantType types.T
-		wantEnum uint32
-		wantSet  uint64
 	}{
 		{
-			name:     "invalid enum becomes error member",
+			name:     "invalid enum uses runtime conversion",
 			target:   plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
 			value:    tree.NewNumVal("bad", "bad", false, tree.P_char),
 			wantType: types.T_enum,
 		},
 		{
-			name:     "invalid set member is dropped",
+			name:     "invalid set uses runtime conversion",
 			target:   plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
 			value:    tree.NewNumVal("x,bad", "x,bad", false, tree.P_char),
 			wantType: types.T_uint64,
-			wantSet:  1,
 		},
 		{
 			name:     "invalid year becomes zero",
@@ -526,14 +528,14 @@ func TestMakeInsertIgnoreMySQLSpecialTypeConstExpr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tt.value, tt.target)
 			require.NoError(t, err)
+			if tt.wantType == types.T_enum || tt.wantType == types.T_uint64 {
+				// ENUM/SET must retain their runtime warning and mode owner.
+				require.False(t, handled)
+				require.Nil(t, expr)
+				return
+			}
 			require.True(t, handled)
 			require.Equal(t, int32(tt.wantType), expr.Typ.Id)
-			if tt.wantType == types.T_enum {
-				require.Equal(t, tt.wantEnum, expr.GetLit().GetEnumVal())
-			}
-			if tt.wantType == types.T_uint64 {
-				require.Equal(t, tt.wantSet, expr.GetLit().GetU64Val())
-			}
 		})
 	}
 }
@@ -542,7 +544,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -653,7 +655,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -912,7 +914,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 }
 
 func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
 	sourceTag := builder.genNewBindTag()
@@ -983,7 +985,7 @@ func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
 }
 
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	emp := mock.ctxt.tables["emp"]
 	require.NotNil(t, emp)
 	require.NotEmpty(t, emp.Indexes)
@@ -1180,4 +1182,146 @@ func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendPreInsertPlanPreservesUpdateRowIDForV1Unique(t *testing.T) {
+	builder := NewQueryBuilder(
+		plan.Query_SELECT,
+		NewMockCompilerContext(false, newPlanTestProcess(t)),
+		false,
+		true,
+	)
+	bindCtx := NewBindContext(builder, nil)
+
+	intType := plan.Type{Id: int32(types.T_int32)}
+	unicodeType := plan.Type{
+		Id:               int32(types.T_varchar),
+		Width:            64,
+		Charset:          uint32(types.CharsetUTF8MB4UnicodeCI),
+		CollationVersion: uint32(types.CollationVersionV1),
+	}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+
+	sourceID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{
+				Typ: intType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 0, Name: "id"},
+				},
+			},
+			{
+				Typ: unicodeType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 1, Name: "s"},
+				},
+			},
+			{
+				Typ: rowIDType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 2, Name: catalog.Row_ID},
+				},
+			},
+		},
+	}, bindCtx)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "s", Typ: unicodeType},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*plan.IndexDef{{
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexName:      "uk_s",
+			IndexTableName: "t___idx_uk_s",
+			Parts:          []string{"s"},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}},
+	}
+	uniqueTableDef := &plan.TableDef{
+		Name: "t___idx_uk_s",
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName},
+	}
+
+	sourceStep, err := appendPreInsertPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		sourceID,
+		0,
+		true,
+		false,
+		uniqueTableDef,
+		true,
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, sourceStep, int32(0))
+
+	var preInsert *plan.Node
+	var keyProject *plan.Node
+	for i := range builder.qry.Nodes {
+		node := builder.qry.Nodes[i]
+		if node.NodeType == plan.Node_PRE_INSERT_UK {
+			preInsert = node
+			keyProject = builder.qry.Nodes[node.Children[0]]
+			break
+		}
+	}
+	require.NotNil(t, preInsert)
+	require.NotNil(t, keyProject)
+
+	// The V1 key is materialized after the base projection but before the
+	// hidden UPDATE rowid. PRE_INSERT_UK continues to use the last input column
+	// as the update rowid, preserving the original operator ABI.
+	require.Equal(t, plan.Node_PROJECT, keyProject.NodeType)
+	require.Len(t, keyProject.ProjectList, 4)
+	require.Equal(t, int32(types.T_int32), keyProject.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(0), keyProject.ProjectList[0].GetCol().ColPos)
+	require.Equal(t, int32(1), keyProject.ProjectList[1].GetCol().ColPos)
+	require.Equal(t, int32(types.T_varbinary), keyProject.ProjectList[2].Typ.Id)
+	require.Equal(t, "physical_collation_key", keyProject.ProjectList[2].GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_Rowid), keyProject.ProjectList[3].Typ.Id)
+	require.Equal(t, int32(2), keyProject.ProjectList[3].GetCol().ColPos)
+
+	require.Equal(t, []int32{2}, preInsert.PreInsertUkCtx.Columns)
+	require.Len(t, preInsert.ProjectList, 3)
+	require.Equal(t, int32(types.T_varbinary), preInsert.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(types.T_int32), preInsert.ProjectList[1].Typ.Id)
+	require.Equal(t, int32(types.T_Rowid), preInsert.ProjectList[2].Typ.Id)
+	require.Equal(t, catalog.Row_ID, preInsert.ProjectList[2].GetCol().Name)
+
+	// INSERT streams do not carry a trailing rowid.  The V1 key must therefore
+	// be appended after the existing projection instead of being inserted before
+	// its last column.
+	_, err = appendPreInsertPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		sourceID,
+		0,
+		false,
+		false,
+		uniqueTableDef,
+		true,
+	)
+	require.NoError(t, err)
+
+	var insertPreInsert *plan.Node
+	for i := len(builder.qry.Nodes) - 1; i >= 0; i-- {
+		if builder.qry.Nodes[i].NodeType == plan.Node_PRE_INSERT_UK {
+			insertPreInsert = builder.qry.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, insertPreInsert)
+	insertKeyProject := builder.qry.Nodes[insertPreInsert.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, insertKeyProject.NodeType)
+	require.Len(t, insertKeyProject.ProjectList, 4)
+	require.Equal(t, int32(types.T_Rowid), insertKeyProject.ProjectList[2].Typ.Id)
+	require.Equal(t, int32(2), insertKeyProject.ProjectList[2].GetCol().ColPos)
+	require.Equal(t, int32(types.T_varbinary), insertKeyProject.ProjectList[3].Typ.Id)
+	require.Equal(t, "physical_collation_key", insertKeyProject.ProjectList[3].GetF().Func.ObjName)
 }

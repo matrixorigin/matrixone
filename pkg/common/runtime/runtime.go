@@ -63,6 +63,12 @@ func SetupServiceBasedRuntime(
 	allRuntime.Store(service, r)
 }
 
+// CompareAndDeleteServiceBasedRuntime removes only the matching registration.
+// It does not close the runtime or the resources registered in it.
+func CompareAndDeleteServiceBasedRuntime(service string, old Runtime) bool {
+	return allRuntime.CompareAndDelete(service, old)
+}
+
 // ServiceRuntime returns a service based runtime
 func ServiceRuntime(
 	service string,

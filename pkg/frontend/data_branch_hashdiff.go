@@ -221,9 +221,7 @@ func lcaProbeColumnLayout(
 			)
 		}
 		layout.attrs = append(layout.attrs, lcaAttrName)
-		layout.types = append(layout.types, types.NewWithCharset(
-			types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale, uint8(lcaCol.Typ.Charset),
-		))
+		layout.types = append(layout.types, types.MustTypeFromPlan(lcaCol.Typ))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
 	}
@@ -270,7 +268,14 @@ func handleDelsOnLCA(
 		return nil, err
 	}
 
-	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
+	// The SQL probe resolves db.table by name under the statement account.
+	// A lineage node owned by another account (design §6.4, e.g. reopened
+	// under a subscription source owner) would resolve that name to a
+	// same-named local decoy or fail outright, so it is always scanned by
+	// id under its own owner identity via the reader fallback.
+	lcaOwnerMismatch := tblStuff.resolvedLCAIdentity(ctx, ses).account != ses.GetAccountId()
+	forceReaderProbe := lcaOwnerMismatch ||
+		(tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load())
 	if forceReaderProbe {
 		sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
 		if err != nil {
@@ -583,7 +588,9 @@ func handleDelsOnLCA(
 		tBat.SetRowCount(0)
 	} else {
 		for i := range tBat.Vecs {
-			tBat.Vecs[i].Shrink(sels, false)
+			if err := tBat.Vecs[i].Shrink(sels, false, ses.proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
@@ -659,8 +666,10 @@ func lcaProbeJoinCastType(typ types.Type) (string, bool) {
 		return "VARBINARY", true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return typ.DescString(), true
-	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+	case types.T_date, types.T_year:
 		return typ.String(), true
+	case types.T_datetime, types.T_time, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Scale), true
 	default:
 		return "", false
 	}
@@ -733,7 +742,9 @@ func runLCAProbeWithReaderFallback(
 	if err = filterVec.UnionBatch(pkVec, 0, rowCount, nil, mp); err != nil {
 		return executor.Result{}, err
 	}
-	filterVec.InplaceSort()
+	if err := filterVec.InplaceSort(mp); err != nil {
+		return executor.Result{}, err
+	}
 	pkFilterExpr, err := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
 	if err != nil {
 		return executor.Result{}, err
@@ -790,8 +801,17 @@ func runLCAProbeWithReaderFallback(
 	}()
 
 	scanStart := time.Now()
+	// Scan under the lineage node's owner identity; the statement context
+	// alone would route the by-id catalog read to the wrong account when the
+	// node lives under another owner (design §6.4). Derive the scan context
+	// from the *current* caller context: the descriptor's captured resolution
+	// context predates the enclosing probe's child cancellation, so attaching
+	// the owner account to it would make cancellation and deadline lossy for
+	// every in-flight catalog and storage read here (identityCtx keeps the
+	// live context when accounts already match).
+	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
 	err = scanSnapshotRelationByIDWithFallback(
-		ctx,
+		scanCtx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
@@ -1068,13 +1088,36 @@ func hashDiffIfHasLCA(
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	// Resolve per-side LCA snapshots once: each side's tombstone
-	// resolution probes the LCA at "the moment THIS side forked off
-	// the LCA" (or, when the side IS the LCA, at the OTHER side's
-	// snapshot — see branchMetaInfo helper docs).
+	// Resolve per-side LCA snapshots once. Both sides must resolve
+	// their collected changes against the shared divergence point of
+	// the two lineages: the earlier of the two per-side fork anchors
+	// (see branchMetaInfo helper docs). The side that forked off the
+	// LCA later inherits the LCA's writes between the two forks, and
+	// those writes are exactly the divergence its collect range
+	// gathered (buildSideCollectRange clamps the LCA window up to
+	// otherFork.Next()). Resolving that side against its own fork
+	// absorbs the divergence into the fork baseline — handleDelsOnLCA
+	// returns the post-fork rows, the collected inserts compare equal
+	// and are dropped — erasing real both-sides conflicts: WHEN
+	// CONFLICT FAIL and SKIP would silently behave like ACCEPT and
+	// DATA BRANCH DIFF would hide the destination rows. The
+	// earlier-forked side keeps its own fork as the anchor, and when
+	// both sides anchor identically (e.g. the other endpoint IS the
+	// LCA) the mutual anchor equals that moment.
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
-	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
-	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
+	var tarLCAProbe, baseLCAProbe types.TS
+	if copt.preservePickConflicts {
+		// PICK keeps the per-side fork anchors. Its conflict rule counts
+		// only writes each side made after its own fork: state the
+		// destination inherited from the LCA between the two forks is
+		// part of its baseline, and such picks must apply without a
+		// conflict (the byte-chain pick in branch_binary_pk.sql).
+		tarLCAProbe = dagInfo.tarLCASnapshot(baseSP)
+		baseLCAProbe = dagInfo.baseLCASnapshot(tarSP)
+	} else {
+		mutualProbe := dagInfo.lcaProbeSnapshot(tarSP, baseSP)
+		tarLCAProbe, baseLCAProbe = mutualProbe, mutualProbe
+	}
 	// A parent created earlier in the same explicit transaction has no
 	// catalog state at the pre-commit CloneTS recorded by its child.  Both
 	// tables become visible together, so the parent's creation commit is the
@@ -1182,7 +1225,10 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			wrapped.batch.Shrink(keep, true)
+			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return err
+			}
 		}
 		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 			copt.expandUpdate && wrapped.kind == diffInsert && wrapped.fromUpdate &&
@@ -1299,27 +1345,17 @@ func hashDiffIfHasLCA(
 						j++
 					} else {
 						// copt.conflictOpt == tree.CONFLICT_FAIL
-						tarRow := make([]any, 1)
-						if err3 = extractRowFromVector(
-							ctx, ses, tarVec, 0, tarRow, i, false,
-						); err3 != nil {
+						key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+						if keyErr != nil {
+							err3 = keyErr
 							return
 						}
 
-						buf := acquireBuffer(tblStuff.bufPool)
-						if err3 = formatValIntoString(
-							ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf,
-						); err3 != nil {
-							releaseBuffer(tblStuff.bufPool, buf)
-							return
-						}
-
-						err3 = moerr.NewInternalErrorNoCtxf(
-							"conflict: %s %s and %s %s on pk(%v) with different values",
-							tarWrapped.name, tarWrapped.kind,
-							baseWrapped.name, baseWrapped.kind, buf.String(),
+						err3 = moerr.NewDataBranchConflictNoCtxf(
+							"%s %s and %s %s on pk(%v)",
+							tarWrapped.name, tarWrapped.logicalOperation(),
+							baseWrapped.name, baseWrapped.logicalOperation(), key,
 						)
-						releaseBuffer(tblStuff.bufPool, buf)
 						return
 					}
 				} else if cmp < 0 {
@@ -1344,11 +1380,15 @@ func hashDiffIfHasLCA(
 					return
 				} else {
 					if len(sels1) != 0 {
-						wrapped.batch.Shrink(sels1, true)
+						if err3 = wrapped.batch.Shrink(sels1, true, ses.proc.Mp()); err3 != nil {
+							return
+						}
 					}
 
 					if len(sels2) != 0 {
-						baseWrapped.batch.Shrink(sels2, true)
+						if err3 = baseWrapped.batch.Shrink(sels2, true, ses.proc.Mp()); err3 != nil {
+							return
+						}
 					}
 				}
 
@@ -1468,7 +1508,15 @@ func hashDiffIfHasLCA(
 					}
 					return diffSideTarget
 				}(),
-				tmpCh, branchTS, copt.expandUpdate, hashmap1, hashmap2,
+				func(wrapped batchWithKind) error {
+					select {
+					case <-newCtx.Done():
+						tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+						return newCtx.Err()
+					case tmpCh <- wrapped:
+						return nil
+					}
+				}, branchTS, copt.expandUpdate, hashmap1, hashmap2, -1,
 			); err3 != nil {
 				atomicErr.Store(err3)
 			}
@@ -1480,6 +1528,19 @@ func hashDiffIfHasLCA(
 	}
 
 	stepHandler := func(forBase bool) (err2 error) {
+		if copt.onlineApply {
+			name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
+			hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
+			if !forBase {
+				name, side, branchTS = tblStuff.tarRel.GetTableName(), diffSideTarget, tarLCAProbe
+				hashmap1, hashmap2, handle = tarDataHashmap, tarTombstoneHashmap, handleTarDeleteAndUpdates
+			}
+			// Delivery owns the batch even on failure. Held batches remain in
+			// retPool until the agency unwinds; handlers release emitted failures.
+			return findDeleteAndUpdateBat(ctx, ses, bh, tblStuff, name, side,
+				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, 1)
+		}
+
 		var (
 			tmpCh = make(chan batchWithKind, 1)
 			first error
@@ -1750,7 +1811,10 @@ func splitDataBranchBatchForNativeUpdate(
 	}
 
 	nativeBat.SetRowCount(nativeBat.Vecs[0].Length())
-	bat.Shrink(nativeRowIdxes, true)
+	if err := bat.Shrink(nativeRowIdxes, true, ses.proc.Mp()); err != nil {
+		tblStuff.retPool.releaseRetBatch(nativeBat, false)
+		return nil, err
+	}
 	return nativeBat, nil
 }
 
@@ -1776,9 +1840,10 @@ func dataBranchUpdateRequiresNativeUpdateFromTuples(
 
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
+	tblStuff tableStuff, tblName string, side int, deliver func(batchWithKind) error, branchTS types.TS,
 	expandUpdate bool,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
+	parallelism int,
 ) (err error) {
 
 	maxTombstoneBatchCnt := tblStuff.maxTombstoneBatchCnt
@@ -1792,16 +1857,6 @@ func findDeleteAndUpdateBat(
 			tuple types.Tuple
 			tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
 		)
-
-		send := func(bwk batchWithKind) error {
-			select {
-			case <-ctx.Done():
-				tblStuff.retPool.releaseRetBatch(bwk.batch, false)
-				return ctx.Err()
-			case tmpCh <- bwk:
-				return nil
-			}
-		}
 
 		processBatch := func(tombBat *batch.Batch) error {
 			if tombBat.RowCount() == 0 {
@@ -1982,7 +2037,7 @@ func findDeleteAndUpdateBat(
 				if stagedUpdateBat != nil || nativeUpdateBat != nil {
 					if expandUpdate {
 						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-						if err2 = send(batchWithKind{
+						if err2 = deliver(batchWithKind{
 							name:       tblName,
 							side:       side,
 							fromUpdate: true,
@@ -2002,7 +2057,7 @@ func findDeleteAndUpdateBat(
 								continue
 							}
 							update.bat.SetRowCount(update.bat.Vecs[0].Length())
-							if err2 = send(batchWithKind{
+							if err2 = deliver(batchWithKind{
 								name:                 tblName,
 								side:                 side,
 								batch:                update.bat,
@@ -2018,7 +2073,7 @@ func findDeleteAndUpdateBat(
 							stagedUpdateBat = nativeUpdateBat
 						}
 						stagedUpdateBat.SetRowCount(stagedUpdateBat.Vecs[0].Length())
-						if err2 = send(batchWithKind{
+						if err2 = deliver(batchWithKind{
 							name:  tblName,
 							side:  side,
 							batch: stagedUpdateBat,
@@ -2029,7 +2084,7 @@ func findDeleteAndUpdateBat(
 					}
 				}
 
-				if err2 = send(batchWithKind{
+				if err2 = deliver(batchWithKind{
 					name:  tblName,
 					side:  side,
 					batch: tBat2,
@@ -2054,7 +2109,11 @@ func findDeleteAndUpdateBat(
 			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
 				return err2
 			}
-			if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+			// The decoded tombstone key carries the packed heap encoding of
+			// the PK column. Fixed-width key payloads such as Decimal256 decode
+			// as raw bytes, so normalize to the PK column type before appending;
+			// AppendAny would assert the typed representation and panic.
+			if err2 = appendTupleValueToVector(tBat1.Vecs[0], tuple[0], ses.proc.Mp()); err2 != nil {
 				return err2
 			}
 			var tombTuple types.Tuple
@@ -2095,7 +2154,7 @@ func findDeleteAndUpdateBat(
 		}
 		return nil
 
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 
@@ -2274,6 +2333,7 @@ func normalizeTupleColumnValue(val any, typ types.Type) (any, error) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
@@ -2312,8 +2372,8 @@ func checkConflictAndAppendToBat(
 
 			msg := buf.String()
 			releaseBuffer(tblStuff.bufPool, buf)
-			return moerr.NewInternalErrorNoCtxf(
-				"conflict: %s %s and %s %s on pk(%v) with different values",
+			return moerr.NewDataBranchConflictNoCtxf(
+				"%s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
 				tblStuff.baseRel.GetTableName(), diffInsert,
 				msg,
@@ -2344,6 +2404,12 @@ func diffDataHelper(
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
 ) (err error) {
+
+	parallelism := -1
+	if copt.onlineApply {
+		// The inline appender and its transaction have one execution owner.
+		parallelism = 1
+	}
 
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
@@ -2589,7 +2655,7 @@ func diffDataHelper(
 		}
 
 		return nil
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 
@@ -2645,7 +2711,7 @@ func diffDataHelper(
 			return nil
 		}
 		return nil
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 
@@ -2797,7 +2863,10 @@ func buildHashmapForTable(
 						return // all rows filtered out
 					}
 					if len(sels) < bat.RowCount() {
-						bat.Shrink(sels, false)
+						if taskErr = bat.Shrink(sels, false, mp); taskErr != nil {
+							atomicErr.Store(taskErr)
+							return
+						}
 						ll = bat.VectorCount()
 					}
 				}
@@ -3368,6 +3437,7 @@ func hydrateHistoricalDataBranchBatch(
 	ses *Session,
 	projected *batch.Batch,
 	tblStuff tableStuff,
+	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
 	endpointSnapshot types.TS,
 ) (err error) {
@@ -3391,6 +3461,7 @@ func hydrateHistoricalDataBranchBatch(
 	tBat.SetRowCount(projected.RowCount())
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	probeStuff.lcaIdent = &endpointIdent
 	probe, err := runLCAProbeWithReaderFallback(
 		ctx, ses, tBat, probeStuff, endpointSnapshot,
 	)
@@ -3403,6 +3474,42 @@ func hydrateHistoricalDataBranchBatch(
 	)
 }
 
+// ownerScopedChangesHandle re-attaches the physical segment owner identity to
+// the live caller context on every Next (design §6). Construction-time
+// identity is not enough: replay runs inside Next, and the engine's lost
+// partition-state recovery reopens the physical table by id through
+// Engine.GetRelationById, which resolves names in the *context's* account.
+// Forwarding the statement context unchanged routes that recovery to the
+// subscriber namespace, where the publisher-owned table cannot resolve.
+// Deriving from the live context (identityCtx) keeps cancellation and every
+// later value attachment intact; for a segment owned by the statement account
+// the derivation is a no-op and local-local diffs pass their context through
+// byte-identical.
+type ownerScopedChangesHandle struct {
+	inner engine.ChangesHandle
+	ident branchIdentity
+}
+
+// scopeChangesHandleToSegmentOwner wraps a segment change handle so every
+// Next runs under the segment's physical owner identity.
+func scopeChangesHandleToSegmentOwner(
+	handle engine.ChangesHandle,
+	ident branchIdentity,
+) engine.ChangesHandle {
+	return &ownerScopedChangesHandle{inner: handle, ident: ident}
+}
+
+func (h *ownerScopedChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	return h.inner.Next(identityCtx(ctx, h.ident), mp)
+}
+
+func (h *ownerScopedChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
 type historicalDataBranchChangesHandle struct {
 	inner            engine.ChangesHandle
 	sourceMapping    []int
@@ -3410,7 +3517,10 @@ type historicalDataBranchChangesHandle struct {
 	ses              *Session
 	endpointRel      engine.Relation
 	endpointSnapshot types.TS
-	hydrate          bool
+	// endpointIdent is the physical owner identity endpointRel was opened
+	// under (design §6); hydration probes the endpoint under it.
+	endpointIdent branchIdentity
+	hydrate       bool
 }
 
 func (h *historicalDataBranchChangesHandle) Next(
@@ -3426,7 +3536,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointRel, h.endpointSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

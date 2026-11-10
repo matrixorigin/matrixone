@@ -280,3 +280,57 @@ func TestParsePhraseWhitespaceParserUnchanged(t *testing.T) {
 	assert.Equal(t, []int32{0, 3, 7},
 		[]int32{children[0].Position, children[1].Position, children[2].Position})
 }
+
+// TestParsePhraseShortTokenizes29271 is the public-path control for #29271 P2: a SHORT
+// (< ngram) phrase that mixes scripts or contains a breaker must tokenize like the index
+// (via the full NewSearchAccum -> PHRASE build), not return a raw whole-string leaf. It
+// asserts token AND position agreement -- "a中" must decompose to 'a' at byte 0 (short
+// Latin, exact) and '中*' at byte 1 (short CJK, prefix), matching the stored 'a'@0 / '中'@1.
+func TestParsePhraseShortTokenizes29271(t *testing.T) {
+	for _, c := range []struct {
+		phrase    string
+		texts     []string
+		positions []int32
+		ops       []int
+	}{
+		{`"a中"`, []string{"a", "中*"}, []int32{0, 1}, []int{TEXT, STAR}},
+		{`"中a"`, []string{"中*", "a"}, []int32{0, 3}, []int{STAR, TEXT}},
+		{`"a-"`, []string{"a"}, []int32{0}, []int{TEXT}},  // hyphen is a discarded breaker
+		{`"-a"`, []string{"a"}, []int32{1}, []int{TEXT}},  // 'a' stored at byte 1
+		{`"中。"`, []string{"中*"}, []int32{0}, []int{STAR}}, // punctuation discarded
+	} {
+		s, err := NewSearchAccum("src", "idx", c.phrase, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+		require.Nil(t, err, c.phrase)
+		require.Len(t, s.Pattern, 1, c.phrase)
+		require.Equal(t, PHRASE, s.Pattern[0].Operator, c.phrase)
+		children := s.Pattern[0].Children
+		require.Equal(t, c.texts, collectTexts(children), c.phrase)
+		for i, ch := range children {
+			require.Equal(t, c.positions[i], ch.Position, "%s child %d position", c.phrase, i)
+			require.Equal(t, c.ops[i], ch.Operator, "%s child %d operator", c.phrase, i)
+		}
+	}
+}
+
+// TestParsePhraseJSONValue29271 verifies that a quoted BOOLEAN phrase on a json_value index is
+// matched as ONE verbatim token, not SimpleTokenizer sub-tokens. json_value's index build
+// (fulltext_index_tokenize) stores each JSON value whole and does NOT run SimpleTokenizer, so
+// decomposing "update_json" into update+json (its underscore is a SimpleTokenizer breaker)
+// looked up tokens the index never stored and matched nothing (#29271 regression).
+func TestParsePhraseJSONValue29271(t *testing.T) {
+	ps, err := ParsePhrase("update_json", "json_value")
+	require.NoError(t, err)
+	require.Len(t, ps, 1)
+	require.Equal(t, PHRASE, ps[0].Operator)
+	children := ps[0].Children
+	require.Len(t, children, 1)
+	require.Equal(t, TEXT, children[0].Operator)
+	require.Equal(t, "update_json", children[0].Text)
+
+	// Contrast: the default parser DOES decompose on the underscore breaker, matching its
+	// per-value SimpleTokenizer index build.
+	def, err := ParsePhrase("update_json", "")
+	require.NoError(t, err)
+	require.Len(t, def, 1)
+	require.Equal(t, []string{"update", "json"}, collectTexts(def[0].Children))
+}

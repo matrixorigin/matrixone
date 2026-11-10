@@ -19,23 +19,31 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIndexMetadataType(t *testing.T) {
-	require.Equal(t, INDEX_TYPE_UNIQUE, indexMetadataType(true, ""))
-	require.Equal(t, INDEX_TYPE_MULTIPLE, indexMetadataType(false, ""))
-	require.Equal(t, INDEX_TYPE_SPATIAL, indexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
-	require.Equal(t, INDEX_TYPE_FULLTEXT, indexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+	require.Equal(t, "PRIMARY", INDEX_TYPE_PRIMARY)
+	require.Equal(t, "UNIQUE", colexec.IndexMetadataType(true, ""))
+	require.Equal(t, "MULTIPLE", colexec.IndexMetadataType(false, ""))
+	require.Equal(t, "SPATIAL", colexec.IndexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
+	require.Equal(t, "FULLTEXT", colexec.IndexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+	require.Equal(t, "FULLTEXT", colexec.IndexMetadataType(false, catalog.MoIndexFullText2Algo.ToString()))
+	require.Equal(t, "UNIQUE", colexec.IndexMetadataType(true, catalog.MoIndexRTreeAlgo.ToString()))
 }
 
 func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
@@ -59,6 +67,75 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
 
+// Issue #31080: db/table/column identifiers may legitimately contain backticks
+// (`tick“table`). The default-ALGORITHM backfill SQL is re-parsed by the
+// internal executor, so every identifier spliced into the format templates must
+// carry doubled backticks; previously only ALGORITHM=COPY worked.
+func TestGenInsertIndexTableSql_EscapesBacktickIdentifiers(t *testing.T) {
+	pkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+
+	// Secondary index with multi parts and primary key (the exact failing shape
+	// from the issue report).
+	secondary := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_fixed",
+		Parts:          []string{"v`1", "v2"},
+		Unique:         false,
+	}
+	sql, err := genInsertIndexTableSql(pkeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "serial_full(`v``1`,`v2`)")
+	require.Contains(t, sql, "`p``k` from `db``1`.`tick``table`;")
+
+	// Multi part index on a table without primary key.
+	noKeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	sql, err = genInsertIndexTableSql(noKeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "select serial(`v``1`,`v2`) from `db``1`.`tick``table` where serial(`v``1`,`v2`) is not null;")
+
+	// Single part index with primary key (parenthesized key expression branch).
+	singlePart := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_single",
+		Parts:          []string{"v`1"},
+		Unique:         false,
+	}
+	sql, err = genInsertIndexTableSql(pkeyTableDef, singlePart, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "select (`v``1`), `p``k` from `db``1`.`tick``table` where (`v``1`) is not null;")
+
+	// Master index backfill goes through a separate generator that must apply
+	// the same quoting.
+	masterPkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Cols: []*planpb.ColDef{
+			{Name: "p`k", Seqnum: 11},
+			{Name: "v`1", Seqnum: 12},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+	master := &planpb.IndexDef{
+		IndexTableName: "__mo_index_master",
+		Parts:          []string{"v`1"},
+	}
+	sqls := genInsertIndexTableSqlForMasterIndex(masterPkeyTableDef, master, "db`1")
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "insert into  `db``1`.`__mo_index_master`")
+	require.Contains(t, sqls[0], "serial_full('12', `v``1`, `p``k`), `p``k` from `db``1`.`tick``table`;")
+}
+
 func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "orders",
@@ -78,6 +155,74 @@ func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
+}
+
+func TestGenInsertIndexTableSqlUsesVersionedPhysicalKeys(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Cols: []*planpb.ColDef{{
+			Name: "name",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+		}},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+
+	t.Run("single-part unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name"},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_collation_key(`name`)")
+	})
+
+	t.Run("composite unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial(`name`,`id`)")
+	})
+
+	t.Run("composite secondary", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_secondary_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial_full(`name`,`id`)")
+	})
+}
+
+func TestGenInsertIndexTableSqlWithoutPrimaryKeyKeepsSerialContract(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_no_pk",
+		Parts:          []string{"name", "region"},
+	}
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select serial(`name`,`region`) from `test`.`orders` where serial(`name`,`region`) is not null;", sql)
+
+	indexDef.KeyFormat = collation.KeyFormatV1
+	sql, err = genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select physical_serial(`name`,`region`) from `test`.`orders` where physical_serial(`name`,`region`) is not null;", sql)
 }
 
 func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {
@@ -148,6 +293,61 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
 	})
 
+	t.Run("v1 native single column groups by physical key", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "name",
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+			}},
+		}
+		indexDef := &planpb.IndexDef{
+			IndexName: "u_name",
+			Parts:     []string{"name"},
+			Unique:    true,
+			KeyFormat: collation.KeyFormatV1,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT `name` FROM `test`.`orders` WHERE `name` IS NOT NULL AND physical_collation_key(`name`) IN (SELECT physical_collation_key(`name`) FROM `test`.`orders` WHERE `name` IS NOT NULL GROUP BY physical_collation_key(`name`) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
+	})
+
+	t.Run("v1 composite key keeps source values for diagnostics", func(t *testing.T) {
+		tableDef := &planpb.TableDef{Name: "orders"}
+		indexDef := &planpb.IndexDef{
+			IndexName: "u_order_id",
+			Parts:     []string{"order", catalog.CreateAlias("id")},
+			Unique:    true,
+			KeyFormat: collation.KeyFormatV1,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL AND physical_serial(`order`,`id`) IN (SELECT physical_serial(`order`,`id`) FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY physical_serial(`order`,`id`) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
+	})
+
+	t.Run("v1 prefix key applies prefix before collation key", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "name",
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+			}},
+		}
+		indexDef := &planpb.IndexDef{
+			IndexName:       "u_name",
+			Parts:           []string{"name"},
+			Unique:          true,
+			KeyFormat:       collation.KeyFormatV1,
+			IndexAlgoParams: `{"prefix_lengths":"name:5"}`,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT substring(`name`, 1, 5) FROM `test`.`orders` WHERE substring(`name`, 1, 5) IS NOT NULL AND physical_collation_key(substring(`name`, 1, 5)) IN (SELECT physical_collation_key(substring(`name`, 1, 5)) FROM `test`.`orders` WHERE substring(`name`, 1, 5) IS NOT NULL GROUP BY physical_collation_key(substring(`name`, 1, 5)) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
+	})
+
 	t.Run("invalid prefix params", func(t *testing.T) {
 		indexDef := &planpb.IndexDef{
 			IndexName:       "u_order",
@@ -207,7 +407,8 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.ErrorIs(t, err, insertErr)
 	require.Equal(t, []string{checkSQL, insertSQL}, spyExec.executedSQLs)
 
@@ -221,6 +422,7 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 	require.NotNil(t, opt)
 	require.True(t, opt.SkipPkDedup)
 	require.Equal(t, indexDef.IndexTableName, opt.TargetTableName)
+	require.Equal(t, uint64(42), spyExec.insertOption.PrePipelineLockTable())
 
 	require.Same(t, topCtx, proc.Ctx)
 	require.NotEqual(t, true, proc.Ctx.Value(ioutil.PipelineFlushKey))
@@ -252,7 +454,8 @@ func TestPrecheckAndInsertUniqueIndexTableRejectsDuplicateBeforeInsert(t *testin
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '7' for key '__mo_index_idx_col'")
@@ -290,10 +493,121 @@ func TestPrecheckAndInsertUniqueIndexTableFormatsCompoundDuplicate(t *testing.T)
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '(1,2)' for key '__mo_index_idx_col'")
 	require.Equal(t, []string{checkSQL}, spyExec.executedSQLs)
 	require.Nil(t, spyExec.insertCtx)
+}
+
+// Record every substatement, including the duplicate-check SELECT, while
+// reusing the existing executor fixture for errors and duplicate result rows.
+type indexBackfillOptionSpyExecutor struct {
+	*alterCopyInsertSpyExecutor
+	options map[string]executor.StatementOption
+}
+
+func (e *indexBackfillOptionSpyExecutor) Exec(
+	ctx context.Context, sql string, opts executor.Options,
+) (executor.Result, error) {
+	e.options[sql] = opts.StatementOption()
+	return e.alterCopyInsertSpyExecutor.Exec(ctx, sql, opts)
+}
+
+func TestCreateIndexBackfillScopesPrePipelineLockToInsert(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unique   bool
+		targetID uint64
+	}{
+		{"regular", false, 42},
+		{"unique", true, 43},
+		{"unresolved target", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			c := &Compile{proc: proc, pn: &planpb.Plan{}}
+			tableDef := &planpb.TableDef{
+				Name: "source", TblId: 7,
+				Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			}
+			indexDef := &planpb.IndexDef{
+				IndexName: "ix_value", IndexTableName: "__mo_index_secondary_test",
+				Parts: []string{"value"}, Unique: tc.unique,
+			}
+			indexInfo := &planpb.CreateTable{IndexTables: []*planpb.TableDef{{
+				Name: indexDef.IndexTableName, TblId: tc.targetID,
+			}}}
+			insertSQL, err := genInsertIndexTableSql(tableDef, indexDef, "test", tc.unique)
+			require.NoError(t, err)
+			insertErr := errors.New("injected backfill failure")
+			spy := &indexBackfillOptionSpyExecutor{
+				alterCopyInsertSpyExecutor: &alterCopyInsertSpyExecutor{insertSQL: insertSQL, insertErr: insertErr},
+				options:                    make(map[string]executor.StatementOption),
+			}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+			t.Cleanup(func() {
+				if existed {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy)
+				}
+			})
+			originalCtx := proc.Ctx
+			if tc.targetID == 0 {
+				// An unresolved target remains on the ordinary row-lock path.
+				err = (&Scope{}).createAndInsertForUniqueOrRegularIndexTable(c, indexDef, "test", tableDef, indexInfo)
+			} else {
+				// Exercise each DDL caller through the real indexTableBuild and
+				// maybeCreateAutoIncrement path. Only the engine boundary is mocked:
+				// the new relation must replace a stale ID from the logical plan.
+				indexInfo.IndexTables[0].TblId = 99
+				ctrl := gomock.NewController(t)
+				db := mock_frontend.NewMockDatabase(ctrl)
+				rel := mock_frontend.NewMockRelation(ctrl)
+				gomock.InOrder(
+					db.EXPECT().RelationExists(gomock.Any(), indexDef.IndexTableName, nil).Return(false, nil),
+					db.EXPECT().Create(gomock.Any(), indexDef.IndexTableName, gomock.Any()).Return(nil),
+					db.EXPECT().Relation(gomock.Any(), indexDef.IndexTableName, nil).Return(rel, nil),
+					rel.EXPECT().GetTableID(gomock.Any()).Return(tc.targetID),
+				)
+				extra := &api.SchemaExtra{}
+				if tc.unique {
+					err = (&Scope{}).handleUniqueIndexTable(c, tableDef.TblId, extra, db, indexDef, "test", tableDef, indexInfo)
+				} else {
+					err = (&Scope{}).handleRegularSecondaryIndexTable(c, tableDef.TblId, extra, db, indexDef, "test", tableDef, indexInfo)
+				}
+				require.Equal(t, tc.targetID, indexInfo.IndexTables[0].TblId)
+				require.Equal(t, []uint64{tc.targetID}, extra.IndexTables)
+			}
+			require.ErrorIs(t, err, insertErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed backfill restores its caller's context")
+			require.Equal(t, tc.targetID, spy.insertOption.PrePipelineLockTable(),
+				"the request names the freshly resolved physical index, not its source table")
+			require.False(t, spy.insertOption.DisableLock(), "backfill still acquires a normal lock")
+			if tc.unique {
+				checkSQL, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+				require.NoError(t, err)
+				require.Equal(t, []string{checkSQL, insertSQL}, spy.executedSQLs)
+				require.Zero(t, spy.options[checkSQL].PrePipelineLockTable(),
+					"the source uniqueness check does not own the hidden target")
+				require.Nil(t, spy.options[checkSQL].AlterCopyDedupOpt())
+				require.NotNil(t, spy.insertOption.AlterCopyDedupOpt())
+				require.True(t, spy.insertOption.AlterCopyDedupOpt().SkipPkDedup)
+			} else {
+				require.Equal(t, []string{insertSQL}, spy.executedSQLs)
+				require.Nil(t, spy.insertOption.AlterCopyDedupOpt())
+			}
+
+			// A later ordinary internal statement on the same Compile must not
+			// inherit this statement's table-lock or dedup request after failure.
+			require.NoError(t, c.runSql("select 1"))
+			require.Zero(t, spy.options["select 1"].PrePipelineLockTable())
+			require.Nil(t, spy.options["select 1"].AlterCopyDedupOpt())
+		})
+	}
 }

@@ -1,4 +1,4 @@
-//go:build amd64 && go1.26 && goexperiment.simd
+//go:build amd64 && go1.27 && goexperiment.simd
 
 // Copyright 2023 Matrix Origin
 //
@@ -71,10 +71,10 @@ func f16AsU32(s []types.Float16) []uint32 {
 // individual args (see file header: a struct spills; args stay in registers).
 func f16dec(h, m7fff, m8000, mInf archsimd.Uint32x16, magic, infNan archsimd.Float32x16) archsimd.Float32x16 {
 	o := h.And(m7fff).ShiftAllLeft(13)
-	of := o.AsFloat32x16().Mul(magic)
-	ou := of.AsUint32x16()
+	of := o.BitsToFloat32().Mul(magic)
+	ou := of.ToBits()
 	ou = ou.Or(mInf).Merge(ou, of.GreaterEqual(infNan)) // ou|=inf where >=infNan
-	return ou.Or(h.And(m8000).ShiftAllLeft(16)).AsFloat32x16()
+	return ou.Or(h.And(m8000).ShiftAllLeft(16)).BitsToFloat32()
 }
 
 // f16Decode constants, built once per kernel as locals.
@@ -98,14 +98,15 @@ func l2sqF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
 		acc0 = dE.MulAdd(dE, acc0)
 		acc1 = dO.MulAdd(dO, acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := f16fast(a[i]) - f16fast(b[i])
 		sum += d * d
@@ -123,16 +124,17 @@ func innerProductF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		acc0 = f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan), acc0)
 		acc1 = f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan), acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
-	return float64(-sum), nil
+	return recoverInnerProductF16(float64(-sum), a, b)
 }
 
 func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
@@ -146,14 +148,15 @@ func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
-		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
-		acc1 = acc1.Add(dO.AsUint32x16().And(absMask).AsFloat32x16())
+		acc0 = acc0.Add(dE.ToBits().And(absMask).BitsToFloat32())
+		acc1 = acc1.Add(dO.ToBits().And(absMask).BitsToFloat32())
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := f16fast(a[i]) - f16fast(b[i])
 		if d < 0 {
@@ -179,8 +182,8 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	nb0, nb1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		aE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan)
 		aO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan)
 		bE := f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan)
@@ -195,6 +198,7 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	dot := sumF32x16(dot0.Add(dot1))
 	na2 := sumF32x16(na0.Add(na1))
 	nb2 := sumF32x16(nb0.Add(nb1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		ai, bi := f16fast(a[i]), f16fast(b[i])
 		dot += ai * bi
@@ -205,5 +209,5 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return cosineDistClamped(float64(dot), denom), nil
+	return recoverCosineF16(cosineDistClamped(float64(dot), denom), a, b)
 }

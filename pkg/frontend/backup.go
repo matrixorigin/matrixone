@@ -21,10 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handleStartBackup(ses *Session, execCtx *ExecCtx, sb *tree.BackupStart) error {
-	return doBackup(execCtx.reqCtx, ses, sb)
+	return doBackup(process.SQLFileAccessContext(execCtx.reqCtx, ses.proc), ses, sb)
 }
 
 func doBackup(ctx context.Context, ses FeSession, bs *tree.BackupStart) error {

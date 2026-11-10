@@ -106,7 +106,7 @@ func recoverLegacyTinyText(
 	if !containsLegacyTextFamily(lowerCreateSQL) && !strings.Contains(lowerCreateSQL, "like") {
 		return nil
 	}
-	evidence, err := parseLegacyTinyTextEvidence(ctx, tableDef.Createsql)
+	evidence, err := parseCachedLegacyTinyTextEvidence(ctx, tableDef.Createsql)
 	if err != nil {
 		return nil
 	}

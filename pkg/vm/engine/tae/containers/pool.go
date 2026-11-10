@@ -56,12 +56,6 @@ func WithAllocationLimit(maxv int) VectorPoolOption {
 	}
 }
 
-func WithFixedSizeRatio(ratio float64) VectorPoolOption {
-	return func(p *VectorPool) {
-		p.ratio = ratio
-	}
-}
-
 func WithMPool(mp *mpool.MPool) VectorPoolOption {
 	return func(p *VectorPool) {
 		p.mp = mp

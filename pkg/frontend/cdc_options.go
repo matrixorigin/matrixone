@@ -26,14 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-)
-
-const (
-	defaultCDCTaskMaxRetryTimes = 10
-	defaultCDCTaskRetryInterval = int64(10 * time.Second)
 )
 
 type CDCUserInfo struct {
@@ -43,10 +39,12 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName            string
-	TaskId              string
-	UserInfo            *CDCUserInfo
-	Exclude             string
+	TaskName string
+	TaskId   string
+	UserInfo *CDCUserInfo
+	Exclude  string
+	// ExcludePattern is the raw regexp. Exclude is escaped for persistence.
+	ExcludePattern      string
 	StartTs             string
 	EndTs               string
 	MaxSqlLength        int64
@@ -67,6 +65,7 @@ type CDCCreateTaskOptions struct {
 
 func (opts *CDCCreateTaskOptions) Reset() {
 	opts.Exclude = ""
+	opts.ExcludePattern = ""
 	opts.StartTs = ""
 	opts.EndTs = ""
 	opts.MaxSqlLength = 0
@@ -121,6 +120,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		key := req.Option[i]
 		value := req.Option[i+1]
 		tmpOpts[key] = value
+	}
+	// Level is processed before Exclude in CDCRequestOptions. Preserve the raw
+	// regexp now so both initial and frequency validation select the same tables
+	// as the runtime scanner; the escaped form is only for persistence.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		if _, err = regexp.Compile(exclude); err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", exclude, err)
+		}
+		opts.ExcludePattern = exclude
+		opts.Exclude = strings.ReplaceAll(exclude, "\\", "\\\\")
 	}
 
 	// extract source uri and check connection
@@ -197,26 +206,22 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			}
 			level = value
 		case cdc.CDCRequestOptions_Exclude:
-			if _, err = regexp.Compile(value); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", value, err)
-				return
-			}
-			opts.Exclude = strings.ReplaceAll(value, "\\", "\\\\")
+			// Validated and prepared before Level above.
 		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
 				if startTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.StartTs = startTs.Format(time.RFC3339)
+				opts.StartTs = startTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_EndTs:
 			if value != "" {
 				if endTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.EndTs = endTs.Format(time.RFC3339)
+				opts.EndTs = endTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_MaxSqlLength:
 			if value != "" {
@@ -274,20 +279,30 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// with an automatically persisted HLC start also require the new executor
-	// capability; older executors cannot parse the lossless timestamp format.
+	// NoFull tasks with an automatically persisted HLC start also require the
+	// lossless timestamp capability; all new tasks use the generation gate below.
 	if opts.NoFull && opts.StartTs != "" && opts.startTsFromSnapshot {
 		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
 	}
+	// Every new task uses generation-aware catalog state, including atomic full
+	// and explicit-start tasks that do not carry the split-snapshot marker.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
-		if err = validateStableInitialSnapshotProtocol(
-			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
-			return
-		}
-	} else if opts.startTsFromSnapshot {
+	}
+	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
+	if sourcePattern {
+		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
+	}
+	if currentProtocolVersion(ses.proc) < defines.MORPCVersion106 {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion106)
+	}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV2
+	if err = validateStableInitialSnapshotProtocol(
+		ctx, true, currentProtocolVersion(ses.proc)); err != nil {
+		return
+	}
+	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
@@ -316,44 +331,12 @@ func validateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion in
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
-	executor := task.TaskCode_InitCdc
-	switch {
-	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcLosslessStart
-	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcStableEpoch
-	}
-	return task.TaskMetadata{
-		ID:       opts.TaskId,
-		Executor: executor,
-		Options: task.TaskOptions{
-			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
-			RetryInterval: defaultCDCTaskRetryInterval,
-			DelayDuration: 0,
-			Concurrency:   0,
-		},
-	}
+	return cdc.BuildTaskMetadata(opts.TaskId, opts.ExtraOpts, opts.NoFull)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	details = &task.Details{
-		AccountID: opts.UserInfo.AccountId,
-		Account:   opts.UserInfo.AccountName,
-		Username:  opts.UserInfo.UserName,
-		Details: &task.Details_CreateCdc{
-			CreateCdc: &task.CreateCdcDetails{
-				TaskName: opts.TaskName,
-				TaskId:   opts.TaskId,
-				Accounts: []*task.Account{
-					{
-						Id:   uint64(opts.UserInfo.AccountId),
-						Name: opts.UserInfo.AccountName,
-					},
-				},
-			},
-		},
-	}
-	return
+	return cdc.BuildTaskDetails(opts.UserInfo.AccountId, opts.UserInfo.AccountName,
+		opts.UserInfo.UserName, opts.TaskName, opts.TaskId), nil
 }
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
@@ -422,11 +405,18 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, parserLowerCaseTableNames(ses)); err != nil {
+		return
+	}
 	if err = WithBackgroundExec(
 		ctx,
 		ses,
 		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
-			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples)
+			ctx = defines.AttachAccountId(ctx, ses.GetTenantInfo().GetTenantID())
+			if opts.ExcludePattern == "" {
+				return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples)
+			}
+			return CDCCheckPitrGranularityWithExclude(ctx, bh, ses.GetTenantName(), patterTupples, opts.ExcludePattern)
 		},
 	); err != nil {
 		return
@@ -449,21 +439,28 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, parserLowerCaseTableNames(ses)); err != nil {
+		return
+	}
 	if err = WithBackgroundExec(
 		ctx,
 		ses,
 		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
-			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples, normalized)
+			ctx = defines.AttachAccountId(ctx, ses.GetTenantInfo().GetTenantID())
+			if opts.ExcludePattern == "" {
+				return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples, normalized)
+			}
+			return CDCCheckPitrGranularityWithExclude(ctx, bh, ses.GetTenantName(), patterTupples, opts.ExcludePattern, normalized)
 		},
 	); err != nil {
 		return

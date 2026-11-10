@@ -27,7 +27,6 @@ var prepareRules = []Rule{}
 func init() {
 	defaultRules = []Rule{
 		rule.NewConstantFold(false),
-		// rule.NewPredicatePushdown(),
 	}
 	prepareRules = []Rule{
 		rule.NewConstantFold(true),
@@ -52,8 +51,8 @@ func (opt *BaseOptimizer) CurrentContext() CompilerContext {
 	return opt.ctx
 }
 
-func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool) (*Query, error) {
-	pn, err := BuildPlan(opt.ctx, stmt, isPrepareStmt)
+func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool, input *PlanningInput) (*Query, error) {
+	pn, err := BuildPlan(opt.ctx, stmt, isPrepareStmt, input)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +66,25 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool) (*Qu
 
 func (opt *BaseOptimizer) optimize() (*Query, error) {
 	if len(opt.qry.Steps) == 0 {
+		return opt.qry, nil
+	}
+	if opt.qry.Correlation != nil {
+		if err := opt.qry.ValidateCorrelation(); err != nil {
+			return nil, err
+		}
+		if err := plan.WalkQueryNodes(opt.qry, func(_ int32, n *plan.Node) error {
+			for _, rule := range opt.rules {
+				if rule.Match(n) {
+					rule.Apply(n, opt.qry, opt.ctx.GetProcess())
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if err := compactCorrelationPlan(opt.qry); err != nil {
+			return nil, err
+		}
 		return opt.qry, nil
 	}
 	for _, step := range opt.qry.Steps {
@@ -90,6 +108,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 }
 
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
+	oldNodes := qry.Nodes
 	newSteps := make([]int32, 0, len(qry.Steps))
 	newNodes := make([]*plan.Node, 0, len(qry.Nodes))
 
@@ -99,6 +118,7 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 
 	qry.Steps = newSteps
 	qry.Nodes = newNodes
+	remapLocalRuntimeFilterDomains(qry, oldNodes)
 }
 
 func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeID int32, nodes *[]*plan.Node) int32 {

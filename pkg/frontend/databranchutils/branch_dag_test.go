@@ -339,6 +339,24 @@ func TestComponentHasLiveLogicalBranch(t *testing.T) {
 	}
 }
 
+func TestComponentHasAlterLineageKeepsUnrelatedComponentsIndependent(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 1, Level: "table"},
+		{TableID: 2, PTableID: 1, Level: "table"},
+		{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+		{TableID: 10, Level: "table"},
+		{TableID: 11, PTableID: 10, Level: "table"},
+	})
+	require.True(t, dag.ComponentHasAlterLineage(2))
+	require.False(t, dag.ComponentHasAlterLineage(11))
+	require.False(t, dag.ComponentHasAlterLineage(99))
+	require.True(t, dag.ComponentsHaveAlterLineage([]uint64{10, 11, 2, 3}))
+	require.False(t, dag.ComponentsHaveAlterLineage([]uint64{10, 11}))
+	require.ElementsMatch(t, []uint64{1, 2, 3}, dag.ComponentIDs(2))
+	require.ElementsMatch(t, []uint64{10, 11}, dag.ComponentIDs(11))
+	require.ElementsMatch(t, []uint64{1, 2, 3, 10, 11}, dag.ComponentsIDs([]uint64{2, 3, 11}))
+}
+
 func TestComputeAlterLineageCompactionPlanReclaimsDeletedAlterGenerations(t *testing.T) {
 	rows := []DataBranchMetadata{
 		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},

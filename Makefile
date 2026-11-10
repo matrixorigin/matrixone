@@ -42,7 +42,7 @@
 # in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
-# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+# Requires Go 1.27+ for the arch-specific SIMD kernels (built by default on x86_64 and arm64).
 ifeq ($(GO),)
 	GO=go
 endif
@@ -229,7 +229,8 @@ JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-TAGS :=
+BUILD_TAGS :=
+TAGS = $(if $(strip $(BUILD_TAGS)),-tags "$(strip $(BUILD_TAGS))")
 
 # Native artifacts are reusable only when every semantic build input matches.
 # Keep these dimensions independent so adding one feature cannot silently alias
@@ -238,22 +239,38 @@ NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
 NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
 NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
-# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
-# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
-# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
-# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Env-var prefix for the build command. The arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1) on both x86_64 and
+# arm64; GOEXPERIMENT defaults to simd, which enables the goexperiment.simd build
+# tag. On x86_64 GOAMD64 additionally defaults to v3 (Haswell baseline --
+# AVX2/FMA/BMI, required by the Go simd experiment); arm64 needs no equivalent
+# knob because NEON is ARMv8 baseline.
 # Disable the SIMD kernels with:
-#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+#   make ARCHSIMD=0 build                       # plain build, no SIMD kernels
 # Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+#
+# NOTE the kernels require Go 1.27+: simd/archsimd gained arm64 (NEON) types in
+# 1.27, and the same release renamed the amd64 slice loaders, so the build tags
+# on those files are `go1.27`, not `go1.26`.
 GOEXPERIMENT_OPT ?=
+ARCHSIMD_ARCH :=
 ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD_ARCH := amd64
+endif
+ifneq ($(filter arm64 aarch64,$(UNAME_M)),)
+  ARCHSIMD_ARCH := arm64
+endif
+
+ifneq ($(ARCHSIMD_ARCH),)
   ARCHSIMD ?= 1
   ifeq ($(ARCHSIMD),1)
-	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
-	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
-	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
-	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
-	GOAMD64 ?= v3
+	ifeq ($(ARCHSIMD_ARCH),amd64)
+	  # DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	  # AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	  # kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	  # mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	  GOAMD64 ?= v3
+	endif
 	GOEXPERIMENT_SIMD ?= simd
   endif
   ifneq ($(GOAMD64),)
@@ -264,28 +281,82 @@ ifeq ("$(UNAME_M)", "x86_64")
   endif
 endif
 
+# Keep unchanged amd64 hot loops at the same cache-line offset when other Go
+# functions change size. Other architectures retain their existing alignment.
+MO_GO_FUNCTION_ALIGNMENT_FLAG :=
+ifeq ($(ARCHSIMD_ARCH),amd64)
+  MO_GO_FUNCTION_ALIGNMENT_FLAG := -funcalign=64
+endif
+
 ifeq ($(MO_CL_CUDA),1)
 	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
 	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
 	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
-	TAGS += -tags "gpu"
+	BUILD_TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	BUILD_TAGS += typecheck
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+SIRIUS_SDK ?=
+SIRIUS_BUILD_MODE ?= release
+SIRIUS_MERGED_REF ?=
+SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
+ifeq ($(MO_SIRIUS),1)
+ifeq ($(filter linux/x86_64 linux/aarch64 linux/arm64,$(UNAME_S)/$(UNAME_M)),)
+$(error MO_SIRIUS=1 requires Linux amd64 or arm64)
+endif
+ifeq ($(strip $(SIRIUS_SDK)),)
+$(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
+endif
+ifneq ($(PIXI_ENVIRONMENT_NAME),mo)
+$(error MO_SIRIUS=1 requires pixi run --frozen -e mo)
+endif
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi project)
+endif
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi prefix)
+endif
+ifneq ($(realpath $(CONDA_PREFIX)),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/mo))
+$(error MO_SIRIUS=1 requires the Sirius mo Pixi prefix)
+endif
+	BUILD_TAGS += sirius
+	# Go's cache does not track external headers/archives behind an unchanged
+	# include path or response file. Bind CGo compilation to the verified SDK.
+	SIRIUS_SDK_FINGERPRINT := $(shell python3 -c 'import hashlib; print(hashlib.sha256(open("$(SIRIUS_SDK)/link.json", "rb").read()).hexdigest())')
+	SIRIUS_CFLAGS := -I$(abspath $(SIRIUS_SDK)) -DSIRIUS_SDK_BUILD_$(SIRIUS_SDK_FINGERPRINT)=1
+	SIRIUS_LDFLAGS := @$(SIRIUS_PREPARED)/link.rsp
+	SIRIUS_CC := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["c_compiler"])')
+	SIRIUS_CXX := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["compiler"])')
+	SIRIUS_CGO_ENV := CC="$(SIRIUS_CC)" CXX="$(SIRIUS_CXX)"
+	SIRIUS_EXTLD := -extld=$(SIRIUS_CXX)
+endif
+
+CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
+GOLDFLAGS=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) $(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) -extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 # Keep all mo-service build variants on one compiler/feature contract. Targets
 # may differ in how native dependencies are produced, never in the Go binary
 # they emit.
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+define SIRIUS_PREPARE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --mo-root "$(ROOT_DIR)" --output "$(SIRIUS_PREPARED)")
+endef
+
+.PHONY: sirius-sdk-prepare
+sirius-sdk-prepare:
+	$(SIRIUS_PREPARE)
+
+define SIRIUS_PACKAGE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
+endef
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
@@ -388,8 +459,10 @@ jieba-dict:
 # build mo-service binary
 .PHONY: build
 build: config cgo jieba-dict
+	$(SIRIUS_PREPARE)
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # Build with native libraries supplied by a prebuilt stage or image. This target
 # is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
@@ -398,8 +471,18 @@ build: config cgo jieba-dict
 build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	$(SIRIUS_PREPARE)
 	$(info [Build binary with prebuilt native libraries])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -424,7 +507,7 @@ musl-thirdparties: musl-install
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+musl: override GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) --linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
@@ -522,15 +605,42 @@ UT_SHARD ?= all
 UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded race binaries with one compiler while the exclusive issues
-# fixture runs, then execute those exact binaries serially. Build or admission
-# failures fall back before any prebuilt binary executes.
-UT_PREBUILD_EMBEDDED ?= 1
+# Optional: build embedded race binaries with one compiler while the issues
+# fixture runs, then execute those exact binaries through the bounded embedded
+# pool. High-footprint packages remain exclusive; build or admission failures
+# fall back before any prebuilt binary executes.
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
+# Split issues roots under one shared package deadline.
+# Shorter process lifetimes bound catalog and race-detector retention. The
+# eight-batch pool gives each process two Go execution cores. Linux runners
+# requesting at least eight tasks use four complete clusters; smaller budgets
+# and unmeasured platforms retain two. One/four batches retain serial rollback.
+UT_ISSUES_BATCHES ?= 8
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# The audited embedded batches use the same two-core child budget. Enable four
+# processes only for measured Linux eight-task runs; preserve smaller rollbacks.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# Audited batching mode applies only to the non-prebuild path. Four-worker
+# pkg/embed uses eight process generations; other audited packages use four.
+UT_EMBEDDED_BATCHES ?= 4
+# A compiler overlapping cluster processes increases the memory peak. The new
+# issues default prepares embedded packages on demand instead. Preserve
+# the prebuild policy for rollback modes; overlapping compilation remains an
+# explicit opt-in for the bounded issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
+# Two independent plan processes shorten the long planner tail within the
+# existing heavy-wave budget. Limit the default to the measured Linux 8-task
+# runner; other budgets, a one-slot heavy cap, and a single requested shard
+# stay serial. An explicit PLAN_RACE_PARALLEL remains an override.
+PLAN_RACE_PARALLEL ?= $(if $(filter 1,$(HEAVY_RACE_PARALLEL) $(PLAN_RACE_SHARDS)),1,$(if $(and $(filter linux,$(UNAME_S)),$(filter 8,$(UT_PARALLEL))),2,1))
+# The table-dump plan cases marked independent may run three at a time inside
+# each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
+# constrained or diagnostic runs.
+PLAN_TEST_PARALLEL ?= 3
 # Keep light/issues overlap opt-in: the measured treatment was slower than the
 # serial baseline and left insufficient cgroup memory headroom. Re-enable only
 # when a new schedule has same-runner timing and memory evidence.
@@ -539,7 +649,8 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_EMBEDDED_BATCHES
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN PLAN_RACE_PARALLEL PLAN_TEST_PARALLEL UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1433,33 +1544,95 @@ clean:
 fmt:
 	gofmt -l -s -w .
 
+# Official golangci-lint 2.14.0 binaries use Go 1.27. Prefer these verified
+# releases on cold caches; retain source installation for other toolchains or
+# unavailable artifacts.
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
-	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+	@set -eu; \
+	platform="$$(go env GOHOSTOS)-$$(go env GOHOSTARCH)"; \
+	case "$$platform/$$(go env GOVERSION)" in \
+	  linux-amd64/go1.27.*) sha=ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab ;; \
+	  linux-arm64/go1.27.*) sha=ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae ;; \
+	  darwin-amd64/go1.27.*) sha=a5667c1c3536be1740133213e1e822bfb8f0d98ea12903174d6d5f635e4ed68d ;; \
+	  darwin-arm64/go1.27.*) sha=5ef5f36a7147e91dc58ef9ef4d11bb7bad5ead0c76eb6c01327a73c641d1dcc3 ;; \
+	  *) sha= ;; \
+	esac; \
+	if [ -n "$$sha" ]; then \
+	  mkdir -p "$(GOPATH)/bin"; \
+	  stage=$$(mktemp -d "$(GOPATH)/bin/.golangci-lint.XXXXXX"); \
+	  trap 'rm -rf "$$stage"' EXIT; \
+	  trap 'exit 130' INT; trap 'exit 143' TERM; \
+	  archive="golangci-lint-2.14.0-$$platform"; \
+	  if MO_DOWNLOAD_ATTEMPTS=1 MO_DOWNLOAD_RETRY_ROUNDS=1 MO_DOWNLOAD_MAX_TIME_SECONDS=60 \
+	     thirdparties/download "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/$$archive.tar.gz" "$$sha" "$$stage/archive.tar.gz" && \
+	     tar -xzf "$$stage/archive.tar.gz" -C "$$stage" "$$archive/golangci-lint"; then \
+	    chmod 0755 "$$stage/$$archive/golangci-lint"; \
+	    mv -f "$$stage/$$archive/golangci-lint" "$(GOPATH)/bin/golangci-lint"; \
+	    exit 0; \
+	  fi; \
+	  echo 'Prebuilt golangci-lint unavailable; installing the pinned version from source' >&2; \
+	fi; \
+	GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+	@GOBIN="$(GOPATH)/bin" go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
+	@GOBIN="$(GOPATH)/bin" go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+
+FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
+
+.PHONY: generate-frontend-mocks
+# Reflection mode selects the interfaces actually used by these shared mocks.
+generate-frontend-mocks: cgo
+	@if [ "$$($(GOPATH)/bin/mockgen -version 2>/dev/null)" != v1.6.0 ]; then \
+		GOBIN="$(GOPATH)/bin" go install github.com/golang/mock/mockgen@v1.6.0; \
+	fi
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/engine_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/vm/engine ChangesHandle,Relation,Reader,Database,Engine
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/txn_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/txn/client TxnClient,TxnOperator,Workspace
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/types_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/frontend ComputationRunner,ComputationWrapper,ExecResult,BackgroundExec
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/incrservice_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/incrservice AutoIncrementService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_lock/types.go -package mock_lock github.com/matrixorigin/matrixone/pkg/lockservice LockService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_moserver/server_mock.go -package mock_moserver github.com/matrixorigin/matrixone/pkg/frontend Server
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_shard/types.go -package mock_shard github.com/matrixorigin/matrixone/pkg/shardservice ShardService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_task/types.go -package mock_task github.com/matrixorigin/matrixone/pkg/taskservice TaskRunner
 
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
-STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+STATIC_CHECK_PACKAGES ?= ./...
+STATIC_CHECK_MOLINT = $(CGO_OPTS) molint check $(GO_MODULE_MODE) $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
+static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
 	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(STATIC_CHECK_GOLANGCI)
 
-# Keep the complete local/release entry point above. PR CI owns license scope
-# selection, but still analyzes the full package graph through content-addressed
-# Go and golangci-lint caches.
-static-check-analysis: config err-check
+# PR CI selects complete affected packages using the verified Go test/import
+# graph. Local use and CI hosts without Node retain the full checks.
+# Both analyzers consume the same package list and their failures stay fatal.
+static-check-analysis: err-check
+	@set -e; packages='./...'; \
+	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
+		$(MAKE) --no-print-directory config; \
+	fi; \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
+.PHONY: static-check-selected
+static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
 
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to
 # use static-check-analysis or static-check above.
+static-check-golangci: override STATIC_CHECK_PACKAGES = ./...
 static-check-golangci:
 	$(STATIC_CHECK_GOLANGCI)
 

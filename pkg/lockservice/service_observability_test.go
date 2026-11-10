@@ -272,7 +272,6 @@ func TestGetLockHolderReacquiresLockTableAfterBindChanged(t *testing.T) {
 			}
 			staleRemote := newRemoteLockTable(
 				l2.serviceID,
-				time.Second,
 				oldBind,
 				client,
 				func(bind pb.LockTable) {
@@ -375,7 +374,6 @@ func TestGetLockHolderRemoteDoesNotBlockAllocatorEpochPurge(t *testing.T) {
 			}
 			remote := newRemoteLockTable(
 				l.serviceID,
-				time.Second,
 				bind,
 				client,
 				l.handleBindChanged,
@@ -599,13 +597,24 @@ func TestGetLockTableBind(t *testing.T) {
 			alloc *lockTableAllocator,
 			l1, l2, _ *service,
 			table uint64) {
+			unknown, err := l1.GetLockTableBind(0, table+1000)
+			require.NoError(t, err)
+			require.False(t, unknown.Valid)
+			require.Nil(t, l1.tableGroups.get(0, table+1000), "observation must not allocate a route")
 			bind1, err := l1.GetLockTableBind(0, table)
 			require.NoError(t, err)
 
 			bind2, err := l2.GetLockTableBind(0, table)
 			require.NoError(t, err)
 
+			require.True(t, bind1.Valid)
 			assert.Equal(t, bind1, bind2)
+			removed, err := l1.CloseRemoteLockTable(0, table, bind1.Version)
+			require.NoError(t, err)
+			require.False(t, removed, "remote eviction must preserve local watermark ownership")
+			current, err := l1.GetLockTableBind(0, table)
+			require.NoError(t, err)
+			require.Equal(t, bind1, current)
 		},
 	)
 }

@@ -27,8 +27,46 @@ These rules apply to Codex, Claude, and every other compatible reviewing agent.
   unproven risk, or item already accepted by the developer is **non-blocking**
   (or omitted). Do not turn every observation into a blocker: if everything is
   blocking, the label has lost its meaning.
+- MatrixOne upgrades by full-cluster shutdown only; old and new binaries never
+  serve one cluster together. "An older CN/TN cannot decode or run this" is not
+  a finding: never request, or block on the absence of, a per-feature
+  `MORPCVersion`, `AllCNsSupportProtocol`/capability gate, or old-peer
+  fallback. Compatibility findings must show a new binary misreading persisted
+  state, backups, or an external-boundary protocol. See
+  [upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md).
 - When uncertain, classify non-blocking and ask for the developer's decision;
   never use a blocking label merely to force attention or another review round.
+
+## Design quality and delivery scope
+
+- Start from user behavior, real callers and existing responsibility owners.
+  Reuse authoritative state machines, validation, storage and execution paths.
+  An unused capability may be missing integration; establish intent before deletion.
+- Trace how new and existing logic fit together. Justify new branches, recheck
+  old assumptions, and remove superseded logic and compatibility paths when
+  their supported use ends, including configuration, state, wiring and docs.
+- Remove unreachable branches, unused fields, redundant computation and
+  abstractions without useful callers. Added complexity must earn its runtime
+  and maintenance cost through concrete functionality, correctness, robustness
+  or performance; avoid speculative generality and over-engineering.
+- Test real entry points, boundaries and reachable unhappy paths with independent
+  oracles and minimal fixtures. Reject duplicated setup, implementation-mirroring
+  assertions and test volume that adds no distinct behavioral proof.
+- Evaluate implementation, tests and documentation separately, then assess the
+  total maintained diff. Net growth is a negative that needs justified benefit;
+  genuine net reduction is a positive when behavior and coverage are preserved.
+  Moving files or externalizing logs is not product simplification. Never remove
+  necessary behavior, coverage or explanation merely to improve line counts.
+- Before delivery, exclude temporary files, raw logs/profiles/benchmark results,
+  per-run manifests, agent transcripts, review attestations and one-off proof
+  narratives. Retain maintained design docs, regression fixtures and reproduction
+  tools only where they have continuing value to the repository.
+
+Keep raw evidence outside tracked source. When reviewers need it, use CI
+artifacts, PR attachments or durable external links; do not require a raw-evidence
+commit to satisfy review. Keep the PR body concise: problem, resulting behavior,
+key validation/results and material limits. Link bulky details instead of pasting
+logs, repeated summaries or the experiment/review chronology.
 
 ## Resource Map
 
@@ -120,7 +158,7 @@ lens is obvious to another.
 | **Control path** | Can cancel/close/reject/timeout make progress independently of the blocked operation, or does it wait on the same lock/channel/RPC? |
 | **State / generation** | Is every transition and failed transition defined? Can old work affect a restarted/reused generation or observe it before admission completes? |
 | **Resource lifecycle** | Every fd/goroutine/lock/alloc created on the change's paths — closed/released on **every** branch incl. error/panic? (→ §4 Q1) |
-| **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? |
+| **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? Upgrade is shutdown-only: never require in-cluster mixed-version gates or `MORPCVersion` bumps ([upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md)). |
 | **Failure modes** | Every error return handled; partial failure leaves consistent state; no silent fallback that hides corruption. |
 | **Contract / API** | Callers updated on both ends of a protocol change; interface impls complete (compile-time `var _` checks intact). |
 | **Performance / scale** | On frequency-sensitive paths, did allocations, copies, scans, locks/atomics, goroutines, I/O, logs, or metric cardinality materially change? Benchmark/profile only when the cost can be material; otherwise record a bounded cost analysis. |

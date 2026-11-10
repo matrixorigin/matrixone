@@ -38,14 +38,15 @@ import (
 )
 
 type MinioSDK struct {
-	name                 string
-	endpoint             string
-	bucket               string
-	core                 *minio.Core
-	client               *minio.Client
-	copyCredentialDomain objectStorageCopyCredentialDomain
-	perfCounterSets      []*perfcounter.CounterSet
-	listMaxKeys          int
+	name                   string
+	endpoint               string
+	supportsConditionalPut bool
+	bucket                 string
+	core                   *minio.Core
+	client                 *minio.Client
+	copyCredentialDomain   objectStorageCopyCredentialDomain
+	perfCounterSets        []*perfcounter.CounterSet
+	listMaxKeys            int
 }
 
 var _ objectStorageCopier = new(MinioSDK)
@@ -176,7 +177,21 @@ func NewMinioSDK(
 		}
 	}
 
-	options.Creds = credentials.NewChainCredentials(credentialProviders)
+	if args.callerCredentialsOnly && args.RoleARN != "" {
+		// A requested role must never fall back to static or anonymous credentials.
+		client := newHTTPClient(args)
+		client.Transport = sqlMinioSTSTransport{ctx: ctx, next: client.Transport}
+		provider := &credentials.STSAssumeRole{
+			Client: client, STSEndpoint: args.Endpoint,
+			Options: credentials.STSAssumeRoleOptions{AccessKey: keyID, SecretKey: keySecret, SessionToken: sessionToken, RoleARN: args.RoleARN, RoleSessionName: args.RoleSessionName, ExternalID: args.ExternalID, Location: args.Region},
+		}
+		options.Creds = credentials.New(provider)
+		if _, err := options.Creds.Get(); err != nil {
+			return nil, err
+		}
+	} else {
+		options.Creds = credentials.NewChainCredentials(credentialProviders)
+	}
 
 	// region
 	if args.Region != "" {
@@ -229,16 +244,36 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:     args.Name,
-		endpoint: args.Endpoint,
-		bucket:   args.Bucket,
-		client:   client,
-		core:     core,
+		name:                   args.Name,
+		endpoint:               args.Endpoint,
+		supportsConditionalPut: args.IsMinio && !minioEndpointIsKnownUnsupported(args.Endpoint),
+		bucket:                 args.Bucket,
+		client:                 client,
+		core:                   core,
 		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
 			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
 		),
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+// MinIO's STS provider creates requests without a context. SQL dynamic services
+// belong to one operation, so initial credentials and refresh borrow its lifetime.
+// This transport is used only for STS, not ordinary object requests or native services.
+type sqlMinioSTSTransport struct {
+	ctx  context.Context
+	next http.RoundTripper
+}
+
+func (t sqlMinioSTSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.next.RoundTrip(req.WithContext(t.ctx))
+}
+
+func minioEndpointIsKnownUnsupported(endpoint string) bool {
+	endpoint = strings.ToLower(endpoint)
+	return strings.Contains(endpoint, "ctyunapi.cn") ||
+		strings.Contains(endpoint, "myqcloud.com") ||
+		strings.Contains(endpoint, "aliyuncs.com")
 }
 
 var _ ObjectStorage = new(MinioSDK)
@@ -360,11 +395,7 @@ func (a *MinioSDK) ReadObjectWithIdentity(
 		r.Close()
 		return nil, mapMinioConditionalReadError(err)
 	}
-	r = mapReadCloserErrors(r, mapMinioConditionalReadError)
-	if max == nil {
-		return r, nil
-	}
-	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+	return mapReadCloserErrors(r, mapMinioConditionalReadError), nil
 }
 
 func mapMinioConditionalReadError(err error) error {
@@ -383,22 +414,7 @@ func (a *MinioSDK) Exists(
 	error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	_, err := a.statObject(
-		ctx,
-		key,
-	)
-	if err != nil {
-		if a.is404(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
+	return objectExists(ctx, key, a.statObject, a.is404)
 }
 
 func (a *MinioSDK) Write(
@@ -420,7 +436,7 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+	if sizeHint != nil && (*sizeHint < smallObjectThreshold || exclusiveWrite(ctx)) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -474,25 +490,6 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		key,
@@ -505,12 +502,10 @@ func (a *MinioSDK) Read(
 	// eager read to expose file not found error
 	_, err = r.Read(nil)
 	if err != nil {
+		r.Close()
 		return nil, err
 	}
-	return &readCloser{
-		r:         io.LimitReader(r, int64(*max-*min)),
-		closeFunc: r.Close,
-	}, nil
+	return r, nil
 }
 
 func (a *MinioSDK) Delete(
@@ -520,22 +515,7 @@ func (a *MinioSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	if _, err := a.deleteObjects(ctx, keys...); err != nil {
-		return err
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 0, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
@@ -614,16 +594,24 @@ func (a *MinioSDK) putObject(
 	if sizeHint != nil {
 		size = *sizeHint
 	}
+	opts := minio.PutObjectOptions{}
+	if exclusiveWrite(ctx) {
+		opts.DisableMultipart = true
+		opts.SetMatchETagExcept("*")
+	}
 	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
 		r,
 		size,
-		minio.PutObjectOptions{},
+		opts,
 	)
 	if err == nil {
 		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	if exclusiveWrite(ctx) && minio.ToErrorResponse(err).StatusCode == 412 {
+		err = moerr.NewFileAlreadyExistsNoCtx(key)
 	}
 	return info, err
 }
@@ -644,8 +632,16 @@ func (a *MinioSDK) getObjectWithOptions(
 	if min == nil {
 		min = ptrTo[int64](0)
 	}
+	if max != nil && *max <= *min {
+		return nil, moerr.NewEmptyRangeNoCtx(key)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			if max != nil {
+				if err := options.SetRange(offset, *max-1); err != nil {
+					return nil, err
+				}
+			}
 			obj, err := DoWithRetryContext(
 				ctx,
 				"s3 get object",
@@ -661,8 +657,14 @@ func (a *MinioSDK) getObjectWithOptions(
 			if err != nil {
 				return nil, err
 			}
+			if max != nil {
+				// Seek would replace the bounded Range with an open-ended one.
+				// Close the bounded response directly, without draining unread data.
+				return obj, nil
+			}
 			if offset > 0 {
 				if _, err := obj.Seek(offset, 0); err != nil {
+					obj.Close()
 					return nil, err
 				}
 			}
@@ -680,6 +682,9 @@ func (a *MinioSDK) getObjectWithOptions(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if max != nil {
+		return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
 	}
 	return r, nil
 }

@@ -30,6 +30,7 @@ import (
 func TestHandleMoTableStatsCtl(t *testing.T) {
 	qc, err := client.NewQueryClient("", morpc.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, qc.Close()) })
 
 	proc := testutil.NewProc(t, testutil.WithQueryClient(qc))
 

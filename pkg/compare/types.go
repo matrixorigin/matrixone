@@ -16,6 +16,7 @@ package compare
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,8 +40,13 @@ type compare[T any] struct {
 }
 
 type strCompare struct {
-	desc        bool
-	nullsLast   bool
+	desc      bool
+	nullsLast bool
+	// sqlOrder selects the SQL ORDER BY comparison domain (NewOrder). The
+	// zero value keeps the value-identity relation used by equality and
+	// identity consumers (New).
+	sqlOrder    bool
+	typ         types.Type
 	vs          []*vector.Vector
 	isConstNull []bool
 }

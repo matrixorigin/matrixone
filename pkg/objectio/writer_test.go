@@ -25,12 +25,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +42,7 @@ const (
 )
 
 func GetDefaultTestPath(module string, name string) string {
-	return filepath.Join("/tmp", module, name)
+	return filepath.Join(os.TempDir(), module, name)
 }
 
 func MakeDefaultTestPath(module string, name string) string {
@@ -491,6 +493,23 @@ func TestWriteArena(t *testing.T) {
 		require.GreaterOrEqual(t, len(a.compressBuf), 200)
 	})
 
+	t.Run("compress capacity respects allocation boundary", func(t *testing.T) {
+		// Exercise the real GiB boundary without allocating a GiB buffer.
+		limit := int(mpool.MaxAllocationSize())
+		require.Equal(t, 1<<30, arenaCompressBufSize(1<<30))
+		require.Equal(t, 1<<30+1, arenaCompressBufSize(1<<30+1))
+		require.Equal(t, limit, arenaCompressBufSize(limit))
+		// An illegal request must still reach Alloc's existing failure path.
+		require.Greater(t, arenaCompressBufSize(limit+1), limit)
+		require.Equal(t, math.MaxInt, arenaCompressBufSize(math.MaxInt))
+
+		a := NewArena(64)
+		defer a.FreeBuffers()
+		_, err := a.compressBufChecked(limit + 1)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.Panics(t, func() { a.CompressBuf(limit + 1) })
+	})
+
 	t.Run("zero-size arena falls back to exact make", func(t *testing.T) {
 		a := NewArena(0)
 		b := a.Alloc(10)
@@ -615,4 +634,121 @@ func TestWriterUsesExactSerializedSize(t *testing.T) {
 	require.Equal(t, expected.Bytes(), arena.serialBuf.Bytes())
 	require.Equal(t, expected.Len(), arena.serialPeak)
 	require.Less(t, arena.serialBuf.Cap(), vec.Size())
+}
+
+func TestBoolZoneMapPersistence(t *testing.T) {
+	ctx := context.Background()
+	service, err := fileservice.NewFileService(ctx, fileservice.Config{Name: defines.LocalFileServiceName, Backend: "DISK", DataDir: t.TempDir(), Cache: fileservice.DisabledCacheConfig}, nil)
+	require.NoError(t, err)
+	defer service.Close(ctx)
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []bool{false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int8{0, 1}, nil, mp))
+	bat.SetRowCount(2)
+	writer, err := NewObjectWriterSpecial(WriterNormal, "bool.blk", service)
+	require.NoError(t, err)
+	writer.SetSortKeySeqnum(0)
+	for _, legacy := range []bool{true, false} {
+		block, err := writer.Write(bat)
+		require.NoError(t, err)
+		zm := index.NewZM(types.T_bool, 0)
+		if legacy {
+			index.UpdateZM(zm, []byte{0})
+		} else {
+			require.NoError(t, index.BatchUpdateZM(zm, bat.Vecs[0]))
+		}
+		require.Equal(t, !legacy, types.DecodeBool(zm.GetMaxBuf()))
+		block.ColumnMeta(0).SetZoneMap(zm)
+	}
+	_, err = writer.WriteEnd(ctx, WriteOptions{Type: WriteTS, Val: time.Now()})
+	require.NoError(t, err)
+	reader, err := NewObjectReaderWithStr("bool.blk", service)
+	require.NoError(t, err)
+	loaded, err := reader.ReadAllMeta(ctx, mp)
+	require.NoError(t, err)
+	meta, ok := loaded.DataMeta()
+	require.True(t, ok)
+	for i := uint32(0); i < 2; i++ {
+		col := meta.GetBlockMeta(i).MustGetColumn(0)
+		require.Equal(t, i == 1, types.DecodeBool(col.rawZoneMap().GetMaxBuf()), "writer must preserve physical bounds")
+		require.True(t, types.DecodeBool(col.ZoneMap().GetMaxBuf()), "reader must protect legacy bounds")
+	}
+	raw, err := reader.ReadExtent(ctx, meta.BlockHeader().ZoneMapArea())
+	require.NoError(t, err)
+	area := ZoneMapArea(raw)
+	// The existing area API exposes the block's metadata length from each index.
+	first := area.GetZoneMap(0, 0)
+	require.Len(t, first, 2*ZoneMapSize)
+	require.True(t, types.DecodeBool(first.GetMaxBuf()))
+	offset, _ := BlockIndex(raw).BlockMetaPos(0)
+	require.False(t, types.DecodeBool(ZoneMap(raw[offset:offset+ZoneMapSize]).GetMaxBuf()))
+}
+
+func TestObjectWriterRejectsUnresolvedTypeBeforeMutation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(t.Context())
+	for _, entry := range []string{"Write", "WriteWithoutSeqnum", "WriteSubBlock"} {
+		for _, flat := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/flat=%v", entry, flat), func(t *testing.T) {
+				arena := NewArena(1024)
+				defer arena.FreeBuffers()
+				id := NewObjectid()
+				writer, err := NewObjectWriter(BuildObjectNameWithObjectID(&id), fs, 0, []uint16{0, 1}, arena)
+				require.NoError(t, err)
+				bat := batch.NewWithSize(2)
+				defer bat.Clean(mp)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
+				if flat {
+					bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+					require.NoError(t, vector.AppendNull(bat.Vecs[1], mp))
+				} else {
+					bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)
+				}
+				bat.SetRowCount(1)
+				write := func() error {
+					switch entry {
+					case "Write":
+						_, err := writer.Write(bat)
+						return err
+					case "WriteWithoutSeqnum":
+						_, err := writer.WriteWithoutSeqnum(bat)
+						return err
+					default:
+						_, _, err := writer.WriteSubBlock(bat, CkpMetaStart)
+						return err
+					}
+				}
+				err = write()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.Zero(t, writer.originSize)
+				require.Zero(t, writer.lastId)
+				require.Zero(t, arena.serialPeak)
+				require.Zero(t, arena.usedOffset)
+				for _, blocks := range writer.blocks {
+					require.Empty(t, blocks)
+				}
+				bat.Vecs[1].Free(mp)
+				bat.Vecs[1] = vector.NewConstNull(types.T_text.ToType(), 1, mp)
+				require.NoError(t, write(), "supported same-schema retry")
+				require.EqualValues(t, 1, writer.lastId)
+				origin := writer.originSize
+				bat.Vecs[1].Free(mp)
+				bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)
+				require.True(t, moerr.IsMoErrCode(write(), moerr.ErrNotSupported))
+				require.Equal(t, origin, writer.originSize, "later rejection preserves an admitted block")
+				require.EqualValues(t, 1, writer.lastId)
+				_, err = writer.WriteEnd(t.Context())
+				require.NoError(t, err)
+			})
+		}
+	}
+	require.Zero(t, mp.CurrNB())
 }
