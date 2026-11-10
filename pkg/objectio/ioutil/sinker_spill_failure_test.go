@@ -944,7 +944,8 @@ func TestReplacementMergePanicOwnershipAndReset(t *testing.T) {
 			}
 			require.NoError(t, s.Write(context.Background(), input))
 			require.NoError(t, s.Sync(context.Background()))
-			require.Equal(t, int32(19), <-observed)
+			require.Len(t, observed, 2)
+			require.ElementsMatch(t, []int32{19, 19 + int32(objectio.BlockMaxRows)}, []int32{<-observed, <-observed})
 			require.NoError(t, s.Close())
 			require.Equal(t, before, mp.CurrNB())
 		})
