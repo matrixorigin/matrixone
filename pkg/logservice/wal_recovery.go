@@ -1227,7 +1227,7 @@ func appendWALRecoveryControl(
 ) (uint64, error) {
 	appendCtx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseLogServiceBootstrap)
 	defer cancel()
-	lsn, err := replayClient.doAppend(appendCtx, pb.LogRecord{Data: cmd})
+	lsn, err := replayClient.doAppend(appendCtx, pb.LogRecord{Data: cmd}, false)
 	return uint64(lsn), err
 }
 
@@ -1574,7 +1574,7 @@ func (s *Service) replayWALEntries(
 				zap.Int("cmd_len", len(cmd)))
 		}
 
-		lsn, err := replayClient.doAppend(appendCtx, pb.LogRecord{Data: cmd})
+		lsn, err := replayClient.doAppend(appendCtx, pb.LogRecord{Data: cmd}, false)
 		cancel()
 
 		if i == startIndex {
