@@ -2062,8 +2062,9 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names       map[tableKey][]tableOp
-	creatdInTxn map[uint64]int // tableId -> statementId
+	names              map[tableKey][]tableOp
+	creatdInTxn        map[uint64]int // tableId -> statementId
+	privateInventories []privateInventoryObligation
 }
 
 type dbOp struct {

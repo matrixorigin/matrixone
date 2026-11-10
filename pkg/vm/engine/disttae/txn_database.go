@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -379,6 +380,33 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	return db.create(ctx, name, defs, false)
+}
+
+// TryCreatePrivateScalarAlterCopy is only for the compiler's validated,
+// transaction-private scalar ALTER COPY replica. Commit is rejected unless a
+// subsequent real inventory update fences this database in the same owner.
+// Other engine implementations retain their ordinary Create path.
+func TryCreatePrivateScalarAlterCopy(ctx context.Context, database engine.Database, owner client.TxnOperator, databaseName, name string, defs []engine.TableDef) (bool, error) {
+	db, ok := database.(*txnDatabase)
+	if !ok {
+		return false, nil
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return true, err
+	}
+	if owner == nil || db.op != owner || owner.IsSnapOp() || db.databaseId == 0 ||
+		db.databaseName != databaseName || db.accountId != accountID || name == "" || inventorySystemDatabase(databaseName) {
+		return true, moerr.NewInternalError(ctx, "invalid private ALTER COPY database owner")
+	}
+	if _, err = txnIsValid(owner); err != nil {
+		return true, err
+	}
+	return true, db.create(ctx, name, defs, true)
+}
+
+func (db *txnDatabase) create(ctx context.Context, name string, defs []engine.TableDef, privateInventory bool) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
 	if db.op.IsSnapOp() {
@@ -409,7 +437,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		logicalId = logicalIdFromCtx.(uint64)
 		replaceLogicalIdIndex = true
 	}
-	return db.createWithID(ctx, name, tableId, logicalId, replaceLogicalIdIndex, defs, false, nil, nil)
+	return db.createWithID(ctx, name, tableId, logicalId, replaceLogicalIdIndex, defs, false, nil, nil, privateInventory)
 }
 
 type tableCatalogOwnership struct {
@@ -428,12 +456,10 @@ func (db *txnDatabase) createWithID(
 	useAlterNote bool,
 	extra *api.SchemaExtra,
 	preservedOwnership *tableCatalogOwnership,
+	privateInventory bool,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
-	}
-	if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
-		return err
 	}
 	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
@@ -441,6 +467,14 @@ func (db *txnDatabase) createWithID(
 	}
 	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
+	if privateInventory {
+		if txn.tableOps == nil {
+			return moerr.NewInternalError(ctx, "private ALTER COPY requires a transaction inventory owner")
+		}
+		txn.tableOps.addPrivateInventory(accountId, db.databaseId, txn.statementID)
+	} else if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+		return err
+	}
 	m := txn.proc.Mp()
 
 	// 1. inspect and **modify** defs, and construct columns

@@ -5729,6 +5729,9 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	})
+	if err := txn.checkPrivateInventoryFences(ctx); err != nil {
+		return nil, err
+	}
 
 	if txn.readOnly.Load() {
 		if txn.haveDDL.Load() {
@@ -6553,6 +6556,7 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 			delete(c.creatdInTxn, k)
 		}
 	}
+	c.rollbackPrivateInventoriesLocked(statementId)
 }
 
 func (c *tableOpsChain) string() string {

@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -2141,11 +2142,19 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
-	if err = dbSource.Create(
-		context.WithValue(c.proc.Ctx,
-			defines.SqlKey{}, c.sql), tblName,
-		append(exeCols, exeDefs...),
-	); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	defs := append(exeCols, exeDefs...)
+	handled := false
+	if _, private := c.proc.Ctx.Value(scalarAlterCopyCreateKey{}).(*scalarAlterCopyCreate); private {
+		if err = c.validateScalarAlterCopyCreate(qry); err != nil {
+			return err
+		}
+		handled, err = disttae.TryCreatePrivateScalarAlterCopy(createCtx, dbSource, c.proc.GetTxnOperator(), dbName, tblName, defs)
+	}
+	if err == nil && !handled {
+		err = dbSource.Create(createCtx, tblName, defs)
+	}
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),

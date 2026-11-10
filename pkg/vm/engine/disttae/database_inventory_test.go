@@ -84,6 +84,7 @@ func TestDatabaseInventoryWriteOwner(t *testing.T) {
 				require.True(t, observed.DisableIncrStatement())
 				require.True(t, observed.HasAccountID())
 				require.EqualValues(t, 1, observed.AccountID())
+				require.Equal(t, scenario == "inventory success" || scenario == "inventory missing", observed.StatementOption().RequireLock())
 				if scenario == "procedure empty" {
 					require.Equal(t, "delete from mo_catalog.mo_stored_procedure where db='a''b'", queries[0])
 					require.Equal(t, "delete from mo_catalog.mo_user_defined_function where db='a''b'", queries[1])

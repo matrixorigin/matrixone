@@ -39,7 +39,7 @@ func inventorySystemDatabase(name string) bool {
 // statement nor starts/commits another transaction. Callers must not hold the
 // workspace mutex while invoking the internal executor.
 func writeDatabaseInventory(ctx context.Context, op client.TxnOperator, query string) error {
-	result, err := executeDatabaseCatalogWrite(ctx, op, query)
+	result, err := executeDatabaseCatalogWrite(ctx, op, query, true)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func writeDatabaseInventory(ctx context.Context, op client.TxnOperator, query st
 	return nil
 }
 
-func executeDatabaseCatalogWrite(ctx context.Context, op client.TxnOperator, query string) (executor.Result, error) {
+func executeDatabaseCatalogWrite(ctx context.Context, op client.TxnOperator, query string, requireLock bool) (executor.Result, error) {
 	txn, err := txnIsValid(op)
 	if err != nil {
 		return executor.Result{}, err
@@ -64,9 +64,13 @@ func executeDatabaseCatalogWrite(ctx context.Context, op client.TxnOperator, que
 	if !ok {
 		return executor.Result{}, moerr.NewInternalError(ctx, "database inventory executor unavailable")
 	}
+	statement := executor.StatementOption{}.WithDisableLog()
+	if requireLock {
+		statement = statement.WithRequireLock()
+	}
 	opts := executor.Options{}.WithTxn(op).WithDisableIncrStatement().WithAccountID(account).
 		WithTimeZone(txn.proc.GetSessionInfo().TimeZone).
-		WithStatementOption(executor.StatementOption{}.WithDisableLog())
+		WithStatementOption(statement)
 	return value.(executor.SQLExecutor).Exec(ctx, query, opts)
 }
 
@@ -93,7 +97,7 @@ func retireDatabaseRoutines(ctx context.Context, op client.TxnOperator, name str
 	}
 	for _, table := range []string{"mo_stored_procedure", "mo_user_defined_function"} {
 		result, err := executeDatabaseCatalogWrite(ctx, op,
-			"delete from mo_catalog."+table+" where db="+sqlquote.String(name))
+			"delete from mo_catalog."+table+" where db="+sqlquote.String(name), false)
 		if err != nil {
 			return err
 		}
@@ -114,7 +118,7 @@ func retireDatabaseCompatibility(ctx context.Context, op client.TxnOperator, nam
 		return err
 	}
 	result, err := executeDatabaseCatalogWrite(ctx, op, fmt.Sprintf(
-		"delete from mo_catalog.mo_mysql_compatibility_mode where account_id=%d and dat_name=%s", account, sqlquote.String(name)))
+		"delete from mo_catalog.mo_mysql_compatibility_mode where account_id=%d and dat_name=%s", account, sqlquote.String(name)), false)
 	if err != nil {
 		return err
 	}
@@ -130,7 +134,17 @@ func advanceDatabaseInventory(ctx context.Context, op client.TxnOperator, name s
 	if err != nil {
 		return err
 	}
-	return writeDatabaseInventory(ctx, op, catalog.DatabaseInventoryIncrementSQL(account, id))
+	if err := writeDatabaseInventory(ctx, op, catalog.DatabaseInventoryIncrementSQL(account, id)); err != nil {
+		return err
+	}
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
+	}
+	if txn.tableOps != nil {
+		txn.tableOps.fencePrivateInventory(account, id, txn.statementID)
+	}
+	return nil
 }
 
 func retireDatabaseInventory(ctx context.Context, op client.TxnOperator, name string, id uint64) error {

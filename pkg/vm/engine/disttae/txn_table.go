@@ -2192,7 +2192,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// the hidden-table name would leave the old row and insert a duplicate.
 	if err := tbl.db.createWithID(
 		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
-		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership,
+		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership, false,
 	); err != nil {
 		return err
 	}

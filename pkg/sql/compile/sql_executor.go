@@ -114,6 +114,22 @@ func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
 // publication admission cannot certify as private preparation.
 type lockFreeStatementTree struct{}
 
+func resolveInternalStatementLock(ctx context.Context, option executor.StatementOption) (context.Context, executor.StatementOption, error) {
+	if option.RequireLock() {
+		if option.DisableLock() {
+			return ctx, option, moerr.NewInternalErrorNoCtx("internal SQL cannot require and disable locking")
+		}
+		return context.WithValue(ctx, lockFreeStatementTree{}, false), option, nil
+	}
+	if option.DisableLock() {
+		return context.WithValue(ctx, lockFreeStatementTree{}, true), option, nil
+	}
+	if inherited, _ := ctx.Value(lockFreeStatementTree{}).(bool); inherited {
+		option = option.WithDisableLock()
+	}
+	return ctx, option, nil
+}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -438,11 +454,11 @@ func (exec *txnExecutor) exec(
 	// A lock-free internal statement stays lock-free through the SQL it
 	// triggers on the same transaction: the nested service executors inherit
 	// the policy from the statement context instead of re-arming catalog
-	// locks for private-preparation catalog rows.
-	if statementOption.DisableLock() {
-		exec.ctx = context.WithValue(exec.ctx, lockFreeStatementTree{}, true)
-	} else if _, ok := exec.ctx.Value(lockFreeStatementTree{}).(bool); ok {
-		statementOption = statementOption.WithDisableLock()
+	// locks for private-preparation catalog rows. A shared catalog mutation may
+	// explicitly require locking and mask the inherited private policy.
+	exec.ctx, statementOption, retErr = resolveInternalStatementLock(exec.ctx, statementOption)
+	if retErr != nil {
+		return executor.Result{}, retErr
 	}
 
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
