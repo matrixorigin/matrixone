@@ -1,0 +1,84 @@
+drop database if exists legacy_nan_zonemap;
+create database legacy_nan_zonemap;
+use legacy_nan_zonemap;
+set @saved_nan_hints=@@optimizer_hints;
+create table poisoned (id int primary key, v32 float, v64 double);
+insert into poisoned values (1,cast('NaN' as float),cast('NaN' as double)),(2,7,7);
+select id from poisoned where id=2 and v64=7;
+➤ id[4,32,0]  𝄀
+2
+select mo_ctl('dn','flush','legacy_nan_zonemap.poisoned');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, legacy_nan_zonemap.poisoned)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set optimizer_hints='';
+select id from poisoned where id=2 and v64=7;
+➤ id[4,32,0]  𝄀
+2
+set optimizer_hints='blockFilter=1';
+explain select id from poisoned where id=2 and v64=7;
+-- @regex("Block Filter Cond:[^\r\n]*v64", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on legacy_nan_zonemap.poisoned  𝄀
+        Filter Cond: (poisoned.v64 = 7), (poisoned.id = 2)  𝄀
+        Block Filter Cond: (poisoned.v64 = 7), (poisoned.id = 2)
+select id from poisoned where id=2 and v32=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v32>0;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v32>=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v32<8;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v32<=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v32 between 6 and 8;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64>0;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64>=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64<8;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64<=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64 between 6 and 8;
+➤ id[4,32,0]  𝄀
+2
+select count(*) from poisoned where id=2 and v64>8;
+➤ count(*)[-5,64,0]  𝄀
+0
+set optimizer_hints='blockFilter=2';
+select id from poisoned where id=2 and v32=7;
+➤ id[4,32,0]  𝄀
+2
+select id from poisoned where id=2 and v64>0;
+➤ id[4,32,0]  𝄀
+2
+select count(*) from poisoned where id=2 and v64>8;
+➤ count(*)[-5,64,0]  𝄀
+0
+set optimizer_hints=@saved_nan_hints;
+drop database legacy_nan_zonemap;
