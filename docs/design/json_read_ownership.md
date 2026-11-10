@@ -128,3 +128,28 @@ immutability contract and its use as reader authority is rejected. The revised
 boundary must pass alias-retention, malicious-allocator, rehome, independent
 reader/lease, production scan and end-to-end cost checks before acceptance.
 This is a development review decision, not an external reviewer approval.
+
+### Failed admission and evaluation order (candidate revision 29)
+
+An eager batch snapshot can encounter a malformed document that the original
+JSON_VALUE evaluator would never read, for example because its path is NULL or
+the row is masked. Returning that candidate-admission error before expression
+evaluation changes both overloads' short-circuit and error precedence. Tests
+reproduce this mismatch.
+
+The snapshot operation will distinguish only a failed document/descriptor
+validation from allocation, accounting, cancellation and programming errors.
+A failed validation publishes no reader and confers no trust; the caller uses
+the existing ordinary evaluator, which fully validates each document it
+actually reads and preserves the original path, mask, DEFAULT and error order.
+Other failures remain terminal. This exceptional fallback is scoped to the
+current evaluation; successful versions retain the existing one-snapshot,
+shared-reader path, and no error is routed to ON ERROR merely by deferring it.
+Batch publishers may decline a malformed candidate without retaining partial
+qualification; a later consumer makes the same safe decision.
+
+Review decision: a failure classification is not evidence of validity and
+never permits unchecked bytes into the trusted query path. Complete admission
+remains mandatory for every published document version, including unselected
+descendants. Tests must cover both overloads, active versus skipped corruption,
+error precedence, and allocation/cancellation failures before acceptance.
