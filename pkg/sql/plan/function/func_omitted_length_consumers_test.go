@@ -388,23 +388,20 @@ func TestDateStringExtractorsBindTextDirectly(t *testing.T) {
 // the pre-widening VARCHAR-to-INT64 coercion accepted (SELECT BIN(CAST('256'
 // AS CHAR)) failed with a uint8 range error; SQL evidence from the review
 // and from the issue-32336 validation service). TEXT shares the CHAR/VARCHAR
-// string-number domain again, so every composition resolves to exactly its
-// VARCHAR peer's INT64 overload.
+// string-number domain again, so the compositions below resolve to exactly
+// their VARCHAR peer's INT64 overload.
 func TestNumericTextCompositionsKeepSignedInt64Peer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
+	// BIN, SPACE and unary +/- have no direct TEXT overload: their widened
+	// TEXT operands must keep resolving their peer's signed INT64 overload
+	// through the implicit TEXT-to-INT64 cast.
 	for _, tc := range []struct {
 		name string
 		args []types.T
 	}{
 		{"bin", []types.T{types.T_text}},
-		{"round", []types.T{types.T_text}},
-		{"round", []types.T{types.T_text, types.T_int64}},
-		{"truncate", []types.T{types.T_text}},
-		{"truncate", []types.T{types.T_text, types.T_int64}},
 		{"space", []types.T{types.T_text}},
-		{"ceil", []types.T{types.T_text, types.T_int64}},
-		{"floor", []types.T{types.T_text, types.T_int64}},
 		{"unary_minus", []types.T{types.T_text}},
 		{"unary_plus", []types.T{types.T_text}},
 	} {
@@ -444,6 +441,37 @@ func TestNumericTextCompositionsKeepSignedInt64Peer(t *testing.T) {
 		})
 	}
 
+	// ROUND, TRUNCATE and the two-argument CEIL/FLOOR bind their direct
+	// dual-domain TEXT overloads instead (round-five review): the signed
+	// CHAR composition results stay, and the upper unsigned range that
+	// existing TEXT inputs previously accepted through the UINT64 overloads
+	// is preserved too.
+	for _, tc := range []struct {
+		name string
+		args []types.T
+	}{
+		{"round", []types.T{types.T_text}},
+		{"round", []types.T{types.T_text, types.T_int64}},
+		{"truncate", []types.T{types.T_text}},
+		{"truncate", []types.T{types.T_text, types.T_int64}},
+		{"ceil", []types.T{types.T_text, types.T_int64}},
+		{"floor", []types.T{types.T_text, types.T_int64}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			textArgs := make([]types.Type, len(tc.args))
+			for i, a := range tc.args {
+				textArgs[i] = a.ToType()
+			}
+			get, err := GetFunctionByName(proc.Ctx, tc.name, textArgs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_decimal128, get.GetReturnType().Oid,
+				"%s(text) must bind its direct dual-domain TEXT overload", tc.name)
+			_, shouldCast := get.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast,
+				"%s(text) must bind its direct TEXT overload, not an INT64-by-cast match", tc.name)
+		})
+	}
+
 	// Executor-level sanity of the restored domain: the selected INT64
 	// overload accepts the review's rejected values through the same
 	// implicit cast the VARCHAR peer used (BIN renders two's complement,
@@ -459,6 +487,368 @@ func TestNumericTextCompositionsKeepSignedInt64Peer(t *testing.T) {
 		Bin[int64])
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is 'bin keeps the signed values through INT64', err info is '%s'", info))
+}
+
+// TestRoundTruncateCeilFloorTextKeepUnsignedUpperRange covers the round-five
+// review regression: the global TEXT->INT64 preference made ROUND, TRUNCATE
+// and the two-argument CEIL/FLOOR reject positive magnitudes at or above 2^63
+// that existing TEXT inputs previously accepted through the first-listed
+// UINT64 overloads (SELECT ROUND(CAST('9223372036854775808' AS TEXT)) and
+// SELECT TRUNCATE(CAST('9223372036854775808' AS TEXT), 0) both returned
+// 9223372036854775808 on the base). The direct dual-domain TEXT overloads
+// parse per row: the signed core keeps the CHAR-composition results the
+// earlier review rounds fixed, the unsigned core keeps the upper range
+// [2^63, 2^64) with the UINT64 overload's exact math, and both domains pack
+// exactly into the scale-0 DECIMAL128 result, whose rendering equals the
+// UINT64 and INT64 displays (all expected values below are the outputs
+// measured on the isolated base and PR validation services).
+func TestRoundTruncateCeilFloorTextKeepUnsignedUpperRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	parseDecs := func(vals []string) []types.Decimal128 {
+		out := make([]types.Decimal128, len(vals))
+		for i, v := range vals {
+			d, err := types.ParseDecimal128(v, 38, 0)
+			require.NoError(t, err, "test fixture %q must parse", v)
+			out[i] = d
+		}
+		return out
+	}
+
+	// Row-level value checks per overload. digits applies to the
+	// two-argument forms (the one-argument rows run with digits 0).
+	for _, tc := range []struct {
+		name    string
+		op      fEvalFn
+		digits  int64
+		twoArg  bool
+		inputs  []string
+		expects []string
+	}{
+		{
+			// Upper unsigned boundary plus the signed controls: the
+			// unsigned rows match the base binary's UINT64-overload
+			// outputs and the signed rows match the current (reviewed and
+			// CI-green) INT64-route outputs.
+			name: "round-one-arg",
+			op:   RoundText,
+			inputs: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"9223372036854775807",
+				"-1",
+				"-9223372036854775808",
+				" 42 ",
+				"0x10",
+				"15",
+			},
+			expects: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"9223372036854775807",
+				"-1",
+				"-9223372036854775808",
+				"42",
+				"16",
+				"15",
+			},
+		},
+		{
+			// '...807' is the largest int64 value whose -1 rounding
+			// crosses int64's ceiling; it keeps the base binary's
+			// UINT64-overload output instead of the INT64 core's
+			// out-of-range panic. '...804' stays below half a unit
+			// and never crosses.
+			name:   "round-digits",
+			op:     RoundText,
+			twoArg: true,
+			digits: -1,
+			inputs: []string{
+				"9223372036854775808",
+				"9223372036854775807",
+				"9223372036854775804",
+				"-1",
+				"-15",
+				"25",
+			},
+			expects: []string{
+				"9223372036854775810",
+				"9223372036854775810",
+				"9223372036854775800",
+				"-10",
+				"-20",
+				"30",
+			},
+		},
+		{
+			name: "truncate-one-arg",
+			op:   TruncateText,
+			inputs: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+			},
+			expects: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+			},
+		},
+		{
+			// TRUNCATE only moves positive values toward zero, so the
+			// largest int64 value truncates at -2 without crossing and
+			// matches the base binary's UINT64-overload output.
+			name:   "truncate-digits",
+			op:     TruncateText,
+			twoArg: true,
+			digits: -2,
+			inputs: []string{
+				"9223372036854775808",
+				"9223372036854775807",
+				"18446744073709551615",
+				"-15",
+			},
+			expects: []string{
+				"9223372036854775800",
+				"9223372036854775800",
+				"18446744073709551600",
+				"0",
+			},
+		},
+		{
+			name:   "ceil-two-arg",
+			op:     CeilText,
+			twoArg: true,
+			digits: 0,
+			inputs: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+				"15",
+			},
+			expects: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+				"15",
+			},
+		},
+		{
+			// ceilUint64's digit arithmetic overflows at the uint64
+			// maximum; the shared core keeps the base's observed output.
+			name:   "ceil-digits-overflow-quirk",
+			op:     CeilText,
+			twoArg: true,
+			digits: -1,
+			inputs: []string{
+				"18446744073709551615",
+				"9223372036854775808",
+				"-15",
+			},
+			expects: []string{
+				"0",
+				"9223372036854775810",
+				"-10",
+			},
+		},
+		{
+			name:   "floor-two-arg",
+			op:     FloorText,
+			twoArg: true,
+			digits: 0,
+			inputs: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+			},
+			expects: []string{
+				"9223372036854775808",
+				"18446744073709551615",
+				"-1",
+			},
+		},
+		{
+			// FLOOR only moves values down, so '...807' never crosses
+			// int64's ceiling and matches the base binary's output.
+			name:   "floor-digits",
+			op:     FloorText,
+			twoArg: true,
+			digits: -1,
+			inputs: []string{
+				"18446744073709551615",
+				"9223372036854775808",
+				"9223372036854775807",
+				"-15",
+			},
+			expects: []string{
+				"18446744073709551610",
+				"9223372036854775800",
+				"9223372036854775800",
+				"-20",
+			},
+		},
+		{
+			// The largest int64 value ceilings across int64's
+			// ceiling, where ceilInt64 silently wraps; the corridor
+			// keeps the base binary's UINT64-overload output instead.
+			// '...800' is already a multiple of 10 and stays unchanged.
+			name:   "ceil-digits-signed-corridor",
+			op:     CeilText,
+			twoArg: true,
+			digits: -1,
+			inputs: []string{
+				"9223372036854775807",
+				"9223372036854775800",
+			},
+			expects: []string{
+				"9223372036854775810",
+				"9223372036854775800",
+			},
+		},
+		{
+			// The same corridor one scale coarser.
+			name:   "ceil-digits-signed-corridor-coarse",
+			op:     CeilText,
+			twoArg: true,
+			digits: -2,
+			inputs: []string{
+				"9223372036854775807",
+			},
+			expects: []string{
+				"9223372036854775900",
+			},
+		},
+		{
+			// The UINT64 kernels' scale table runs one digit further
+			// than the INT64 kernels' (uint64 has 20 digits, int64 has
+			// 19), so the base binary kept round's -19 digit row: the
+			// values in the upper half of the last int64 unit route
+			// through the UINT64 core while the rest keeps the shared
+			// zero result (base outputs measured on 4.2-dev).
+			name:   "round-digits-table-boundary",
+			op:     RoundText,
+			twoArg: true,
+			digits: -19,
+			inputs: []string{
+				"9000000000000000000",
+				"9223372036854775807",
+				"4999999999999999999",
+			},
+			expects: []string{
+				"10000000000000000000",
+				"10000000000000000000",
+				"0",
+			},
+		},
+		{
+			// The same digit-table row for CEIL: any positive value
+			// below the 19-digit unit ceilings up to it.
+			name:   "ceil-digits-table-boundary",
+			op:     CeilText,
+			twoArg: true,
+			digits: -19,
+			inputs: []string{
+				"9000000000000000000",
+				"4999999999999999999",
+			},
+			expects: []string{
+				"10000000000000000000",
+				"10000000000000000000",
+			},
+		},
+		{
+			// FLOOR and TRUNCATE collapse to zero at the boundary in
+			// both kernels, so they need no routing and keep the base
+			// outputs directly.
+			name:   "floor-digits-table-boundary",
+			op:     FloorText,
+			twoArg: true,
+			digits: -19,
+			inputs: []string{
+				"9000000000000000000",
+			},
+			expects: []string{
+				"0",
+			},
+		},
+		{
+			name:   "truncate-digits-table-boundary",
+			op:     TruncateText,
+			twoArg: true,
+			digits: -19,
+			inputs: []string{
+				"9000000000000000000",
+			},
+			expects: []string{
+				"0",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nulls := make([]bool, len(tc.inputs))
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_text.ToType(), tc.inputs, nulls),
+			}
+			if tc.twoArg {
+				digitRows := make([]int64, len(tc.inputs))
+				for i := range digitRows {
+					digitRows[i] = tc.digits
+				}
+				inputs = append(inputs,
+					NewFunctionTestConstInput(types.T_int64.ToType(), digitRows[:1], nil))
+			}
+			fcTC := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_decimal128.ToType(), false,
+					parseDecs(tc.expects), nulls),
+				tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.name, info))
+		})
+	}
+
+	// Rows both parsers reject keep the INT64 implicit-cast error, so the
+	// current head's diagnostics and error expectations stay identical.
+	for _, tc := range []struct {
+		name   string
+		op     fEvalFn
+		inputs []string
+	}{
+		{"round-decimal", RoundText, []string{"2.5"}},
+		{"round-not-numeric", RoundText, []string{"中文"}},
+		{"round-above-uint64", RoundText, []string{"99999999999999999999999"}},
+		{"truncate-decimal", TruncateText, []string{"2.5"}},
+		{"ceil-two-arg-decimal", CeilText, []string{"-1.2"}},
+		{"floor-two-arg-decimal", FloorText, []string{"-1.2"}},
+	} {
+		t.Run("reject-"+tc.name, func(t *testing.T) {
+			nulls := make([]bool, len(tc.inputs))
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_text.ToType(), tc.inputs, nulls),
+			}
+			if _, twoArg := map[string]bool{"ceil-two-arg-decimal": true, "floor-two-arg-decimal": true}[tc.name]; twoArg {
+				inputs = append(inputs,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil))
+			}
+			fcTC := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_decimal128.ToType(), true, parseDecs([]string{"0"}), nulls),
+				tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is 'reject %s', err info is '%s'", tc.name, info))
+		})
+	}
+
+	// NULL TEXT rows stay NULL, like the implicit-cast route.
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(),
+				[]string{"9223372036854775808", ""}, []bool{false, true}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
+		},
+		NewFunctionTestResult(types.T_decimal128.ToType(), false,
+			parseDecs([]string{"9223372036854775808", "0"}), []bool{false, true}),
+		RoundText)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'round keeps NULL rows', err info is '%s'", info))
 }
 
 // TestDateTextKeepsStringParser covers the regression raised by PR review:

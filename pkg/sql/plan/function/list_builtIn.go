@@ -7726,6 +7726,23 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilStr
 				},
 			},
+			{
+				// Two-argument CEIL binds TEXT directly so both numeric
+				// domains keep working (see the ROUND TEXT overloads): the
+				// signed INT64 coercion keeps CEIL(CAST('-1' AS CHAR), 0) ->
+				// -1 from the review fix, while the unsigned core keeps the
+				// upper range existing TEXT inputs previously accepted
+				// (CEIL(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 14,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilText
+				},
+			},
 		},
 	},
 
@@ -7970,6 +7987,23 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return FloorStr
+				},
+			},
+			{
+				// Two-argument FLOOR binds TEXT directly so both numeric
+				// domains keep working (see the ROUND TEXT overloads): the
+				// signed rows keep FLOOR(CAST('-1' AS CHAR), 0) -> -1 from
+				// the review fix, while the unsigned core keeps the upper
+				// range existing TEXT inputs previously accepted
+				// (FLOOR(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 14,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorText
 				},
 			},
 		},
@@ -8586,6 +8620,37 @@ var supportedMathBuiltIns = []FuncNew{
 					return RoundDecimal256
 				},
 			},
+			{
+				// TEXT binds directly so both numeric domains keep working
+				// (#32336, #32374, PR review): the cheaper INT64 coercion
+				// restored the signed composition results (ROUND(CAST('-1'
+				// AS CHAR)) -> -1), but its parseSignedCastString rejects the
+				// positive magnitudes that explicit TEXT inputs previously
+				// accepted through the first-listed UINT64 overload
+				// (ROUND(CAST('9223372036854775808' AS TEXT)) -> 9223372036854775808,
+				// TRUNCATE alike). RoundText parses per row: signed rows keep
+				// the INT64 core, the upper unsigned range [2^63, 2^64) keeps
+				// the UINT64 core values, and the scale-0 DECIMAL128 result
+				// renders like both.
+				overloadId: 12,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundText
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundText
+				},
+			},
 		},
 	},
 
@@ -8715,6 +8780,34 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TruncateDecimal256
+				},
+			},
+			{
+				// TEXT binds directly so both numeric domains keep working
+				// (see the ROUND TEXT overloads above): the signed INT64
+				// coercion keeps the CHAR composition results
+				// (TRUNCATE(CAST('-1' AS CHAR), 0) -> -1) while the
+				// unsigned core keeps the upper range existing TEXT inputs
+				// accepted before the widening
+				// (TRUNCATE(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 12,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateText
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateText
 				},
 			},
 		},

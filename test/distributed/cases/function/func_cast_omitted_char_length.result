@@ -231,10 +231,10 @@ bin(cast('256' as varchar(10))) as bin_varchar_control;
 select round(cast('-1' as char)) as round_text,
 round(cast('-1' as char), 0) as round2_text,
 round(cast('-1' as varchar(10))) as round_varchar_control;
-➤ round_text[-5,64,0]  ¦  round2_text[-5,64,0]  ¦  round_varchar_control[-5,64,0]  𝄀
+➤ round_text[3,38,0]  ¦  round2_text[3,38,0]  ¦  round_varchar_control[-5,64,0]  𝄀
 -1  ¦  -1  ¦  -1
 select truncate(cast('-1' as char), 0) as truncate_text;
-➤ truncate_text[-5,64,0]  𝄀
+➤ truncate_text[3,38,0]  𝄀
 -1
 select space(cast('-1' as char)) as space_text,
 length(space(cast('2' as char))) as space_len_text;
@@ -243,7 +243,7 @@ length(space(cast('2' as char))) as space_len_text;
 select ceil(cast('-1' as char), 0) as ceil2_text,
 floor(cast('-1' as char), 0) as floor2_text,
 ceil(cast('-1.2' as char)) as ceil_onearg_text;
-➤ ceil2_text[-5,64,0]  ¦  floor2_text[-5,64,0]  ¦  ceil_onearg_text[8,54,0]  𝄀
+➤ ceil2_text[3,38,0]  ¦  floor2_text[3,38,0]  ¦  ceil_onearg_text[8,54,0]  𝄀
 -1  ¦  -1  ¦  -1.0
 select -cast('300' as char) as neg_text,
 cast('300' as char) << 1 as shiftl_text;
@@ -267,3 +267,93 @@ hex(4660) as hex_int_control;
 select length(hex(cast(concat(repeat('a',50000), repeat('b',50000)) as char))) as hex_len_text;
 ➤ hex_len_text[-5,64,0]  𝄀
 200000
+select round(cast('9223372036854775808' as text)) as round_upper,
+round(cast('9223372036854775808' as text), 0) as round2_upper,
+round(cast('9223372036854775808' as char), 0) as round2_char_comp;
+➤ round_upper[3,38,0]  ¦  round2_upper[3,38,0]  ¦  round2_char_comp[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808  ¦  9223372036854775808
+select round(cast('9223372036854775808' as text), -1) as round2_upper_dm1;
+➤ round2_upper_dm1[3,38,0]  𝄀
+9223372036854775810
+select round(cast('18446744073709551615' as text)) as round_umax;
+➤ round_umax[3,38,0]  𝄀
+18446744073709551615
+select round(cast('9223372036854775807' as text)) as round_imax,
+round(cast('-9223372036854775808' as text)) as round_imin;
+➤ round_imax[3,38,0]  ¦  round_imin[3,38,0]  𝄀
+9223372036854775807  ¦  -9223372036854775808
+select round(cast('9223372036854775807' as text), -1) as round_imax_dm1,
+round(cast('9223372036854775804' as text), -1) as round_imax_dm1_ctrl,
+ceil(cast('9223372036854775807' as text), -1) as ceil_imax_dm1,
+ceil(cast('9223372036854775807' as text), -2) as ceil_imax_dm2,
+floor(cast('9223372036854775807' as text), -1) as floor_imax_dm1,
+truncate(cast('9223372036854775807' as text), -2) as trunc_imax_dm2;
+➤ round_imax_dm1[3,38,0]  ¦  round_imax_dm1_ctrl[3,38,0]  ¦  ceil_imax_dm1[3,38,0]  ¦  ceil_imax_dm2[3,38,0]  ¦  floor_imax_dm1[3,38,0]  ¦  trunc_imax_dm2[3,38,0]  𝄀
+9223372036854775810  ¦  9223372036854775800  ¦  9223372036854775810  ¦  9223372036854775900  ¦  9223372036854775800  ¦  9223372036854775800
+select round(cast('18446744073709551615' as text), -1);
+Data truncation: data out of range: data type uint64, ROUND
+select round(cast('9000000000000000000' as text), -19) as round_dm19,
+round(cast('9223372036854775807' as text), -19) as round_dm19_imax,
+round(cast('4999999999999999999' as text), -19) as round_dm19_ctrl,
+ceil(cast('9000000000000000000' as text), -19) as ceil_dm19,
+floor(cast('9000000000000000000' as text), -19) as floor_dm19,
+truncate(cast('9000000000000000000' as text), -19) as trunc_dm19;
+➤ round_dm19[3,38,0]  ¦  round_dm19_imax[3,38,0]  ¦  round_dm19_ctrl[3,38,0]  ¦  ceil_dm19[3,38,0]  ¦  floor_dm19[3,38,0]  ¦  trunc_dm19[3,38,0]  𝄀
+10000000000000000000  ¦  10000000000000000000  ¦  0  ¦  10000000000000000000  ¦  0  ¦  0
+select round(cast('9000000000000000000' as text), -20) as round_dm20;
+➤ round_dm20[3,38,0]  𝄀
+0
+select truncate(cast('9223372036854775808' as text), 0) as truncate_upper,
+truncate(cast('18446744073709551615' as text), 0) as truncate_umax,
+truncate(cast('9223372036854775808' as text), -2) as truncate_upper_dm2;
+➤ truncate_upper[3,38,0]  ¦  truncate_umax[3,38,0]  ¦  truncate_upper_dm2[3,38,0]  𝄀
+9223372036854775808  ¦  18446744073709551615  ¦  9223372036854775800
+select ceil(cast('9223372036854775808' as text), 0) as ceil2_upper,
+floor(cast('9223372036854775808' as text), 0) as floor2_upper;
+➤ ceil2_upper[3,38,0]  ¦  floor2_upper[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808
+select ceil(cast('9223372036854775808' as text), -2) as ceil2_upper_dm2,
+ceil(cast('18446744073709551615' as text), -1) as ceil2_umax_dm1,
+floor(cast('18446744073709551615' as text), -1) as floor2_umax_dm1;
+➤ ceil2_upper_dm2[3,38,0]  ¦  ceil2_umax_dm1[3,38,0]  ¦  floor2_umax_dm1[3,38,0]  𝄀
+9223372036854775900  ¦  0  ¦  18446744073709551610
+drop table if exists func_cast_omit_char_ub;
+create table func_cast_omit_char_ub (a text);
+insert into func_cast_omit_char_ub values ('9223372036854775808'),
+('18446744073709551615'),
+('-1'),
+('9223372036854775807');
+select round(a) from func_cast_omit_char_ub;
+➤ round(a)[3,38,0]  𝄀
+9223372036854775808  𝄀
+18446744073709551615  𝄀
+-1  𝄀
+9223372036854775807
+select truncate(a, 0) from func_cast_omit_char_ub;
+➤ truncate(a, 0)[3,38,0]  𝄀
+9223372036854775808  𝄀
+18446744073709551615  𝄀
+-1  𝄀
+9223372036854775807
+select ceil(a, 0), floor(a, 0) from func_cast_omit_char_ub;
+➤ ceil(a, 0)[3,38,0]  ¦  floor(a, 0)[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808  𝄀
+18446744073709551615  ¦  18446744073709551615  𝄀
+-1  ¦  -1  𝄀
+9223372036854775807  ¦  9223372036854775807
+select round(a, -1) from func_cast_omit_char_ub where a <> '18446744073709551615';
+➤ round(a, -1)[3,38,0]  𝄀
+9223372036854775810  𝄀
+-10  𝄀
+9223372036854775810
+select round(cast('2.5' as text), 0);
+invalid argument cast to int, bad value 2.5
+select truncate(cast('2.5' as text), 0);
+invalid argument cast to int, bad value 2.5
+select ceil(cast('-1.2' as text), 0);
+invalid argument cast to int, bad value -1.2
+select floor(cast('-1.2' as text), 0);
+invalid argument cast to int, bad value -1.2
+select round(cast('99999999999999999999999' as text));
+Data truncation: data out of range: data type int64, value '99999999999999999999999'
+drop table if exists func_cast_omit_char_ub;
