@@ -15,9 +15,9 @@
 package txnif
 
 import (
-	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -76,11 +76,11 @@ func (memo *TxnMemo) LogicalDMLTables() map[uint64]uint64 { return memo.logicalD
 
 func (memo *TxnMemo) RecordLogicalDML(database, table uint64) error {
 	if !memo.logicalDMLTracking || !memo.logicalDMLKnown {
-		return fmt.Errorf("logical DML tracking is not active or known")
+		return moerr.NewInternalErrorNoCtx("logical DML tracking is not active or known")
 	}
 	record := memo.GetTable(table)
 	if database == 0 || table == 0 || record == nil || record.DbID != database {
-		return fmt.Errorf("logical DML identity is not in the dirty memo")
+		return moerr.NewInternalErrorNoCtx("logical DML identity is not in the dirty memo")
 	}
 	if memo.logicalDML == nil {
 		memo.logicalDML = make(map[uint64]uint64)
@@ -95,12 +95,12 @@ func (memo *TxnMemo) LogicalDMLSize() int64 { return 5 + 16*int64(len(memo.logic
 func (memo *TxnMemo) WriteLogicalDMLTo(w io.Writer) (n int64, err error) {
 	if !memo.logicalDMLTracking || !memo.logicalDMLKnown && len(memo.logicalDML) != 0 ||
 		uint64(len(memo.logicalDML)) > uint64(memo.TableCount()) || uint64(len(memo.logicalDML)) > uint64(^uint32(0)) {
-		return 0, fmt.Errorf("invalid logical DML memo")
+		return 0, moerr.NewInternalErrorNoCtx("invalid logical DML memo")
 	}
 	for table, database := range memo.logicalDML {
 		record := memo.GetTable(table)
 		if database == 0 || table == 0 || record == nil || record.DbID != database {
-			return 0, fmt.Errorf("logical DML identity is not in the dirty memo")
+			return 0, moerr.NewInternalErrorNoCtx("logical DML identity is not in the dirty memo")
 		}
 	}
 	write := func(value []byte) error {
@@ -144,7 +144,7 @@ func (memo *TxnMemo) ReadLogicalDMLFrom(r io.Reader) (n int64, err error) {
 	}
 	count := types.DecodeUint32(header[1:])
 	if header[0] > 1 || header[0] == 0 && count != 0 || uint64(count) > uint64(memo.TableCount()) {
-		return n, fmt.Errorf("invalid logical DML extension header")
+		return n, moerr.NewInternalErrorNoCtx("invalid logical DML extension header")
 	}
 	for i := uint32(0); i < count; i++ {
 		var pair [16]byte
@@ -156,10 +156,10 @@ func (memo *TxnMemo) ReadLogicalDMLFrom(r io.Reader) (n int64, err error) {
 		database, table := types.DecodeUint64(pair[:8]), types.DecodeUint64(pair[8:])
 		record := memo.GetTable(table)
 		if database == 0 || table == 0 || record == nil || record.DbID != database {
-			return n, fmt.Errorf("logical DML identity is not in the dirty memo")
+			return n, moerr.NewInternalErrorNoCtx("logical DML identity is not in the dirty memo")
 		}
 		if _, duplicate := memo.logicalDML[table]; duplicate {
-			return n, fmt.Errorf("duplicate logical DML identity")
+			return n, moerr.NewInternalErrorNoCtx("duplicate logical DML identity")
 		}
 		if memo.logicalDML == nil {
 			memo.logicalDML = make(map[uint64]uint64, count)

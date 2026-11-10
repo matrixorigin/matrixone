@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -50,7 +51,8 @@ func TestCheckpointLogicalDMLRoundTrip(t *testing.T) {
 				require.NoError(t, err)
 				require.Nil(t, legacy)
 				missing, err := ReadCheckpointLogicalDML(ctx, 14, loc, fs, mp)
-				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+				require.ErrorContains(t, err, "logical DML checkpoint metadata missing")
 				require.Nil(t, missing)
 				return
 			}
@@ -104,7 +106,7 @@ func TestCheckpointLogicalDMLRejectsMalformedMetadata(t *testing.T) {
 			loc, _, err := data.Sync(ctx, fs)
 			require.NoError(t, err)
 			loaded, err := ReadCheckpointLogicalDML(ctx, 14, loc, fs, mp)
-			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 			require.Nil(t, loaded)
 		})
 	}
@@ -143,7 +145,7 @@ func TestCheckpointLogicalDMLMerge(t *testing.T) {
 			}
 			err := data.MergeLogicalDML(ctx, inputs, types.BuildTS(200, 0), fs)
 			if scenario == "wrong_identity" || scenario == "wrong_coverage" {
-				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 				require.Nil(t, data.logicalDML)
 				return
 			}

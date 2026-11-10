@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -471,7 +472,7 @@ func (c *CkpReplayer) restoreLogicalDML(ctx context.Context) error {
 			values := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 			if !values[0].Equal(&end) {
 				bat.Clean(common.CheckpointAllocator)
-				return fmt.Errorf("logical DML checkpoint coverage does not match checkpoint end")
+				return moerr.NewInternalError(ctx, "logical DML checkpoint coverage does not match checkpoint end")
 			}
 			for i := 1; i < bat.RowCount(); i++ {
 				bounds[identity{dbs[i], tables[i]}] = values[i]

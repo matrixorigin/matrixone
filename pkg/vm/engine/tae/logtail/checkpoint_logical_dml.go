@@ -16,9 +16,9 @@ package logtail
 
 import (
 	"context"
-	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,11 +71,11 @@ func ReadCheckpointLogicalDML(ctx context.Context, version uint32, location obje
 	}
 	logical, ok := meta.SubMeta(0)
 	if !ok {
-		return nil, fmt.Errorf("logical DML checkpoint metadata missing")
+		return nil, moerr.NewInternalError(ctx, "logical DML checkpoint metadata missing")
 	}
 	blocks := logical.BlockCount()
 	if blocks == 0 || uint32(logical.BlockHeader().StartID())+blocks > math.MaxUint16 || logical.BlockHeader().ColumnCount() != 3 {
-		return nil, fmt.Errorf("invalid logical DML checkpoint block count")
+		return nil, moerr.NewInternalError(ctx, "invalid logical DML checkpoint block count")
 	}
 	result = newCheckpointLogicalDMLBatch()
 	defer func() {
@@ -96,11 +96,11 @@ func ReadCheckpointLogicalDML(ctx context.Context, version uint32, location obje
 		err = func() error {
 			defer loaded.Clean(mp)
 			if len(loaded.Vecs) != 3 || loaded.RowCount() == 0 {
-				return fmt.Errorf("invalid logical DML checkpoint shape")
+				return moerr.NewInternalError(ctx, "invalid logical DML checkpoint shape")
 			}
 			for i, typ := range []types.T{types.T_uint64, types.T_uint64, types.T_TS} {
 				if loaded.Vecs[i] == nil || loaded.Vecs[i].GetType().Oid != typ || loaded.Vecs[i].Length() != loaded.RowCount() || loaded.Vecs[i].HasNull() {
-					return fmt.Errorf("invalid logical DML checkpoint column")
+					return moerr.NewInternalError(ctx, "invalid logical DML checkpoint column")
 				}
 			}
 			dbs := vector.MustFixedColNoTypeCheck[uint64](loaded.Vecs[0])
@@ -109,15 +109,15 @@ func ReadCheckpointLogicalDML(ctx context.Context, version uint32, location obje
 			for i, table := range tables {
 				if result.RowCount() == 0 {
 					if dbs[i] != 0 || table != 0 || bounds[i].IsEmpty() {
-						return fmt.Errorf("invalid logical DML checkpoint coverage")
+						return moerr.NewInternalError(ctx, "invalid logical DML checkpoint coverage")
 					}
 					coverage = bounds[i]
 				} else {
 					if dbs[i] == 0 || table == 0 || bounds[i].GT(&coverage) {
-						return fmt.Errorf("invalid logical DML checkpoint identity or bound")
+						return moerr.NewInternalError(ctx, "invalid logical DML checkpoint identity or bound")
 					}
 					if _, duplicate := seen[table]; duplicate {
-						return fmt.Errorf("duplicate logical DML checkpoint table")
+						return moerr.NewInternalError(ctx, "duplicate logical DML checkpoint table")
 					}
 					seen[table] = struct{}{}
 				}
@@ -155,7 +155,7 @@ type LogicalDMLCheckpoint struct {
 // unknown history contributes a conservative floor; it never becomes known-zero.
 func (data *CheckpointData_V2) MergeLogicalDML(ctx context.Context, inputs []LogicalDMLCheckpoint, end types.TS, fs fileservice.FileService) (err error) {
 	if data.logicalDML != nil || end.IsEmpty() {
-		return fmt.Errorf("invalid logical DML checkpoint merge owner or coverage")
+		return moerr.NewInternalError(ctx, "invalid logical DML checkpoint merge owner or coverage")
 	}
 	type bound struct {
 		database  uint64
@@ -166,7 +166,7 @@ func (data *CheckpointData_V2) MergeLogicalDML(ctx context.Context, inputs []Log
 	known := false
 	for _, input := range inputs {
 		if input.End.IsEmpty() || input.End.GT(&end) {
-			return fmt.Errorf("logical DML checkpoint input is outside merge coverage")
+			return moerr.NewInternalError(ctx, "logical DML checkpoint input is outside merge coverage")
 		}
 		if input.Version < CheckpointVersion14 {
 			if input.End.GT(&legacyFloor) {
@@ -184,12 +184,12 @@ func (data *CheckpointData_V2) MergeLogicalDML(ctx context.Context, inputs []Log
 			tables := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
 			values := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 			if !values[0].Equal(&input.End) {
-				return fmt.Errorf("logical DML checkpoint input coverage mismatch")
+				return moerr.NewInternalError(ctx, "logical DML checkpoint input coverage mismatch")
 			}
 			for i := 1; i < bat.RowCount(); i++ {
 				old, exists := bounds[tables[i]]
 				if exists && old.database != dbs[i] {
-					return fmt.Errorf("logical DML checkpoint table changed database identity")
+					return moerr.NewInternalError(ctx, "logical DML checkpoint table changed database identity")
 				}
 				if !exists || values[i].GT(&old.timestamp) {
 					bounds[tables[i]] = bound{dbs[i], values[i]}

@@ -19,6 +19,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/stretchr/testify/require"
@@ -89,6 +90,13 @@ func TestLogicalDMLMemo(t *testing.T) {
 }
 
 func TestLogicalDMLMemoRejectsMalformed(t *testing.T) {
+	t.Run("invalid header uses internal error", func(t *testing.T) {
+		memo := newLogicalMemo()
+		_, err := memo.ReadLogicalDMLFrom(bytes.NewReader([]byte{2, 0, 0, 0, 0}))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.ErrorContains(t, err, "invalid logical DML extension header")
+		require.False(t, memo.LogicalDMLTrackingEnabled())
+	})
 	valid := []byte{1, 1, 0, 0, 0}
 	db, table := uint64(1), uint64(10)
 	valid = append(valid, types.EncodeUint64(&db)...)
