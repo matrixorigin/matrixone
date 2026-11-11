@@ -33,7 +33,7 @@ permissions:
 jobs:
   cs-coverage-canary:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@72b5af2c25a84b0563a610c062a3749bde1a1210
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
     with:
       canary_pr_32523: true
       canary_local_minio: ${{ inputs.local_minio_coverage }}
