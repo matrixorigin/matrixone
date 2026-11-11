@@ -241,3 +241,33 @@ func TestPredicateScratchCapacityFallsBackAfterReleasingBanks(t *testing.T) {
 	}
 	require.Nil(t, frame.predicateVectors[0], "optional scratch must yield capacity to the valid fallback")
 }
+
+func TestPredicateRowScratchRetiresAtNextOwnerOrFree(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	input := batch.NewWithSize(1)
+	t.Cleanup(func() { input.Clean(mp) })
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true}, nil, mp))
+	input.SetRowCount(3)
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	frame := &DictionaryInputFrame{}
+	t.Cleanup(func() { frame.Free(mp) })
+	var first, second []int64
+	var parameter vector.FunctionParameterWrapper[bool]
+	got, all, err := SelectPredicateRows(proc, input, nil, []ExpressionExecutor{executor}, nil, &first, &parameter, nil, nil, frame)
+	require.NoError(t, err)
+	require.False(t, all)
+	require.Equal(t, []int64{0, 2}, got, "End must not expire the returned borrowed mapping")
+	require.Same(t, &first, frame.pooledRows)
+	got, all, err = SelectPredicateRows(proc, input, nil, []ExpressionExecutor{executor}, nil, &second, &parameter, nil, nil, frame)
+	require.NoError(t, err)
+	require.False(t, all)
+	require.Nil(t, first, "the next callback may retire the prior scratch owner")
+	require.Equal(t, []int64{0, 2}, got)
+	frame.Free(mp)
+	require.Nil(t, second, "Free returns and clears the final pooled slice")
+}

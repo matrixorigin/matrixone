@@ -92,7 +92,8 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
-	if filter.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(inputResult.Batch.ExtraBuf) == 0 {
+	if filter.ctr.dictionaryBoundary.AllowsDictionaryOutput() &&
+		(!filter.ctr.dictionaryBoundary.PrefersOwnedOutput() || inputResult.Batch.HasDictionary()) && len(inputResult.Batch.ExtraBuf) == 0 {
 		output, err := filter.selectedCall(proc, inputResult.Batch)
 		if err != nil {
 			return vm.CancelResult, err

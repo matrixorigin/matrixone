@@ -58,6 +58,7 @@ type container struct {
 	readerSelection           *vector.DictionaryVectorSlot
 	columnUses                []engine.ReaderColumnUse
 	columnUsesReady           bool
+	columnUsesOwned           bool
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -248,6 +249,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.readerSelection = nil
 	tableScan.ctr.columnUses = nil
 	tableScan.ctr.columnUsesReady = false
+	tableScan.ctr.columnUsesOwned = false
 
 	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()

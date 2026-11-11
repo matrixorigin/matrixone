@@ -30,6 +30,7 @@ import (
 // Masked evaluation compacts operands first, so those vectors cannot match these
 // full-domain input slots. The frame is execution-lane local, never concurrent.
 type DictionaryInputFrame struct {
+	pooledRows       *[]int64
 	predicateInput   *batch.Batch
 	predicateVectors []*vector.Vector
 	predicateSeen    []bool
@@ -67,6 +68,11 @@ func (f *DictionaryInputFrame) End() {
 	}
 }
 func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
+	if f.pooledRows != nil {
+		vector.PutSels(*f.pooledRows)
+		*f.pooledRows = nil
+		f.pooledRows = nil
+	}
 	for _, v := range f.flat {
 		if v != nil {
 			v.Free(mp)

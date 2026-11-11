@@ -68,6 +68,8 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 			require.NoError(t, fixture.barg.Prepare(fixture.proc))
 			require.NoError(t, fixture.arg.Prepare(fixture.proc))
 			require.True(t, fixture.arg.AcceptsDictionary(0))
+			require.True(t, fixture.arg.PrefersOwnedDictionaryInput(0))
+			require.False(t, fixture.arg.PrefersOwnedDictionaryInput(1))
 			_, err = vm.Exec(fixture.barg, fixture.proc)
 			require.NoError(t, err)
 			var got []int32

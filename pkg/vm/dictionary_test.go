@@ -57,10 +57,14 @@ func (p *dictionaryTestProducer) DictionaryOutput() (bool, *vector.AllocationAcc
 
 type dictionaryTestConsumer struct {
 	testOperator
-	accepts bool
+	accepts   bool
+	ownsInput bool
 }
 
 func (p *dictionaryTestConsumer) AcceptsDictionary(child int) bool { return p.accepts && child == 0 }
+func (p *dictionaryTestConsumer) PrefersOwnedDictionaryInput(child int) bool {
+	return child == 0 && p.ownsInput
+}
 
 func dictionaryRuntimeFixture(t *testing.T) (*process.Process, *batch.Batch) {
 	t.Helper()
@@ -318,4 +322,25 @@ func TestDictionaryReusableBoundaryKeepsCapacityAndHeldSnapshots(t *testing.T) {
 	require.Equal(t, []int64{10, 10, 10}, vector.MustFixedColNoTypeCheck[int64](third.Vecs[0]))
 	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](held, 0))
 	require.NotSame(t, &firstData[0], &third.Vecs[0].GetData()[0])
+}
+
+func TestDictionaryOwnedDemandPropagatesWithoutDisablingSelection(t *testing.T) {
+	source := newDictionaryTestProducer(nil)
+	forwarder := &dictionaryTestForwarder{newDictionaryTestProducer(nil)}
+	forwarder.AppendChild(source)
+	parent := &dictionaryTestConsumer{accepts: true, ownsInput: true}
+	parent.AppendChild(forwarder)
+	ConfigureDictionaryBoundaries(parent)
+	require.True(t, source.boundary.AllowsDictionaryOutput(), "selection remains admitted")
+	require.True(t, source.boundary.PrefersOwnedOutput())
+	require.True(t, forwarder.boundary.PrefersOwnedOutput())
+	parent.ownsInput = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, source.boundary.PrefersOwnedOutput(), "reconfiguration must clear stale ownership demand")
+	require.True(t, source.boundary.AllowsDictionaryOutput())
+	parent.ownsInput = true
+	parent.accepts = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, source.boundary.AllowsDictionaryOutput())
+	require.False(t, source.boundary.PrefersOwnedOutput())
 }

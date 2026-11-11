@@ -42,3 +42,10 @@ func (hashJoin *HashJoin) DictionaryOutputState() *vm.DictionaryOutputState {
 func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return hashJoin.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
 }
+
+// Supported probe joins copy matching values into their owned result buffers;
+// retaining per-input-column dictionaries is unnecessary for that lifetime.
+// This preference does not weaken capability: retained inputs remain supported.
+func (hashJoin *HashJoin) PrefersOwnedDictionaryInput(child int) bool {
+	return child == 0 && hashJoin.dictionaryInputSupported()
+}

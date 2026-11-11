@@ -99,3 +99,10 @@ func (projection *Projection) DictionaryOutputState() *vm.DictionaryOutputState 
 func (projection *Projection) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return projection.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
 }
+
+// A flat destination consumes owned projected values. Avoid constructing input
+// views solely to normalize them at that boundary; inherited demand also travels
+// through projections whose destination supports both representations.
+func (projection *Projection) PrefersOwnedDictionaryInput(child int) bool {
+	return child == 0 && !projection.ctr.dictionaryBoundary.AllowsDictionaryOutput()
+}

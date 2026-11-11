@@ -43,16 +43,39 @@ type DictionaryConsumer interface {
 // BeginCall, and ExecProjection must normalize its final result before returning.
 // Each execution lane owns its state and its one borrowed output.
 type DictionaryOutputState struct {
-	required   bool
-	allowed    bool
-	allocation *vector.AllocationAccountSelection
-	output     *batch.Batch
-	pool       *mpool.MPool
+	required    bool
+	allowed     bool
+	preferOwned bool
+	allocation  *vector.AllocationAccountSelection
+	output      *batch.Batch
+	pool        *mpool.MPool
 }
 
 // AllowsDictionaryOutput is false until preparation admits this producer's
 // destination. Producers must consult it before retaining a selected backing.
 func (b *DictionaryOutputState) AllowsDictionaryOutput() bool { return b.allowed }
+
+// PrefersOwnedOutput is a consumer demand hint, not a representation requirement.
+// Selected filtering stays admitted; producers may compact private owned inputs
+// instead of allocating immutable views for values a consumer copies anyway.
+func (b *DictionaryOutputState) PrefersOwnedOutput() bool { return b.preferOwned }
+
+// Consumers request this only when input values do not escape their borrowed
+// input lifetime. Unknown consumers preserve the existing representation choice.
+type dictionaryOwnedInputConsumer interface{ PrefersOwnedDictionaryInput(child int) bool }
+
+func dictionaryInputPrefersOwned(op Operator, child int, inherited, accepted bool) bool {
+	if !accepted {
+		return false
+	}
+	if inherited {
+		return true
+	}
+	if consumer, ok := op.(dictionaryOwnedInputConsumer); ok {
+		return consumer.PrefersOwnedDictionaryInput(child)
+	}
+	return false
+}
 
 func (b *DictionaryOutputState) BeginCall() {
 	if b.output != nil {
@@ -128,43 +151,49 @@ func reusableDictionaryOutput(dst, src *batch.Batch, allocation *vector.Allocati
 // and preparation, never during encoding. It also serves native kernels that
 // prepare operators individually. Root output defaults to flat.
 func ConfigureDictionaryBoundaries(root Operator) {
-	configureDictionaryBoundary(root, false)
+	configureDictionaryBoundary(root, false, false)
 }
 
-func configureDictionaryBoundary(op Operator, acceptsOutput bool) {
+func configureDictionaryBoundary(op Operator, acceptsOutput, preferOwned bool) {
 	if op == nil {
 		return
 	}
-	configureDictionaryProducer(op, acceptsOutput)
+	configureDictionaryProducer(op, acceptsOutput, preferOwned)
 	consumer, accepts := op.(DictionaryConsumer)
 	for i, child := range op.GetOperatorBase().Children {
-		configureDictionaryBoundary(child, accepts && consumer.AcceptsDictionary(i))
+		accepted := accepts && consumer.AcceptsDictionary(i)
+		configureDictionaryBoundary(child, accepted, dictionaryInputPrefersOwned(op, i, preferOwned, accepted))
 	}
 }
 
-func configureDictionaryProducer(op Operator, accepts bool) {
+func configureDictionaryProducer(op Operator, accepts, preferOwned bool) {
 	if producer, ok := op.(DictionaryProducer); ok {
 		state := producer.DictionaryOutputState()
 		state.BeginCall()
 		possible, allocation := producer.DictionaryOutput()
-		wasAllowed := state.allowed
+		wasAllowed, wasOwned := state.allowed, state.preferOwned
 		state.allowed = possible && accepts
 		state.required = possible && !accepts
 		state.allocation = allocation
+		state.preferOwned = preferOwned && state.allowed
 		// Pure forwarding consumers can now re-evaluate their child edges. This
 		// touches declared producers only, never walks an ordinary flat subtree.
-		if wasAllowed != state.allowed {
+		if wasAllowed != state.allowed || wasOwned != state.preferOwned {
 			configureDictionaryChildren(op)
 		}
 	}
 }
 
 func configureDictionaryEdges(op Operator) {
-	configureDictionaryProducer(op, false)
+	configureDictionaryProducer(op, false, false)
 	configureDictionaryChildren(op)
 }
 
 func configureDictionaryChildren(op Operator) {
+	inherited := false
+	if producer, ok := op.(DictionaryProducer); ok {
+		inherited = producer.DictionaryOutputState().PrefersOwnedOutput()
+	}
 	for i, child := range op.GetOperatorBase().Children {
 		if _, ok := child.(DictionaryProducer); !ok {
 			continue
@@ -173,7 +202,7 @@ func configureDictionaryChildren(op Operator) {
 		if consumer, ok := op.(DictionaryConsumer); ok {
 			accepts = consumer.AcceptsDictionary(i)
 		}
-		configureDictionaryProducer(child, accepts)
+		configureDictionaryProducer(child, accepts, dictionaryInputPrefersOwned(op, i, inherited, accepts))
 	}
 }
 

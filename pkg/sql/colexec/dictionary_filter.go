@@ -149,11 +149,23 @@ func SelectBatchColumns(input *batch.Batch, positions []int, rows []int64, mp *m
 func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int, executors []ExpressionExecutor, account *vector.AllocationAccountSelection, scratch *[]int64, parameter *vector.FunctionParameterWrapper[bool], analyzer process.Analyzer, beforeEval func(int, int), frame *DictionaryInputFrame) ([]int64, bool, error) {
 	*scratch = (*scratch)[:0]
 	current := input
+	persistentFrame := frame != nil
 	if frame == nil {
 		frame = &DictionaryInputFrame{}
 		defer frame.Free(proc.Mp())
 	}
 	frame.Begin(current, account, proc.Mp())
+	if persistentFrame {
+		if frame.pooledRows != nil && frame.pooledRows != scratch {
+			vector.PutSels(*frame.pooledRows)
+			*frame.pooledRows = nil
+			frame.pooledRows = nil
+		}
+		if *scratch == nil {
+			*scratch = vector.GetSels()
+			frame.pooledRows = scratch
+		}
+	}
 	defer func() { frame.Observe(analyzer); frame.End() }()
 	var owned *batch.Batch
 	defer func() {

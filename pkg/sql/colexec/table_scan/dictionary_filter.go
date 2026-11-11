@@ -49,11 +49,23 @@ func (tableScan *TableScan) selectReaderFilter(proc *process.Process, bat *batch
 // prepareColumnUses distinguishes values leaving projection from private inputs.
 // Directly forwarded columns take priority over computed uses of the same input.
 func (tableScan *TableScan) prepareColumnUses() {
-	if tableScan.ctr.columnUsesReady {
+	owned := tableScan.ctr.dictionaryBoundary.PrefersOwnedOutput()
+	if tableScan.ctr.columnUsesReady && tableScan.ctr.columnUsesOwned == owned {
 		return
 	}
 	tableScan.ctr.columnUsesReady = true
-	if len(tableScan.ProjectList) == 0 || len(tableScan.ProjectExecutors) != len(tableScan.ProjectList) {
+	tableScan.ctr.columnUsesOwned = owned
+	tableScan.ctr.columnUses = nil
+	if len(tableScan.ProjectList) == 0 {
+		if owned {
+			tableScan.ctr.columnUses = make([]engine.ReaderColumnUse, len(tableScan.Types))
+			for i := range tableScan.ctr.columnUses {
+				tableScan.ctr.columnUses[i] = engine.ReaderColumnOwned
+			}
+		}
+		return
+	}
+	if len(tableScan.ProjectExecutors) != len(tableScan.ProjectList) {
 		return
 	}
 	uses := make([]engine.ReaderColumnUse, len(tableScan.Types))
@@ -69,7 +81,7 @@ func (tableScan *TableScan) prepareColumnUses() {
 			return
 		}
 		use := engine.ReaderColumnOwned
-		if _, direct := tableScan.ProjectList[i].Expr.(*plan.Expr_Col); direct && executor.IsColumnExpr() {
+		if _, direct := tableScan.ProjectList[i].Expr.(*plan.Expr_Col); direct && executor.IsColumnExpr() && !owned {
 			use = engine.ReaderColumnRetain
 		}
 		for _, column := range columns {

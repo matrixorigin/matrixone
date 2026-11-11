@@ -495,3 +495,32 @@ ignores relation tags while still validating column positions. This keeps valid
 scan projections/predicates from silently falling back because planner tags are
 nonzero; it is not a multi-input dependency API. Nonzero-tag projection and
 predicate controls prove this correspondence.
+
+
+Column use must include the real consumer, not only the scan's local projection.
+Runtime decision counters showed Q7's scan projection forwards all inputs and
+therefore never requested the owned mode. Complete the approved handoff by
+propagating a soft owned-input preference through the existing dictionary-boundary
+configuration. Supported probe hash joins copy values into owned result buffers
+and request owned input; projections with flat output request it as well. Existing
+boundary state carries the preference through admitted edges without disabling
+selected filtering. Unknown consumers retain default behavior. Scan forward uses
+become owned under that preference; computed/unused classification is unchanged.
+Borrowed/constant/non-private source fallback remains mechanically supported.
+
+This is configuration metadata only, not a new vector kind, lifetime contract,
+materialization requirement or allocation owner. Preference changes invalidate
+cached column classification. Reconfiguration must clear stale preferences,
+including when destination permission is removed. Routing, native kernels and
+retaining consumers are unchanged. Validate propagation and existing selected
+probe correctness before repeating local timing/resource evidence; no pushes.
+
+
+Persistent predicate frames take original-row scratch from the existing selection
+pool once per lane and return the caller's final slice at Free. End does not
+expire the returned row mapping; its existing next-callback/reader-return borrow
+contract remains intact. A nil/temporary frame leaves returned scratch caller-owned
+and never returns it to the pool before consumption. Switching scratch owners or
+account/schema generations retires the old pool ownership before reinitializing.
+This avoids allocating a fresh full-block row map for every newly compiled scan;
+it does not add a cache tier or change selection validation.
