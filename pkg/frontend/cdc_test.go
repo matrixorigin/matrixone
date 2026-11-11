@@ -888,6 +888,8 @@ type testTaskService struct {
 	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
 }
 
+func (*testTaskService) SQLTaskService() taskservice.TaskService { return nil }
+
 func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	var (
 		mu           sync.Mutex

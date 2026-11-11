@@ -82,6 +82,11 @@ func TestSQLTaskFormat(t *testing.T) {
 			want: "alter task task_a set timeout '1m'",
 		},
 		{
+			name: "alter reset one run",
+			stmt: &AlterSQLTask{Name: Identifier("task_a"), Action: AlterTaskResetRun, RunID: 42},
+			want: "alter task task_a reset runs 42 force",
+		},
+		{
 			name: "drop if exists",
 			stmt: &DropSQLTask{IfExists: true, Name: Identifier("task_a")},
 			want: "drop task if exists task_a",

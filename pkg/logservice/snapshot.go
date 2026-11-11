@@ -277,9 +277,10 @@ func (sm *snapshotManager) prepareDir(path string) error {
 	return nil
 }
 
-// ReconcileInterruptedExport removes exported snapshots left after Dragonboat
-// renamed a completed snapshot but before it removed its completion flag.
-// Call this only during store startup, before the replica can export again.
+// ReconcileInterruptedExport removes exports abandoned by a crashed replica:
+// temporary generating directories and final directories still carrying the
+// Dragonboat completion flag. Call this only during store startup, before the
+// replica can export again.
 func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
@@ -291,7 +292,16 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 	}
 	for _, name := range names {
 		var index uint64
-		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+		var from uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern+"-%d.generating", &index, &from)
+		if err == nil && count == 2 && from == replicaID &&
+			name == fmt.Sprintf(snapshotPathPattern+"-%d.generating", index, replicaID) {
+			if err := sm.cfg.FS.RemoveAll(sm.cfg.FS.PathJoin(path, name)); err != nil {
+				return err
+			}
+			continue
+		}
+		count, err = fmt.Sscanf(name, snapshotPathPattern, &index)
 		if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, index) {
 			continue
 		}

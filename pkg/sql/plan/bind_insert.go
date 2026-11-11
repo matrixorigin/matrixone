@@ -6887,7 +6887,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		// bytes into the declared destination-typed column. The lowered
 		// branches must keep that carrier contract: binding an assignment cast
 		// over the carrier re-parses the already-materialized bytes as text
-		// and fails with Error 20101 "malformed vector input" on the real
+		// and fails with Error 20301 "malformed vector input" on the real
 		// INSERT. Re-emit the same constant in the array-domain VecVal flavor
 		// — the flavor constant folding already produces for array constants
 		// — typed with the destination column type, so every branch, the
