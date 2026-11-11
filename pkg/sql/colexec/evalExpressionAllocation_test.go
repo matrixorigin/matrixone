@@ -155,12 +155,19 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
+	require.Zero(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity(),
+		"the first non-NULL generation needs no validity reservation")
+	// Establish real nullable storage before probing a stale NULL beyond its
+	// bound. The non-NULL fast path intentionally has no bitmap to exceed.
+	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	require.NoError(t, err)
+	require.True(t, equalResult.IsNull(1))
 	capacityRows := uint64(equalRoot.resultVector.GetResultVector().
 		GetNulls().GetBitmap().ExternalStorageCapacity() * 64)
 	require.GreaterOrEqual(t, capacityRows, uint64(4))
 	second.Vecs[0].GetNulls().Add(capacityRows)
 
-	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	equalResult, err = equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
 	require.NoError(t, err)
 	require.True(t, equalResult.IsNull(1))
 	require.False(t, equalResult.IsNull(capacityRows))

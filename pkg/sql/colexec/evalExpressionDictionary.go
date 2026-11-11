@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // normalizeDictionaryParameters owns the compatibility storage for functions
@@ -97,4 +98,31 @@ func (expr *FunctionExpressionExecutor) freeDictionaryParameters() {
 	}
 	expr.dictionaryScratch = nil
 	expr.dictionaryParameters = nil
+}
+
+// comparisonProducesNoNulls admits only synchronous strict comparisons whose
+// existing dictionary capability also closes prepared/mixed/grouping shapes.
+// It is checked for every evaluation, including flat inputs; schema nullability
+// and the representation alone do not prove the current logical argument domain.
+func (expr *FunctionExpressionExecutor) comparisonProducesNoNulls() bool {
+	// Eval calls this only for accounted Boolean results: unaccounted
+	// results already have lazy validity storage.
+	if expr.dictionaryInput == nil {
+		return false
+	}
+	switch expr.fid {
+	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN:
+	default:
+		return false
+	}
+	if !expr.dictionaryInput(expr.parameterResults) {
+		return false
+	}
+	for _, argument := range expr.parameterResults {
+		if argument.HasNull() {
+			return false
+		}
+	}
+	return true
 }

@@ -237,3 +237,124 @@ func TestDictionaryBetweenPreservesNaNNullAndRepeatedRows(t *testing.T) {
 		}
 	})
 }
+
+func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
+	for _, shape := range []string{"flat", "dictionary"} {
+		t.Run(shape, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			source := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { source.Free(mp) })
+			values := []int64{1, 2, 3, 4, 5, 6, 7, 8}
+			require.NoError(t, vector.AppendFixedList(source, values, nil, mp))
+			input := batch.NewWithSize(1)
+			// The input only borrows the source/scope; neither is owned by this header.
+			input.Vecs[0] = source
+			input.SetRowCount(len(values))
+			scope := &vector.DictionarySelectionScope{}
+			t.Cleanup(func() { scope.Free(mp) })
+			physical := []int64{0, 1, 2, 3, 4, 5, 6, 7}
+			if shape == "dictionary" {
+				physical = []int64{5, 1, 5, 3}
+				source.GetNulls().Add(7) // Outside this logical view: must not force a nullable result.
+				admitted, err := scope.Bind([]*vector.Vector{source}, input.Vecs, []int{0}, physical, len(values), mp, nil)
+				require.NoError(t, err)
+				require.True(t, admitted)
+				input.SetRowCount(len(physical))
+			}
+			column := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			literal := func(v int64) *plan.Expr {
+				return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}}}
+			}
+			for _, op := range []string{"=", "<>", ">", ">=", "<", "<=", "between"} {
+				t.Run(op, func(t *testing.T) {
+					var expression *plan.Expr
+					if op == "between" {
+						expression = bindTestFunction(t, proc, op, column, literal(2), literal(5))
+					} else {
+						expression = bindTestFunction(t, proc, op, column, literal(3))
+					}
+					executor, err := NewExpressionExecutorWithAllocation(proc, expression, allocation)
+					require.NoError(t, err)
+					t.Cleanup(executor.Free)
+					root := executor.(*FunctionExpressionExecutor)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity(), "proved non-NULL result must not reserve validity")
+					require.False(t, result.HasNull())
+					for i, row := range physical {
+						value := values[row]
+						want := false
+						switch op {
+						case "=":
+							want = value == 3
+						case "<>":
+							want = value != 3
+						case ">":
+							want = value > 3
+						case ">=":
+							want = value >= 3
+						case "<":
+							want = value < 3
+						case "<=":
+							want = value <= 3
+						case "between":
+							want = value >= 2 && value <= 5
+						}
+						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, i))
+					}
+					// Runtime NULLs on the same executor restore normal reservation, even
+					// if its preceding generation used the non-null preparation.
+					if shape == "dictionary" {
+						input.Vecs[0].GetNulls().Add(1)
+					} else {
+						source.GetNulls().Add(1)
+					}
+					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.True(t, result.IsNull(1))
+					capacity := result.GetNulls().GetBitmap().ExternalStorageCapacity()
+					require.Positive(t, capacity)
+					if shape == "dictionary" {
+						input.Vecs[0].GetNulls().Del(1)
+					} else {
+						source.GetNulls().Del(1)
+					}
+					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.False(t, result.HasNull())
+					require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+					// A full mask still uses the conservative ordinary preparation; a
+					// partial mask must preserve masked rows as NULL.
+					mask := make([]bool, input.RowCount())
+					for i := range mask {
+						mask[i] = true
+					}
+					result, err = executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					require.EqualValues(t, input.RowCount(), result.GetNulls().GetBitmap().Len())
+					mask[0] = false
+					result, err = executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					require.True(t, result.IsNull(0))
+					root.dictionaryInput = nil // Unproved kernel shape retains normal admission.
+					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.EqualValues(t, input.RowCount(), result.GetNulls().GetBitmap().Len())
+				})
+			}
+		})
+	}
+}

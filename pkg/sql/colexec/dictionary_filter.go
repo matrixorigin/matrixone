@@ -230,10 +230,10 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 		if analyzer != nil {
 			analyzer.Alloc(int64(value.Size()))
 		}
-		if *parameter == nil || !vector.ReuseFunctionFixedTypeParameter(value, *parameter) {
-			*parameter = vector.GenerateFunctionFixedTypeParameter[bool](value)
-		}
 		if value.IsConst() {
+			if *parameter == nil || !vector.ReuseFunctionFixedTypeParameter(value, *parameter) {
+				*parameter = vector.GenerateFunctionFixedTypeParameter[bool](value)
+			}
 			keep, isNull := (*parameter).GetValue(0)
 			if isNull || !keep {
 				*scratch = (*scratch)[:0]

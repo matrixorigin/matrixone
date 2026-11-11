@@ -670,6 +670,22 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
+	return fr.preExtendAndReset(targetSize, true)
+}
+
+// PreExtendAndResetNonNull prepares an evaluation proven to emit no NULLs.
+// The caller must audit the kernel and its current runtime arguments; unknown
+// or nullable evaluations must use PreExtendAndReset instead. Value storage
+// stays accounted. An empty implicit validity bitmap needs no reservation.
+// Existing bitmap capacity remains owned for a later nullable evaluation.
+func (fr *FunctionResult[T]) PreExtendAndResetNonNull(targetSize int) error {
+	if targetSize < 0 {
+		return moerr.NewInvalidInputNoCtx("negative function result length")
+	}
+	return fr.preExtendAndReset(targetSize, false)
+}
+
+func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) error {
 	if fr.vec == nil {
 		var err error
 		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
@@ -695,13 +711,15 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
-		return err
+	if nullable {
+		if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
+			return err
+		}
 	}
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
+	if nullBitmap := fr.vec.nsp.GetBitmap(); nullable && nullBitmap.HasExternalStorage() {
 		// Allocation-accounted storage can outlive several evaluations and be
 		// larger than this result. Publish the current row domain explicitly so
 		// NULL unions never infer it from a reused source or physical capacity.

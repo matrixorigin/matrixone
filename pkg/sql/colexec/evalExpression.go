@@ -1980,7 +1980,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	expr.resetResultType(expr.resultVector)
-	if err = expr.resultVector.PreExtendAndReset(rowCount); err != nil {
+	if selectList == nil && expr.allocation != nil && expr.resultType.Oid == types.T_bool && expr.comparisonProducesNoNulls() {
+		err = vector.MustFunctionResult[bool](expr.resultVector).PreExtendAndResetNonNull(rowCount)
+	} else {
+		err = expr.resultVector.PreExtendAndReset(rowCount)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if selectList != nil && len(expr.selectList.SelectList) < rowCount {
