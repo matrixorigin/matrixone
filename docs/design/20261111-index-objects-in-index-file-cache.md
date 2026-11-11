@@ -1,4 +1,4 @@
-# Index objects pinned in the index-file cache
+# Index objects in the index-file cache
 
 ## Problem
 
@@ -9,47 +9,41 @@ other workload's objects then miss.
 
 ## Decision
 
-With `[fileservice.cache] index-file-pin-objects = true` (default false), a CN keeps the
-objects of IVF-Flat entries tables whole in its index-file cache, apart from the shared
-disk cache.
+With `[fileservice.cache] index-file-cache-objects = true` (default false), a CN keeps the
+objects of IVF-Flat entries tables whole in its index-file cache, as index files beside
+HNSW and fulltext ones, apart from the shared disk cache.
 
-- **What is pinned.** Reads of an entries table carry `IndexFileObject`: its table scans,
-  identified by the table type, and the IVF-Flat search's own scan. A read with it of an
-  object the index-file cache holds is served from there. Otherwise the object is queued
-  for download into the index-file cache, and the read takes the normal path with its
-  ranges alone; a whole-object prefetch with it, through the prefetcher or the IO
-  pipeline, is queued the same way, not downloaded into the disk cache. An object the
-  cache has no room for, or that is waiting to be queued again, keeps the disk cache's
-  prefetch and whole-object read.
-- **What a CN pins.** The objects its own reads touch. A distributed search assigns whole
-  objects to CNs by object id, so each CN pins its share; a CN that serves the whole index
-  pins all of it.
-- **Consistency.** A pinned copy is the bytes of an immutable object named by the object.
+- **Loading.** `indexfile.OpenObject` opens an object's entry, or reads the object whole
+  into the cache and opens it, as `indexfile.Open` does for an index file: one read per
+  entry at a time, an object of 16 MiB or more read as four ranges at once. The IVF-Flat
+  search's scan of the entries table opens the objects of its blocks before reading them,
+  eight at once, and holds them until the scan ends. A distributed search assigns whole
+  objects to CNs by object id, so each CN loads its share. An object that cannot be loaded
+  is read the normal way.
+- **Reading.** Reads of an entries table carry `IndexFileObject`: its table scans,
+  identified by the table type, and the search's own scan. A read with it of an object the
+  index-file cache holds is served from there, and the decoded data still enters the
+  memory cache. A prefetch with it, through the prefetcher or the IO pipeline, of an
+  object the cache holds is not downloaded into the disk cache. Anything else takes the
+  normal path.
+- **Eviction.** An object's entry is an index file like any other: the cache's LRU evicts
+  it, and the next scan that needs it reads it again. A held entry is not evicted, and the
+  release of a hold, or a read, marks it used.
+- **Consistency.** An entry is the bytes of an immutable object named by the object.
   Which objects and rows a query sees still comes from its snapshot, so results do not
-  depend on what is pinned; only where the bytes come from does.
-- **Room.** An object is pinned only into the index-file cache's free room, counting the
-  downloads under way, so pinning itself evicts nothing and cannot thrash. The cache stays
-  one LRU shared with the other index files: a later index file that needs room evicts the
-  least recently used entries, pinned copies included. An object not pinned, for lack of
-  room or a failed download, is not queued again for a minute.
-- **Downloads.** As many objects download at once per CN as the prefetcher's workers,
-  each once at a time, and an object of 16 MiB or more reads four ranges at once. They
-  hold connections of the disk cache's download budget. A read never waits for them.
-- **Use and restart.** A read of a pinned copy marks it used. After a restart the copies
-  on disk serve reads while the cache loads them and are not downloaded again.
-- **Delete.** Deleting an object through the CN's file service drops its queued pin,
-  waits for one under way, then deletes its pinned copy, so no read after the delete is
-  served from it. Objects deleted elsewhere, as by TN garbage collection, are no longer
-  read, and their copies age out.
-- **Cleanup.** Pinned copies no longer read age out with the index-file cache's idle
-  collection.
+  depend on what the cache holds; only where the bytes come from does.
+- **Restart.** After a restart the entries on disk serve reads while the cache loads them.
+- **Delete.** Deleting an object through the CN's file service deletes its entry. Objects
+  deleted elsewhere, as by TN garbage collection, are no longer read, and their entries
+  age out.
 
 ## Alternatives
 
 - **Make the index-file cache the disk tier of index tables.** The read and prefetch path
-  uses the disk cache directly in about forty places, and the index-file cache's LRU
-  would then evict index files for entries.
+  uses the disk cache directly in about forty places.
+- **Load in the background and read the disk cache meanwhile.** A read cannot use an
+  object until its load ends, so the first scans read their ranges again beside the load.
 - **Fill each index whole when it is first used.** A distributed search reads only a
-  share of the objects on each CN, which would each download the whole index.
+  share of the objects on each CN, which would each read the whole index.
 - **A snapshot of the entries rows.** It would go stale with every sync of the index;
   objects do not.

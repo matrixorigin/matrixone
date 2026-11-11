@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -41,12 +43,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
@@ -822,6 +826,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if relData != nil {
 		selectedBlocks = relData.DataCnt()
 	}
+	if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && relData != nil {
+		defer closeIndexObjects(openIndexObjects(ctx, s.proc.GetFileService(), indexObjectNames(relData)))
+	}
 	readers, err := rel.BuildReaders(
 		ctx,
 		s.proc,
@@ -1307,4 +1314,63 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
 	}
 	return bat, nil
+}
+
+// indexObjectLoaders is the most objects of a scan read into the index-file cache at once.
+const indexObjectLoaders = 8
+
+// indexObjectNames returns the objects of the persisted blocks of relData, each once.
+func indexObjectNames(relData engine.RelData) []string {
+	var objects []string
+	seen := make(map[string]struct{})
+	for i := 0; i < relData.DataCnt(); i++ {
+		blk := relData.GetBlockInfo(i)
+		if blk.IsMemBlk() {
+			continue
+		}
+		name := blk.MetaLocation().Name().String()
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			objects = append(objects, name)
+		}
+	}
+	return objects
+}
+
+// openIndexObjects opens objects from the index-file cache of fs when it keeps index
+// objects, reading the ones it does not hold; the scan then reads them from there. An
+// object that cannot be read into the cache is left to the scan.
+func openIndexObjects(ctx context.Context, fs fileservice.FileService, objects []string) []*indexfile.File {
+	cache, shared := fileservice.IndexObjectCache(fs)
+	if cache == nil || len(objects) == 0 {
+		return nil
+	}
+	files := make([]*indexfile.File, len(objects))
+	sem := make(chan struct{}, indexObjectLoaders)
+	var wg sync.WaitGroup
+	for i, object := range objects {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			f, err := indexfile.OpenObject(ctx, cache, shared, object, 0)
+			if err != nil {
+				if ctx.Err() == nil {
+					logutil.Warn("ivfflat: read object into the index-file cache", zap.String("object", object), zap.Error(err))
+				}
+				return
+			}
+			files[i] = f
+		}()
+	}
+	wg.Wait()
+	return files
+}
+
+func closeIndexObjects(files []*indexfile.File) {
+	for _, f := range files {
+		if f != nil {
+			_ = f.Close()
+		}
+	}
 }

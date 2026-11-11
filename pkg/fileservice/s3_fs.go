@@ -50,8 +50,7 @@ type S3FS struct {
 	memCache       *MemCache
 	diskCache      *DiskCache
 	indexFileCache *IndexFileCache
-	pinObjectsOn   bool
-	pinned         pinnedObjects
+	indexObjects   indexObjects
 	remoteCache    *RemoteCache
 	asyncUpdate    bool
 
@@ -336,7 +335,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
 	s.indexFileCache = caches.index
-	s.pinObjectsOn = config.IndexFilePinObjects
+	s.indexObjects.on = config.IndexFileCacheObjects
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
@@ -874,18 +873,13 @@ read_disk_cache:
 			}
 		}
 	}
-	if vector.Policy.Any(IndexFileObject) && s.pinsObjects() {
-		if err := s.readPinnedObject(ctx, vector); err != nil {
+	if vector.Policy.Any(IndexFileObject) && s.cachesIndexObjects() {
+		if err := s.readIndexObject(ctx, vector); err != nil {
 			finishFill()
 			return err
 		}
 		if vector.allDone() {
 			return nil
-		}
-		// An object being pinned is downloaded whole into the index-file cache, not the
-		// disk cache.
-		if s.pinRoute(vector.FilePath, 0) {
-			vector.Policy |= SkipFullFilePreloads
 		}
 	}
 
@@ -1854,7 +1848,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			}
 			return s.remoteCache.DeletePaths(ctx, filePaths)
 		}(),
-		s.unpinObjects(ctx, filePaths),
+		s.deleteIndexObjects(ctx, filePaths),
 	)
 }
 
@@ -1873,7 +1867,6 @@ func (s *S3FS) Close(ctx context.Context) {
 	if s.prefetcher != nil {
 		s.prefetcher.close(ctx)
 	}
-	s.pinned.close()
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })
