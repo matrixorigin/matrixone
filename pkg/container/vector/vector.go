@@ -7057,23 +7057,21 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		v.clearBinaryStringAt(int(vi))
 		return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 	}
-	dataSource, dataRow := w, wi
 	if w.IsDictionary() {
-		var row int
-		dataSource, row = w.dictionaryPhysicalRow(int(wi))
-		dataRow = int64(row)
-	}
-	if v.typ.IsFixedLen() {
+		if err := v.copyDictionaryPayload(w, vi, wi, mp); err != nil {
+			return err
+		}
+	} else if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
-		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], dataSource.data[dataRow*int64(sz):(dataRow+1)*int64(sz)])
+		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], w.data[wi*int64(sz):(wi+1)*int64(sz)])
 	} else {
 		var err error
 		vva := MustFixedColNoTypeCheck[types.Varlena](v)
-		wva := MustFixedColNoTypeCheck[types.Varlena](dataSource)
-		if wva[dataRow].IsSmall() {
-			vva[vi] = wva[dataRow]
+		wva := MustFixedColNoTypeCheck[types.Varlena](w)
+		if wva[wi].IsSmall() {
+			vva[vi] = wva[wi]
 		} else {
-			bs := wva[dataRow].GetByteSlice(dataSource.area)
+			bs := wva[wi].GetByteSlice(w.area)
 			err = BuildVarlenaFromByteSlice(v, &vva[vi], &bs, mp)
 			if err != nil {
 				return err
@@ -8594,17 +8592,18 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if w.IsConst() {
 		sel = 0
 	}
-	dataSource, dataRow := w, sel
 	if w.IsDictionary() {
-		var physicalRow int
-		dataSource, physicalRow = w.dictionaryPhysicalRow(int(sel))
-		dataRow = int64(physicalRow)
-	}
-	if varlen {
+		if err := v.copyDictionaryPayload(w, int64(oldLen), sel, mp); err != nil {
+			return err
+		}
+		if varlen {
+			v.areaDisjoint = preserveAreaDisjoint
+		}
+	} else if varlen {
 		var vs, ws []types.Varlena
 		ToSliceNoTypeCheck(v, &vs)
-		ToSliceNoTypeCheck(dataSource, &ws)
-		err := BuildVarlenaFromVarlena(v, &vs[oldLen], &ws[dataRow], &dataSource.area, mp)
+		ToSliceNoTypeCheck(w, &ws)
+		err := BuildVarlenaFromVarlena(v, &vs[oldLen], &ws[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -8617,20 +8616,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		switch tlen {
 		case 8:
 			p1 := unsafe.Pointer(&v.data[oldLen*8])
-			p2 := unsafe.Pointer(&dataSource.data[dataRow*8])
+			p2 := unsafe.Pointer(&w.data[sel*8])
 			*(*int64)(p1) = *(*int64)(p2)
 		case 4:
 			p1 := unsafe.Pointer(&v.data[oldLen*4])
-			p2 := unsafe.Pointer(&dataSource.data[dataRow*4])
+			p2 := unsafe.Pointer(&w.data[sel*4])
 			*(*int32)(p1) = *(*int32)(p2)
 		case 2:
 			p1 := unsafe.Pointer(&v.data[oldLen*2])
-			p2 := unsafe.Pointer(&dataSource.data[dataRow*2])
+			p2 := unsafe.Pointer(&w.data[sel*2])
 			*(*int16)(p1) = *(*int16)(p2)
 		case 1:
-			v.data[oldLen] = dataSource.data[dataRow]
+			v.data[oldLen] = w.data[sel]
 		default:
-			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], dataSource.data[int(dataRow)*tlen:(int(dataRow)+1)*tlen])
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
 		}
 	}
 
@@ -8671,12 +8670,7 @@ func appendSelectedGrouping[T int32 | int64](
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if w.IsDictionary() {
-		for i := 0; i < cnt; i++ {
-			if err := v.UnionOne(w, sel, mp); err != nil {
-				return err
-			}
-		}
-		return nil
+		return v.unionDictionaryMulti(w, sel, cnt, mp)
 	}
 	if cnt == 0 {
 		return nil
@@ -13782,4 +13776,30 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+}
+
+// copyDictionaryPayload runs after the caller's ordinary validation/admission.
+// Only payload coordinates become physical; NULL/grouping and provenance stay
+// with the caller's logical row. Flat callers keep their original address flow.
+func (v *Vector) copyDictionaryPayload(w *Vector, target, logical int64, mp *mpool.MPool) error {
+	base, physical := w.dictionaryPhysicalRow(int(logical))
+	if v.typ.IsVarlen() {
+		var dst, src []types.Varlena
+		ToSliceNoTypeCheck(v, &dst)
+		ToSliceNoTypeCheck(base, &src)
+		return BuildVarlenaFromVarlena(v, &dst[target], &src[physical], &base.area, mp)
+	}
+	switch width := v.typ.TypeSize(); width {
+	case 8:
+		*(*uint64)(unsafe.Pointer(&v.data[target*8])) = *(*uint64)(unsafe.Pointer(&base.data[physical*8]))
+	case 4:
+		*(*uint32)(unsafe.Pointer(&v.data[target*4])) = *(*uint32)(unsafe.Pointer(&base.data[physical*4]))
+	case 2:
+		*(*uint16)(unsafe.Pointer(&v.data[target*2])) = *(*uint16)(unsafe.Pointer(&base.data[physical*2]))
+	case 1:
+		v.data[target] = base.data[physical]
+	default:
+		copy(v.data[int(target)*width:(int(target)+1)*width], base.data[physical*width:(physical+1)*width])
+	}
+	return nil
 }

@@ -264,6 +264,44 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	require.True(t, source.IsPreparedJSONComparisonParam())
 	source.Free(mp)
 	require.Equal(t, values[1], dict.GetStringAt(2))
+	for _, operation := range []string{"one", "multi", "copy"} {
+		func() {
+			target := NewVec(types.T_varchar.ToType())
+			defer target.Free(mp)
+			if operation == "copy" {
+				for range 4 {
+					require.NoError(t, AppendBytes(target, nil, true, mp))
+				}
+			}
+			repeat := 1
+			if operation == "multi" {
+				repeat = 2
+			}
+			expected := []string{values[1], values[0], values[1], ""}
+			kinds := []PrepareParamKind{PrepareParamDecimal, PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}
+			sources := []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceLiteral}
+			for logical, value := range expected {
+				switch operation {
+				case "one":
+					require.NoError(t, target.UnionOne(dict, int64(logical), mp))
+				case "multi":
+					require.NoError(t, target.UnionMulti(dict, int64(logical), repeat, mp))
+				case "copy":
+					require.NoError(t, target.Copy(dict, int64(logical), int64(logical), mp))
+				}
+				for duplicate := 0; duplicate < repeat; duplicate++ {
+					row := logical*repeat + duplicate
+					require.Equal(t, logical == 3, target.IsNull(uint64(row)))
+					if logical != 3 {
+						require.Equal(t, value, target.GetStringAt(row))
+					}
+					require.Equal(t, kinds[logical], target.GetPrepareParamKindAt(row))
+					require.Equal(t, sources[logical], target.GetStringSourceAt(row))
+					require.Equal(t, logical == 0 || logical == 2, target.GetIsBinaryStringAt(row))
+				}
+			}
+		}()
+	}
 	require.NoError(t, dict.EnsureWritable(mp))
 	require.Equal(t, values[1], dict.GetStringAt(0))
 	require.Equal(t, values[0], dict.GetStringAt(1))

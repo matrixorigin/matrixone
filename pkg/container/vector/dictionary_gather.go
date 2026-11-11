@@ -334,3 +334,14 @@ func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []
 		next++
 	}
 }
+
+// unionDictionaryMulti keeps selected repetition outside the flat broadcast
+// frame, reusing UnionOne's logical metadata and allocation-failure contract.
+func (v *Vector) unionDictionaryMulti(w *Vector, row int64, count int, mp *mpool.MPool) error {
+	for i := 0; i < count; i++ {
+		if err := v.UnionOne(w, row, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -575,3 +575,39 @@ output survival after releasing the original cache owner. The existing persisted
 fixture proves scoped input and owned selected varlen output. Requalify all22 and
 per-query resources locally; keep uncovered native/runtime copies blocking, and
 make no push while any query/resource regression remains.
+
+
+## Approved flat-path repair — 2026-11-11
+
+The requester approved repairing A/B's shared flat vector and key-encoding
+costs from local c8c5ceab99. Preserve all preceding designs, including separate
+C/D follow-ups. The membership extension and its verified Q12 activation stay
+in A/B. Diagnostics with selection, accounting or normalization disabled are
+not production remedies and cannot establish acceptance.
+
+Restore flat Copy/UnionOne payload operands and typed stores; resolve selected
+physical payload in private helpers after ordinary admission, without changing
+logical metadata or ownership. Keep selected UnionMulti repetition out of the
+flat broadcast frame. Restore the flat H8 encoder and route selected typed
+stores separately; move selected string-key sizing out of the shared flat frame
+without captured callbacks or new scratch. Retain bulk gather preflight, window
+reuse, private backing reclamation, aliases/COW, NULL/grouping/string provenance,
+canonical keys, error cleanup and full accounting. No schema, public interface,
+cache policy, queue protocol, new pool or generic representation is approved.
+
+Verify existing flat/constant/selected and unhappy-path fixtures, focused owning
+packages and targeted static checks. Inspect generated flat code and component
+controls against c8c5ceab99 and frozen main 553e16f52b; component gains never
+replace TPC-H acceptance. Then use one fresh process per arm/configuration,
+open once, run six full Q1-Q22 suites, discard cold and retain/profile/account
+five warm suites. Local SF10 memory comes first, then SF10 disk and SF100 disk
+only if the preceding gate clears; no server129. Preserve existing matched
+schema/32 CPUs/cache/memory/spill settings, reject spill/swap/OOM, and perform
+no benchmark-time data/schema/result verification. Every query and Total must
+be reported. No unresolved per-query regression or missing copy coverage can
+be waived by Total. New remedies outside this closure require design review.
+
+Keep changes local and unpushed until accepted. Only then merge newest
+authoritative main, rerun semantically affected evidence and complete the
+mandatory self-review/pre-push gates. Results belong in comments, with genuinely
+superseded tables collapsed after replacements are posted.

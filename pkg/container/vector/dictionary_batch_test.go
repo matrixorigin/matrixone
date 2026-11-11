@@ -173,6 +173,39 @@ func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
 				selected, err := NewDictionaryVector(base, rows, mp, nil)
 				require.NoError(t, err)
 				t.Cleanup(func() { selected.Free(mp) })
+				for _, operation := range []string{"one", "multi", "copy"} {
+					func() {
+						output := NewVec(typ.ToType())
+						defer output.Free(mp)
+						if operation == "copy" {
+							require.NoError(t, output.PreExtend(len(mapping), mp))
+							output.SetLength(len(mapping))
+							output.SetAllNulls(len(mapping))
+						}
+						repeat := 1
+						if operation == "multi" {
+							repeat = 2
+						}
+						for logical, physical := range mapping {
+							switch operation {
+							case "one":
+								require.NoError(t, output.UnionOne(selected, int64(logical), mp))
+							case "multi":
+								require.NoError(t, output.UnionMulti(selected, int64(logical), repeat, mp))
+							case "copy":
+								require.NoError(t, output.Copy(selected, int64(logical), int64(logical), mp))
+							}
+							for duplicate := 0; duplicate < repeat; duplicate++ {
+								row := logical*repeat + duplicate
+								isNull := nullable && physical == 1
+								require.Equal(t, isNull, output.IsNull(uint64(row)))
+								if !isNull {
+									require.Equal(t, raw[int(physical)*width:(int(physical)+1)*width], output.GetData()[row*width:(row+1)*width])
+								}
+							}
+						}
+					}()
+				}
 				for _, tc := range []struct {
 					start, count int
 					flags        []uint8
