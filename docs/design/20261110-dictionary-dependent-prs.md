@@ -486,3 +486,12 @@ retained immutable siblings, in-place owned header/buffer identity and failed
 prefix cleanup. Existing fallback/visibility/Top-K controls remain. Run local
 all22 timing and per-query accounting without pushing; any unresolved regression
 or counter-coverage gap continues to block acceptance.
+
+
+Single-batch dependency collection must match the actual executor binding.
+ColumnExpressionExecutor treats every relation tag as input zero when exactly
+one batch is supplied. The shared collector explicitly describes that mode and
+ignores relation tags while still validating column positions. This keeps valid
+scan projections/predicates from silently falling back because planner tags are
+nonzero; it is not a multi-input dependency API. Nonzero-tag projection and
+predicate controls prove this correspondence.

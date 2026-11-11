@@ -328,12 +328,16 @@ func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 }
 
 func TestProjectionColumnUses(t *testing.T) {
-	for _, shape := range []string{"mixed", "forward-priority", "domain", "unknown"} {
+	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "unknown"} {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProc(t)
 			typ := types.T_int32.ToType()
 			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}}
 			scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ), lateTestCompare(t, ">", 1, 3)}
+			if shape == "single-batch-tag" {
+				scan.ProjectList[0].GetCol().RelPos = 7
+				scan.ProjectList[1].GetF().Args[0].GetCol().RelPos = 9
+			}
 			if shape == "forward-priority" {
 				scan.ProjectList = append(scan.ProjectList, lateTestCol(1, typ))
 			}

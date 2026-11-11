@@ -289,12 +289,13 @@ func compactPredicateRows(value *vector.Vector, rows int, scratch []int64, selec
 	return scratch[:kept]
 }
 
-// CollectExpressionInputColumns reports audited input dependencies. Unknown
-// executors decline rather than guessing that a column is dead.
-func CollectExpressionInputColumns(executor ExpressionExecutor, seen []bool, columns *[]int) bool {
+// CollectSingleBatchInputColumns matches ColumnExpressionExecutor.Eval's
+// single-batch binding: relation tags do not select another input in this mode.
+// Unknown executors decline rather than guessing that a column is dead.
+func CollectSingleBatchInputColumns(executor ExpressionExecutor, seen []bool, columns *[]int) bool {
 	switch e := executor.(type) {
 	case *ColumnExpressionExecutor:
-		if e.relIndex != 0 || e.colIndex < 0 || e.colIndex >= len(seen) {
+		if e.colIndex < 0 || e.colIndex >= len(seen) {
 			return false
 		}
 		if !seen[e.colIndex] {
@@ -304,20 +305,20 @@ func CollectExpressionInputColumns(executor ExpressionExecutor, seen []bool, col
 	case *FixedVectorExpressionExecutor:
 	case *FunctionExpressionExecutor:
 		for _, child := range e.parameterExecutor {
-			if !CollectExpressionInputColumns(child, seen, columns) {
+			if !CollectSingleBatchInputColumns(child, seen, columns) {
 				return false
 			}
 		}
 	case *decimalTypedExecutor:
-		return CollectExpressionInputColumns(e.root, seen, columns)
+		return CollectSingleBatchInputColumns(e.root, seen, columns)
 	case *decimalMulSubExecutor:
-		return CollectExpressionInputColumns(e.root, seen, columns)
+		return CollectSingleBatchInputColumns(e.root, seen, columns)
 	case *decimalChainExecutor:
-		return CollectExpressionInputColumns(e.root, seen, columns)
+		return CollectSingleBatchInputColumns(e.root, seen, columns)
 	case *memoExpressionExecutor:
-		return CollectExpressionInputColumns(e.state.executor, seen, columns)
+		return CollectSingleBatchInputColumns(e.state.executor, seen, columns)
 	case *memoRootExpressionExecutor:
-		return CollectExpressionInputColumns(e.executor, seen, columns)
+		return CollectSingleBatchInputColumns(e.executor, seen, columns)
 	default:
 		return false
 	}

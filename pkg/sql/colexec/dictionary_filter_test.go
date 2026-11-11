@@ -27,7 +27,7 @@ import (
 )
 
 func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
-	for _, shape := range []string{"original-rows", "skip-divide-zero", "identity", "none", "memo"} {
+	for _, shape := range []string{"original-rows", "skip-divide-zero", "identity", "none", "memo", "single-batch-tag"} {
 		t.Run(shape, func(t *testing.T) {
 			skipError := shape == "skip-divide-zero"
 			mp := mpool.MustNewZero()
@@ -61,6 +61,9 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			} else if shape == "none" {
 				predicates = []*plan.Expr{bindTestFunction(t, proc, ">", col, literal(9))}
 				want = []int64{}
+			}
+			if shape == "single-batch-tag" {
+				col.GetCol().RelPos = 7
 			}
 			executors, err := NewExpressionExecutorsFromPlanExpressions(proc, predicates)
 			require.NoError(t, err)

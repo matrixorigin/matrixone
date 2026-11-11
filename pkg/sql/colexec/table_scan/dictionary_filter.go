@@ -65,7 +65,7 @@ func (tableScan *TableScan) prepareColumnUses() {
 	for i, executor := range tableScan.ProjectExecutors {
 		clear(seen)
 		columns = columns[:0]
-		if !colexec.CollectExpressionInputColumns(executor, seen, &columns) {
+		if !colexec.CollectSingleBatchInputColumns(executor, seen, &columns) {
 			return
 		}
 		use := engine.ReaderColumnOwned
