@@ -1477,8 +1477,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	key := deletedBlockKey{blockID: *bid, tableID: ls.table.tableId}
-	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[key])
+	deleted := rawRowIdDeletes.offsets[ls.table.tableId]
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deleted[*bid])
 
 	return leftRows
 }

@@ -3496,7 +3496,12 @@ func (txn *Transaction) registerCNObjects(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) {
-	txn.cnObjsSummary[cnObjectKey{objectID: objId, tableID: tableId}] = Summary{
+	objects := txn.cnObjsSummary[tableId]
+	if objects == nil {
+		objects = make(map[types.Objectid]Summary)
+		txn.cnObjsSummary[tableId] = objects
+	}
+	objects[objId] = Summary{
 		objBat:             objBat,
 		accountId:          accountId,
 		databaseId:         databaseId,
@@ -4914,10 +4919,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		seen := make(map[tableKey]bool)
 		txn.deletedBlocks.iter(
 			func(key deletedBlockKey, offsets []int64) bool {
-				summary := txn.cnObjsSummary[cnObjectKey{
-					objectID: *key.blockID.Object(),
-					tableID:  key.tableID,
-				}]
+				summary := txn.cnObjsSummary[key.tableID][*key.blockID.Object()]
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -5052,7 +5054,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				objectID: *key.blockID.Object(),
 				tableID:  key.tableID,
 			}
-			summary := txn.cnObjsSummary[objectKey]
+			summary := txn.cnObjsSummary[objectKey.tableID][objectKey.objectID]
 
 			affectedBats[affectedBatchKey{
 				tableID: key.tableID,
@@ -6333,9 +6335,9 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
-			offsets: map[deletedBlockKey][]int64{},
+			offsets: map[uint64]map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:   map[cnObjectKey]Summary{},
+		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 

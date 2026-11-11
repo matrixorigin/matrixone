@@ -688,10 +688,10 @@ type Transaction struct {
 	// only readers and writers.
 	workspaceSegments colexec.TxnWorkspaceSegments
 
-	// Map uncommitted CN objects to their logical table metadata. Transaction-local
-	// clones may share an object, so object ID alone cannot identify its owner.
-	// Guarded by txn.Lock() and has the same lifecycle as the transaction.
-	cnObjsSummary map[cnObjectKey]Summary
+	// Map logical table ID to its uncommitted CN objects and their metadata.
+	// Transaction-local clones may share an object, so each table owns a separate
+	// object map. Guarded by txn.Lock() and has the transaction lifecycle.
+	cnObjsSummary map[uint64]map[types.Objectid]Summary
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
 	cn_flushed_s3_tombstone_object_stats_list *sync.Map
 	//cn_flushed_s3_tombstone_object_stats_list struct {
@@ -952,9 +952,10 @@ type deletedBlockKey struct {
 type deletedBlocks struct {
 	sync.RWMutex
 
-	// (table ID, block ID) => deleted row offsets. The table ID is required
-	// because transaction-local clones may reference the same physical block.
-	offsets map[deletedBlockKey][]int64
+	// Logical table ID => physical block ID => deleted row offsets. Keeping
+	// tables in separate maps preserves clone ownership without hashing the
+	// table ID into every block lookup.
+	offsets map[uint64]map[types.Blockid][]int64
 }
 
 func (b *deletedBlocks) size() int {
@@ -963,25 +964,30 @@ func (b *deletedBlocks) size() int {
 	}
 	b.RLock()
 	defer b.RUnlock()
-	return len(b.offsets)
+	size := 0
+	for _, blocks := range b.offsets {
+		size += len(blocks)
+	}
+	return size
 }
 
 func (b *deletedBlocks) addDeletedBlocks(tableID uint64, blockID *types.Blockid, offsets []int64) {
 	b.Lock()
 	defer b.Unlock()
-	key := deletedBlockKey{blockID: *blockID, tableID: tableID}
-	b.offsets[key] = append(b.offsets[key], offsets...)
+	blocks := b.offsets[tableID]
+	if blocks == nil {
+		blocks = make(map[types.Blockid][]int64)
+		b.offsets[tableID] = blocks
+	}
+	blocks[*blockID] = append(blocks[*blockID], offsets...)
 }
 
 func (b *deletedBlocks) getDeletedRowIDs(tableID uint64, appendTo func(row types.Rowid)) {
 	b.RLock()
 	defer b.RUnlock()
-	for key, offsets := range b.offsets {
-		if key.tableID != tableID {
-			continue
-		}
+	for blockID, offsets := range b.offsets[tableID] {
 		for _, offset := range offsets {
-			rowID := types.NewRowid(&key.blockID, uint32(offset))
+			rowID := types.NewRowid(&blockID, uint32(offset))
 			appendTo(rowID)
 		}
 	}
@@ -994,9 +1000,9 @@ func (b *deletedBlocks) getDeletedRowIDsForBlocks(
 ) {
 	b.RLock()
 	defer b.RUnlock()
+	deleted := b.offsets[tableID]
 	for i := range blocks {
-		key := deletedBlockKey{blockID: blocks[i], tableID: tableID}
-		for _, offset := range b.offsets[key] {
+		for _, offset := range deleted[blocks[i]] {
 			rowID := types.NewRowid(&blocks[i], uint32(offset))
 			appendTo(rowID)
 		}
@@ -1006,15 +1012,17 @@ func (b *deletedBlocks) getDeletedRowIDsForBlocks(
 func (b *deletedBlocks) clean() {
 	b.Lock()
 	defer b.Unlock()
-	b.offsets = make(map[deletedBlockKey][]int64)
+	b.offsets = make(map[uint64]map[types.Blockid][]int64)
 }
 
 func (b *deletedBlocks) iter(fn func(deletedBlockKey, []int64) bool) {
 	b.RLock()
 	defer b.RUnlock()
-	for key, offsets := range b.offsets {
-		if !fn(key, offsets) {
-			return
+	for tableID, blocks := range b.offsets {
+		for blockID, offsets := range blocks {
+			if !fn(deletedBlockKey{blockID: blockID, tableID: tableID}, offsets) {
+				return
+			}
 		}
 	}
 }
@@ -1030,9 +1038,9 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
-			offsets: map[deletedBlockKey][]int64{},
+			offsets: map[uint64]map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:   map[cnObjectKey]Summary{},
+		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
 		// The recorded-name holder installs at construction (round-41):
 		// a GC job the pool accepts captures it — never the

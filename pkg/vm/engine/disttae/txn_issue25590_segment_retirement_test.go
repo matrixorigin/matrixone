@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -124,8 +125,8 @@ func newIssue25590SharedOpWorkspaceForTest(t *testing.T, op client.TxnOperator) 
 		engine:          &Engine{},
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: map[deletedBlockKey][]int64{}},
-		cnObjsSummary:   map[cnObjectKey]Summary{},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
+		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),

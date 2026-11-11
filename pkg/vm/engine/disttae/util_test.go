@@ -634,18 +634,14 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 
 func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 	const tableID uint64 = 42
-	keyFor := func(blockID types.Blockid) deletedBlockKey {
-		return deletedBlockKey{blockID: blockID, tableID: tableID}
-	}
 	delBlks := deletedBlocks{
-		offsets: map[deletedBlockKey][]int64{},
+		offsets: map[uint64]map[types.Blockid][]int64{},
 	}
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
 		bid, offset := row.Decode()
 
-		key := keyFor(*bid)
-		delBlks.offsets[key] = append(delBlks.offsets[key], int64(offset))
+		delBlks.addDeletedBlocks(tableID, bid, []int64{int64(offset)})
 	}
 
 	rowIds := make([]types.Rowid, 0)
@@ -656,7 +652,7 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 
 	for i := range rowIds {
 		bid, offset := rowIds[i].Decode()
-		have, ok := delBlks.offsets[keyFor(*bid)]
+		have, ok := delBlks.offsets[tableID][*bid]
 		require.True(t, ok)
 		require.NotEqual(t, 0, len(have))
 
@@ -665,12 +661,11 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 	}
 
 	selected := rowIds[0].CloneBlockID()
-	selectedKey := keyFor(selected)
-	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selectedKey]))
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[tableID][selected]))
 	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
 		scoped = append(scoped, row)
 	})
-	require.Len(t, scoped, len(delBlks.offsets[selectedKey]))
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 	for i := range scoped {
 		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
 	}
