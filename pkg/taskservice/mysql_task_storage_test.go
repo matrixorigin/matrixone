@@ -470,8 +470,8 @@ func TestSQLTaskInSqlMock(t *testing.T) {
 
 	updated := tasks[0]
 	updated.Timezone = "Asia/Shanghai"
-	mock.ExpectExec("update sql_task set cron_expr=?, `timezone`=?, next_fire_time=?, trigger_count=?, schedule_generation=?, updated_at=? where task_id=? and account_id=? and schedule_generation=? and trigger_count=?").
-		WithArgs(updated.CronExpr, updated.Timezone, updated.NextFireTime, uint64(2), uint64(2), updated.UpdatedAt, updated.TaskID, updated.AccountID, updated.ScheduleGeneration, updated.TriggerCount).
+	mock.ExpectExec("update sql_task set schedule_generation=greatest(trigger_count, schedule_generation)+1, trigger_count=schedule_generation, cron_expr=?, `timezone`=?, next_fire_time=?, updated_at=? where task_id=? and account_id=? and schedule_generation=? and trigger_count < 9223372036854775807 and schedule_generation < 9223372036854775807").
+		WithArgs(updated.CronExpr, updated.Timezone, updated.NextFireTime, updated.UpdatedAt, updated.TaskID, updated.AccountID, updated.ScheduleGeneration).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	affected, err = storage.AlterSQLTask(context.Background(), tasks[0], updated, SQLTaskSetSchedule)
 	require.NoError(t, err)
@@ -2467,4 +2467,56 @@ func TestBatchTaskInsertSQLAndArguments(t *testing.T) {
 		require.Equal(t, 2, n)
 		require.Equal(t, 1, calls)
 	})
+}
+
+func TestAlterSQLTaskConflictDiagnosis(t *testing.T) {
+	const update = "update sql_task set schedule_generation=greatest(trigger_count, schedule_generation)+1, trigger_count=schedule_generation, enabled=0, updated_at=? where task_id=? and account_id=? and schedule_generation=? and trigger_count < 9223372036854775807 and schedule_generation < 9223372036854775807"
+	const lookup = "select trigger_count, schedule_generation from sql_task where task_id=? and account_id=? and schedule_generation=?"
+	for _, tc := range []struct {
+		name               string
+		rows               *sqlmock.Rows
+		lookupErr, wantErr error
+		updateErr          error
+		resultErr          error
+	}{
+		{name: "missing", rows: sqlmock.NewRows([]string{"trigger_count", "schedule_generation"})},
+		{name: "exhausted", rows: sqlmock.NewRows([]string{"trigger_count", "schedule_generation"}).AddRow(int64(9223372036854775807), 1), wantErr: ErrSQLTaskSequenceExhausted},
+		{name: "read failure", lookupErr: errors.New("read failed")},
+		{name: "update failure", updateErr: errors.New("update outcome unknown")},
+		{name: "rows affected failure", resultErr: errors.New("rows affected unknown")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, mock := newMockStorage(t)
+			t.Cleanup(func() { require.NoError(t, store.Close()); require.NoError(t, mock.ExpectationsWereMet()) })
+			observed := SQLTask{TaskID: 1, AccountID: 2, ScheduleGeneration: 1}
+			exec := mock.ExpectExec(update).WithArgs(nil, observed.TaskID, observed.AccountID, observed.ScheduleGeneration)
+			if tc.updateErr != nil {
+				exec.WillReturnError(tc.updateErr)
+			} else if tc.resultErr != nil {
+				exec.WillReturnResult(sqlmock.NewErrorResult(tc.resultErr))
+			} else {
+				exec.WillReturnResult(sqlmock.NewResult(0, 0))
+				query := mock.ExpectQuery(lookup).WithArgs(observed.TaskID, observed.AccountID, observed.ScheduleGeneration)
+				if tc.lookupErr != nil {
+					query.WillReturnError(tc.lookupErr)
+				} else {
+					query.WillReturnRows(tc.rows)
+				}
+			}
+			mock.ExpectClose()
+			n, err := store.AlterSQLTask(t.Context(), observed, observed, SQLTaskSuspend)
+			require.Zero(t, n)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else if tc.lookupErr != nil {
+				require.ErrorIs(t, err, tc.lookupErr)
+			} else if tc.updateErr != nil {
+				require.ErrorIs(t, err, tc.updateErr)
+			} else if tc.resultErr != nil {
+				require.ErrorIs(t, err, tc.resultErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

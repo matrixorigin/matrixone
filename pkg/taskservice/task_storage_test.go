@@ -591,6 +591,45 @@ func TestTriggerSQLTaskRejectsStaleScheduleAndPreservesChanges(t *testing.T) {
 	require.Equal(t, current.TriggerCount, got.TriggerCount)
 }
 
+func TestAlterSQLTaskAfterConcurrentTrigger(t *testing.T) {
+	for name, factory := range storages {
+		for _, action := range []SQLTaskAlterAction{SQLTaskSuspend, SQLTaskSetSchedule} {
+			t.Run(fmt.Sprintf("%s/%d", name, action), func(t *testing.T) {
+				ctx := t.Context()
+				store := factory(t)
+				t.Cleanup(func() { require.NoError(t, store.Close()) })
+				mustAddTestSQLTask(t, store, 1, newTestSQLTask("concurrent-trigger", 1))
+				observed := mustGetTestSQLTask(t, store, 1)[0]
+				trigger := observed
+				for i := 0; i < 2; i++ {
+					trigger.TriggerCount++
+					n, err := store.TriggerSQLTask(ctx, trigger, newTestAsyncTask(fmt.Sprintf("firing-%d", i)))
+					require.NoError(t, err)
+					require.Equal(t, 2, n)
+				}
+				updated := observed
+				updated.CronExpr, updated.Timezone, updated.NextFireTime = "0 * * * * *", "UTC", 123
+				n, err := store.AlterSQLTask(ctx, observed, updated, action)
+				require.NoError(t, err)
+				require.Equal(t, 1, n)
+				got := mustGetTestSQLTask(t, store, 1)[0]
+				require.Equal(t, trigger.TriggerCount+1, got.TriggerCount)
+				require.Equal(t, got.TriggerCount, got.ScheduleGeneration)
+				if action == SQLTaskSuspend {
+					require.False(t, got.Enabled)
+				} else {
+					require.Equal(t, updated.CronExpr, got.CronExpr)
+					require.Equal(t, updated.Timezone, got.Timezone)
+					require.Equal(t, updated.NextFireTime, got.NextFireTime)
+				}
+				n, err = store.AlterSQLTask(ctx, observed, updated, action)
+				require.NoError(t, err)
+				require.Zero(t, n, "a competing definition change must not be overwritten")
+			})
+		}
+	}
+}
+
 func TestAlterSQLTaskDoesNotUndoConcurrentSuspension(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
@@ -1004,4 +1043,16 @@ func testSQLTaskAdmission(claim *SQLTaskClaim, sequence uint64) *SQLTaskRunAdmis
 		admission.ParentTaskID, admission.MetadataID = claim.ParentTaskID, claim.MetadataID
 	}
 	return admission
+}
+
+func TestAlterSQLTaskCanceledBeforeMutation(t *testing.T) {
+	store := NewMemTaskStorage()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	mustAddTestSQLTask(t, store, 1, newTestSQLTask("canceled-alter", 1))
+	original := mustGetTestSQLTask(t, store, 1)[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.AlterSQLTask(ctx, original, original, SQLTaskSuspend)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, original, mustGetTestSQLTask(t, store, 1)[0])
 }

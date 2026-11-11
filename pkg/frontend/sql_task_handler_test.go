@@ -914,3 +914,50 @@ func mustGetTestSQLTasksForFrontend(t *testing.T, store taskservice.TaskStorage,
 	require.NoError(t, err)
 	return tasks
 }
+
+// Inject a committed scheduler firing between the handler's read and update.
+type triggerBeforeAlterStore struct {
+	taskservice.TaskStorage
+	triggered bool
+}
+
+func (s *triggerBeforeAlterStore) AlterSQLTask(ctx context.Context, observed, updated taskservice.SQLTask, action taskservice.SQLTaskAlterAction) (int, error) {
+	if !s.triggered {
+		s.triggered = true
+		trigger := observed
+		trigger.TriggerCount++
+		async := taskpb.AsyncTask{Metadata: taskpb.TaskMetadata{ID: "alter-trigger"}}
+		n, err := s.TaskStorage.TriggerSQLTask(ctx, trigger, async)
+		if err != nil {
+			return 0, err
+		}
+		if n != 2 {
+			return 0, fmt.Errorf("trigger did not commit: affected %d", n)
+		}
+	}
+	return s.TaskStorage.AlterSQLTask(ctx, observed, updated, action)
+}
+
+type alterTestTaskService struct {
+	taskservice.TaskService
+	store taskservice.TaskStorage
+}
+
+func (s *alterTestTaskService) GetStorage() taskservice.TaskStorage { return s.store }
+
+func TestHandleSQLTaskSuspendAfterTrigger(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, service, store := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := t.Context()
+	require.NoError(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{Name: tree.Identifier("suspend_after_trigger"), CronExpr: "0 0 0 1 1 *", Timezone: "UTC", SQLBody: "select 1;"}))
+	wrapper := &triggerBeforeAlterStore{TaskStorage: store}
+	getPu(ses.GetService()).TaskService = &alterTestTaskService{TaskService: service, store: wrapper}
+	require.NoError(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{Name: tree.Identifier("suspend_after_trigger"), Action: tree.AlterTaskSuspend}))
+	require.True(t, wrapper.triggered)
+	got, err := getSQLTaskByName(ctx, store, "suspend_after_trigger", ses.GetAccountId())
+	require.NoError(t, err)
+	require.False(t, got.Enabled)
+	require.Equal(t, got.ScheduleGeneration, got.TriggerCount)
+}

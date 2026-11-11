@@ -792,19 +792,18 @@ func (m *mysqlTaskStorage) AlterSQLTask(ctx context.Context, observed, updated S
 	var args []any
 	switch action {
 	case SQLTaskSuspend, SQLTaskSetSchedule:
-		sequence, err := nextSQLTaskInvalidationSequence(observed)
-		if err != nil {
-			return 0, err
-		}
+		// Single-table UPDATE evaluates assignments left to right. Advance from
+		// the locked row, then copy the new generation to the trigger counter.
+		query = "update sql_task set schedule_generation=greatest(trigger_count, schedule_generation)+1, trigger_count=schedule_generation, "
 		if action == SQLTaskSuspend {
-			query = "update sql_task set enabled=0, trigger_count=?, schedule_generation=?, updated_at=?"
-			args = []any{sequence, sequence, nullTime(updated.UpdatedAt)}
+			query += "enabled=0, updated_at=?"
+			args = []any{nullTime(updated.UpdatedAt)}
 		} else {
-			query = "update sql_task set cron_expr=?, `timezone`=?, next_fire_time=?, trigger_count=?, schedule_generation=?, updated_at=?"
-			args = []any{updated.CronExpr, updated.Timezone, updated.NextFireTime, sequence, sequence, nullTime(updated.UpdatedAt)}
+			query += "cron_expr=?, `timezone`=?, next_fire_time=?, updated_at=?"
+			args = []any{updated.CronExpr, updated.Timezone, updated.NextFireTime, nullTime(updated.UpdatedAt)}
 		}
-		query += " where task_id=? and account_id=? and schedule_generation=? and trigger_count=?"
-		args = append(args, observed.TaskID, observed.AccountID, observed.ScheduleGeneration, observed.TriggerCount)
+		query += " where task_id=? and account_id=? and schedule_generation=? and trigger_count < 9223372036854775807 and schedule_generation < 9223372036854775807"
+		args = append(args, observed.TaskID, observed.AccountID, observed.ScheduleGeneration)
 	case SQLTaskResume:
 		query = "update sql_task set enabled=1, next_fire_time=?, updated_at=? where task_id=? and account_id=? and schedule_generation=?"
 		args = []any{updated.NextFireTime, nullTime(updated.UpdatedAt), observed.TaskID, observed.AccountID, observed.ScheduleGeneration}
@@ -825,6 +824,22 @@ func (m *mysqlTaskStorage) AlterSQLTask(ctx context.Context, observed, updated S
 		return 0, err
 	}
 	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 && (action == SQLTaskSuspend || action == SQLTaskSetSchedule) {
+		var count, generation uint64
+		err = m.db.QueryRowContext(ctx, "select trigger_count, schedule_generation from sql_task where task_id=? and account_id=? and schedule_generation=?", observed.TaskID, observed.AccountID, observed.ScheduleGeneration).Scan(&count, &generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if _, err = nextSQLTaskInvalidationSequence(SQLTask{TriggerCount: count, ScheduleGeneration: generation}); err != nil {
+			return 0, err
+		}
+	}
 	return int(affected), err
 }
 

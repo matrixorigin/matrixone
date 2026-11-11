@@ -257,24 +257,26 @@ func (s *memTaskStorage) AlterSQLTask(ctx context.Context, observed, updated SQL
 	if action > SQLTaskSetTimeout {
 		return 0, moerr.NewInvalidInputNoCtx("unknown sql task alter action")
 	}
-	var sequence uint64
-	if action == SQLTaskSuspend || action == SQLTaskSetSchedule {
-		var err error
-		sequence, err = nextSQLTaskInvalidationSequence(observed)
-		if err != nil {
-			return 0, err
-		}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	s.Lock()
 	defer s.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	current, ok := s.sqlTasks[observed.TaskID]
 	if !ok || current.AccountID != observed.AccountID {
 		return 0, nil
 	}
 	switch action {
 	case SQLTaskSuspend, SQLTaskSetSchedule:
-		if current.ScheduleGeneration != observed.ScheduleGeneration || current.TriggerCount != observed.TriggerCount {
+		if current.ScheduleGeneration != observed.ScheduleGeneration {
 			return 0, nil
+		}
+		sequence, err := nextSQLTaskInvalidationSequence(current)
+		if err != nil {
+			return 0, err
 		}
 		current.TriggerCount, current.ScheduleGeneration = sequence, sequence
 		if action == SQLTaskSuspend {
