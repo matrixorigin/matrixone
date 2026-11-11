@@ -443,3 +443,67 @@ func SortByKey(
 	}
 	return nil
 }
+
+func (w *CNS3Writer) PersistedNames() []string {
+	if w == nil || w.sinker == nil {
+		return nil
+	}
+	return w.sinker.PersistedNames()
+}
+
+func (w *CNS3Writer) AbandonAndRetainableNames() []string {
+	if w == nil || w.sinker == nil {
+		return nil
+	}
+	return w.sinker.AbandonAndRetainableNames()
+}
+
+func (w *CNS3Writer) CancelPending() {
+	if w != nil && w.sinker != nil {
+		w.sinker.CancelPending()
+	}
+}
+
+func (w *CNS3Writer) HasUncommittedCapacityHook() bool {
+	if w == nil || w.sinker == nil {
+		return false
+	}
+	return w.sinker.HasUncommittedCapacityHook()
+}
+
+func (w *CNS3Writer) WorkspaceOwnsCleanup() bool {
+	return w != nil && w.sinker != nil && w.sinker.WorkspaceOwnsCleanup()
+}
+
+func WorkspaceSinkerCapacityOption(proc *process.Process) ioutil.SinkerOption {
+	if proc == nil {
+		return nil
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	owner, ok := txnOp.GetWorkspace().(ioutil.SinkerOwner)
+	if !ok {
+		return nil
+	}
+	return owner.SinkerCapacityOption()
+}
+
+func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	w.ClearWorkspaceSinkerCapacity()
+	if opt := WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opt(w.sinker)
+	}
+}
+
+func (w *CNS3Writer) ClearWorkspaceSinkerCapacity() {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	w.sinker.RebindUncommittedCapacityHook(nil)
+	w.sinker.ClearWorkspaceOwnedCleanup()
+}
