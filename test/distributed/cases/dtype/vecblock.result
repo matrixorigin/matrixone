@@ -63,9 +63,9 @@ invalid input: expected vector dimension 4 != actual dimension 3.
 select cast('[1,2,3]' as vecf8(4));
 invalid input: expected vector dimension 4 != actual dimension 3.
 insert into t (id, a) values (5, '[1,2,3,nan]');
-internal error: vector element cannot be NaN or Inf: NaN
+invalid input: vector element cannot be NaN or Inf: NaN
 insert into t (id, b) values (5, '[1,2,3,inf]');
-internal error: vector element cannot be NaN or Inf: +Inf
+invalid input: vector element cannot be NaN or Inf: +Inf
 select cast('[3.4028235e38]' as vecf8(1));
 invalid input: vecf8 element 0 value 3.4028235e+38 is out of range: it decodes to an infinite value
 select cast('[-3.4028235e38, 1]' as vecf8(2));
