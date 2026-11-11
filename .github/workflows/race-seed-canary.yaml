@@ -25,10 +25,11 @@ permissions:
 jobs:
   cs-coverage-canary:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@484fe737aeaa2d4b46f5da0da1e2533be2fc1c66
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@a5d69c4f293f4e6faed3a8caf37e774c25f990bd
     with:
       canary_pr_32523: true
-      runner_label: cs-mty-large-7c14g
+      runner_label: cs-mnl2-large-7c14g
+      canary_package_parallelism: 8
     secrets: inherit
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
