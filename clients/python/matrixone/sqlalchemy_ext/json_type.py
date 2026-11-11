@@ -10,7 +10,7 @@ This module provides enhanced JSON type that supports:
 import json
 from typing import Union
 
-from sqlalchemy import cast, String
+from sqlalchemy import cast, String, true, false
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.sql.expression import ColumnElement
@@ -136,15 +136,15 @@ class JSONPathElement(ColumnElement):
 
         # Smart quote handling
         if isinstance(other, str):
-            # Don't add quotes for boolean strings or if already quoted
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            # Preserve explicitly quoted JSON inputs; normal Python strings are JSON strings
+            if other.startswith('"'):
                 other_value = other
             else:
                 # Add quotes for regular strings
                 other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
-            # Convert Python bool to JSON boolean string
-            other_value = 'true' if other else 'false'
+            # Use SQL boolean literals to keep JSON booleans separate from JSON strings
+            other_value = true() if other else false()
         else:
             # Numbers and other types: use as-is
             other_value = other
@@ -157,12 +157,12 @@ class JSONPathElement(ColumnElement):
 
         # Smart quote handling (same as __eq__)
         if isinstance(other, str):
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            if other.startswith('"'):
                 other_value = other
             else:
                 other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
-            other_value = 'true' if other else 'false'
+            other_value = true() if other else false()
         else:
             other_value = other
 
