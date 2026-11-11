@@ -480,6 +480,7 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
 		ExecutionDependentAccess: true,
+		EnumSetResultTypes:       []planpb.Type{{Id: int32(types.T_enum), Enumvalues: "red,blue"}},
 		LocalRuntimeFilterDomains: []*planpb.LocalRuntimeFilterDomain{{
 			SourceScanNodeId: 1, SourceColumnName: "id", KeyType: int32(types.T_int64),
 			Targets: []*planpb.LocalRuntimeFilterTarget{{ScanNodeId: 2, ColumnName: "parent_id", ProbeNdv: 10}, nil},
@@ -540,6 +541,8 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
 	cloned := DeepCopyQuery(source)
 	require.True(t, proto.Equal(source, cloned))
+	cloned.EnumSetResultTypes[0].Enumvalues = "changed"
+	require.Equal(t, "red,blue", source.EnumSetResultTypes[0].Enumvalues)
 	cloned.SelectLockReferences[0].ObjectRef.ObjName = "changed"
 	cloned.SelectLockReferences[0].ViewPath[0].ViewName = "changed"
 	require.Equal(t, "locked", source.SelectLockReferences[0].ObjectRef.ObjName)

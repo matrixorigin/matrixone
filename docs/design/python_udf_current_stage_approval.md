@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r44-2026-11-11`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r45-2026-11-12`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -934,3 +934,20 @@ routine DDL and regenerated as one parser. Independent Architecture and
 SQL/Planner approval of r44 remains pending; rebase, tests and prior
 implementation approvals do not supply those decisions. Historical facts and
 revision descriptions above remain unchanged.
+
+
+## r45: preserve official ENUM/SET result metadata (2026-11-12)
+
+The governing proposal is `python-udf-current-stage-r45-2026-11-12`. Official
+main `12679d7993eca1fb5355711eeb60e30ee522592f` assigns Query field 24 to
+output-aligned declared ENUM/SET domains. Retain that field and ColDef field 25
+for result publication; the unmerged routine dependency envelope moves to Query
+field 25. Regenerate the combined schema and verify both contracts survive
+serialization and independent deep-copy. Earlier candidate routine tags are not
+aliases or a promised development-history input.
+
+Catalog 4.0.7/53 (36 tenant, 17 cluster), MORPC 134, the external Arrow/Flight
+ABI, capacity limits and opt-in unisolated development scope remain unchanged.
+Independent Architecture and SQL/Planner approval of r45 remains pending; this
+maintenance and its tests do not supply either decision. Historical approval
+facts and revision descriptions above remain unchanged.
