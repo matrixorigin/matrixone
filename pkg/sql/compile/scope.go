@@ -172,7 +172,7 @@ func (s *Scope) freeOperatorsWithOwnProcess() {
 		return
 	}
 	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		op.Free(s.Proc, false, nil)
+		vm.Free(op, s.Proc, false, nil)
 		return nil
 	})
 }
@@ -445,7 +445,7 @@ func (s *Scope) FreeOperator(c *Compile) {
 	}
 
 	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-		op.Free(c.proc, false, nil)
+		vm.Free(op, c.proc, false, nil)
 		return nil
 	})
 }

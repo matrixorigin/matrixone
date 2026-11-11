@@ -10797,7 +10797,7 @@ func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
 	// VECF64) into a false +Inf. float16/bf16 have no native arithmetic, so they widen to float32
 	// (exact, preserving finiteness). Integer targets clamp and can never be non-finite -- skipped.
 	fail := func(d float64) error {
-		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", d)
+		return moerr.NewInvalidInputNoCtxf("vector element cannot be NaN or Inf: %v", d)
 	}
 	switch v := any(out).(type) {
 	case []float32:

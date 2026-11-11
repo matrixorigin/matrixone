@@ -6052,6 +6052,10 @@ func bindFuncExprAndConstFoldInternal(
 		if proc == nil {
 			goto between_fallback
 		}
+		// The between kernel has no vector implementation; vectors bind as >= and <=.
+		if types.T(retExpr.GetF().Args[0].Typ.Id).IsArray() {
+			goto between_fallback
+		}
 
 		fnArgs := retExpr.GetF().Args
 

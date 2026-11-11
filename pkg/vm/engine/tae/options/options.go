@@ -31,6 +31,7 @@ import (
 func WithWalClientFactory(factory logservicedriver.LogServiceClientFactory) func(*Options) {
 	return func(opts *Options) {
 		opts.WalClientFactory = factory
+		opts.WalContextClientFactory = nil
 		if opts.WalClientFactory == nil {
 			_, opts.WalClientFactory = logservicedriver.NewMockServiceAndClientFactory()
 		}

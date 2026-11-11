@@ -77,7 +77,11 @@ func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice
 }
 
 func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), s.cfg.LogService.ConnectTimeout.Duration, moerr.CauseNewLogServiceClient)
+	return s.newLogServiceClientWithContext(context.Background(), shard)
+}
+
+func (s *store) newLogServiceClientWithContext(parent context.Context, shard metadata.TNShard) (logservice.Client, error) {
+	ctx, cancel := context.WithTimeoutCause(parent, s.cfg.LogService.ConnectTimeout.Duration, moerr.CauseNewLogServiceClient)
 	defer cancel()
 	client, err := logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
 		ReadOnly:         false,
@@ -91,6 +95,16 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 		return nil, moerr.AttachCause(ctx, err)
 	}
 	return client, nil
+}
+
+func (s *store) createWALContextClientFactory(shard metadata.TNShard) func(context.Context) (logservice.Client, error) {
+	if s.options.logServiceClientFactory != nil {
+		// The injected factory has no context contract.
+		return nil
+	}
+	return func(ctx context.Context) (logservice.Client, error) {
+		return s.newLogServiceClientWithContext(ctx, shard)
+	}
 }
 
 func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {
@@ -165,21 +179,22 @@ func (s *store) newTAEStorage(
 	}
 
 	opt := &options.Options{
-		Clock:             s.rt.Clock(),
-		Fs:                fs,
-		LocalFs:           localFs,
-		TmpFs:             tmpFs.(*fileservice.TmpFileService),
-		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
-		MaxWALRecordSize:  int(s.cfg.LogService.MaxWALRecordSize),
-		Shard:             shard,
-		CheckpointCfg:     ckpcfg,
-		GCCfg:             gcCfg,
-		MergeCfg:          mergeCfg,
-		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
-		IsStandalone:      s.cfg.InStandalone,
-		Ctx:               ctx,
-		TaskServiceGetter: s.GetTaskService,
-		SID:               s.cfg.UUID,
+		Clock:                   s.rt.Clock(),
+		Fs:                      fs,
+		LocalFs:                 localFs,
+		TmpFs:                   tmpFs.(*fileservice.TmpFileService),
+		WalClientFactory:        logservicedriver.LogServiceClientFactory(factory),
+		WalContextClientFactory: s.createWALContextClientFactory(shard),
+		MaxWALRecordSize:        int(s.cfg.LogService.MaxWALRecordSize),
+		Shard:                   shard,
+		CheckpointCfg:           ckpcfg,
+		GCCfg:                   gcCfg,
+		MergeCfg:                mergeCfg,
+		IncrementalDedup:        s.cfg.Txn.IncrementalDedup == "true",
+		IsStandalone:            s.cfg.InStandalone,
+		Ctx:                     ctx,
+		TaskServiceGetter:       s.GetTaskService,
+		SID:                     s.cfg.UUID,
 	}
 	options.WithCatalogGCInterval(s.cfg.GCCfg.CatalogGCInterval.Duration)(opt)
 	return taestorage.NewTAEStorage(
