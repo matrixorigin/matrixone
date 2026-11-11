@@ -25,7 +25,7 @@ permissions:
 jobs:
   cs-coverage-canary:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@484fe737aeaa2d4b46f5da0da1e2533be2fc1c66
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@8dbf87e5783c203c115802bb563f059df6b10e98
     with:
       canary_pr_32523: true
       runner_label: cs-mty-large-7c14g
