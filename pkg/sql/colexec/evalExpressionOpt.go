@@ -64,9 +64,11 @@ func getReadonlyResultFromExpression(
 	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
 		return nil, nil, err
 	}
-	if vec, err = executor.Eval(proc, data, nil); err != nil {
-		executor.Free()
-		return nil, nil, err
+	vec, evalErr := evalBorrowedExecutor(executor, func() (*vector.Vector, error) {
+		return executor.Eval(proc, data, nil)
+	})
+	if evalErr != nil {
+		return nil, nil, evalErr
 	}
 
 	return vec, executor.Free, nil
@@ -79,14 +81,44 @@ func GetWritableResultFromExpression(
 
 	var executor ExpressionExecutor
 	if executor, err = NewExpressionExecutor(proc, planExpr); err == nil {
-		if vec, err = executor.Eval(proc, data, nil); err == nil {
+		vec, err = evalBorrowedExecutor(executor, func() (*vector.Vector, error) {
+			return executor.Eval(proc, data, nil)
+		})
+		// evalBorrowedExecutor has already freed the executor on error and
+		// panic exits, so this Free covers every successful-eval exit,
+		// including a failed ownership transfer Dup.
+		if err == nil {
+			defer executor.Free()
 			if !modifyResultOwnerToOuter(executor) {
 				vec, err = vec.Dup(proc.Mp())
 			}
 		}
-		executor.Free()
 	}
 	return vec, err
+}
+
+// evalBorrowedExecutor runs eval while executor is borrowed from the reuse
+// pool. Every non-success exit closes the borrowing here: a returned error
+// frees the executor directly, and a panic from the evaluated function
+// implementation (for example moerr.NewOutOfRangeNoCtx in a numeric core)
+// would otherwise unwind past all normal Free calls, so the executor is
+// freed and the original panic value is re-raised unchanged to keep the SQL
+// error path intact. On success the caller keeps ownership of the executor's
+// lifetime through the returned value.
+func evalBorrowedExecutor[T any](
+	executor ExpressionExecutor, eval func() (T, error),
+) (result T, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			executor.Free()
+			panic(r)
+		}
+	}()
+	result, err = eval()
+	if err != nil {
+		executor.Free()
+	}
+	return result, err
 }
 
 // modifyResultOwnerToOuter change the owner of expression result outer to make sure that
