@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/prashantv/gostub"
 
@@ -44,6 +45,8 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -660,6 +663,237 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
+
+func TestCreateIndexLockProtocol(t *testing.T) {
+	newCompile := func(t *testing.T, eng *stubEngine) *Compile {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		return NewCompile("test", "db1", "create index idx_a on t1(a)", "", "", eng, proc, nil, false, nil, time.Now())
+	}
+	newScope := func() *Scope {
+		return &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateIndex{CreateIndex: &plan2.CreateIndex{
+				Database: "db1",
+				Table:    "t1",
+				TableDef: &plan2.TableDef{Name: "t1", TblId: 42},
+			}},
+		}}}}
+	}
+
+	t.Run("metadata conflict rebuilds the plan", func(t *testing.T) {
+		eng := newStubEngine()
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return moerr.NewTxnNeedRetry(context.Background())
+		})
+		defer lockMoTbl.Reset()
+
+		err := newScope().CreateIndex(newCompile(t, eng))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("base relation lock publishes a definition fence", func(t *testing.T) {
+		eng := newStubEngine()
+		db := newStubDatabase("db1")
+		relation := newStubRelation("t1")
+		relation.tableID = 42
+		db.rels["t1"] = relation
+		eng.dbs["db1"] = db
+
+		metadataLocked := false
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, mode lock.LockMode) error {
+			require.Equal(t, "db1", dbName)
+			require.Equal(t, "t1", tableName)
+			require.Equal(t, lock.LockMode_Exclusive, mode)
+			metadataLocked = true
+			return nil
+		})
+		defer lockMoTbl.Reset()
+		stop := errors.New("stop after base-table lock")
+		baseLock := gostub.Stub(&lockTable, func(
+			_ context.Context,
+			_ engine.Engine,
+			_ *process.Process,
+			locked engine.Relation,
+			dbName string,
+			definitionChanged bool,
+		) error {
+			require.True(t, metadataLocked)
+			require.Same(t, relation, locked)
+			require.Equal(t, "db1", dbName)
+			require.True(t, definitionChanged)
+			return stop
+		})
+		defer baseLock.Reset()
+
+		err := newScope().CreateIndex(newCompile(t, eng))
+		require.ErrorIs(t, err, stop)
+	})
+}
+
+func TestAdvanceCreateIndexSnapshotDuringUpgrade(t *testing.T) {
+	const service = "create-index-peer-upgrade"
+	frontier := timestamp.Timestamp{PhysicalTime: 125, LogicalTime: 3}
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+
+	ctrl := gomock.NewController(t)
+	lockService := mock_lock.NewMockLockService(ctrl)
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil).Times(1)
+	txnOp.EXPECT().GetWorkspace().Return(workspace).Times(1)
+	txnOp.EXPECT().SnapshotTS().Return(frontier.Next()).Times(1)
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = lockService
+	proc.Base.TxnOperator = txnOp
+	calls := 0
+	barrier := &testCreateIndexLogtailBarrier{unsupported: true, acquire: func(context.Context) (timestamp.Timestamp, error) {
+		calls++
+		return frontier, nil
+	}}
+	c := &Compile{proc: proc, e: barrier}
+
+	// The old protocol and an unadvertised TN retain the legacy snapshot.
+	require.NoError(t, c.advanceIndexDDLSnapshot())
+	require.Zero(t, calls)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	require.NoError(t, c.advanceIndexDDLSnapshot())
+	require.Zero(t, calls)
+
+	// Once the peer advertises support, the next build uses its frontier.
+	barrier.unsupported = false
+	require.NoError(t, c.advanceIndexDDLSnapshot())
+	require.Equal(t, 1, calls)
+
+	// Cancellation must not be hidden by the legacy fast path.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("index build canceled")
+	cancel(cause)
+	proc.Ctx = ctx
+	require.ErrorIs(t, c.advanceIndexDDLSnapshot(), cause)
+}
+
+type testCreateIndexLogtailBarrier struct {
+	engine.Engine
+	acquire     func(context.Context) (timestamp.Timestamp, error)
+	unsupported bool
+	peerErr     error
+}
+
+func (e *testCreateIndexLogtailBarrier) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.acquire(ctx)
+}
+
+func (e *testCreateIndexLogtailBarrier) AcquirePeerLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, bool, error) {
+	if e.peerErr != nil {
+		return timestamp.Timestamp{}, false, e.peerErr
+	}
+	if e.unsupported {
+		return timestamp.Timestamp{}, false, nil
+	}
+	frontier, err := e.acquire(ctx)
+	return frontier, true, err
+}
+
+type testGenericIndexBarrier struct {
+	engine.Engine
+}
+
+func (*testGenericIndexBarrier) AcquireLogtailReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
+}
+
+func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	wantErr := errors.New("snapshot refresh failed")
+
+	newCompile := func(t *testing.T, eng engine.Engine) (*Compile, *mock_frontend.MockTxnOperator) {
+		t.Helper()
+		service := t.Name()
+		rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+		moruntime.SetupServiceBasedRuntime(service, rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+
+		ctrl := gomock.NewController(t)
+		lockService := mock_lock.NewMockLockService(ctrl)
+		lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+			Mode:      txn.TxnMode_Pessimistic,
+			Isolation: txn.TxnIsolation_RC,
+		}).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.LockService = lockService
+		proc.Base.TxnOperator = txnOp
+		return &Compile{proc: proc, e: eng}, txnOp
+	}
+	newBarrier := func(err error) engine.Engine {
+		return &testCreateIndexLogtailBarrier{acquire: func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, err
+		}}
+	}
+
+	t.Run("missing ordered barrier capability", func(t *testing.T) {
+		c, _ := newCompile(t, newStubEngine())
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "barrier is unavailable")
+	})
+
+	t.Run("generic barrier without peer capability", func(t *testing.T) {
+		c, _ := newCompile(t, &testGenericIndexBarrier{})
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "peer logtail read barrier is unavailable")
+	})
+
+	t.Run("no advertisement with negotiation error", func(t *testing.T) {
+		c, _ := newCompile(t, &testCreateIndexLogtailBarrier{peerErr: wantErr})
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
+	})
+
+	t.Run("ordered barrier failure", func(t *testing.T) {
+		c, _ := newCompile(t, newBarrier(wantErr))
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
+	})
+
+	t.Run("missing workspace", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		txnOp.EXPECT().GetWorkspace().Return(nil)
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "missing workspace")
+	})
+
+	t.Run("workspace advance failure", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
+		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(wantErr)
+		txnOp.EXPECT().GetWorkspace().Return(workspace)
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
+	})
+
+	t.Run("workspace remains at the frontier", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
+		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
+		txnOp.EXPECT().GetWorkspace().Return(workspace)
+		txnOp.EXPECT().SnapshotTS().Return(frontier)
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "did not advance past")
+	})
+}
+
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

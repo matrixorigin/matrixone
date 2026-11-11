@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -153,6 +154,7 @@ func (c *Compile) Compile(
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
+	triggerStatementPlanCompiledFault(c.proc.Ctx, queryPlan)
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -161,6 +163,28 @@ func (c *Compile) Compile(
 	}
 
 	return c.proc.GetQueryContextError()
+}
+
+const indexDDLPlanCompiledFault = "index-ddl-plan-compiled"
+
+// triggerStatementPlanCompiledFault exposes a deterministic boundary between
+// planning and pre-pipeline locking for cross-CN schema-change tests. Fault
+// injection is disabled in production, so ordinary compilation pays only the
+// enabled-state check.
+func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan) {
+	if !fault.Status() || queryPlan == nil {
+		return
+	}
+	if queryPlan.GetDdl().GetCreateIndex() != nil {
+		fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+		return
+	}
+	for _, action := range queryPlan.GetDdl().GetAlterTable().GetActions() {
+		if action.GetAddIndex() != nil {
+			fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+			return
+		}
+	}
 }
 
 // Run executes the pipeline and returns the result.

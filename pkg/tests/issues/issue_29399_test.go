@@ -704,7 +704,13 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			namesake := open(account+"#replacement#reader", cn1.GetServiceConfig().CN.Frontend.Port)
 			_, err = namesake.ExecContext(ctx, "drop table allowed.owned")
 			require.ErrorContains(t, err, "do not have privilege")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count))
 			execSQLRequire(t, ctx, admin, "drop user u")
+			// The retained session is on CN1; wait until it observes CN0's deletion.
+			syncAuthenticatedClusterCommit(t, ctx, c)
+			observer := open(account+"#admin", cn1.GetServiceConfig().CN.Frontend.Port)
+			require.NoError(t, observer.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_user where user_name = 'u'").Scan(&count))
+			require.Zero(t, count)
 			require.ErrorContains(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count), "do not have privilege")
 			execSQLRequire(t, ctx, admin, "update external_parent.t set id = 12")
 			execSQLRequire(t, ctx, admin, "restore database external_parent {snapshot='"+snapshot+"'}")

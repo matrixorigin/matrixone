@@ -1335,6 +1335,13 @@ type Engine interface {
 type LogtailReadBarrier interface {
 	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
 }
+
+// PeerLogtailReadBarrier obtains a barrier only when the connected TN
+// advertises support. False means the peer did not advertise the capability.
+type PeerLogtailReadBarrier interface {
+	AcquirePeerLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, supported bool, err error)
+}
+
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector
