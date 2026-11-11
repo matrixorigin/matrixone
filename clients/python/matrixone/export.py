@@ -134,7 +134,7 @@ def _build_csv_export_sql(
     query_sql = _query_to_sql(query)
 
     # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
+    sql_parts = [query_sql, "\nINTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
 
     # Add CSV options
     options = []
@@ -180,7 +180,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
+    return f"{query_sql}\nINTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:
