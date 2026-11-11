@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +65,7 @@ func TestM0StatementViewOwnsVisiblePrefix(t *testing.T) {
 	txn.deletedBlocks.byTable[42] = map[types.Blockid][]int64{block: {1}}
 	txn.deletedBlocks.byTable[43] = map[types.Blockid][]int64{block: {0}}
 	baseline := proc.Mp().CurrNB()
-	captured, err := txn.CaptureM0StatementReadView(t.Context(), 1)
+	captured, err := txn.CaptureM0StatementReadView(t.Context(), 1, proc)
 	require.NoError(t, err)
 	defer func() {
 		if captured != nil {
@@ -106,6 +107,67 @@ func TestM0StatementViewOwnsVisiblePrefix(t *testing.T) {
 	require.ErrorContains(t, v.acquire(txn, 1), "closed")
 }
 
+func TestM0StatementViewOutlivesAccountedWorkspace(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	statementProc := testutil.NewProcess(t)
+	t.Cleanup(statementProc.Free)
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	workspaceParent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(workspaceParent.Close)
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(workspaceParent))
+	parent, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	t.Cleanup(parent.Close)
+	require.NoError(t, statementProc.SetExecutionResourceBudgetForTesting(parent))
+	op, closeOp := client.NewTestTxnOperator(t.Context())
+	t.Cleanup(closeOp)
+	txn := &Transaction{proc: proc, op: op}
+	t.Cleanup(txn.closeWorkspaceAllocation)
+
+	rows := batch.New([]string{"a"})
+	rows.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	t.Cleanup(func() { rows.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendFixed(rows.Vecs[0], int32(42), false, proc.Mp()))
+	rows.SetRowCount(1)
+	workspace, err := txn.copyWorkspaceBatch(rows)
+	require.NoError(t, err)
+	workspaceLive := true
+	t.Cleanup(func() {
+		if workspaceLive {
+			workspace.Clean(proc.Mp())
+		}
+	})
+	require.Positive(t, budget.AggregateUsed(), "source must use the workspace allocation account")
+	require.Zero(t, parent.Used(), "workspace uses its own generation")
+	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: workspace}}
+
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 1, statementProc)
+	require.NoError(t, err)
+	viewLive := true
+	t.Cleanup(func() {
+		if viewLive {
+			view.Release()
+		}
+	})
+	require.Positive(t, parent.Used(), "view must use the statement budget")
+	require.True(t, view.(*m0StatementReadView).writes[0].bat.HasAllocationAccount())
+	workspace.Clean(proc.Mp())
+	workspaceLive = false
+	txn.writes = nil
+	txn.closeWorkspaceAllocation()
+	workspaceParent.Close()
+	require.False(t, parent.Closed())
+	parent.Close()
+	require.Positive(t, budget.AggregateUsed(), "live view must remain charged after workspace close")
+	require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](view.(*m0StatementReadView).writes[0].bat.Vecs[0]))
+	view.Release()
+	viewLive = false
+	require.Zero(t, parent.Used())
+	require.Zero(t, budget.AggregateUsed())
+}
+
 func TestM0StatementViewFailureAndBinding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -115,15 +177,17 @@ func TestM0StatementViewFailureAndBinding(t *testing.T) {
 	op.AddWorkspace(txn)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := txn.CaptureM0StatementReadView(ctx, 0)
+	_, err := txn.CaptureM0StatementReadView(ctx, 0, proc)
 	require.ErrorIs(t, err, context.Canceled)
-	_, err = txn.CaptureM0StatementReadView(t.Context(), 1)
+	_, err = txn.CaptureM0StatementReadView(t.Context(), 1, proc)
 	require.Error(t, err)
 	txn.beginCatalogMutation()
-	_, err = txn.CaptureM0StatementReadView(t.Context(), 0)
+	_, err = txn.CaptureM0StatementReadView(t.Context(), 0, proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 	txn.endCatalogMutation()
-	view, err := txn.CaptureM0StatementReadView(t.Context(), 0)
+	_, err = txn.CaptureM0StatementReadView(t.Context(), 0, nil)
+	require.ErrorContains(t, err, "nil process for execution resource budget")
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 0, proc)
 	require.NoError(t, err)
 	v := view.(*m0StatementReadView)
 	require.ErrorContains(t, v.acquire(&Transaction{op: op}, 0), "binding changed")
@@ -145,11 +209,34 @@ func TestM0StatementViewBudgetFailure(t *testing.T) {
 	// fail before publishing any state.
 	held, err := mp.Alloc(1024*1024-128, true)
 	require.NoError(t, err)
-	view, err := txn.CaptureM0StatementReadView(t.Context(), 0)
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 0, proc)
 	require.Error(t, err)
 	mp.Free(held)
 	require.Nil(t, view)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestM0StatementViewRejectsExecutionBudgetExhaustion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	parent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(parent.Close)
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(parent))
+	op, closeOp := client.NewTestTxnOperator(t.Context())
+	t.Cleanup(closeOp)
+	txn := &Transaction{proc: proc, op: op}
+
+	held, err := parent.ReserveTransientMemory(parent.Cap())
+	require.NoError(t, err)
+	t.Cleanup(func() { held.Release() })
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 0, proc)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, view)
+	require.Equal(t, parent.Cap(), budget.AggregateUsed())
+	held.Release()
+	require.Zero(t, budget.AggregateUsed())
 }
 
 func TestM0StatementViewBudgetChargesEntrySize(t *testing.T) {
@@ -161,7 +248,7 @@ func TestM0StatementViewBudgetChargesEntrySize(t *testing.T) {
 	baseline := proc.Mp().CurrNB()
 
 	captureBudget := func(offset int) int {
-		view, err := txn.CaptureM0StatementReadView(t.Context(), offset)
+		view, err := txn.CaptureM0StatementReadView(t.Context(), offset, proc)
 		require.NoError(t, err)
 		defer view.Release()
 		return len(view.(*m0StatementReadView).reservation)
@@ -179,6 +266,11 @@ func TestM0StatementViewBudgetChargesEntrySize(t *testing.T) {
 func TestM0StatementViewPartialFailureCleanup(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	parent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer parent.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(parent))
 	op, closeOp := client.NewTestTxnOperator(t.Context())
 	defer closeOp()
 	txn := &Transaction{proc: proc, op: op}
@@ -194,10 +286,11 @@ func TestM0StatementViewPartialFailureCleanup(t *testing.T) {
 	defer bad.Clean(proc.Mp())
 	txn.writes = []Entry{{typ: INSERT, bat: first}, {typ: DELETE, fileName: "bad", bat: bad}}
 	before := proc.Mp().CurrNB()
-	view, err := txn.CaptureM0StatementReadView(t.Context(), 2)
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 2, proc)
 	require.ErrorContains(t, err, "invalid flushed tombstone stats")
 	require.Nil(t, view)
 	require.Equal(t, before, proc.Mp().CurrNB(), "both already-cloned batches and the metadata reservation must be refunded")
+	require.Zero(t, budget.AggregateUsed(), "failed capture must release its statement account")
 }
 
 func TestM0StatementViewCollectorsUseCapturedMember(t *testing.T) {
@@ -219,7 +312,7 @@ func TestM0StatementViewCollectorsUseCapturedMember(t *testing.T) {
 	meta.SetRowCount(1)
 	defer meta.Clean(proc.Mp())
 	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, fileName: "data", bat: meta}}
-	view, err := txn.CaptureM0StatementReadView(t.Context(), 1)
+	view, err := txn.CaptureM0StatementReadView(t.Context(), 1, proc)
 	require.NoError(t, err)
 	defer view.Release()
 	table := &txnTable{tableId: 42, db: &txnDatabase{databaseId: 7, op: op}}
@@ -250,12 +343,12 @@ func TestM0StatementViewSnapshotRefreshRequiresRecapture(t *testing.T) {
 	defer closeOp()
 	bound := &statementSnapshotOp{TxnOperator: op, snapshot: timestamp.Timestamp{PhysicalTime: 1}}
 	txn := &Transaction{proc: proc, op: bound}
-	old, err := txn.CaptureM0StatementReadView(t.Context(), 0)
+	old, err := txn.CaptureM0StatementReadView(t.Context(), 0, proc)
 	require.NoError(t, err)
 	defer old.Release()
 	bound.snapshot = timestamp.Timestamp{PhysicalTime: 2}
 	require.True(t, moerr.IsMoErrCode(old.(*m0StatementReadView).acquire(txn, 0), moerr.ErrTxnNeedRetry))
-	fresh, err := txn.CaptureM0StatementReadView(t.Context(), 0)
+	fresh, err := txn.CaptureM0StatementReadView(t.Context(), 0, proc)
 	require.NoError(t, err)
 	defer fresh.Release()
 	require.NoError(t, fresh.(*m0StatementReadView).acquire(txn, 0))

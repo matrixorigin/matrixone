@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
@@ -89,10 +90,10 @@ func captureM0StatementView(c *Compile, p *plan.Plan) (m0read.StatementReadView,
 		return nil, moerr.NewInternalErrorNoCtx("M0: statement transaction unavailable")
 	}
 	owner, ok := op.GetWorkspace().(interface {
-		CaptureM0StatementReadView(context.Context, int) (m0read.StatementReadView, error)
+		CaptureM0StatementReadView(context.Context, int, *process.Process) (m0read.StatementReadView, error)
 	})
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("M0: statement workspace owner unavailable")
 	}
-	return owner.CaptureM0StatementReadView(c.proc.Ctx, c.TxnOffset)
+	return owner.CaptureM0StatementReadView(c.proc.Ctx, c.TxnOffset, c.proc)
 }

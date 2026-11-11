@@ -192,7 +192,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 		require.NoError(t, writeObjectToFS(ctx, failFS, names[i]))
 	}
 
-	baseline := mp.OnHeapCurrNB()
+	baseline := mp.CurrNB()
 	require.False(t, writer.removed, "the mirror workspace is live before its settlement")
 
 	// Write 1 — the mirror is the ONLY workspace that claims this
@@ -215,7 +215,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 		sidClaimed, colexec.TxnWorkspaceUnCommitType)
 
 	require.False(t, writer.removed)
-	require.Greater(t, mp.OnHeapCurrNB(), baseline,
+	require.Greater(t, mp.CurrNB(), baseline,
 		"the downstream source.Write's staged copies are live mirror-workspace memory before the settlement")
 	require.Equal(t, int32(colexec.TxnWorkspaceUnCommitType),
 		server.GetCnSegmentType(sidSole, tbl.tableId, txnID),
@@ -235,8 +235,8 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 	// on the filesystem for the recording side's records.
 	require.True(t, writer.removed,
 		"a successful transfer terminates the mirror workspace — no other terminal ever reaches it")
-	require.Equal(t, baseline, mp.OnHeapCurrNB(),
-		"the transferred settlement released every staged copy — the successful-transfer mpool baseline (on-heap) is restored")
+	require.Equal(t, baseline, mp.CurrNB(),
+		"the transferred settlement released every staged copy — the successful-transfer mpool baseline (all backing) is restored")
 	require.Zero(t, writer.workspaceSize,
 		"the workspace accounting is torn down with the recorded-name settlement")
 	require.Empty(t, writer.pendingObjectCleanupNames(),

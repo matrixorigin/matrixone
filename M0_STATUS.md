@@ -1,5 +1,22 @@
 # M0 restricted metadata-only ADD prototype
 
+## Transaction workspace integration, 2026-11-11
+
+This integration merges main `56ad29d8a5ebcd7359febb3e5c5575b2fce8eee6`
+into candidate `a0cc35177a38bf59743c35de1f8f6616b9627718`. The conflict in
+`txn_issue25590_test.go` retains both M0 worker-panic cleanup and main's
+workspace memory-admission assertions. The captured M0 statement view now
+charges its independently owned copy to the statement's execution budget and
+releases that charge with its last reference, even after the workspace closes.
+
+On Go 1.27.1/macOS, the affected disttae selection passed 11 roots in each of
+default and `mo_m0`; six `mo_m0` roots also passed with race detection. The
+compile entry selection passed in both modes, and two `mo_m0` SQL integration
+roots passed. Incremental golangci-lint and the pinned molint passed for the
+affected packages in both modes. These local checks do not qualify historical
+upgrade/restore, Linux or QA. The parent candidate's CI remains bound to its
+own SHA; the integrated head requires its own CI and maintainer design review.
+
 ## Main integration, 2026-11-11
 
 This revision merges main `1a12e18e68714c5a583525de62b6b78c9dee63b9`

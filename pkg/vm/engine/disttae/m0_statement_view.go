@@ -25,16 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const m0StatementViewMetadataSite mpool.AllocationSite = 5
 
 // m0StatementReadView is captured by the transaction owner before any pipeline
 // runs. A write batch, selection, or raw-delete map must never be borrowed from
 // the workspace: UPDATE may mutate it while another scan is still consuming it.
-// The mpool reservation bounds the retained Go metadata; vector payloads are
-// independently charged by CloneWithoutAllocationAccount to the same pool.
+// Its allocation account belongs to the statement, not the source workspace,
+// so the view remains charged while it outlives the workspace batches.
 type m0StatementReadView struct {
 	refs        atomic.Int64
 	owner       *Transaction
@@ -45,6 +50,8 @@ type m0StatementReadView struct {
 	selections  map[*batch.Batch][]int64
 	mp          *mpool.MPool
 	reservation []byte
+	registry    *mpool.AllocationAccountRegistry
+	account     *mpool.AllocationAccount
 }
 
 func (v *m0StatementReadView) Release() {
@@ -64,6 +71,13 @@ func (v *m0StatementReadView) Release() {
 	v.selections = nil
 	v.mp.Free(v.reservation)
 	v.reservation = nil
+	if v.account != nil {
+		if _, _, err := v.registry.CompleteTerminal(v.account); err != nil {
+			logutil.Errorf("M0 statement view allocation terminal: %v", err)
+		}
+		v.account = nil
+		v.registry = nil
+	}
 }
 
 func (v *m0StatementReadView) acquire(txn *Transaction, offset int) error {
@@ -87,9 +101,11 @@ func (v *m0StatementReadView) acquire(txn *Transaction, offset int) error {
 }
 
 // CaptureM0StatementReadView is an internal optional workspace capability. The
-// ordinary compile never calls it. Capture follows the workspace->deletedBlocks
-// lock order used by writers; it performs no I/O, logtail wait, or RPC.
-func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset int) (m0read.StatementReadView, error) {
+// ordinary compile never calls it. The statement process supplies the budget;
+// the workspace process can have a different lifetime and query generation.
+// Capture follows the workspace->deletedBlocks lock order used by writers; it
+// performs no I/O, logtail wait, or RPC.
+func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset int, statementProc *process.Process) (m0read.StatementReadView, error) {
 	txn.Lock()
 	defer txn.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -140,17 +156,34 @@ func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset i
 	}
 	v := &m0StatementReadView{owner: txn, snapshot: txn.op.SnapshotTS(), offset: offset, mp: txn.proc.Mp()}
 	v.refs.Store(1)
-	reservation, err := v.mp.Alloc(int(budget), true)
-	if err != nil {
-		return nil, err
-	}
-	v.reservation = reservation
 	ok := false
 	defer func() {
 		if !ok {
 			v.Release()
 		}
 	}()
+	// A view can outlive the workspace account. Charge its independent copy
+	// to the statement generation and retain the account until its last user.
+	generation, err := statementProc.GetExecutionResourceBudget()
+	if err != nil {
+		return nil, err
+	}
+	v.registry, err = generation.AllocationAccountRegistry()
+	if err != nil {
+		return nil, err
+	}
+	v.account, err = v.registry.OpenWithController(generation.Cap(), generation)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := vector.NewAllocationAccountSelection(v.account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	if err != nil {
+		return nil, err
+	}
+	v.reservation, err = v.mp.AllocAccounted(int(budget), v.account, mpool.AllocationOwnerTxnWorkspace, m0StatementViewMetadataSite)
+	if err != nil {
+		return nil, err
+	}
 	v.writes = make([]Entry, 0, offset)
 	v.selections = make(map[*batch.Batch][]int64)
 	for _, e := range txn.writes[:offset] {
@@ -164,8 +197,13 @@ func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset i
 		entry.pkRange.min = slices.Clone(e.pkRange.min)
 		entry.pkRange.max = slices.Clone(e.pkRange.max)
 		if e.bat != nil {
-			entry.bat, err = e.bat.CloneWithoutAllocationAccount(v.mp, true)
-			if err != nil {
+			attrs, attrTypes := e.bat.GetSchema()
+			entry.bat = batch.NewWithSchema(true, attrs, attrTypes)
+			entry.bat.Recursive = e.bat.Recursive
+			if err = entry.bat.SetAllocationAccount(selection); err != nil {
+				return nil, err
+			}
+			if err = e.bat.CloneTo(entry.bat, v.mp); err != nil {
 				return nil, err
 			}
 			entry.bat.Attrs = slices.Clone(e.bat.Attrs)
