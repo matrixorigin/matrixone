@@ -398,3 +398,22 @@ then a local-only clean build and the same Q1-Q22 six-suite protocol against the
 frozen matching main. No repeated full pre-push gate or remote push while this
 local performance revision is unaccepted. Any remaining regression gets a
 concrete diagnosis/proposal before further product changes.
+
+
+## Approved selected H8 typed-store correction
+
+The requester reviewed the detailed H8 design and authorized implementation.
+Eligible fixed-width 1/2/4/8-byte nonconstant logical NULL-free dictionary keys
+reuse the existing fillKeys native typed-store primitive and batched offset
+update. Resolve physical backing and logical selection outside the row loop;
+remove the selected generic per-value slice-copy helper. Keep canonical float,
+nullable, constant-backed and varlen fallback behavior, owned key scratch and
+existing flat loops/single-full-width bulk copy. No new unsafe import/function,
+allocation, lease, materialization, wire or key-layout change is introduced.
+
+Validate existing key equivalence/NULL/float/constant controls plus two-byte
+composite keys, nonzero offsets, repeated/reordered selections and NULL-domain
+prefixes. Inspect emitted selected loops for per-value memmove removal. Full
+local Q1-Q22 timing and per-query resource acceptance remain mandatory; do not
+infer no allocation/copy regression from suite totals or absent instrumentation.
+Keep the entire correction local and do not push until all acceptance closes.

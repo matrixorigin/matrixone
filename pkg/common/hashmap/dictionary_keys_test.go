@@ -194,3 +194,41 @@ func TestDictionaryConstantHashKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 1, 1}, found)
 }
+
+func TestDictionaryH8CompositeOffsets(t *testing.T) {
+	for _, withDomain := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "null-domain"}[withDomain], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			small := vector.NewVec(types.T_int16.ToType())
+			wide := vector.NewVec(types.T_int32.ToType())
+			t.Cleanup(func() { small.Free(mp); wide.Free(mp) })
+			require.NoError(t, vector.AppendFixedList(small, []int16{-2, 4, 7}, nil, mp))
+			require.NoError(t, vector.AppendFixedList(wide, []int32{100, 200, 300}, nil, mp))
+			table, err := NewIntHashMap(withDomain, mp)
+			require.NoError(t, err)
+			t.Cleanup(table.Free)
+			iterator := table.NewIterator()
+			_, _, err = iterator.Insert(0, 3, []*vector.Vector{small, wide})
+			require.NoError(t, err)
+			rows, err := vector.NewRowSelection([]int64{1, 2, 0, 2}, 3, mp, nil)
+			require.NoError(t, err)
+			t.Cleanup(rows.Release)
+			selected := make([]*vector.Vector, 2)
+			for i, source := range []*vector.Vector{small, wide} {
+				base, err := vector.FreezeVector(source, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				selected[i], err = vector.NewDictionaryVector(base, rows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { selected[i].Free(mp) })
+			}
+			found, _, err := iterator.Find(1, 3, selected)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{3, 1, 3}, found)
+			found, _, err = iterator.Find(0, 4, selected)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{2, 3, 1, 3}, found)
+		})
+	}
+}
