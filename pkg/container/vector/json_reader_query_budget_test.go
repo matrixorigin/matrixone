@@ -222,6 +222,10 @@ func TestJSONReaderQueryUsesAllocationAccount(t *testing.T) {
 	result.Close()
 	require.Equal(t, baseline, state.account.Snapshot().Used)
 
+	output, err := NewFunctionResultWrapperWithAllocation(types.T_varchar.ToType(), mp, state.selection)
+	require.NoError(t, err)
+	defer output.Free()
+	require.NoError(t, output.PreExtendAndReset(1))
 	snapshot := state.account.Snapshot()
 	metadata := JSONReaderMetadataCapacity(reflect.TypeFor[jsonQueryResult]().Size())
 	require.Greater(t, snapshot.Limit-snapshot.Used, metadata)
@@ -236,6 +240,18 @@ func TestJSONReaderQueryUsesAllocationAccount(t *testing.T) {
 		result.Close()
 	}
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	direct := reader.(JSONDirectTextReader)
+	selected, appended, err := direct.QueryTextTo(0, []byte("$[0]"), false, -1, MustFunctionResult[types.Varlena](output))
+	selected.Close()
+	require.True(t, appended)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity, "direct output must use the statement account")
+	filler.Release()
+	require.NoError(t, output.PreExtendAndReset(1))
+	selected, appended, err = direct.QueryTextTo(0, []byte("$[0]"), false, -1, MustFunctionResult[types.Varlena](output))
+	selected.Close()
+	require.NoError(t, err)
+	require.True(t, appended)
+	require.Len(t, output.GetResultVector().GetBytesAt(0), 8192)
 }
 
 func TestJSONReaderIndependentBudgetedReaders(t *testing.T) {
