@@ -58,6 +58,8 @@ type JSONReader interface {
 
 // JSONDirectTextReader copies eligible values directly into an accounted
 // function result. Unsupported values fall back to the owned selection.
+// The limit is a byte eligibility bound (negative means unlimited), not a
+// character-width check; callers must handle the fallback's width semantics.
 // No source bytes escape the reader, and append failures are returned.
 type JSONDirectTextReader interface {
 	QueryTextTo(int, []byte, bool, int, *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error)
