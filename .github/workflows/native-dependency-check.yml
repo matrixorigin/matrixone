@@ -7,45 +7,13 @@ permissions:
   contents: read
 
 jobs:
-  gossip-test-diagnostic:
+  macos-native-flags-diagnostic:
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Build native CPU dependencies
+      - name: Check system tools and native Make target contract
         run: |
-          export GOEXPERIMENT=simd GOMAXPROCS=2
-          go version
-          make cgo NATIVE_BUILD_JOBS=2
-      - name: Run original race test
-        shell: bash
-        run: |
-          export GOEXPERIMENT=simd GOMAXPROCS=2
-          set +e
-          set -o pipefail
-          .agents/skills/mo-dev/scripts/mo-cgo-test -vet=off -short -v -race -tags matrixone_test -p=1 -count=1 -timeout=5m -run '^TestGossipFixtureStartupRealBindCollision$' ./pkg/logservice 2>&1 | tee "$RUNNER_TEMP/gossip-baseline.log"
-          result=${PIPESTATUS[0]}
-          echo "BASELINE_EXIT=$result"
-          if [[ "$result" -ne 0 && "$result" -ne 1 ]]; then exit "$result"; fi
-      - name: Run candidate race test
-        shell: bash
-        run: |
-          set -euo pipefail
-          export GOEXPERIMENT=simd GOMAXPROCS=2
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          source = Path.cwd() / 'pkg/logservice/gossip_fixture_test.go'
-          target = Path(os.environ['RUNNER_TEMP']) / 'gossip-candidate.go'
-          overlay = Path(os.environ['RUNNER_TEMP']) / 'gossip-overlay.json'
-          text = source.read_text()
-          old = 'occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())'
-          assert text.count(old) == 1
-          target.write_text(text.replace(old, 'occupied, err = net.Listen("tcp", cfg.GossipListenAddr())'))
-          overlay.write_text(json.dumps({'Replace': {str(source): str(target)}}))
-          PY
-          .agents/skills/mo-dev/scripts/mo-cgo-test -vet=off -short -v -race -tags matrixone_test -p=1 -count=1 -timeout=5m -overlay="$RUNNER_TEMP/gossip-overlay.json" -run '^TestGossipFixtureStartupRealBindCollision$' ./pkg/logservice
+          node --version
+          /usr/bin/make --version
+          PATH="/usr/bin:/bin:$PATH" node --test .github/ci/native-provenance-makeflags.test.cjs
