@@ -74,7 +74,11 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 	require.True(t, ok)
 	second, ok := peer.RawService().(testutil.TaskServiceGetter).GetTaskService()
 	require.True(t, ok)
-	var template taskservice.SQLTask
+	execSQLRequire(t, ctx, db, "create task alter_seed schedule '0 0 0 1 1 *' timezone 'UTC' as begin select 1; end")
+	seed, err := first.GetStorage().QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, 0), taskservice.WithTaskName(taskservice.EQ, "alter_seed"))
+	require.NoError(t, err)
+	require.Len(t, seed, 1)
+	template := seed[0]
 	for _, tc := range []struct {
 		name   string
 		action taskservice.SQLTaskAlterAction
@@ -88,7 +92,6 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, tasks, 1)
 			observed := tasks[0]
-			template = observed
 			trigger := observed
 			trigger.TriggerCount++
 			spec := &pbtask.SQLTaskContext{TaskId: observed.TaskID, TaskName: observed.TaskName, AccountId: observed.AccountID, TriggerType: taskservice.SQLTaskTriggerScheduled, TriggerCount: trigger.TriggerCount, DatabaseName: observed.DatabaseName, SQLBody: observed.SQLBody}
@@ -217,9 +220,6 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 			if outcome.err == nil {
 				require.Equal(t, 1, outcome.n)
 			}
-			current, err := first.GetStorage().QuerySQLTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, observed.TaskID))
-			require.NoError(t, err)
-			require.Len(t, current, 1)
 			var count int
 			require.NoError(t, taskDB.QueryRowContext(ctx, "select count(*) from mo_task.sys_async_task where task_metadata_id=?", firingID).Scan(&count))
 			if tc.commit {
@@ -227,13 +227,21 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 			} else {
 				require.Zero(t, count)
 			}
+			if tc.cancel {
+				// The server may still commit after the client returns. The
+				// writer rollback above is known, but ALTER's outcome is not.
+				return
+			}
+			current, err := first.GetStorage().QuerySQLTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, observed.TaskID))
+			require.NoError(t, err)
+			require.Len(t, current, 1)
 			if outcome.err == nil {
 				require.False(t, current[0].Enabled)
 				require.Equal(t, current[0].TriggerCount, current[0].ScheduleGeneration)
 				if tc.commit {
 					require.Greater(t, current[0].TriggerCount, observed.TriggerCount+1)
 				}
-			} else if !tc.cancel {
+			} else {
 				var sqlErr *mysql.MySQLError
 				require.ErrorAs(t, outcome.err, &sqlErr)
 				require.Contains(t, sqlErr.Message, "conflict")
@@ -242,9 +250,6 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 				} else {
 					require.Equal(t, observed.TriggerCount, current[0].TriggerCount)
 				}
-			} else {
-				require.Equal(t, observed.TriggerCount, current[0].TriggerCount)
-				require.True(t, current[0].Enabled)
 			}
 		})
 	}

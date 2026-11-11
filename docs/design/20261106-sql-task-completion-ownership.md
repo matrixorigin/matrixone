@@ -348,6 +348,13 @@ run history, statement accounting, and ordinary client SQL logging remain intact
 
 ## Operations and compatibility
 
+If an `ALTER TASK` client disconnects or is canceled after sending the
+statement, the server may still commit it. The client error alone does not
+establish rollback, and a `SHOW TASKS` read does not prove the earlier request
+has finished. Reconcile the request outcome before deciding whether to retry;
+a repeated suspend or schedule change can advance the generation again and
+invalidate additional unclaimed firings.
+
 `ALTER TASK <name> RESET RUNS <run_id> FORCE` uses the existing task-admin
 privilege and affects only the specified tenant/name/run, even when the original
 definition was dropped. Before using it, isolate the old executor and
