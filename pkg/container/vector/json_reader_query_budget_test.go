@@ -256,12 +256,13 @@ func TestJSONReaderIndependentBudgetedReaders(t *testing.T) {
 	builder, err := NewJSONReaderBuilder(mp, nil, admission)
 	require.NoError(t, err)
 	defer builder.Close()
-	require.NoError(t, builder.Append(jsonAdmissionValue(t, `["first","second"]`), false))
+	require.NoError(t, builder.Append(jsonAdmissionValue(t, `["first","second",123]`), false))
 	reader, err := builder.Finish()
 	require.NoError(t, err)
 	defer reader.Close()
 	path := jsonReaderPath(t, "$[*]")
 	single := *jsonReaderPath(t, "$[0]")
+	number := *jsonReaderPath(t, "$[2]")
 	views := make([]JSONReader, 2)
 	for i := range views {
 		views[i], err = reader.Window(0, 1)
@@ -298,6 +299,21 @@ func TestJSONReaderIndependentBudgetedReaders(t *testing.T) {
 				selectErr = errors.New("unexpected selected text")
 			}
 			selected.Close()
+			if selectErr == nil {
+				localMP := mpool.MustNewZero()
+				output := NewFunctionResultWrapper(types.T_varchar.ToType(), localMP)
+				selectErr = output.PreExtendAndReset(1)
+				if selectErr == nil {
+					var appended bool
+					selected, appended, selectErr = view.(JSONDirectTextReader).QueryTextAtPathTo(0, number, false, 512, MustFunctionResult[types.Varlena](output))
+					selected.Close()
+					if selectErr == nil && (!appended || string(output.GetResultVector().GetBytesAt(0)) != "123") {
+						selectErr = errors.New("unexpected direct text")
+					}
+				}
+				output.Free()
+				mpool.DeleteMPool(localMP)
+			}
 			errs <- selectErr
 		}(view)
 	}
