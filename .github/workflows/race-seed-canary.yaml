@@ -49,7 +49,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libjemalloc-dev
+          sudo apt-get install -y build-essential pkg-config
       - uses: matrixorigin/CI/actions/setup-env@main
         with:
           setup-java: true
@@ -58,6 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           make config
+          make -j2 cgo
           go test -race -short -timeout 15m ./pkg/container/types
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
