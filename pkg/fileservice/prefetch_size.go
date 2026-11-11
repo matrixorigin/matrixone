@@ -15,12 +15,13 @@
 package fileservice
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var errObjectSizeUnknown = errors.New("object size unknown")
+var errObjectSizeUnknown = moerr.NewInternalErrorNoCtx("object size unknown")
 
 // prefetchedObjectsMax is the most object sizes kept; past it they are dropped.
 const prefetchedObjectsMax = 1 << 16
