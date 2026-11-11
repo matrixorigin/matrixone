@@ -35,6 +35,7 @@ const (
 	AllocationOwnerExternal
 	AllocationOwnerDependent
 	AllocationOwnerWindow
+	AllocationOwnerTxnWorkspace
 	AllocationOwnerSelection
 )
 
@@ -52,6 +53,8 @@ const (
 // non-zero IDs remain renderable during rolling upgrades.
 func (o AllocationOwner) String() string {
 	switch o {
+	case AllocationOwnerTxnWorkspace:
+		return "txn_workspace"
 	case AllocationOwnerHashBuild:
 		return "hash_build"
 	case AllocationOwnerIndexBuild:

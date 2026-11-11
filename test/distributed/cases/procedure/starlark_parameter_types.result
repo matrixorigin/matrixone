@@ -352,7 +352,7 @@ matches
 create or replace procedure typed_value(out v vecf32(2)) language 'starlark' $$out_v = "bad"$$;
 set @v=99;
 call typed_value(@v);
-internal error: malformed vector input: bad
+invalid input: malformed vector input: bad
 select @v=99 as matches;
 matches
 1
@@ -880,7 +880,7 @@ matches
 create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "bad"$$;
 set @v=99;
 call typed_value(@v);
-internal error: malformed vector input: bad
+invalid input: malformed vector input: bad
 select @v=99 as matches;
 matches
 1

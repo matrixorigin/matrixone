@@ -37,7 +37,8 @@ func TestAllocationOwnerCatalog(t *testing.T) {
 		{AllocationOwnerExternal, 13, "external"},
 		{AllocationOwnerDependent, 14, "dependent"},
 		{AllocationOwnerWindow, 15, "window"},
-		{AllocationOwnerSelection, 16, "selection"},
+		{AllocationOwnerTxnWorkspace, 16, "txn_workspace"},
+		{AllocationOwnerSelection, 17, "selection"},
 	}
 	seen := make(map[AllocationOwner]struct{}, len(owners))
 	seenNames := make(map[string]struct{}, len(owners))
