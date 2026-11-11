@@ -60,6 +60,9 @@ disable_fault_injection()
 1
 create table copy_tx(v tinyint, payload mediumtext);
 create table rowid_tx(v tinyint);
+select length(repeat('x',32768)) as payload_bytes;
+payload_bytes
+32768
 select enable_fault_injection();
 enable_fault_injection()
 1
@@ -68,7 +71,7 @@ add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 65536, bvt_workspac
 1
 begin;
 insert into copy_tx values (1,'prior');
-insert into copy_tx values (9,repeat('x',131072));
+insert into copy_tx values (9,repeat('x',32768)),(9,repeat('y',32768));
 allocation account capacity exceeded
 select count(*) as n, sum(v) as total from copy_tx;
 n	total

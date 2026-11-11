@@ -34,12 +34,13 @@ select disable_fault_injection();
 -- Earlier uncommitted rows and the account must survive statement rollback.
 create table copy_tx(v tinyint, payload mediumtext);
 create table rowid_tx(v tinyint);
+select length(repeat('x',32768)) as payload_bytes;
 select enable_fault_injection();
 select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',65536,'bvt_workspace_memory');
 begin;
 insert into copy_tx values (1,'prior');
 -- @regex('.*allocation account capacity exceeded.*', true)
-insert into copy_tx values (9,repeat('x',131072));
+insert into copy_tx values (9,repeat('x',32768)),(9,repeat('y',32768));
 select count(*) as n, sum(v) as total from copy_tx;
 -- @session:id=1
 select count(*) as committed_rows from bvt_workspace_memory.copy_tx;
@@ -67,7 +68,8 @@ select count(*) as committed_rows from bvt_workspace_memory.rowid_tx;
 -- @session
 select remove_fault_point('fj/cn/workspace_allocation_limit');
 select disable_fault_injection();
--- Commit merges thirty small batches without copying obsolete rowids.
+-- Bounded multi-statement commit: thirty separate 64-row INSERTs share one account.
+-- Statement boundaries prevent cross-statement merging; same-region UTs cover rowid merge.
 create table merge_tx(v bigint primary key);
 select enable_fault_injection();
 select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',200000,'bvt_workspace_memory');

@@ -89,3 +89,11 @@ normal Sinker/colexec/DML consumer UT, incremental vet/lint and diff checks pass
 The first SQL harness attempt failed before case execution due to passing a file
 where the tester requires a directory; this is not a BVT pass. Linux QA and 5%
 performance remain separate unfulfilled gates until recorded runtime evidence.
+
+The corrected public SQL BVT passed all 92 statements, including six expected
+capacity errors and four cross-session visibility checks. On 4.2, REPEAT returns
+NULL above 65535 bytes, so the copy-refusal fixture uses two distinct 32768-byte
+values and asserts their length instead of depending on main string semantics.
+Cross-statement merge is conservatively restricted by statement region; the
+30-statement SQL case verifies bounded commit, while same-region UT verifies
+rowid merge ownership and refusal. Its transaction cost remains a 5% QA gate.
