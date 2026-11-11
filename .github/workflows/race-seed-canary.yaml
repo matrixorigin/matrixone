@@ -23,6 +23,13 @@ permissions:
   contents: read
 
 jobs:
+  cs-coverage-canary:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@484fe737aeaa2d4b46f5da0da1e2533be2fc1c66
+    with:
+      canary_pr_32523: true
+      runner_label: cs-mty-large-7c14g
+    secrets: inherit
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
