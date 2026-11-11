@@ -97,3 +97,6 @@ values and asserts their length instead of depending on main string semantics.
 Cross-statement merge is conservatively restricted by statement region; the
 30-statement SQL case verifies bounded commit, while same-region UT verifies
 rowid merge ownership and refusal. Its transaction cost remains a 5% QA gate.
+
+Existing cn_spill_byte_bound, workspace_filter and update_workspace SQL BVT also
+passed with nonempty per-case terminal reports and no failures/skips/abnormalities.
