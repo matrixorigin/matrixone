@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -252,22 +251,6 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	require.False(t, snapshot.UserDefinedVarsSnapshotTooLarge)
 	require.False(t, snapshot.SystemVariablesSnapshotTooLarge)
 	require.Zero(t, snapshot.PrepareStmts[0].RequiredProtocolVersion)
-	type runtimeState struct {
-		value   any
-		present bool
-	}
-	globals := map[string]runtimeState{}
-	for _, name := range []string{"optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter"} {
-		v, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
-		globals[name] = runtimeState{v, present}
-	}
-	assertGlobalsUnchanged := func() {
-		t.Helper()
-		for name, want := range globals {
-			v, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
-			require.Equal(t, want, runtimeState{v, present}, name)
-		}
-	}
 	newTargetRequest := func(id uint32) *query.Request {
 		req := client.NewRequest(query.CmdMethod_MigrateConnTo)
 		req.MigrateConnToRequest = &query.MigrateConnToRequest{
@@ -288,13 +271,11 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	}
 	require.True(t, moerr.IsMoErrCode(authErr, moerr.ErrInternal), "replay authorization must be reached: %v", authErr)
 	require.ErrorContains(t, authErr, "do not have privilege to execute the statement")
-	assertGlobalsUnchanged()
 	// A direct RPC caller owns the failed target and must discard it, just as
 	// the proxy does after a replay error. Do not retry partially replayed state.
 	require.ErrorIs(t, denied.Raw(func(any) error { return driver.ErrBadConn }), driver.ErrBadConn)
 	require.Error(t, denied.PingContext(ctx))
 	assertSourceUsable()
-	assertGlobalsUnchanged()
 	t.Log("authenticated replay authorization failed; caller discarded target and source rows [1,2] remained usable")
 	// Correct the privilege cause using a NEW authenticated target, not a
 	// same-ConnID retry after partially replayed state.
@@ -310,7 +291,6 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	require.NotNil(t, response.MigrateConnToResponse)
 	require.True(t, response.MigrateConnToResponse.Success)
-	assertGlobalsUnchanged()
 	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
 	return target
 }

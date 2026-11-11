@@ -78,7 +78,7 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		// Exercise the added function BVT's generated value and index contract
 		// through the same live SQL frontend, including every mutation form.
 		// The embedded cluster becomes query-ready before the durable catalog
-		// barrier finishes. Observe the existing UINT64 result admission; do not
+		// barrier finishes. Observe the existing JSON-to-text admission; do not
 		// set a runtime version or floor to manufacture authoring permission.
 		require.Eventually(t, func() bool {
 			rt := moruntime.ServiceRuntime(cn.ServiceID())
@@ -87,7 +87,7 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			}
 			value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 			floor, valid := value.(int64)
-			return ok && valid && floor >= defines.MORPCVersion80
+			return ok && valid && floor >= defines.MORPCVersion129
 		}, 90*time.Second, 100*time.Millisecond, "existing result-type authoring admission did not complete")
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)
@@ -118,6 +118,21 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		exec(`insert ignore into generated_crc(id,j) values(3,'{"t1":"a"}')`)
 		var count int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from generated_crc").Scan(&count))
+		require.Equal(t, 2, count)
+
+		// Exercise a real SQL DEFAULT and an ordinary ON UPDATE through writes
+		// and a reconstructed table. CRC32 itself is not valid ON UPDATE syntax.
+		exec(`create table crc32_default(id int primary key,note int,c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))),touched timestamp default '2000-01-01 00:00:00' on update current_timestamp)`)
+		exec("insert into crc32_default(id,note) values(1,0)")
+		exec("update crc32_default set note=1 where id=1")
+		var defaultCRC uint64
+		var updated int
+		require.NoError(t, conn.QueryRowContext(ctx, "select c,touched>'2000-01-01 00:00:00' from crc32_default where id=1").Scan(&defaultCRC, &updated))
+		require.Equal(t, uint64(4012824821), defaultCRC)
+		require.Equal(t, 1, updated)
+		exec("alter table crc32_default add column other int,algorithm=copy")
+		exec("insert into crc32_default(id,note) values(2,0)")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from crc32_default where c=4012824821").Scan(&count))
 		require.Equal(t, 2, count)
 
 		// Real SQL/binary PREPARE -> CN query RPC -> frontend lifecycle entry.
