@@ -347,6 +347,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 			},
 		})
 
+		// The join reads only the candidate rows of the base table.
+		scanNode.NarrowScan = true
 		joinNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{scanNode.NodeId, candidateNodeID},

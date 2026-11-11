@@ -65,7 +65,7 @@ For each object in its prefetch window, a scan passes:
 - the object and its size, from the catalog;
 - when the scan expects to reach it, from the scan's position and pace;
 - the share of the object's blocks the scan reads;
-- for the IVF-Flat row fetch, the ranges of the columns it reads;
+- for an index row fetch, the ranges of the columns it reads;
 - a token for the scan, which ends when the scan closes.
 
 The pace is measured. A scan uses its own pace once it has read enough blocks over
@@ -130,13 +130,24 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
   are running and waits for them, bounded by the caller's context. Closing the disk
   cache also cancels running prefetch downloads.
 
-### The IVF-Flat row fetch prefetches only its columns (decision)
+### An index row fetch prefetches only its columns (decision)
 
-The base-table scan of an IVF-Flat join back from candidates to rows reads a few rows of
-each object, and only the primary key and the projected or filter columns, never the
-vector column, which holds nearly all of a base object's bytes. It never downloads a
-whole object, neither ahead of the scan nor on a read. Ahead of the scan, it prefetches
-for each object the ranges of the columns it reads, across all the object's blocks.
+A vector or fulltext index search (IVF-Flat, HNSW, IVF-PQ, CAGRA, fulltext, fulltext2)
+joins its candidates back to the base table by primary key. That base-table scan, the row
+fetch, reads a few rows of each object, and only the columns the query needs from the
+base table. The planner marks it; no other scan is marked. The full-table scan a
+pre-filter plan copies from it, and the exact branches of adaptive and scalar vector
+plans, are not marked. Master and regular secondary indexes are out of scope.
+
+A row fetch never downloads a whole object on a read. Ahead of the scan, for each object:
+- When the columns it reads are under half of the object's bytes, it prefetches the
+  ranges of those columns, across all the object's blocks.
+- Otherwise, or when the object records no column ranges, it prefetches the whole
+  object as other scans do: at that share, one whole download costs fewer requests than
+  one request per column, for at most twice the bytes.
+
+The choice depends only on the object and the columns read, so a query makes it the same
+way each time.
 
 - An object stores its data column by column: the chunks of one column for every block
   lie one after another, whatever the column's type, and the object's metadata records
@@ -144,9 +155,11 @@ for each object the ranges of the columns it reads, across all the object's bloc
 - Each range is downloaded on its own and cached as it is, so later reads of the column
   in any block of the object are served from the disk cache, as from a whole object.
 - A request of ranges is skipped while cached ranges cover them or the whole object is
-  cached. Requests of ranges for one object add up, and a request of the whole object
-  takes over a queued request of ranges.
-- The entries search keeps whole-object prefetch: it reads the vector column.
+  cached or downloading. Requests of ranges for one object add up, and a request of the
+  whole object takes over a queued request of ranges.
+- A whole request for an object whose column ranges are cached downloads those bytes
+  again; this needs two queries reading different columns of the object.
+- The index search keeps whole-object prefetch of its own tables.
 
 ### Parallel range downloads of whole objects (decision)
 
@@ -190,17 +203,23 @@ for each object the ranges of the columns it reads, across all the object's bloc
   objects a scan needed next aged out of the LRU. With partial cache, one traced TPC-H run filled
   54 GB into the disk cache against 29 GB for the parent build, and its first round
   took 49.4 s against 26.7–36.2 s for the parent build.
+- **Column ranges for every scan.** A scan that reads every block of an object reads a
+  large share of it, and TPC-H's whole-object prefetch is measured; changing it needs its
+  own measurement.
+- **Column ranges for a row fetch whatever its share.** A row fetch that reads the vector
+  or text column reads most of each object; one request per column per object costs
+  more requests than one whole download for the same bytes.
 - **Let the thrash signal decide the row fetch's whole objects.** The signal turned the
   base table to range reads only after it had downloaded whole objects, about 140 MB each
   for a read of under 1 MB, and those downloads evicted the entries files. Its column
   ranges are about 0.3% of each object's bytes.
-- **Whole-object requests from the IVF-Flat join-back.** The join-back reads about 0.1%
+- **Whole-object requests from the index row fetch.** The IVF-Flat row fetch reads about 0.1%
   of each base-table object, yet its requests kept those objects newest. The entries
   table's files, read 30–100%, were evicted instead, and the base table's first eviction
   came 2–3 s later. On local object storage the first filtered round took 16.7–19.6 s
   against 9.2–14.5 s for the parent build; on the emulated remote store the entries table
   also switched to ranges and the second filtered round took 29 s against 12 s. The
-  join-back now prefetches only its columns.
+  row fetch now prefetches only its columns.
 - **Limit split downloads by the connections they hold.** That limit counts
   connections, not downloads, and with the prefetcher running it stopped splitting
   almost every download. The first TPC-H round took 36.8 s, against 23.6–31.9 s when

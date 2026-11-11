@@ -1766,17 +1766,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			idx++
 		}
 		end = max(end, idx)
-		if policy.Any(fileservice.ColumnPrefetch) {
-			if err := ls.prefetchColumns(ctx, blk, seqNums, due); err != nil {
-				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-			}
-			continue
-		}
-		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
-			continue
-		}
-
-		// prefetch blk data
 		var size int64
 		var blocks int
 		if ls.pState != nil {
@@ -1784,8 +1773,25 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 				size, blocks = int64(entry.ObjectStats.Size()), int(entry.ObjectStats.BlkCnt())
 			}
 		}
+		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
+		if policy.Any(fileservice.ColumnPrefetch) {
+			if !isPrefetcher {
+				continue
+			}
+			ranges, err := ls.prefetchColumns(ctx, blk, seqNums, due, size)
+			if err != nil {
+				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
+			}
+			if ranges || err != nil || size <= 0 {
+				continue
+			}
+		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+			continue
+		}
+
+		// prefetch blk data
 		var err error
-		if prefetcher, ok := ls.fs.(fileservice.ObjectPrefetcher); ok && size > 0 {
+		if isPrefetcher && size > 0 {
 			if ls.rc.prefetchScan == nil {
 				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
 			}
@@ -1806,17 +1812,15 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	ls.rc.batchPrefetchCursor = max(end, begin)
 }
 
-// prefetchColumns asks to download, from the object of blk, the ranges that hold the
-// columns seqNums across all its blocks, which the scan reaches at due.
-func (ls *LocalDisttaeDataSource) prefetchColumns(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16, due int64) error {
-	prefetcher, ok := ls.fs.(fileservice.ObjectPrefetcher)
-	if !ok {
-		return nil
-	}
+// prefetchColumns asks to download, from the object of blk of size bytes, the ranges that
+// hold the columns seqNums across all its blocks, which the scan reaches at due. It returns
+// false when the columns have no ranges or are at least half of the object, which is then
+// downloaded whole.
+func (ls *LocalDisttaeDataSource) prefetchColumns(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16, due int64, size int64) (bool, error) {
 	loc := blk.MetaLocation()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, ls.fs)
 	if err != nil {
-		return err
+		return false, err
 	}
 	data := meta.MustDataMeta()
 	if ls.rc.prefetchScan == nil {
@@ -1834,10 +1838,10 @@ func (ls *LocalDisttaeDataSource) prefetchColumns(ctx context.Context, blk *obje
 		req.Ranges = append(req.Ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
 		req.Size += int64(ext.Length())
 	}
-	if len(req.Ranges) == 0 {
-		return nil
+	if len(req.Ranges) == 0 || (size > 0 && req.Size*2 >= size) {
+		return false, nil
 	}
-	return prefetcher.PrefetchObject(ctx, req)
+	return true, ls.fs.(fileservice.ObjectPrefetcher).PrefetchObject(ctx, req)
 }
 
 const (
