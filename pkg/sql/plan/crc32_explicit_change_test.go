@@ -26,6 +26,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSameLegacyCRC32Expression(t *testing.T) {
+	for _, tc := range []struct {
+		name, old, next string
+		same, known     bool
+	}{
+		{"format_and_case", "crc32(j)", "CRC32( `J` )", true, true},
+		{"nested_and_literal", "crc32(json_extract(j, '$.A'))", "CRC32(JSON_EXTRACT(`J`, '$.A'))", true, true},
+		{"literal_case", "crc32(json_extract(j, '$.A'))", "crc32(json_extract(j, '$.a'))", false, true},
+		{"changed_operator", "crc32(j)", "crc32(j) + 1", false, true},
+		{"malformed_old", "crc32(j) + 'unfinished", "crc32(j) + 1", false, false},
+		{"missing_old", "", "crc32(j)", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			same, known := sameLegacyCRC32Expression(tc.old, tc.next)
+			require.Equal(t, tc.same, same)
+			require.Equal(t, tc.known, known)
+		})
+	}
+}
+
 // An explicit replacement is a semantic change: COPY must bind the new
 // expression and rebuild the generated-column index, while leaving the
 // original catalog definition untouched until publication.

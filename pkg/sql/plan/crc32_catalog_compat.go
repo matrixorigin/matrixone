@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -64,16 +65,62 @@ func rejectLegacyCRC32GeneratedFallback(ctx context.Context, table *planpb.Table
 	return nil
 }
 
+// Formatting, identifier quoting and identifier/function case do not make a
+// repeated generated expression a semantic change. Compare scanner tokens so
+// string literal case stays significant. An invalid historical origin cannot
+// establish either equality or an intentional change.
+func sameLegacyCRC32Expression(left, right string) (bool, bool) {
+	if left == "" || right == "" {
+		return false, false
+	}
+	a, b := mysql.NewScanner(dialect.MYSQL, left), mysql.NewScanner(dialect.MYSQL, right)
+	defer mysql.PutScanner(a)
+	defer mysql.PutScanner(b)
+	same := true
+	for {
+		apos, bpos := a.Pos, b.Pos
+		at, av := a.Scan()
+		bt, bv := b.Scan()
+		if at == mysql.LEX_ERROR || bt == mysql.LEX_ERROR {
+			return false, false
+		}
+		if at != bt {
+			same = false
+			continue
+		}
+		if at == 0 {
+			return same, true
+		}
+		if at == mysql.STRING {
+			// Retain the exact formatted spelling as well as the decoded bytes.
+			// The historical origin may have been authored under a different
+			// backslash mode, so equal decoding alone is not a proof.
+			if av != bv || strings.TrimSpace(left[apos:a.Pos]) != strings.TrimSpace(right[bpos:b.Pos]) {
+				same = false
+			}
+		} else if !strings.EqualFold(av, bv) {
+			same = false
+		}
+	}
+}
+
 // CHANGE/MODIFY repeats the column definition even for a rename or reorder.
-// Preserve its bound identity when the expression and type are unchanged. A
-// semantic conversion needs an explicit rebuild, never a metadata-only rewrite.
+// Preserve its bound identity when the expression and type are unchanged. An
+// intentionally different expression binds normally and COPY rebuilds values.
 func preserveLegacyCRC32Generated(ctx context.Context, old *planpb.ColDef, attr *tree.AttributeGeneratedAlways, typ planpb.Type) (*planpb.GeneratedCol, bool, error) {
 	if old.GeneratedCol == nil || !containsLegacyCRC32(old.GeneratedCol.Expr) {
 		return nil, false, nil
 	}
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(attr.Expr, attr.Expr, false)
-	if old.GeneratedCol.OriginString != fmtCtx.String() || old.GeneratedCol.IsStored != attr.Stored || (old.Typ.Id != typ.Id || old.Typ.Width != typ.Width || old.Typ.Scale != typ.Scale) {
+	same, known := sameLegacyCRC32Expression(old.GeneratedCol.OriginString, fmtCtx.String())
+	if !known {
+		return nil, true, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
+	}
+	if !same {
+		return nil, false, nil
+	}
+	if old.GeneratedCol.IsStored != attr.Stored || (old.Typ.Id != typ.Id || old.Typ.Width != typ.Width || old.Typ.Scale != typ.Scale) {
 		return nil, true, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
 	}
 	owned := *old.GeneratedCol
