@@ -307,3 +307,21 @@ Review decision: compare both concrete readers with the existing unquote
 operation for empty, escaped, multibyte and NUL-containing strings, including
 single wildcard matches. Verify that results survive reader and cache-owner
 release, and rerun the scoped concurrency and paired performance checks.
+
+### Dictionary inputs (candidate revision 38)
+
+A dictionary Vector is an ordinary source, not evidence of admitted JSON.
+Before materializing selected rows, check each non-NULL physical descriptor
+without exposing its backing. Copy the mapped payloads and logical row metadata
+into one private flat version, then validate every copied document before
+publication. No validation qualification crosses the dictionary boundary.
+Allocation failures remain terminal and leave the source unchanged; malformed
+descriptors or JSON report invalid input so evaluation can preserve its existing
+row and NULL short-circuit order. An admitted reader owns its copied version
+independently of the dictionary and its source.
+
+Review decision: exercise reordered and repeated rows, NULLs, malformed
+unselected descendants and descriptors, allocation failure, and release of the
+dictionary before reading the snapshot. The dictionary source's selected rows
+are copied once and fully validated once; subsequent path queries reuse the
+published version.

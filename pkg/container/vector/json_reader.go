@@ -159,7 +159,17 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 	if source.IsConst() {
 		rows = 1
 	}
-	if !source.IsConstNull() && (rows > len(source.data)/types.VarlenaSize) {
+	if source.IsDictionary() {
+		// Dictionary materialization reads the selected physical descriptors.
+		// Check them before gathering payloads from an unknown source.
+		for row := 0; row < rows; row++ {
+			if !source.IsNull(uint64(row)) {
+				if _, err := source.GetBytesAtChecked(row); err != nil {
+					return nil, true, err
+				}
+			}
+		}
+	} else if !source.IsConstNull() && (rows > len(source.data)/types.VarlenaSize) {
 		return nil, true, moerr.NewInvalidInputNoCtx("invalid JSON reader descriptors")
 	}
 	admission := firstJSONReaderMemoryAdmission(admissions)
@@ -168,7 +178,12 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 		return nil, false, err
 	}
 	defer func() { releaseJSONReaderMetadata(ownerMeta) }()
-	private, err := source.dup(mp, true, true, selection)
+	var private *Vector
+	if source.IsDictionary() {
+		private, err = source.materializeDictionaryWithBuilder(mp, selection, buildPrivateJSONVarlena)
+	} else {
+		private, err = source.dup(mp, true, true, selection)
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -187,6 +202,18 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 	}
 	ownerMeta = nil
 	return reader, false, nil
+}
+
+// buildPrivateJSONVarlena only copies into an unpublished snapshot. Its caller
+// validates every copied document before transferring ownership to a reader.
+func buildPrivateJSONVarlena(dst *Vector, descriptor *types.Varlena, data *[]byte, mp *mpool.MPool) error {
+	if len(*data) <= types.VarlenaInlineSize {
+		clear(descriptor[:])
+		descriptor[0] = byte(len(*data))
+		copy(descriptor[1:], *data)
+		return nil
+	}
+	return buildVarlenaNoInline(dst, descriptor, data, mp)
 }
 
 // JSONReaderBuilder owns an unpublished column. Append copies and validates
