@@ -1,0 +1,128 @@
+drop database if exists cte_scalar_union_limit;
+create database cte_scalar_union_limit;
+use cte_scalar_union_limit;
+create table measurements(period int, amount decimal(20,7), guard_value bigint);
+insert into measurements values
+(1,10,-9223372036854775808),(1,20,-9223372036854775808),
+(2,60,-9223372036854775808),(2,null,-9223372036854775808);
+create table metrics as
+select row_number() over () as rn, u.* from (
+with grouped as (
+select period, sum(amount) as total from measurements group by period
+), totals as (
+select max(total) as mx, min(total) as mn from grouped
+)
+select 'max' as metric, mx as amount from totals
+union all select 'min', mn from totals
+union all select 'sum', mx+mn from totals
+union all select 'zero', mx/nullif(mn-mn,0) from totals
+) u limit 4;
+select metric, amount from metrics order by metric;
+➤ metric[12,-1,0]  ¦  amount[3,43,12]  𝄀
+max  ¦  60.000000000000  𝄀
+min  ¦  30.000000000000  𝄀
+sum  ¦  90.000000000000  𝄀
+zero  ¦  null
+select count(*) as n, count(distinct rn) as distinct_rn, min(rn) as first_rn, max(rn) as last_rn from metrics;
+➤ n[-5,64,0]  ¦  distinct_rn[-5,64,0]  ¦  first_rn[-5,64,0]  ¦  last_rn[-5,64,0]  𝄀
+4  ¦  4  ¦  1  ¦  4
+select column_name, data_type, numeric_precision, numeric_scale, is_nullable
+from information_schema.columns
+where table_schema='cte_scalar_union_limit' and table_name='metrics'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  ¦  is_nullable[12,-1,0]  𝄀
+rn  ¦  BIGINT  ¦  null  ¦  null  ¦  NO  𝄀
+metric  ¦  VARCHAR  ¦  null  ¦  null  ¦  NO  𝄀
+amount  ¦  DECIMAL  ¦  43  ¦  12  ¦  YES  𝄀
+__mo_fake_pk_col  ¦  BIGINT UNSIGNED  ¦  null  ¦  null  ¦  NO
+with totals as (select sum(amount) as total from measurements)
+select total from totals union all select total from totals limit 2;
+➤ total[3,38,7]  𝄀
+90.0000000  𝄀
+90.0000000
+with totals as (select sum(amount) as total from measurements)
+select total from totals union all select total from totals limit 2 offset 1;
+➤ total[3,38,7]  𝄀
+90.0000000
+with totals as (select sum(amount) as total from measurements)
+select total from totals union all select total from totals limit 1;
+➤ total[3,38,7]  𝄀
+90.0000000
+with totals as (select sum(amount) as total from measurements)
+select total from totals where total<0
+union all select total from totals limit 2;
+➤ total[3,38,7]  𝄀
+90.0000000
+prepare page from 'with totals as (select sum(amount) as total from measurements) select total from totals union all select total from totals limit ?';
+set @page_limit=0;
+execute page using @page_limit;
+➤ total[3,38,7]
+set @page_limit=2;
+execute page using @page_limit;
+➤ total[3,38,7]  𝄀
+90.0000000  𝄀
+90.0000000
+deallocate prepare page;
+with risky as (select abs(max(guard_value)) as v from measurements)
+select v from risky union all select v from risky limit 0;
+➤ v[-5,64,0]
+with risky as (select abs(max(guard_value)) as v from measurements)
+select v from risky union all select v from risky limit 2;
+-- @regex("out of range", true)
+Data truncation: data out of range: data type int, '-9223372036854775808'
+with c as (select max(period) a,count(*) unused,min(period) b from measurements)
+select a from c union all select b from c order by 1;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+with c as (select max(period) a,count(*) unused,min(period) b from measurements)
+select 1 from c union all select b from c order by 1;
+➤ 1[-5,64,0]  𝄀
+1  𝄀
+1
+prepare consumer_error from 'with c as (select max(guard_value) g from measurements) select abs(g) from c union all select g from c order by 1';
+execute consumer_error;
+-- @regex("out of range", true)
+Data truncation: data out of range: data type int, '-9223372036854775808'
+update measurements set guard_value=-7;
+execute consumer_error;
+➤ abs(g)[-5,64,0]  𝄀
+-7  𝄀
+7
+execute consumer_error;
+➤ abs(g)[-5,64,0]  𝄀
+-7  𝄀
+7
+deallocate prepare consumer_error;
+set @saved_scalar_hints=@@optimizer_hints;
+set optimizer_hints='scalarCTEReuse=2';
+with totals as (select sum(amount) as total from measurements)
+select total from totals union all select total from totals limit 2;
+➤ total[3,38,7]  𝄀
+90.0000000  𝄀
+90.0000000
+set optimizer_hints=@saved_scalar_hints;
+update measurements set amount=null;
+with totals as (select sum(amount) as total, count(amount) as n from measurements)
+select total,n from totals union all select total,n from totals limit 2;
+➤ total[3,38,7]  ¦  n[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  0
+delete from measurements;
+with grouped as (select period,sum(amount) as total from measurements group by period),
+totals as (select max(total) as mx,min(total) as mn from grouped)
+select mx,mn from totals union all select mx,mn from totals limit 2;
+➤ mx[3,38,7]  ¦  mn[3,38,7]  𝄀
+null  ¦  null  𝄀
+null  ¦  null
+create table empty_metrics as
+with totals as (select sum(amount) as total,count(*) as n from measurements)
+select total,n from totals union all select total,n from totals limit 2;
+select * from empty_metrics;
+➤ total[3,38,7]  ¦  n[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  0
+with totals as (select count(*) as n from measurements having count(*)>0)
+select n from totals union all select n from totals limit 2;
+➤ n[-5,64,0]
+drop database cte_scalar_union_limit;
