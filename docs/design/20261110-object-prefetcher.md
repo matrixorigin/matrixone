@@ -209,6 +209,12 @@ way each time.
 - **Column ranges for a row fetch whatever its share.** A row fetch that reads the vector
   or text column reads most of each object; one request per column per object costs
   more requests than one whole download for the same bytes.
+- **Prefetch only the blocks a row fetch reads.** A `limit 10` fulltext row fetch reads
+  about one block per object, yet 20 such queries downloaded the whole table (38 objects,
+  about 2.8 GB on the emulated remote store) to read about 200 rows. Prefetching only
+  those blocks serves one query on a cold cache, but concurrent and later queries of the
+  same objects then fetch their own blocks again; one whole-object or whole-column
+  download serves them all from the cache.
 - **Let the thrash signal decide the row fetch's whole objects.** The signal turned the
   base table to range reads only after it had downloaded whole objects, about 140 MB each
   for a read of under 1 MB, and those downloads evicted the entries files. Its column
