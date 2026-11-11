@@ -2374,7 +2374,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot, distinct bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot, distinct, grouping bool) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 	}
@@ -2447,6 +2447,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
+		if grouping {
+			subCtx.groupingStage = &groupingStage{orderBy: astOrderBy}
+		}
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
@@ -2607,6 +2610,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}, ctx)
 	}
 
+	if grouping {
+		return builder.finishGroupingStage(lastNodeID, subCtxList[0], ctx, astLimit, astRankOption, distinct, isRoot)
+	}
+
 	// set ctx base on selects[0] and it's ctx
 	ctx.groupTag = builder.genNewBindTag()
 	ctx.aggregateTag = builder.genNewBindTag()
@@ -2635,26 +2642,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	// Track the original number of columns before ORDER BY binding
 	// ORDER BY may add new expressions to ctx.projects, but these should not be in the final output
 	resultLen := len(ctx.projects)
-
-	if distinct {
-		// A grouping SELECT's DISTINCT covers all sets, before ORDER BY can
-		// introduce hidden expressions and before LIMIT truncates the result.
-		distinctTag := builder.genNewBindTag()
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PROJECT, ProjectList: ctx.projects,
-			Children: []int32{lastNodeID}, BindingTags: []int32{distinctTag},
-		}, ctx)
-		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
-		projects := make([]*plan.Expr, resultLen)
-		for i, expr := range ctx.projects {
-			builder.nameByColRef[[2]int32{distinctTag, int32(i)}] = ctx.headings[i]
-			projects[i] = &plan.Expr{
-				Typ:  expr.Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: distinctTag, ColPos: int32(i)}},
-			}
-		}
-		ctx.projects = projects
-	}
 
 	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
 	// added to ctx.projects by ORDER BY are included in the PROJECT node
@@ -3292,7 +3279,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, selectClause.Distinct)
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, selectClause.Distinct, true)
 			}
 		}
 
@@ -3310,7 +3297,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
-		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, false)
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, false, false)
 	case *tree.ValuesClause:
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
@@ -3354,6 +3341,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		); err != nil {
 			return
 		}
+	}
+
+	// Expanded groups bind ordering inputs now, but apply ordering only after
+	// the complete grouped result and its windows have been constructed.
+	if ctx.groupingStage != nil {
+		astOrderBy = ctx.groupingStage.orderBy
 	}
 
 	// bind ORDER BY clause
@@ -3455,6 +3448,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		); err != nil {
 			return
 		}
+	}
+
+	if ctx.groupingStage != nil {
+		return builder.appendGroupingStage(ctx, nodeID, resultLen, boundOrderBys, boundHavingList, notCacheable)
 	}
 
 	// append WINDOW node

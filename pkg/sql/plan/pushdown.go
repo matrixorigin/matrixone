@@ -26,6 +26,28 @@ import (
 
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
+// An omitted grouping key is an output NULL, not its evaluated input value.
+func referencesOmittedGroupingKey(expr *plan.Expr, groupTag int32, flags []bool) bool {
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos == groupTag && col.ColPos >= 0 && int(col.ColPos) < len(flags) && !flags[col.ColPos]
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if referencesOmittedGroupingKey(arg, groupTag, flags) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if referencesOmittedGroupingKey(item, groupTag, flags) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	// Record before pushdownFilters
@@ -47,7 +69,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) {
+			if len(node.GroupBy) > 0 && !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				!referencesOmittedGroupingKey(filter, groupTag, node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)

@@ -428,4 +428,157 @@ select 1 k from empty_src group by grouping sets (()) having 1=0;
 ➤ k[-5,64,0]
 select g from src group by grouping sets (());
 SQL syntax error: column "src.g" must appear in the GROUP BY clause or be used in an aggregate function
+select g from (select g from src group by g with rollup) t where g=1;
+➤ g[4,32,0]  𝄀
+1
+create table filtered_rollup as select g from (select g from src group by g with rollup) t where g=1;
+select * from filtered_rollup;
+➤ g[4,32,0]  𝄀
+1
+select g from (select g from src group by g with rollup) t where g is null;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g from src group by g with rollup) t where g is not null order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select g from (select g from src group by g with rollup) t where coalesce(g,-1)=-1;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g from src group by g with rollup) t where g in (1,2) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select g from src where g=1 group by g with rollup order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+select g,h from (select g,h from src group by grouping sets ((g,h),(g))) t where g=1 order by h;
+➤ g[4,32,0]  ¦  h[4,32,0]  𝄀
+1  ¦  null  𝄀
+1  ¦  10  𝄀
+1  ¦  20
+select k from (select g+1 k from src group by g+1 with rollup) t where k=2;
+➤ k[-5,64,0]  𝄀
+2
+select * from (select 1 k from src group by grouping sets (())) t where k=0;
+➤ k[-5,64,0]
+create table filtered_empty_set as select * from (select 1 k from src group by grouping sets (())) t where k=0;
+select * from filtered_empty_set;
+➤ k[-5,64,0]
+select * from (select 1 k from empty_src group by grouping sets (())) t where k=0;
+➤ k[-5,64,0]
+select * from (select 1 k from src group by grouping sets ((),())) t where k=0;
+➤ k[-5,64,0]
+select * from (select 1 k from src group by grouping sets ((),())) t where k=1;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select count(*) from src having 1=0;
+➤ count(*)[-5,64,0]
+select * from (select count(*) k from src) t where false;
+➤ k[-5,64,0]
+select g,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+create table global_window as select g,count(*) over() n from src group by g with rollup;
+select * from global_window order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+select g,row_number() over(order by g) rn from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  rn[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+select g,count(g) over() present_keys,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  present_keys[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  2  ¦  3  𝄀
+1  ¦  2  ¦  3  𝄀
+2  ¦  2  ¦  3
+select g,sum(v) s,sum(sum(v)) over() total,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  21  ¦  42  ¦  3  𝄀
+1  ¦  12  ¦  42  ¦  3  𝄀
+2  ¦  9  ¦  42  ¦  3
+select g,sum(v) s,sum(sum(v)) over(order by g rows between unbounded preceding and current row) running
+from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  running[-5,64,0]  𝄀
+null  ¦  21  ¦  21  𝄀
+1  ¦  12  ¦  33  𝄀
+2  ¦  9  ¦  42
+select g,count(*) over(partition by g) n from src group by grouping sets ((g),(g),()) order by g,n;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  2  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+2  ¦  2
+select g,count(*) over() n from src group by g with rollup having sum(v)>10 order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  2  𝄀
+1  ¦  2
+select distinct count(*) over() n from src group by g with rollup;
+➤ n[-5,64,0]  𝄀
+3
+create table distinct_window as select distinct count(*) over() n from src group by g with rollup;
+select * from distinct_window;
+➤ n[-5,64,0]  𝄀
+3
+select g from src group by g with rollup order by count(*) over(),g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select g,count(*) over() n from src group by g with rollup order by g limit 2;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3
+select * from (select g,count(*) over() n from src group by g with rollup) t where g=1;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  3
+select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+➤ k[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+create table empty_window as select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+select * from empty_window;
+➤ k[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+select g,count(*) over() n from empty_src group by g with rollup;
+➤ g[4,32,0]  ¦  n[-5,64,0]
+select g,sum(v) s,grouping(g) flag,row_number() over(order by g,grouping(g)) rn
+from nullable_src group by g with rollup order by g,flag;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  ¦  rn[-5,64,0]  𝄀
+null  ¦  5  ¦  0  ¦  1  𝄀
+null  ¦  12  ¦  1  ¦  2  𝄀
+1  ¦  7  ¦  0  ¦  3
+create view global_window_view as select g,count(*) over() n from src group by g with rollup;
+create table window_view_result as select * from global_window_view;
+select * from window_view_result order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+prepare global_window_stmt from 'select g,count(*) over() n from src group by g with rollup order by g';
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+deallocate prepare global_window_stmt;
 drop database grouping_ctas_test;

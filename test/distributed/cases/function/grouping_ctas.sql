@@ -157,4 +157,58 @@ select 1 k from src group by grouping sets (()) having 1=0;
 select 1 k from empty_src group by grouping sets (()) having 1=0;
 select g from src group by grouping sets (());
 
+-- 外层谓词作用于分组输出；输入 WHERE 与补 NULL 后的输出 WHERE 不可互换。
+select g from (select g from src group by g with rollup) t where g=1;
+create table filtered_rollup as select g from (select g from src group by g with rollup) t where g=1;
+select * from filtered_rollup;
+select g from (select g from src group by g with rollup) t where g is null;
+select g from (select g from src group by g with rollup) t where g is not null order by g;
+select g from (select g from src group by g with rollup) t where coalesce(g,-1)=-1;
+select g from (select g from src group by g with rollup) t where g in (1,2) order by g;
+select g from src where g=1 group by g with rollup order by g;
+select g,h from (select g,h from src group by grouping sets ((g,h),(g))) t where g=1 order by h;
+select k from (select g+1 k from src group by g+1 with rollup) t where k=2;
+
+-- 无键全局分组仍会在零输入上发出一行，输出过滤不能变成输入过滤。
+select * from (select 1 k from src group by grouping sets (())) t where k=0;
+create table filtered_empty_set as select * from (select 1 k from src group by grouping sets (())) t where k=0;
+select * from filtered_empty_set;
+select * from (select 1 k from empty_src group by grouping sets (())) t where k=0;
+select * from (select 1 k from src group by grouping sets ((),())) t where k=0;
+select * from (select 1 k from src group by grouping sets ((),())) t where k=1;
+select count(*) from src having 1=0;
+select * from (select count(*) k from src) t where false;
+
+-- 窗口在所有分组集合合并后执行，不在分支内分别执行。
+select g,count(*) over() n from src group by g with rollup order by g;
+create table global_window as select g,count(*) over() n from src group by g with rollup;
+select * from global_window order by g;
+select g,row_number() over(order by g) rn from src group by g with rollup order by g;
+select g,count(g) over() present_keys,count(*) over() n from src group by g with rollup order by g;
+select g,sum(v) s,sum(sum(v)) over() total,count(*) over() n from src group by g with rollup order by g;
+select g,sum(v) s,sum(sum(v)) over(order by g rows between unbounded preceding and current row) running
+from src group by g with rollup order by g;
+select g,count(*) over(partition by g) n from src group by grouping sets ((g),(g),()) order by g,n;
+select g,count(*) over() n from src group by g with rollup having sum(v)>10 order by g;
+select distinct count(*) over() n from src group by g with rollup;
+create table distinct_window as select distinct count(*) over() n from src group by g with rollup;
+select * from distinct_window;
+select g from src group by g with rollup order by count(*) over(),g;
+select g,count(*) over() n from src group by g with rollup order by g limit 2;
+select * from (select g,count(*) over() n from src group by g with rollup) t where g=1;
+select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+create table empty_window as select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+select * from empty_window;
+select g,count(*) over() n from empty_src group by g with rollup;
+select g,sum(v) s,grouping(g) flag,row_number() over(order by g,grouping(g)) rn
+from nullable_src group by g with rollup order by g,flag;
+create view global_window_view as select g,count(*) over() n from src group by g with rollup;
+create table window_view_result as select * from global_window_view;
+select * from window_view_result order by g;
+prepare global_window_stmt from 'select g,count(*) over() n from src group by g with rollup order by g';
+execute global_window_stmt;
+execute global_window_stmt;
+execute global_window_stmt;
+deallocate prepare global_window_stmt;
+
 drop database grouping_ctas_test;

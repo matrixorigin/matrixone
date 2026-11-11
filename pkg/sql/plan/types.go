@@ -349,6 +349,9 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
+	// Expanded grouping branches stop before windows and final projection.
+	groupingStage *groupingStage
+
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
 	sampleByAst    map[string]int32
