@@ -3065,6 +3065,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
+	if col.EnumSetResultType != nil && typ.Oid.IsMySQLString() {
+		if err = setEnumSetResultMetadata(ctx, col.EnumSetResultType, typ.Charset, c); err != nil {
+			return nil, err
+		}
+	}
 	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.
 		// Width-less computed BLOB expressions keep the conservative upper bound
