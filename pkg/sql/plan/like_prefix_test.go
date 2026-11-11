@@ -892,6 +892,7 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, function string
 		joined, unsafe, folded  bool
+		ci                      bool
 		selectivity             float64
 	}{
 		{name: "literal", pattern: "abc1", function: "=", selectivity: 0.00001},
@@ -900,6 +901,10 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 		{name: "joined scan", pattern: "abc1", function: "=", joined: true, selectivity: 0.2},
 		{name: "throwing residual", pattern: "abc1", function: "=", unsafe: true, selectivity: 0.2},
 		{name: "folded provenance", pattern: "abc1", function: "like", folded: true, selectivity: 0.2},
+		// A case-insensitive collation folds LIKE; the byte-ordered =/prefix_eq
+		// rewrite cannot, so the folding LIKE predicate stays (issue #31175).
+		{name: "ci literal keeps like", pattern: "abc1", function: "like", ci: true, selectivity: 0.2},
+		{name: "ci prefix keeps like", pattern: "abc%", function: "like", ci: true, selectivity: 0.2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, scanID, _, _ := newEncodedIndexCostTestCase(t, []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, nil,
@@ -911,6 +916,9 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 			stats.TableCnt = 100_000
 			stats.NdvMap["category"] = 100_000
 			col := &planpb.Expr{Typ: node.TableDef.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: node.BindingTags[0], ColPos: 2, Name: "category"}}}
+			if tc.ci {
+				col.Typ.Charset = uint32(types.CharsetUTF8)
+			}
 			right := makePlan2StringConstExprWithType(tc.pattern)
 			if tc.folded {
 				right.GetLit().Src = makePlan2StringConstExprWithType(tc.pattern)

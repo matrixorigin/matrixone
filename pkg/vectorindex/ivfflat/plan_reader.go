@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -727,10 +728,12 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // relationScanner executes typed hidden-table reads in the caller's current
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
-	proc           *process.Process
-	generation     *planSearchGeneration
-	accountID      *uint32
-	snapshot       *plan.Snapshot
+	proc       *process.Process
+	generation *planSearchGeneration
+	accountID  *uint32
+	snapshot   *plan.Snapshot
+	// 只在本 reader 的执行代际内复用；Close 释放 scanner，不写入共享 Process。
+	snapshotTxn    client.TxnOperator
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
@@ -758,12 +761,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	} else if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
-		clone := s.proc.GetCloneTxnOperator()
-		if clone == nil {
-			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
-			s.proc.SetCloneTxnOperator(clone)
+		if s.snapshotTxn == nil {
+			s.snapshotTxn = txn.CloneSnapshotOp(*s.snapshot.TS)
 		}
-		txn = clone
+		txn = s.snapshotTxn
 	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {

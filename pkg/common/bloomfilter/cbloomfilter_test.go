@@ -32,6 +32,42 @@ const (
 	cVecCount  = 10
 )
 
+func TestOptionalBloomSuppliedScratch(t *testing.T) {
+	for _, args := range []struct {
+		bits   uint64
+		hashes uint32
+	}{{0, 1}, {64, 0}, {64, MAX_K_SEED + 1}} {
+		filter, ok := TryNewCBloomFilterWithSeed(args.bits, args.hashes, 1)
+		require.False(t, ok)
+		require.Nil(t, filter)
+	}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	typ := types.T_int64.ToType()
+	vec, err := vector.NewConstFixed[int64](typ, 42, 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	filter, ok := TryNewCBloomFilterWithSeed(1024, 3, 1)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		if filter.Valid() {
+			filter.Free()
+		}
+	})
+	filter.AddVector(vec)
+	require.False(t, filter.TestFixedVectorInto(nil, make([]uint8, 3)))
+	require.False(t, filter.TestFixedVectorInto(vec, make([]uint8, 2)))
+	scratch := []uint8{9, 9, 9}
+	require.True(t, filter.TestFixedVectorInto(vec, scratch))
+	require.Equal(t, []uint8{1, 1, 1}, scratch)
+	nulls := vector.NewConstNull(typ, 3, mp)
+	t.Cleanup(func() { nulls.Free(mp) })
+	require.True(t, filter.TestFixedVectorInto(nulls, scratch))
+	require.Equal(t, []uint8{0, 0, 0}, scratch)
+	filter.Free()
+	require.False(t, filter.TestFixedVectorInto(vec, scratch))
+}
+
 func TestCBloomFilter(t *testing.T) {
 	bf := NewCBloomFilter(1000, 3)
 	assert.NotNil(t, bf)

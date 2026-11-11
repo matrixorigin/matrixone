@@ -5984,6 +5984,10 @@ var (
 			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
 		},
 		{
+			input:  `select t.a from sa.t centroidx ('Vector_l2_ops', '{"quantization":"int8"}', '{"db":"D","ignored":"it''s"}') join u`,
+			output: `select t.a from sa.t centroidx ('vector_l2_ops', '{"quantization":"int8"}', '{"db":"D","ignored":"it\'s"}') join u`,
+		},
+		{
 			input: "alter user u1 lock",
 		},
 		{
@@ -6642,6 +6646,24 @@ func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
 		createStmt, ok := stmt.(*tree.CreateTable)
 		require.True(t, ok, sql)
 		require.Len(t, createStmt.Defs, 2, sql)
+	}
+}
+
+func TestAlterSQLTaskResetOneRun(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "alter task `My Task` reset runs 42 force", 1)
+	require.NoError(t, err)
+	reset, ok := stmt.(*tree.AlterSQLTask)
+	require.True(t, ok)
+	require.Equal(t, tree.AlterTaskResetRun, reset.Action)
+	require.EqualValues(t, 42, reset.RunID)
+	for _, query := range []string{
+		"alter task t reset runs 0 force",
+		"alter task t reset runs -1 force",
+		"alter task t reset runs 9223372036854775808 force",
+		"alter task t reset runs 1",
+	} {
+		_, err = ParseOne(context.Background(), query, 1)
+		require.Error(t, err, query)
 	}
 }
 

@@ -44,6 +44,12 @@ func Prepare(op Operator, proc *process.Process) error {
 		return nil
 	}
 
+	if producer, ok := op.(DictionaryProducer); ok {
+		state := producer.DictionaryOutputState()
+		state.BeginCall()
+		*state = DictionaryOutputState{}
+	}
+
 	childrenProc := proc
 	if preparer, ok := op.(childrenProcessPreparer); ok {
 		childrenProc = preparer.PrepareChildrenProcess(proc)
@@ -53,7 +59,11 @@ func Prepare(op Operator, proc *process.Process) error {
 			return err
 		}
 	}
-	return op.Prepare(proc)
+	if err := op.Prepare(proc); err != nil {
+		return err
+	}
+	configureDictionaryEdges(op)
+	return nil
 }
 
 func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
