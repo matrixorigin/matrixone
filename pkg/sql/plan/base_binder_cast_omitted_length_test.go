@@ -141,9 +141,10 @@ func boundExprFn(t *testing.T, bound *Expr) *plan.Function {
 func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 	t.Run("ceil_floor_keep_numeric_string_parsing", func(t *testing.T) {
 		// The decimal-string compositions keep binding the direct TEXT
-		// overload, whose one-argument exact-integer executor now returns
-		// scale-0 DECIMAL128; the large-integer spellings bind the same
-		// overload and keep their exact values.
+		// overload, whose one-argument exact-integer executor returns the
+		// wide scale-0 DECIMAL256 the pre-widening composition domain
+		// needs; the large-integer spellings bind the same overload and
+		// keep their exact values.
 		for _, sql := range []string{
 			"select ceil(cast('1.2' as char))",
 			"select ceil(convert('1.2', char))",
@@ -152,7 +153,7 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 			bound := bindFirstSelectExpr(t, sql)
 			fn := boundExprFn(t, bound)
 			require.Equal(t, "ceil", fn.Func.GetObjName(), sql)
-			require.Equal(t, int32(types.T_decimal128), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_decimal256), bound.Typ.Id, sql)
 			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
 				"the TEXT cast result must reach ceil directly, without a narrowing implicit cast")
 		}
@@ -164,7 +165,7 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 			bound := bindFirstSelectExpr(t, sql)
 			fn := boundExprFn(t, bound)
 			require.Equal(t, "floor", fn.Func.GetObjName(), sql)
-			require.Equal(t, int32(types.T_decimal128), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_decimal256), bound.Typ.Id, sql)
 			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql)
 		}
 	})

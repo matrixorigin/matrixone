@@ -148,9 +148,9 @@ select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"'
 -- CEIL and FLOOR keep the string/numeric parsing semantics for the TEXT cast
 -- results: decimal and negative strings parse as floating-point values on
 -- the direct TEXT overloads, for both CAST and CONVERT spellings. The
--- one-argument overloads carry scale-0 DECIMAL128 (see the exact-integer
--- section below), so the values render in the integer domain without the
--- old FLOAT64 display's trailing ".0".
+-- one-argument overloads carry scale-0 DECIMAL256 (see the exact-integer
+-- and wide-domain sections below), so the values render in the integer
+-- domain without the old FLOAT64 display's trailing ".0".
 select ceil(cast('1.2' as char)) as ceil_cast,
        floor(cast('1.2' as char)) as floor_cast,
        ceil(convert('-1.2', char)) as ceil_convert_neg,
@@ -363,7 +363,7 @@ drop table if exists func_cast_omit_char_ub;
 -- for 9007199254740993 (the FLOOR spelling equally) and shrinking
 -- 18446744073709551615 to 18446744073709552000. The one-argument TEXT
 -- overloads now parse the same dual integer domains as their two-argument
--- siblings and carry scale-0 DECIMAL128: every integer string keeps the
+-- siblings and carry scale-0 DECIMAL256: every integer string keeps the
 -- exact value the base binary's UINT64 tie produced, decimal and negative
 -- strings keep the string parser's values, and base-prefixed or
 -- space-padded integers parse like the implicit cast did.
@@ -395,10 +395,37 @@ select ceil(v) from func_cast_omit_char_unary;
 select floor(v) from func_cast_omit_char_unary;
 select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
 
--- integer tokens beyond the uint64 domain keep the out-of-range error the
--- base binary's UINT64 cast produced for these rows, instead of a silently
--- rounded float; non-numeric strings keep the string parser's error.
-select ceil(cast('99999999999999999999999' as text));
-select floor(cast('18446744073709551617' as text));
+-- [mo-bot P2 review round] Restore the pre-widening numeric domain of the
+-- one-argument CEIL/FLOOR on the omitted-length CHAR compositions: the
+-- DECIMAL128(38,0) intermediate rejected every float magnitude the prior
+-- FLOAT64 route displayed (CEIL(CAST('1e40' AS CHAR)) raised a decimal
+-- conversion error) and every integer token beyond uint64 (FLOOR(CONVERT(
+-- '18446744073709551616', CHAR)) raised a UINT64 range error), both
+-- previously successful on the base. The one-argument executors now carry
+-- scale-0 DECIMAL256, the widest integral numeric: integer tokens keep the
+-- exact dual-domain values and every other numeric token keeps the VARCHAR
+-- route's accepted domain and shortest-digit display for magnitudes within
+-- 76 integral digits.
+select ceil(cast('1e40' as char)) as ceil_comp_1e40,
+       floor(convert('18446744073709551616', char)) as floor_comp_u64p1,
+       ceil(cast('99999999999999999999999' as text)) as ceil_comp_23nines,
+       floor(cast('1e40' as char)) as floor_comp_1e40,
+       floor(cast('12345678901234567890123456789012345678901' as text)) as floor_comp_41d,
+       ceil(cast('1.5e40' as char)) as ceil_comp_1p5e40,
+       floor(cast('-1e40' as char)) as floor_comp_neg_1e40,
+       ceil(cast('18446744073709551617' as text)) as ceil_comp_u64p2,
+       ceil(cast('1e75' as char)) as ceil_comp_1e75;
+-- NULL-row safety holds at the widened domain too: a wide mixed batch keeps
+-- every row's own result, including the NULL row.
+drop table if exists func_cast_omit_char_unary_wide;
+create table func_cast_omit_char_unary_wide (v text);
+insert into func_cast_omit_char_unary_wide values ('1e40'), (null), ('18446744073709551616');
+select ceil(v), floor(v) from func_cast_omit_char_unary_wide;
+drop table if exists func_cast_omit_char_unary_wide;
+-- magnitudes whose display needs more than 76 integral digits exceed
+-- DECIMAL256, the widest scale-0 numeric, and keep the decimal conversion
+-- error; non-numeric strings keep the string parser's error.
+select ceil(cast('1e76' as text));
+select ceil(cast('1e300' as text));
 select ceil(cast('中文' as text));
 drop table if exists func_cast_omit_char_unary;

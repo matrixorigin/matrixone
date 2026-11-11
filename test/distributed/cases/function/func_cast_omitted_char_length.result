@@ -142,7 +142,7 @@ select ceil(cast('1.2' as char)) as ceil_cast,
 floor(cast('1.2' as char)) as floor_cast,
 ceil(convert('-1.2', char)) as ceil_convert_neg,
 floor(convert('-1.2', char)) as floor_convert_neg;
-➤ ceil_cast[3,38,0]  ¦  floor_cast[3,38,0]  ¦  ceil_convert_neg[3,38,0]  ¦  floor_convert_neg[3,38,0]  𝄀
+➤ ceil_cast[3,76,0]  ¦  floor_cast[3,76,0]  ¦  ceil_convert_neg[3,76,0]  ¦  floor_convert_neg[3,76,0]  𝄀
 2  ¦  1  ¦  -1  ¦  -2
 select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char)) as tsadd_convert,
 timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char)) as tsadd_cast;
@@ -243,7 +243,7 @@ length(space(cast('2' as char))) as space_len_text;
 select ceil(cast('-1' as char), 0) as ceil2_text,
 floor(cast('-1' as char), 0) as floor2_text,
 ceil(cast('-1.2' as char)) as ceil_onearg_text;
-➤ ceil2_text[3,38,0]  ¦  floor2_text[3,38,0]  ¦  ceil_onearg_text[3,38,0]  𝄀
+➤ ceil2_text[3,38,0]  ¦  floor2_text[3,38,0]  ¦  ceil_onearg_text[3,76,0]  𝄀
 -1  ¦  -1  ¦  -1
 select -cast('300' as char) as neg_text,
 cast('300' as char) << 1 as shiftl_text;
@@ -368,36 +368,56 @@ floor(cast('18446744073709551615' as text)) as floor_umax_1arg,
 ceil(cast('-9223372036854775808' as text)) as ceil_imin_1arg,
 floor(cast(' 42 ' as text)) as floor_trim_1arg,
 ceil(cast('0x10' as text)) as ceil_hex_1arg;
-➤ ceil_2p53p1[3,38,0]  ¦  floor_2p53p1[3,38,0]  ¦  ceil_imax_1arg[3,38,0]  ¦  floor_imax_1arg[3,38,0]  ¦  ceil_upper_1arg[3,38,0]  ¦  floor_upper_1arg[3,38,0]  ¦  ceil_umax_1arg[3,38,0]  ¦  floor_umax_1arg[3,38,0]  ¦  ceil_imin_1arg[3,38,0]  ¦  floor_trim_1arg[3,38,0]  ¦  ceil_hex_1arg[3,38,0]  𝄀
+➤ ceil_2p53p1[3,76,0]  ¦  floor_2p53p1[3,76,0]  ¦  ceil_imax_1arg[3,76,0]  ¦  floor_imax_1arg[3,76,0]  ¦  ceil_upper_1arg[3,76,0]  ¦  floor_upper_1arg[3,76,0]  ¦  ceil_umax_1arg[3,76,0]  ¦  floor_umax_1arg[3,76,0]  ¦  ceil_imin_1arg[3,76,0]  ¦  floor_trim_1arg[3,76,0]  ¦  ceil_hex_1arg[3,76,0]  𝄀
 9007199254740993  ¦  9007199254740993  ¦  9223372036854775807  ¦  9223372036854775807  ¦  9223372036854775808  ¦  9223372036854775808  ¦  18446744073709551615  ¦  18446744073709551615  ¦  -9223372036854775808  ¦  42  ¦  16
 select ceil(cast('9007199254740993' as char)) as ceil_comp_2p53p1,
 floor(convert('9007199254740993', char)) as floor_comp_2p53p1;
-➤ ceil_comp_2p53p1[3,38,0]  ¦  floor_comp_2p53p1[3,38,0]  𝄀
+➤ ceil_comp_2p53p1[3,76,0]  ¦  floor_comp_2p53p1[3,76,0]  𝄀
 9007199254740993  ¦  9007199254740993
 drop table if exists func_cast_omit_char_unary;
 create table func_cast_omit_char_unary (v text);
 insert into func_cast_omit_char_unary values ('9007199254740993'), (null), ('1'), ('-1.2');
 select ceil(v) from func_cast_omit_char_unary;
-➤ ceil(v)[3,38,0]  𝄀
+➤ ceil(v)[3,76,0]  𝄀
 9007199254740993  𝄀
 null  𝄀
 1  𝄀
 -1
 select floor(v) from func_cast_omit_char_unary;
-➤ floor(v)[3,38,0]  𝄀
+➤ floor(v)[3,76,0]  𝄀
 9007199254740993  𝄀
 null  𝄀
 1  𝄀
 -2
 select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
-➤ ceil(v)[3,38,0]  ¦  floor(v)[3,38,0]  𝄀
+➤ ceil(v)[3,76,0]  ¦  floor(v)[3,76,0]  𝄀
 9007199254740993  ¦  9007199254740993  𝄀
 1  ¦  1  𝄀
 -1  ¦  -2
-select ceil(cast('99999999999999999999999' as text));
-Data truncation: data out of range: data type uint64, value '99999999999999999999999'
-select floor(cast('18446744073709551617' as text));
-Data truncation: data out of range: data type uint64, value '18446744073709551617'
+select ceil(cast('1e40' as char)) as ceil_comp_1e40,
+floor(convert('18446744073709551616', char)) as floor_comp_u64p1,
+ceil(cast('99999999999999999999999' as text)) as ceil_comp_23nines,
+floor(cast('1e40' as char)) as floor_comp_1e40,
+floor(cast('12345678901234567890123456789012345678901' as text)) as floor_comp_41d,
+ceil(cast('1.5e40' as char)) as ceil_comp_1p5e40,
+floor(cast('-1e40' as char)) as floor_comp_neg_1e40,
+ceil(cast('18446744073709551617' as text)) as ceil_comp_u64p2,
+ceil(cast('1e75' as char)) as ceil_comp_1e75;
+➤ ceil_comp_1e40[3,76,0]  ¦  floor_comp_u64p1[3,76,0]  ¦  ceil_comp_23nines[3,76,0]  ¦  floor_comp_1e40[3,76,0]  ¦  floor_comp_41d[3,76,0]  ¦  ceil_comp_1p5e40[3,76,0]  ¦  floor_comp_neg_1e40[3,76,0]  ¦  ceil_comp_u64p2[3,76,0]  ¦  ceil_comp_1e75[3,76,0]  𝄀
+10000000000000000000000000000000000000000  ¦  18446744073709552000  ¦  100000000000000000000000  ¦  10000000000000000000000000000000000000000  ¦  12345678901234568000000000000000000000000  ¦  15000000000000000000000000000000000000000  ¦  -10000000000000000000000000000000000000000  ¦  18446744073709552000  ¦  1000000000000000000000000000000000000000000000000000000000000000000000000000
+drop table if exists func_cast_omit_char_unary_wide;
+create table func_cast_omit_char_unary_wide (v text);
+insert into func_cast_omit_char_unary_wide values ('1e40'), (null), ('18446744073709551616');
+select ceil(v), floor(v) from func_cast_omit_char_unary_wide;
+➤ ceil(v)[3,76,0]  ¦  floor(v)[3,76,0]  𝄀
+10000000000000000000000000000000000000000  ¦  10000000000000000000000000000000000000000  𝄀
+null  ¦  null  𝄀
+18446744073709552000  ¦  18446744073709552000
+drop table if exists func_cast_omit_char_unary_wide;
+select ceil(cast('1e76' as text));
+invalid input: 1e+76 beyond the range, can't be converted to Decimal256(76,0).
+select ceil(cast('1e300' as text));
+invalid input: 1e+300 beyond the range, can't be converted to Decimal256(76,0).
 select ceil(cast('中文' as text));
 strconv.ParseFloat: parsing "中文": invalid syntax
 drop table if exists func_cast_omit_char_unary;

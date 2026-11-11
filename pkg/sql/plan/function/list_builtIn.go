@@ -7717,15 +7717,19 @@ var supportedMathBuiltIns = []FuncNew{
 				// values the pre-widening UINT64 tie produced
 				// (CEIL(CAST('9007199254740993' AS TEXT)) and the FLOOR
 				// spelling stay exact instead of silently rounding through
-				// float64), while the decimal, negative and exponent strings
-				// the widened omitted-length CAST/CONVERT-to-CHAR results need
-				// (#32336, #32374) keep the string parser's values through a
-				// float fallback. Scale-0 DECIMAL128 carries both integer
-				// domains exactly and renders like the base's UINT64 route.
+				// float64), while every other numeric token keeps the
+				// accepted domain and shortest-digit display of the VARCHAR
+				// route's string parser (mo-bot review: the DECIMAL128(38,0)
+				// intermediate rejected CEIL(CAST('1e40' AS CHAR)) and
+				// FLOOR(CONVERT('18446744073709551616', CHAR))). Scale-0
+				// DECIMAL256 — the widest integral numeric — carries the
+				// exact integer domains and every wide float fallback the
+				// widened omitted-length CAST/CONVERT-to-CHAR results need
+				// (#32336, #32374).
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return types.T_decimal256.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CeilTextUnary
@@ -7983,17 +7987,19 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				// One-argument FLOOR binds TEXT directly with a dual-domain
 				// executor: integer strings keep the exact INT64 and UINT64
-				// values the pre-widening UINT64 tie produced, while the
-				// decimal, negative and exponent strings the widened
-				// omitted-length CAST/CONVERT-to-CHAR results need
-				// (#32336, #32374) keep the string parser's values through a
-				// float fallback, and NULL rows keep NULL results. Scale-0
-				// DECIMAL128 carries both integer domains exactly and
-				// renders like the base's UINT64 route.
+				// values the pre-widening UINT64 tie produced, while every
+				// other numeric token keeps the accepted domain and
+				// shortest-digit display of the VARCHAR route's string
+				// parser (mo-bot review: the DECIMAL128(38,0) intermediate
+				// rejected the wide compositions), and NULL rows keep NULL
+				// results. Scale-0 DECIMAL256 — the widest integral numeric —
+				// carries both integer domains and every wide float fallback
+				// the widened omitted-length CAST/CONVERT-to-CHAR results
+				// need (#32336, #32374).
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return types.T_decimal256.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return FloorTextUnary
