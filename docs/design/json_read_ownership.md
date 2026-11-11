@@ -1,11 +1,192 @@
 # Immutable JSON read ownership
 
 Owning issue: #28037. Consumer: [PR #28275](https://github.com/matrixorigin/matrixone/pull/28275).
-The ownership foundation is organized as a separate dependency of that PR.
+The ownership foundation is [PR #32546](https://github.com/matrixorigin/matrixone/pull/32546),
+a separate dependency of #28275. Both PRs remain subject to the design gate for
+the complete series; splitting the implementation does not approve its design.
 
 This dependency provides binary JSON admission and opaque, immutable read
 owners. SQL syntax, overloads, response policies, persisted expression admission,
 and operator delivery belong to consumers and are outside this change.
+
+## Design decision D1: review target and acceptance
+
+Status: **PROPOSED; independent design approval pending** (2026-11-11).
+This section is a design-only amendment to the implementation reviewed as
+`4df268ea5f21882599fdfd6f415b67f849b99675` ->
+`42ea0b3940fe9d9b41f9d37daee767a4de3d2fe6`. The detailed mechanism and revision
+history below remain part of this design. The approving review must identify
+the exact commit containing D1, this document, both PRs, its decision and any
+remaining conditions. An author update, publication permission, or a passing
+test is not that approval.
+
+The change crosses Vector, FileService, ObjectIO, storage publication and
+execution-resource ownership. It adds immutable versions and modifies cache-pin
+admission and execution-generation initialization, so the architectural design
+gate applies regardless of SQL syntax changes or the standalone PR's label.
+Implementation approval remains blocked during this distinct design-review
+phase. Historical paragraphs headed "Review decision" record development
+decisions; none is a claim of an external reviewer approval of D1.
+
+### Problem and baseline
+
+Main `4df268e` decodes admitted binary JSON for a legacy lookup without a fresh
+complete traversal. Ordinary Vector APIs can subsequently expose writable
+payloads and descriptors, so admission at an earlier write is insufficient to
+justify unchecked reads of the current mutable input. The defensive #28275
+implementation validates the complete current document on every lookup. That
+preserves malformed-descendant rejection but makes a small-field query depend
+on unrelated document contents, repeatedly for each path and expression.
+
+The required invariant is complete validation of a stable owned version before
+any unchecked query, including unselected descendants. Repeated queries may
+reuse that conclusion only while descriptors, payload, NULL/constant metadata
+and row mapping remain owned and immutable. Unknown or ordinary mutable input
+must retain complete validation. A pointer, length, lease or flag alone is not
+the ownership proof. The existing binary JSON representation, query engine,
+reference-counted leases and query/CN memory accounts are the constraints and
+local precedents; this design introduces no new interoperability format.
+
+### Alternatives and selection
+
+| Option | Correctness and cost | Complexity, compatibility and validation |
+| --- | --- | --- |
+| Keep defensive validation before every lookup | Meets the malformed-input contract; Q lookups pay Q complete traversals, even for a fixed small path. | Smallest implementation and unchanged formats, but retains the measured common-path regression. Easy to test; retained as the ordinary mutable-input fallback, not the normal immutable route. |
+| Always copy and fully validate a requested column into a private snapshot | Meets the contract and shares one validated version across paths; every producer pays a full descriptor/payload copy, including a private builder or sealed storage result. | A credible simpler ownership boundary with unchanged formats and straightforward isolation tests. It increases peak live memory and scan-copy cost even where a producer can safely transfer private storage. It is the fallback for external aliases, not the preferred route for every source. |
+| Make all Vector writes copy-on-write and encapsulate every writable alias | Could support reusable validation if every descriptor, area, NULL and row-map mutation creates a new version. | Requires changing or restricting existing byte/slice access and all mutation, window, transport and reuse paths. Compatibility is at the API and ownership level despite unchanged disk bytes. Migration and testing extend beyond JSON_VALUE; a single missed writable alias invalidates the guarantee. Not selected for this series. |
+| Private producers publish immutable owners; other inputs use snapshots (selected) | Complete admission occurs before publication. Private builders/storage avoid an extra document copy; externally aliased input copies once. Paths share the same version. | More publication/lifetime machinery than snapshot-only, bounded to actual consumers and the two private owner implementations. Reuses existing formats, leases and accounts. Requires producer-to-consumer, alias, mapping, cancellation and accounting tests, plus end-to-end cost measurement. |
+
+Header-only/path-local checking and a trusted flag are rejected because they
+cannot preserve complete rejection of malformed unselected descendants or
+protect mutable aliases. A path cache would address a different cost and is
+outside this decision. No second partial JSON decoder is introduced.
+
+### Architecture, resource bounds and fallback
+
+The publication point follows private construction, complete admission and
+successful backing/metadata reservation. Failure publishes no handle. A view or
+result retains its owner; the last effective reference releases the backing and
+its shared pin charge exactly once. Handle and row-map charges have their own
+bounded lifetimes. Selection copies indices, not whole documents per path;
+constant repetition stores one row and a logical length. Reset, Free, new batches
+and prepared rebinding do not inherit another version's qualification.
+
+For B payload bytes, D descriptor/NULL metadata, N document nodes, Q lookups and
+S selected rows: a snapshot uses O(B + D) private backing and O(B + D + N)
+construction/admission work. A private transfer avoids an additional full
+backing copy. Admission retains the existing depth, byte and traversal-work
+bounds; it does not allocate width-dependent child/frame tables. Subsequent
+queries pay existing path parsing/lookup and owned output only. A selection
+uses O(S) accounted indices; its owner is shared rather than multiplied by Q.
+
+SQL backing, pin capacity, metadata and maps use the existing finite statement
+and CN budgets. Physical retained capacity is charged, not just logical bytes;
+missing accounting authority takes the accounted snapshot path. Reserve before
+retain/publication, and undo reservations on every partial failure. Retained
+results can outlive a reader, so closing a reader alone is not a zero-memory
+assertion; after the last consumer closes, this feature's live references and
+charges must be zero. There is no global cache, cleanup worker or new disk use.
+
+Memory-only admission obtains memory authority for the existing execution
+generation, not spill authority. Promotion initializes spill capacity on that
+same generation before any spill-capable handle is returned. It must preserve
+existing reservations, locking, limits and closed-generation behavior. Known
+FileService allocators may create new private storage; an unknown allocator
+uses the default private-allocation path rather than lending qualification to
+caller-controlled storage or rehome callbacks.
+
+Unsupported conversions materialize independent mutable data and lose the old
+qualification. A malformed candidate publishes no reader; the consumer may
+defer to the ordinary fully checked evaluator to preserve NULL/mask/error order.
+Allocation, account and cancellation failures remain terminal. Concurrency is
+limited to independent retained readers; concurrent source writes or Close
+racing operations on the same handle are unsupported. Releasing backing or
+returning output never exposes writable aliases to another consumer or tenant.
+
+Disk, wire and catalog formats remain unchanged. The series follows the
+repository's shutdown-upgrade contract, not mixed-running-version or old-node
+rejoin support; unrelated existing capability gates remain intact. Removing
+consumer demand returns to the defensive evaluator and discards read owners,
+without an on-disk migration. A rollout still requires supported-release data,
+recovery and deployed QA evidence at the applicable consumer boundary.
+
+### Fixed quantitative acceptance criteria
+
+These are merge/acceptance requirements, not a claim that the current code has
+passed them. Permission to publish a Draft does not change the numbers.
+
+| Boundary | Required result |
+| --- | --- |
+| Reuse | After successful admission of one version, additional 1/2/8 path queries add zero complete-document validations and zero full-document snapshot copies. At most one snapshot is shared for the same input version within its consuming evaluation. |
+| Unselected growth | With a fixed `$.keep`, increasing unrelated elements from 16 to 4096 adds no query-phase validation or full-document copy. Initial admission and externally aliased snapshot construction remain explicit costs. |
+| Resident/64-row performance | For each integer, string, mixed, wide and deep scenario and its 1/2/8-path inputs, five alternating paired candidate/base ratios have median <=1.20. Compare the actual legacy baseline; the seven-argument comparison covers only the shared short-text result domain. |
+| Actual SQL | Five alternating paired ratios have median <=1.10 for every fixed scenario. Timing includes planning, cold scan, admission, copying, evaluation and result release. Resident setup exclusion cannot establish this result. |
+| Memory and release | Charge all introduced live backing, pins, metadata and row maps before publication. Document storage and pin capacity do not multiply with path count; after all results/readers close, introduced live charges and references are zero. Record B/op, allocs/op, copies and per-domain/process peaks without adding overlapping counters. |
+| Unused feature | Queries without JSON_VALUE demand create zero additional snapshots, JSON owner/pin reservations or publication maps through this facility. |
+| Evidence identity | Same environment/toolchain/native inputs and harness in both arms; retain all five pairs and result oracles. Noise that prevents a decision is INCONCLUSIVE, not PASS. Observations use tests/probes, not new production high-frequency counters. |
+
+These criteria apply to the composed series, not to a standalone dependency
+that has no SQL consumer. Ordinary mutable-input full-validation benchmarks
+remain separate and must disclose their cost; they cannot be relabeled as
+immutable-reader results. A numeric fast path alone cannot satisfy coverage.
+Any proposed numerical exception requires an explicit new decision naming the
+policy owner, scope, rationale and exact measurements; it cannot be inferred
+from publication permission.
+
+### Measured costs and their decision status
+
+The #32546 publication record reports main `4df268e` versus composed tree
+`0b0eaa2464c6268edbb4855dbbe1c33e5c7540d3`, tested as `d64cd49` and also present
+at `9b47393`. Ubuntu used matching toolchain/native inputs and five AB/BA pairs.
+These are composed-tree observations, not standalone-foundation performance or
+independent reviewer reruns.
+
+| Observation | Paired median | Decision status under the fixed criteria |
+| --- | ---: | --- |
+| Worst actual SQL, deep/16/1 path | 1.0979x | Within 1.10x; limited margin, not proof of production throughput. |
+| Worst warm lookup | 1.0084x | Within 1.20x. |
+| Legacy 64 rows, wide/16/8 paths | 1.2034x | Above 1.20x; acceptance OPEN. |
+| Contract 64 rows, integer/4096/1 path | 1.2103x | Above 1.20x; acceptance OPEN. |
+| Contract 64 rows, string/16/1 path | 1.2007x | Above 1.20x; acceptance OPEN. |
+| Mutable input, 4096 elements | 9.7723x | Disclosed defensive fallback; not an immutable-query PASS or an accepted blanket workload cost. |
+
+The requester accepted publishing these measured costs for review, as recorded
+in #32546's initial body. That decision authorizes disclosure, not design or
+numerical acceptance. No quantitative waiver is recorded here. The PR body
+retains per-arm ns/op, B/op, allocs/op and all three above-target ratio series.
+Twenty expression windows had no observed major faults or global swap; two
+global swap-in pages occurred in one SQL baseline window. These observations
+do not prove absence of scheduling noise. Raw evidence remains author-retained;
+independent reproduction is not claimed.
+
+### Validation and approval record
+
+| Contract | Minimum proof and current evidence boundary |
+| --- | --- |
+| Complete admission and mutable aliases | Owning tests for self/overlap/bounds/encoding/depth errors, source/descriptor/inline mutation, repair and legal same-size mutation; no malformed version may publish. |
+| Lifetime and coordinates | Independent readers/results, dictionary reorder/repetition/NULL, nested selection/window/repeat, failed allocation, Reset/Free and deterministic scoped race; final charges zero. |
+| Private cache and budgets | Malicious/unknown allocator and retained rehome aliases, physical pin accounting, failed/cancelled reservations, memory-only promotion and ordinary full-budget controls. |
+| Consumer and SQL | Actual storage, memory, remote reception and constructor routes, filter/projection and prepared reuse; two overloads and response semantics belong to #28275. Standalone owning tests do not substitute for SQL. |
+| Performance | Fixed five-pair protocol above. Three composed cases remain above target; historical results on another base are not this candidate's PASS. |
+| Recovery and native risk | Attribute existing supported-release reports to their actual code/data. The historical proot native release error is unclassified; native passes do not erase it. A candidate-specific reproduction requires repair, and reviewer/QA disposition is required before merge. |
+
+The approval record is intentionally explicit:
+
+| Field | Current value |
+| --- | --- |
+| Design revision | D1 plus the detailed mechanism/revisions below, at the exact commit carrying this amendment. |
+| PR series | Foundation #32546 -> consumer #28275; owning issue #28037. |
+| Phase | Design review; implementation approval not yet granted. |
+| Independent reviewer and immutable review URL | PENDING; none supplied or fabricated by this amendment. |
+| Design decision | PENDING independent review; publication and local validation are not substitutes. |
+| Implementation/performance acceptance | OPEN, including the three fixed-threshold failures above. |
+
+To close the design gate, record an actual review naming the exact D1 commit
+and its PASS/REQUEST_CHANGES decision, resolved alternatives and cost decisions,
+and both PRs. Only then resume implementation approval. Design approval alone
+does not turn the remaining numerical failures, native-risk disposition, CI or
+deployed QA into PASS. A material ownership/accounting/compatibility change
+requires review of the affected design decision again.
 
 ## Invariant and state
 
