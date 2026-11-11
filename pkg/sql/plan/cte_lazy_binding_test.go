@@ -640,8 +640,13 @@ func TestCTEMultiReferenceReusesProducerContainingCTE(t *testing.T) {
 }
 
 func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	logicPlan, err := runOneStmt(mock, t, `
+	for _, routing := range []string{
+		"a.o_custkey between 1 and 100 and b.o_custkey between 50 and 150",
+		"a.o_custkey = 1 and b.o_custkey = 1",
+	} {
+		t.Run(routing, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, `
 		with customer_totals as (
 			select o_custkey, max(c_name) as customer_name,
 			       sum(o_totalprice) as total
@@ -651,26 +656,32 @@ func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
 		select a.o_custkey, a.customer_name, b.total
 		from customer_totals a join customer_totals b
 		  on a.o_custkey = b.o_custkey
-		where a.o_custkey between 1 and 100
-		  and b.o_custkey between 50 and 150
+		where `+routing+`
 		  and a.total > 0
 		order by a.o_custkey
 		limit 100`)
-	require.NoError(t, err)
+			require.NoError(t, err)
 
-	query := logicPlan.GetQuery()
-	require.NotNil(t, query)
-	tableScans := make(map[string]int)
-	for nodeID := range cteReachablePlanNodes(query) {
-		node := query.Nodes[nodeID]
-		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
-			tableScans[node.TableDef.Name]++
-		}
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			tableScans := make(map[string]int)
+			ordersHasRoutingFilter := false
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+					tableScans[node.TableDef.Name]++
+					if node.TableDef.Name == "orders" && len(node.FilterList) > 0 {
+						ordersHasRoutingFilter = true
+					}
+				}
+			}
+			require.Equal(t, 1, tableScans["orders"])
+			require.Equal(t, 1, tableScans["customer"])
+			require.True(t, ordersHasRoutingFilter, "bound literal routing predicates must reach the shared producer")
+			require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+		})
 	}
-	require.Equal(t, 1, tableScans["orders"])
-	require.Equal(t, 1, tableScans["customer"])
-	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
-	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
 }
 
 func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
@@ -1684,9 +1695,16 @@ func TestCTEDrainProofRecognizesPendingCommaJoinEquality(t *testing.T) {
 		name      string
 		operator  string
 		wantDrain bool
+		nested    bool
+		outer     bool
+		limited   bool
 	}{
 		{name: "equality becomes hash join", operator: "=", wantDrain: true},
 		{name: "non equality remains streaming join", operator: ">", wantDrain: false},
+		{name: "equality crosses ordinary inner join", operator: "=", nested: true, wantDrain: true},
+		{name: "non equality crosses ordinary inner join", operator: ">", nested: true},
+		{name: "equality cannot cross outer join", operator: "=", nested: true, outer: true},
+		{name: "equality cannot cross limited join", operator: "=", nested: true, limited: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), test.operator, []*planpb.Expr{
@@ -1706,10 +1724,68 @@ func TestCTEDrainProofRecognizesPendingCommaJoinEquality(t *testing.T) {
 				{NodeId: 3, NodeType: planpb.Node_FILTER, Children: []int32{2}, FilterList: []*planpb.Expr{condition}},
 			}
 
+			if test.nested {
+				upperCondition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+					GetColExpr(intType, 20, 0), GetColExpr(intType, 30, 0),
+				})
+				require.NoError(t, err)
+				builder.qry.Nodes = append(builder.qry.Nodes,
+					&planpb.Node{NodeId: 4, NodeType: planpb.Node_VALUE_SCAN, BindingTags: []int32{30}},
+					&planpb.Node{NodeId: 5, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 4}},
+				)
+				builder.qry.Nodes[3].Children[0] = 5
+				builder.qry.Nodes[3].FilterList = append(builder.qry.Nodes[3].FilterList, upperCondition)
+				if test.outer {
+					builder.qry.Nodes[5].JoinType = planpb.Node_LEFT
+				}
+				if test.limited {
+					builder.qry.Nodes[5].Limit = makePlan2Int64ConstExprWithType(1)
+				}
+			}
 			requirements, drained := builder.cteConsumerDrainRequirements(
 				3, []cteOccurrence{{rootID: 0}})
 			require.Equal(t, test.wantDrain, drained)
 			require.Equal(t, test.wantDrain, requirements[0])
+		})
+	}
+}
+
+func TestCTEConditionalProducerTotality(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	integer := planpb.Type{Id: int32(types.T_int64)}
+	text := planpb.Type{Id: int32(types.T_varchar), Width: 12}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	builder.qry.Nodes = []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{1}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "k", Typ: integer}, {Name: "v", Typ: integer}, {Name: "s", Typ: text},
+		}}}}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	condition := bind("=", GetColExpr(integer, 1, 0), makePlan2Int64ConstExprWithType(1))
+	pure := bind("case", condition, GetColExpr(integer, 1, 1), makePlan2NullConstExprWithType())
+	unsafe, err := appendCastBeforeExpr(ctx.GetContext(), GetColExpr(text, 1, 2), integer)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "pure conditional with NULL arm", expr: pure, want: true},
+		{name: "fallible condition", expr: bind("case", bind("=", unsafe, makePlan2Int64ConstExprWithType(1)), GetColExpr(integer, 1, 1), makePlan2Int64ConstExprWithType(0))},
+		{name: "fallible arm", expr: bind("case", condition, unsafe, makePlan2Int64ConstExprWithType(0))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, builder.cteExprIsTotal(0, test.expr, nil, make(map[[2]int32]bool)))
+		})
+	}
+	for _, literal := range []string{"Sunday", "too-long-for-char-nine"} {
+		t.Run(literal, func(t *testing.T) {
+			cast, err := appendCastBeforeExpr(ctx.GetContext(), makePlan2StringConstExprWithType(literal), planpb.Type{Id: int32(types.T_char), Width: 9})
+			require.NoError(t, err)
+			require.Equal(t, len(literal) <= 9, builder.cteExprIsTotal(0, cast, nil, make(map[[2]int32]bool)))
 		})
 	}
 }
