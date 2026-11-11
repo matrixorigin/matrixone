@@ -105,10 +105,34 @@ func TestS3FSPrefetchRanges(t *testing.T) {
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(ctx, req))
 	require.False(t, fs.prefetcher.isQueued("object"), "its ranges are cached")
+	whole := ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Needs: req.Ranges}
+	require.NoError(t, fs.PrefetchObject(ctx, whole))
+	require.False(t, fs.prefetcher.isQueued("object"), "the ranges a whole request needs are cached")
+	whole.Needs = []PrefetchRange{{Offset: 1000, Size: 10}}
+	require.False(t, fs.haveObject(whole), "a range it needs is not cached")
+	whole.Needs = nil
+	require.False(t, fs.haveObject(whole), "a whole request without needs wants the object")
 	other := req
 	other.Ranges = []PrefetchRange{{Offset: 1000, Size: 10}}
 	require.NoError(t, fs.PrefetchObject(ctx, other))
 	require.True(t, fs.prefetcher.isQueued("object"))
+}
+
+// Adjacent ranges not cached are read in one read; cached ones are not read.
+func TestS3FSPrefetchRangesJoinsAdjacent(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 300<<10)
+	ctx := context.Background()
+	a, b, c := PrefetchRange{Offset: 1000, Size: 100}, PrefetchRange{Offset: 1100, Size: 50}, PrefetchRange{Offset: 4000, Size: 10}
+	fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 160, Ranges: []PrefetchRange{c, b, a}})
+	require.Equal(t, int64(2), storage.reads.Load(), "a and b in one read, c in another")
+	require.Equal(t, int64(160), storage.bytes.Load())
+	require.Equal(t, data[1050:1120], readRangeOf(t, fs, ColumnPrefetch, 1050, 70))
+	require.Equal(t, int64(2), storage.reads.Load(), "a read across a and b is served from the cache")
+
+	d := PrefetchRange{Offset: 1150, Size: 20}
+	fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 180, Ranges: []PrefetchRange{a, b, d}})
+	require.Equal(t, int64(3), storage.reads.Load(), "only d is read")
+	require.Equal(t, int64(180), storage.bytes.Load())
 }
 
 // A download at a size other than the object's caches nothing.

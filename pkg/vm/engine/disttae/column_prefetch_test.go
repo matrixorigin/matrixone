@@ -42,8 +42,9 @@ func (fs *columnPrefetchFS) PrefetchObject(_ context.Context, req fileservice.Ob
 }
 
 // newColumnPrefetchSource writes one object of 3 blocks, a small int32 column 0 and a large
-// vector column 1, and returns a data source over its blocks.
-func newColumnPrefetchSource(t *testing.T) (*LocalDisttaeDataSource, *columnPrefetchFS, objectio.ObjectStats) {
+// vector column 1, recording their ranges in the object or not, and returns a data source
+// over its blocks.
+func newColumnPrefetchSource(t *testing.T, recordColumns bool) (*LocalDisttaeDataSource, *columnPrefetchFS, objectio.ObjectStats) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	ctx := context.Background()
@@ -73,7 +74,9 @@ func newColumnPrefetchSource(t *testing.T) (*LocalDisttaeDataSource, *columnPref
 		require.NoError(t, err)
 		bat.Clean(mp)
 	}
-	writer.WriteObjectMeta(ctx, 3*rows, []objectio.ColumnMeta{objectio.BuildObjectColumnMeta(), objectio.BuildObjectColumnMeta()})
+	if recordColumns {
+		writer.WriteObjectMeta(ctx, 3*rows, []objectio.ColumnMeta{objectio.BuildObjectColumnMeta(), objectio.BuildObjectColumnMeta()})
+	}
 	blocks, err := writer.WriteEnd(ctx)
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
@@ -100,15 +103,18 @@ func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 		policy  fileservice.Policy
 		seqNums []uint16
 		ranges  int // ranges of the one request; -1 means the whole object; -2 no request
+		needs   int // ranges a whole request needs
+		bare    bool
 	}{
 		{name: "small column", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: 1},
-		{name: "most of the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0, 1}, ranges: -1},
-		{name: "no column extent", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{7}, ranges: -1},
+		{name: "most of the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0, 1}, ranges: -1, needs: 2},
+		{name: "columns not in the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{7}, ranges: -2},
+		{name: "column ranges not recorded", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: -1, bare: true},
 		{name: "scan", seqNums: []uint16{0}, ranges: -1},
 		{name: "whole preloads skipped", policy: fileservice.SkipFullFilePreloads, seqNums: []uint16{0}, ranges: -2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ls, fs, stats := newColumnPrefetchSource(t)
+			ls, fs, stats := newColumnPrefetchSource(t, !tc.bare)
 			ctx := fileservice.WithFileServicePolicy(context.Background(), tc.policy)
 			ls.batchPrefetch(ctx, tc.seqNums)
 			if tc.ranges == -2 {
@@ -123,6 +129,7 @@ func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 				require.Equal(t, int64(stats.Size()), req.Size)
 				require.Equal(t, 3, req.Reads)
 				require.Equal(t, 3, req.Blocks)
+				require.Len(t, req.Needs, tc.needs, "the column ranges that, cached, make the download unneeded")
 				return
 			}
 			require.Len(t, req.Ranges, tc.ranges)

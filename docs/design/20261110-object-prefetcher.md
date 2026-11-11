@@ -145,6 +145,8 @@ A row fetch never downloads a whole object on a read. Ahead of the scan, for eac
 - Otherwise, or when the object records no column ranges, it prefetches the whole
   object as other scans do: at that share, one whole download costs fewer requests than
   one request per column, for at most twice the bytes.
+- When the object stores none of the columns, as for columns added after it was
+  written, it prefetches nothing.
 
 The choice depends only on the object and the columns read, so a query makes it the same
 way each time.
@@ -152,13 +154,16 @@ way each time.
 - An object stores its data column by column: the chunks of one column for every block
   lie one after another, whatever the column's type, and the object's metadata records
   where that run starts and how long it is. Each column is one range per object.
-- Each range is downloaded on its own and cached as it is, so later reads of the column
-  in any block of the object are served from the disk cache, as from a whole object.
+- A request keeps one range per column. Its download skips the columns already cached
+  and reads the others that lie next to each other, as consecutive columns of an object
+  do, in one read; each read is cached as it is, so later reads of the columns in any
+  block of the object are served from the disk cache, as from a whole object.
 - A request of ranges is skipped while cached ranges cover them or the whole object is
   cached or downloading. Requests of ranges for one object add up, and a request of the
   whole object takes over a queued request of ranges.
-- A whole request for an object whose column ranges are cached downloads those bytes
-  again; this needs two queries reading different columns of the object.
+- A row fetch's whole request carries the ranges of its columns: it is skipped while
+  cached ranges cover them, even when earlier requests of other column sets cached them.
+  Merged with a request that needs the whole object, it needs it too.
 - The index search keeps whole-object prefetch of its own tables.
 
 ### Parallel range downloads of whole objects (decision)

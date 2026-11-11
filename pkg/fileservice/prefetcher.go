@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"container/heap"
 	"context"
 	"slices"
@@ -31,6 +32,8 @@ import (
 // bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
 // it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
 // With Ranges, only those ranges of the object, of Size bytes in all, are downloaded.
+// A request of the whole object with Needs is not downloaded while cached ranges cover
+// Needs.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
@@ -38,6 +41,7 @@ type ObjectPrefetch struct {
 	Reads    int
 	Blocks   int
 	Ranges   []PrefetchRange
+	Needs    []PrefetchRange
 	Scan     *PrefetchScan
 }
 
@@ -65,26 +69,46 @@ func (s *PrefetchScan) live() bool {
 
 // merge returns the prefetch of the object for both r and o: the sooner Due and the
 // larger share.
-// A request of the whole object takes over one of ranges, and ranges add up.
+// A request of the whole object takes over one of ranges, and ranges add up. The whole
+// object has Needs only when both requests are satisfied by cached ranges.
 func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
 	if o.share() > r.share() {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
 	}
-	switch {
-	case len(r.Ranges) == 0:
-	case len(o.Ranges) == 0:
-		r.Ranges, r.Size = nil, o.Size
-	default:
-		r.Ranges = slices.Clone(r.Ranges)
-		for _, x := range o.Ranges {
-			if !slices.Contains(r.Ranges, x) {
-				r.Ranges = append(r.Ranges, x)
-				r.Size += x.Size
-			}
+	if len(r.Ranges) > 0 && len(o.Ranges) > 0 {
+		r.Ranges, r.Size = unionRanges(r.Ranges, o.Ranges, r.Size)
+		return r
+	}
+	var needs []PrefetchRange
+	if rn, on := r.needed(), o.needed(); len(rn) > 0 && len(on) > 0 {
+		needs, _ = unionRanges(rn, on, 0)
+	}
+	if len(r.Ranges) > 0 {
+		r.Size = o.Size
+	}
+	r.Ranges, r.Needs = nil, needs
+	return r
+}
+
+// unionRanges returns a copy of a with the ranges of b not in it, and size plus their bytes.
+func unionRanges(a, b []PrefetchRange, size int64) ([]PrefetchRange, int64) {
+	a = slices.Clone(a)
+	for _, x := range b {
+		if !slices.Contains(a, x) {
+			a = append(a, x)
+			size += x.Size
 		}
 	}
-	return r
+	return a, size
+}
+
+// needed returns the ranges that, cached, satisfy r.
+func (r ObjectPrefetch) needed() []PrefetchRange {
+	if len(r.Ranges) > 0 {
+		return r.Ranges
+	}
+	return r.Needs
 }
 
 // share returns, in tenths, the share of the object's blocks the read reads.
@@ -205,12 +229,21 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		return
 	}
 	if e, ok := p.entries[req.FilePath]; ok {
+		if e.index >= 0 && p.have(req) {
+			metric.FSPrefetchCachedCounter.Inc()
+			return
+		}
 		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
 		if e.index >= 0 {
-			size := e.req.Size
-			e.req = e.req.merge(req)
-			p.queuedBytes += e.req.Size - size
+			merged := e.req.merge(req)
+			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytes+grow > p.limit() {
+				// Past the queue's bytes, the queued download keeps what it downloads.
+				merged.Size, merged.Ranges, merged.Needs = e.req.Size, e.req.Ranges, e.req.Needs
+				metric.FSPrefetchDroppedCounter.Inc()
+			}
+			p.queuedBytes += merged.Size - e.req.Size
+			e.req = merged
 			heap.Fix(&p.queue, e.index)
 		}
 		return
@@ -367,9 +400,9 @@ func (s *S3FS) prefetchQueueLimit(workers int) func() int64 {
 	}
 }
 
-// haveObject reports whether the whole object of req is cached or being downloaded, or,
-// for a request of ranges, whether cached ranges cover them. A request of the whole object
-// marks a cached one used.
+// haveObject reports whether the whole object of req is cached or being downloaded, or
+// whether cached ranges cover the ranges req needs. A request of the whole object marks a
+// cached one used.
 func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	path, err := parseFilePathAtService(req.FilePath, s.name)
 	if err != nil {
@@ -386,11 +419,12 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	} else if _, ok := s.diskCache.cache.Get(context.Background(), diskPath); ok {
 		return true
 	}
-	if len(req.Ranges) == 0 {
+	needs := req.needed()
+	if len(needs) == 0 {
 		return false
 	}
 	key := s.diskCache.rangeObjectKey(path.File)
-	for _, r := range req.Ranges {
+	for _, r := range needs {
 		if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); !ok {
 			return false
 		}
@@ -423,10 +457,10 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	metric.FSPrefetchDownloadedCounter.Inc()
 }
 
-// prefetchRanges reads each range of req into the disk cache on its own, so the bytes
-// between them are not read.
+// prefetchRanges reads into the disk cache the ranges of req not cached, those that are
+// adjacent in one read each, so the bytes between them are not read.
 func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
-	for _, r := range req.Ranges {
+	for _, r := range s.rangesToDownload(req) {
 		vector := &IOVector{
 			FilePath: req.FilePath,
 			Entries:  []IOEntry{{Offset: r.Offset, Size: r.Size}},
@@ -441,4 +475,32 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 		}
 	}
 	metric.FSPrefetchDownloadedCounter.Inc()
+}
+
+// rangesToDownload returns the ranges of req not covered by cached ranges, in order, with
+// adjacent ones joined.
+func (s *S3FS) rangesToDownload(req ObjectPrefetch) []PrefetchRange {
+	var key string
+	if path, err := parseFilePathAtService(req.FilePath, s.name); err == nil {
+		key = s.diskCache.rangeObjectKey(path.File)
+	}
+	out := make([]PrefetchRange, 0, len(req.Ranges))
+	for _, r := range req.Ranges {
+		if key != "" {
+			if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); ok {
+				continue
+			}
+		}
+		out = append(out, r)
+	}
+	slices.SortFunc(out, func(a, b PrefetchRange) int { return cmp.Compare(a.Offset, b.Offset) })
+	joined := out[:0]
+	for _, r := range out {
+		if n := len(joined); n > 0 && joined[n-1].Offset+joined[n-1].Size == r.Offset {
+			joined[n-1].Size += r.Size
+			continue
+		}
+		joined = append(joined, r)
+	}
+	return joined
 }

@@ -83,6 +83,10 @@ func TestObjectColumnExtentIsItsBlocksInOrder(t *testing.T) {
 
 	for _, seq := range []uint16{0, 1, 2} {
 		column := meta.MustGetColumn(seq).Location()
+		if seq > 0 {
+			before := meta.MustGetColumn(seq - 1).Location()
+			require.Equal(t, before.Offset()+before.Length(), column.Offset(), "column %d starts where the one before ends", seq)
+		}
 		next := column.Offset()
 		var total uint32
 		for blk := range rowsPerBlock {

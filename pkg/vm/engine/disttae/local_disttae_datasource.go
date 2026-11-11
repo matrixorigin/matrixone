@@ -1774,16 +1774,39 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 		}
 		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
+		var needs []fileservice.PrefetchRange
 		if policy.Any(fileservice.ColumnPrefetch) {
 			if !isPrefetcher {
 				continue
 			}
-			ranges, err := ls.prefetchColumns(ctx, blk, seqNums, due, size)
+			ranges, bytes, recorded, err := ls.columnRanges(ctx, blk, seqNums)
 			if err != nil {
 				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-			}
-			if ranges || err != nil || size <= 0 {
 				continue
+			}
+			if recorded && len(ranges) == 0 {
+				// The object stores none of the columns.
+				continue
+			}
+			// The columns are downloaded alone while under half of the object.
+			if recorded && (size <= 0 || bytes*2 < size) {
+				if ls.rc.prefetchScan == nil {
+					ls.rc.prefetchScan = new(fileservice.PrefetchScan)
+				}
+				err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
+					FilePath: blk.MetaLocation().Name().String(),
+					Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
+				})
+				if err != nil {
+					logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
+				}
+				continue
+			}
+			if size <= 0 {
+				continue
+			}
+			if recorded {
+				needs = ranges
 			}
 		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
@@ -1797,7 +1820,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Needs: needs, Scan: ls.rc.prefetchScan,
 			})
 		} else {
 			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
@@ -1812,36 +1835,32 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	ls.rc.batchPrefetchCursor = max(end, begin)
 }
 
-// prefetchColumns asks to download, from the object of blk of size bytes, the ranges that
-// hold the columns seqNums across all its blocks, which the scan reaches at due. It returns
-// false when the columns have no ranges or are at least half of the object, which is then
-// downloaded whole.
-func (ls *LocalDisttaeDataSource) prefetchColumns(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16, due int64, size int64) (bool, error) {
+// columnRanges returns the ranges that hold the columns seqNums across all the blocks of
+// the object of blk, and their bytes in all. It returns false when the object stores a
+// column of seqNums without recording its range.
+func (ls *LocalDisttaeDataSource) columnRanges(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16) ([]fileservice.PrefetchRange, int64, bool, error) {
 	loc := blk.MetaLocation()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, ls.fs)
 	if err != nil {
-		return false, err
+		return nil, 0, false, err
 	}
 	data := meta.MustDataMeta()
-	if ls.rc.prefetchScan == nil {
-		ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-	}
-	req := fileservice.ObjectPrefetch{FilePath: loc.Name().String(), Due: due, Scan: ls.rc.prefetchScan}
+	var ranges []fileservice.PrefetchRange
+	var bytes int64
+	recorded := true
 	for _, seq := range seqNums {
 		if seq > data.BlockHeader().MaxSeqnum() {
 			continue
 		}
 		ext := data.MustGetColumn(seq).Location()
 		if ext.Length() == 0 {
+			recorded = false
 			continue
 		}
-		req.Ranges = append(req.Ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
-		req.Size += int64(ext.Length())
+		ranges = append(ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
+		bytes += int64(ext.Length())
 	}
-	if len(req.Ranges) == 0 || (size > 0 && req.Size*2 >= size) {
-		return false, nil
-	}
-	return true, ls.fs.(fileservice.ObjectPrefetcher).PrefetchObject(ctx, req)
+	return ranges, bytes, recorded, nil
 }
 
 const (
