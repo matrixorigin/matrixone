@@ -2672,3 +2672,38 @@ func TestBudgetCleanupPreservesErrorsAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBudgetCleanupContinuesAfterSQLVerificationFailures(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("DROP DATABASE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SHOW DATABASES LIKE").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("remaining_db"))
+	mock.ExpectQuery("SELECT table_name FROM mo_catalog.mo_iceberg_tables").WillReturnError(errors.New("catalog verification failed"))
+	deletes := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/v1/config"):
+			_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+		case r.Method == http.MethodDelete:
+			deletes <- r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	cfg := localE2ETestConfig()
+	cfg.CatalogURI = server.URL + "/iceberg"
+	result := (&caseRunner{cfg: cfg, db: db, ownedDatabase: true}).cleanupBudgetCase(context.Background(), &budgetRESTResources{namespace: true, tables: []string{"first"}})
+	for _, want := range []string{"remaining_db", "catalog verification failed"} {
+		if result.Status != "failed" || !strings.Contains(result.Error, want) {
+			t.Fatalf("missing SQL verification error %q: %+v", want, result)
+		}
+	}
+	if len(deletes) != 2 || !strings.HasSuffix(<-deletes, "/tables/first") || !strings.HasSuffix(<-deletes, "/namespaces/"+cfg.Namespace) {
+		t.Fatal("cleanup did not delete both owned REST resources")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
