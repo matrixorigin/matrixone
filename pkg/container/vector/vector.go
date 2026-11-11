@@ -3886,6 +3886,10 @@ func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
 	} else if i >= v.length {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
 	}
+	if v.IsDictionary() {
+		base, physicalRow := v.dictionaryPhysicalRow(i)
+		return base.GetBytesAtChecked(physicalRow)
+	}
 	if i >= len(v.data)/types.VarlenaSize {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector data size")
 	}
