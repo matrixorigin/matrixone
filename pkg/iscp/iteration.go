@@ -855,8 +855,6 @@ func (permanentError) Error() string {
 	return "permanent error"
 }
 
-var errPermanent error = permanentError{}
-
 func isPermanentError(err error) bool {
 	var target permanentError
 	return errors.As(err, &target)
