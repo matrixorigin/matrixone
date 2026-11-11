@@ -95,7 +95,10 @@ func sameLegacyCRC32Expression(left, right string) (bool, bool) {
 			// Retain the exact formatted spelling as well as the decoded bytes.
 			// The historical origin may have been authored under a different
 			// backslash mode, so equal decoding alone is not a proof.
-			if av != bv || strings.TrimSpace(left[apos:a.Pos]) != strings.TrimSpace(right[bpos:b.Pos]) {
+			if av == bv && strings.TrimSpace(left[apos:a.Pos]) != strings.TrimSpace(right[bpos:b.Pos]) {
+				return false, false
+			}
+			if av != bv {
 				same = false
 			}
 		} else if !strings.EqualFold(av, bv) {
