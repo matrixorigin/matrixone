@@ -22,6 +22,7 @@ vector operations, and fulltext search.
 
 from __future__ import annotations
 
+from ._driver_params import single_driver_parameters
 from ._telemetry import observe, pool_wait
 from ._utils import result_returns_rows
 
@@ -147,7 +148,7 @@ class Session(SQLAlchemySession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
-            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            return self.connection().exec_driver_sql(sql, single_driver_parameters(params), execution_options={'no_parameters': params is None})
         except Exception as error:
             from .client import _classify_db_error
 
@@ -726,7 +727,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             raise TypeError('execute_driver requires SQL text')
         try:
             connection = await self.connection()
-            return await connection.exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            return await connection.exec_driver_sql(sql, single_driver_parameters(params), execution_options={'no_parameters': params is None})
         except Exception as error:
             from .client import _classify_db_error
 
