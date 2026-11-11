@@ -292,3 +292,18 @@ that unrelated work is acceptable only with evidence for exact-once promotion,
 current disk and explicit limits, no stale or premature spill authority,
 concurrent callers, borrowed processes, failure/cancellation and final account
 release. Validate common structure sizes and rerun the complete SQL gate.
+
+### Owned text from an admitted JSON string (candidate revision 37)
+
+For `TpCodeString`, the existing unquote operation returns the stored payload
+as an owned Go string; legacy float formatting has no effect on that type. A
+private reader or cache reader may make the same owned string conversion
+directly after selection. This relies on the complete admission check having
+already verified the canonical length and UTF-8 payload, including for nested
+and wildcard-selected values. It must not expose a slice or a string alias to
+the retained backing, and it does not relax checks for any other type.
+
+Review decision: compare both concrete readers with the existing unquote
+operation for empty, escaped, multibyte and NUL-containing strings, including
+single wildcard matches. Verify that results survive reader and cache-owner
+release, and rerun the scoped concurrency and paired performance checks.
