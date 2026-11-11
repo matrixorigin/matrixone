@@ -1642,7 +1642,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 		}
 	}
-	//small table means this table maybe not flushed yet, or it's not worse to go index
+	// Small tables may not be flushed yet, or an index may not be more expensive.
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
 	idxToChoose := -1
 	var filterIdx []int32
@@ -1650,19 +1650,31 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if !pointBlocked {
 		idxToChoose, filterIdx, keySetSize = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
 	}
-	// A cardinality-proven unique point cannot produce the broad output that
-	// the aggregate scan estimates below are intended to guard against. A key
-	// set has a different finite bound and must not use the singleton bypass.
-	singletonPoint := idxToChoose != -1 && keySetSize == 0 && indexes[idxToChoose].Unique &&
-		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
-	if !ignoreStats && !singletonPoint {
-		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
-			// for cluster by table, make it less prone to go index
-			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
-				return nodeID
-			}
+	selectEqualityFallback := func() {
+		idxToChoose, filterIdx, keySetSize = builder.getMostSelectiveIndexForPointSelectWithKeySets(indexes, node, ignoreStats, sortedSelectivity, false)
+	}
+	allowedByScanStats := func() bool {
+		// A schema-proven singleton may bypass the broad-scan guard. A key
+		// set is not a singleton, and must use the ordinary guard.
+		singletonPoint := idxToChoose != -1 && keySetSize == 0 && indexes[idxToChoose].Unique &&
+			len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
+		if ignoreStats || singletonPoint {
+			return true
 		}
-		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK) {
+			return false
+		}
+		return !(node.Stats.Selectivity >= InFilterSelectivityLimit ||
+			node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)))
+	}
+	if !allowedByScanStats() {
+		if keySetSize == 0 {
+			return nodeID
+		}
+		// The key-set gate must not mask a previously usable equality point.
+		selectEqualityFallback()
+		if !allowedByScanStats() {
 			return nodeID
 		}
 	}
@@ -1674,8 +1686,22 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			condType = KeySetIndexCondition
 		}
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
-		return retID
+		if idxTableNodeID >= 0 {
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
+		// Failed key-set lowering has published no nodes and changed no scan
+		// state. Retry the pre-existing equality selection, or continue to the
+		// ordinary non-equality/scan paths if there is no candidate.
+		selectEqualityFallback()
+		if !allowedByScanStats() {
+			return nodeID
+		}
+		if idxToChoose != -1 {
+			retID, idxTableNodeID = builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
 	}
 
 	if sortedSelectivity < 1 {
@@ -2109,6 +2135,17 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	if leadingEqualCond {
 		leadingPos = tryMatchMoreLeadingFilters(idxDef, node, leadingPos[0])
 	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return -1
+	}
+	for i := range leadingPos {
+		if prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])] > 0 {
+			// Full values cannot probe a truncated key, even if the column is
+			// also available from a full primary-key component.
+			return -1
+		}
+	}
 
 	if !leadingEqualCond && node.Stats != nil && node.Stats.TableCnt >= 50000 {
 		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
@@ -2351,6 +2388,14 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if !idxDef.Unique {
 			numParts--
 		}
+		if numParts <= 0 {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || prefixLengths[catalog.ResolveAlias(idxDef.Parts[0])] > 0 {
+			// The range/IN bounds below are full values, not index prefixes.
+			continue
+		}
 		if idxDef.Unique && numParts == 1 {
 			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
 		} else if !idxDef.Unique && numParts >= 1 {
@@ -2547,8 +2592,6 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	if err != nil {
 		panic(err)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
-
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
@@ -2562,6 +2605,13 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	} else {
 		idxFilter = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
 	}
+
+	// A declined key-set lowering must not publish an invalid scan or mutate
+	// the original scan. The caller will retry the ordinary access paths.
+	if filterType == KeySetIndexCondition && idxFilter == nil {
+		return -1, -1
+	}
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	// recod index table scan info
 	idxScanInfo := plan.IndexScanInfo{
@@ -2619,6 +2669,10 @@ func hasKnownScanCardinality(stats *plan.Stats) bool {
 }
 
 func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32, int) {
+	return builder.getMostSelectiveIndexForPointSelectWithKeySets(indexes, node, ignoreStats, maxSelectivity, true)
+}
+
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelectWithKeySets(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool) (int, []int32, int) {
 	currentSel := maxSelectivity
 	currentIdx := -1
 	knownCardinality := hasKnownScanCardinality(node.Stats)
@@ -2635,9 +2689,11 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			col2filter[col.ColPos] = int32(i)
 			continue
 		}
-		if colPos, size, ok := indexKeySetFilter(node.FilterList[i]); ok {
-			inCol2filter[colPos] = int32(i)
-			inFilterSize[colPos] = size
+		if allowKeySet {
+			if colPos, size, ok := indexKeySetFilter(node.FilterList[i]); ok {
+				inCol2filter[colPos] = int32(i)
+				inFilterSize[colPos] = size
+			}
 		}
 	}
 
@@ -2649,13 +2705,22 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		if !idxDef.Unique {
 			numKeyParts--
 		}
-		if numKeyParts == 0 {
+		if numKeyParts <= 0 {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
 			continue
 		}
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
 			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
+			if prefixLengths[tmpName] > 0 {
+				// Equality lowering serializes the full value. Stop before a
+				// truncated key part so the fallback cannot lose matching rows.
+				break
+			}
 			colIdx := node.TableDef.Name2ColIndex[tmpName]
 			idx, ok := col2filter[colIdx]
 			if !ok {
@@ -2668,7 +2733,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		// key set when every other part is equality bound. Keep the original
 		// equality-only candidate when this general form does not apply.
 		candidateKeySetSize := 0
-		if numKeyParts > 1 && len(inCol2filter) > 0 {
+		if allowKeySet && numKeyParts > 1 && len(inCol2filter) > 0 && keySetIndexSupported(idxDef) {
 			keySetFilterIdx = keySetFilterIdx[:0]
 			inCount := 0
 			for j := 0; j < numKeyParts; j++ {
@@ -3127,3 +3192,4 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	}
 	return accessID, nil
 }
+

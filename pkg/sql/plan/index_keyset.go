@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -63,6 +65,33 @@ func indexKeySetFilter(expr *plan.Expr) (int32, int, bool) {
 	return col.ColPos, vec.Length(), true
 }
 
+// keySetIndexSupported rejects truncated index keys. Index writes serialize the
+// prefix rather than the original SQL value, so probing with a full value can
+// miss rows. Malformed metadata is also unsafe to use for this optimization.
+func keySetIndexSupported(idxDef *IndexDef) bool {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return false
+	}
+	for _, part := range idxDef.Parts {
+		if prefixLengths[catalog.ResolveAlias(part)] > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// marshalKeySetElement builds an independent one-row vector. Window borrows the
+// entire variable-length payload, and marshaling it for each row would copy the
+// whole IN list repeatedly. scratch owns only the selected row and is reused.
+func marshalKeySetElement(src, scratch *vector.Vector, row int, mp *mpool.MPool) ([]byte, error) {
+	scratch.ResetWithSameType()
+	if err := scratch.UnionOne(src, int64(row), mp); err != nil {
+		return nil, err
+	}
+	return scratch.MarshalBinary()
+}
+
 // replaceKeySetCondition lowers equality-bound key parts plus one IN dimension
 // to the existing serialized PREFIX_IN access primitive. Each tuple is folded
 // separately: serializing a scalar equality vector together with an N-element
@@ -103,19 +132,18 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 		}
 		compositeFilterSel *= filter.Selectivity
 	}
-	if inVec == nil {
+	if inVec == nil || builder.compCtx.GetProcess() == nil {
 		return nil
 	}
 
+	mp := builder.compCtx.GetProcess().Mp()
+	rowVec := vector.NewVec(*inVec.GetType())
+	defer rowVec.Free(mp)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	tuples := make([]*plan.Expr, inVec.Length())
 	serializedKeyBytes := 0
 	for row := 0; row < inVec.Length(); row++ {
-		rowVec, err := inVec.Window(row, row+1)
-		if err != nil {
-			return nil
-		}
-		data, err := rowVec.MarshalBinary()
+		data, err := marshalKeySetElement(inVec, rowVec, row, mp)
 		if err != nil {
 			return nil
 		}

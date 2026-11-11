@@ -352,4 +352,50 @@ where user_id='u1' and run_id='r1'
   and idempotency_key in ('first','second','third')
   and session_id=1 and payload<30 order by id;
 
+-- A three-column index also supports IN in the middle key position.
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+select id,payload from keyset_access force index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+
+-- Dynamic equality must fall back safely when tuples cannot be folded at plan time.
+prepare keyset_param from 'select id,payload from keyset_access force index(uq_user_run_key) where user_id=cast(? as varchar(16)) and run_id=''r1'' and idempotency_key in (''first'',''second'') order by id';
+set @keyset_user='u1';
+execute keyset_param using @keyset_user;
+set @keyset_user='u2';
+execute keyset_param using @keyset_user;
+set @keyset_user=null;
+execute keyset_param using @keyset_user;
+deallocate prepare keyset_param;
+
+-- Full equality values must not be probed against truncated index components.
+create table keyset_prefix (
+  id int primary key, a int, b varchar(20), payload int,
+  key ix_tail(a,b(4)), key ix_head(b(4),a)
+);
+insert into keyset_prefix values
+  (1,1,'abcdef',10),(2,1,'abcdxy',20),(3,1,'wxyz12',30),(4,2,'abcdef',40);
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+select id,payload from keyset_prefix force index(ix_tail)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where b='abcdef' and a in (1,2) order by id;
+select id,payload from keyset_prefix force index(ix_head)
+where b='abcdef' and a in (1,2) order by id;
+select id,payload from keyset_prefix force index(ix_head)
+where b in ('abcdef','wxyz12') and a=1 order by id;
+
+-- A nonunique key set must retain every row for a duplicated key.
+create table keyset_duplicates (
+  id int primary key, a int, b varchar(20), payload int, key ix_ab(a,b)
+);
+insert into keyset_duplicates values
+  (1,1,'alpha',10),(2,1,'alpha',20),(3,1,'beta',30),(4,2,'alpha',40);
+select id,payload from keyset_duplicates ignore index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+select id,payload from keyset_duplicates force index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+
 drop database mysql_compat_index_hint;
+

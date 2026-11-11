@@ -607,4 +607,77 @@ and session_id=1 and payload<30 order by id;
 ➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  20
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+5  ¦  50
+select id,payload from keyset_access force index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+5  ¦  50
+prepare keyset_param from 'select id,payload from keyset_access force index(uq_user_run_key) where user_id=cast(? as varchar(16)) and run_id=''r1'' and idempotency_key in (''first'',''second'') order by id';
+set @keyset_user='u1';
+execute keyset_param using @keyset_user;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+set @keyset_user='u2';
+execute keyset_param using @keyset_user;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+6  ¦  60
+set @keyset_user=null;
+execute keyset_param using @keyset_user;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+deallocate prepare keyset_param;
+create table keyset_prefix (
+id int primary key, a int, b varchar(20), payload int,
+key ix_tail(a,b(4)), key ix_head(b(4),a)
+);
+insert into keyset_prefix values
+(1,1,'abcdef',10),(2,1,'abcdxy',20),(3,1,'wxyz12',30),(4,2,'abcdef',40);
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30
+select id,payload from keyset_prefix force index(ix_tail)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where b='abcdef' and a in (1,2) order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+4  ¦  40
+select id,payload from keyset_prefix force index(ix_head)
+where b='abcdef' and a in (1,2) order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+4  ¦  40
+select id,payload from keyset_prefix force index(ix_head)
+where b in ('abcdef','wxyz12') and a=1 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30
+create table keyset_duplicates (
+id int primary key, a int, b varchar(20), payload int, key ix_ab(a,b)
+);
+insert into keyset_duplicates values
+(1,1,'alpha',10),(2,1,'alpha',20),(3,1,'beta',30),(4,2,'alpha',40);
+select id,payload from keyset_duplicates ignore index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select id,payload from keyset_duplicates force index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
 drop database mysql_compat_index_hint;
+
