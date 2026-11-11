@@ -65,7 +65,8 @@ func TestShardingReadPublishesReceivedJSONVersion(t *testing.T) {
 	defer result.Close()
 	text, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 	for _, response := range [][]byte{nil, {0}, {0, 1, 0, 0, 0}} {
 		_, err := decodeShardingReadBatch(ctx, response, output, mp)
 		require.Error(t, err)

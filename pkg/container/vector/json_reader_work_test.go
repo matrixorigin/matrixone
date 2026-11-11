@@ -79,9 +79,11 @@ func TestJSONReaderResidentWork(t *testing.T) {
 						} else {
 							require.Equal(t, expected[index], selected.Text)
 						}
+						selected.Close()
 						text, err := cursor.Text()
 						require.NoError(t, err)
-						require.Equal(t, expected[index], text, "text selection must leave the raw query result unchanged")
+						require.Equal(t, expected[index], text.Text, "text selection must leave the raw query result unchanged")
+						text.Close()
 						require.Equal(t, backing, mp.CurrNB(), "resident queries must not allocate document backing")
 					}
 					t.Logf("document_bytes=%d reader_backing_bytes=%d queries=%d", len(raw), backing, queries)

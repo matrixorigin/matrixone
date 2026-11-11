@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// JSONReaderMemoryAdmission charges non-MPool metadata to a statement budget.
+// JSONReaderMemoryAdmission charges non-MPool reader allocations to a statement budget.
 // A successful reservation returns exactly one release function. The callback
 // does not attest that any bytes are valid or immutable.
 type JSONReaderMemoryAdmission func(uint64) (func(), error)
@@ -81,6 +81,15 @@ func ReserveJSONReaderMetadata(selection *AllocationAccountSelection, admission 
 		return nil, moerr.NewInternalErrorNoCtx("JSON metadata admission returned no release")
 	}
 	return release, nil
+}
+
+// ReserveJSONReaderBacking admits a Go-backed query allocation before it is
+// made. The allowance includes allocator rounding and the release token.
+func ReserveJSONReaderBacking(selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission, size uint64) (func(), error) {
+	if size > (math.MaxUint64-256)/2 {
+		return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
+	}
+	return ReserveJSONReaderMetadata(selection, admission, 2*size+256)
 }
 
 func releaseJSONReaderMetadata(release func()) {

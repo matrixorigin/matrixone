@@ -111,7 +111,8 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	text, err := result.Text()
 	result.Close()
 	require.NoError(t, err)
-	require.Equal(t, "2", text)
+	require.Equal(t, "2", text.Text)
+	text.Close()
 	destination.Free(mp)
 
 	// On a cache miss with JSON_VALUE demand, the private constructor owns the

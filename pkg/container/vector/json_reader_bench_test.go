@@ -50,7 +50,8 @@ func BenchmarkJSONReader(b *testing.B) {
 				text, err := result.Text()
 				result.Close()
 				require.NoError(b, err)
-				require.Equal(b, "1", text)
+				require.Equal(b, "1", text.Text)
+				text.Close()
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
@@ -67,7 +68,9 @@ func BenchmarkJSONReader(b *testing.B) {
 					if mode == "publication" {
 						current.Close()
 					}
-					if textErr != nil || output != "1" {
+					got := output.Text
+					output.Close()
+					if textErr != nil || got != "1" {
 						b.Fatal("invalid JSON reader result")
 					}
 				}

@@ -151,7 +151,8 @@ func TestJSONReadSetDeleteMapping(t *testing.T) {
 					text, err := result.Text()
 					result.Close()
 					require.NoError(t, err)
-					require.Equal(t, want, text)
+					require.Equal(t, want, text.Text)
+					text.Close()
 				}
 			} else if len(deleted) == 3 {
 				require.NoError(t, err)

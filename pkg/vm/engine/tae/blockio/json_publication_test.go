@@ -79,7 +79,8 @@ func TestJSONStoragePublicationMapsDeletedRows(t *testing.T) {
 				text, err := result.Text()
 				result.Close()
 				require.NoError(t, err)
-				require.Equal(t, "1", text)
+				require.Equal(t, "1", text.Text)
+				text.Close()
 			} else {
 				require.NotNil(t, publication.Readers()[0])
 				path, err := types.ParseStringToPath("$.keep")
@@ -89,7 +90,8 @@ func TestJSONStoragePublicationMapsDeletedRows(t *testing.T) {
 				text, err := result.Text()
 				result.Close()
 				require.NoError(t, err)
-				require.Equal(t, "2", text)
+				require.Equal(t, "2", text.Text)
+				text.Close()
 			}
 		}()
 	}
@@ -153,7 +155,8 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 			text, err := result.Text()
 			result.Close()
 			require.NoError(t, err)
-			require.Equal(t, "3", text)
+			require.Equal(t, "3", text.Text)
+			text.Close()
 		}()
 	}
 }
