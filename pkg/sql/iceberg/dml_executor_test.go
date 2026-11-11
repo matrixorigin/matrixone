@@ -22,6 +22,9 @@ import (
 	"strings"
 	"testing"
 
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -365,6 +368,11 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 	bat, cleanup := newReplacementExecutorBatch(t)
 	defer cleanup()
 
+	opts, err := icebergwritecore.ParseParquetOptions(map[string]string{"write.parquet.compression-codec": "snappy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.ParquetOptions = opts
 	executor = withSQLTestDMLExecutorMetadata(executor, 0, 1)
 	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
@@ -404,6 +412,18 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 		switch {
 		case strings.Contains(path, "/replacement/"):
 			replacementObjects++
+			data := deleteWriter.objects[path]
+			file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, group := range file.Metadata().RowGroups {
+				for _, col := range group.Columns {
+					if col.MetaData.Codec.String() != "SNAPPY" {
+						t.Fatalf("unexpected codec: %s", col.MetaData.Codec)
+					}
+				}
+			}
 			if !strings.Contains(path, "/mo-dml/update/") || strings.Contains(path, "stmt-update-batch") {
 				t.Fatalf("unexpected replacement object path: %s", path)
 			}
@@ -832,5 +852,104 @@ func TestDMLActionExecutorRejectsTagOverwriteBeforeObjectWrite(t *testing.T) {
 	}
 	if len(manifestWriter.paths) != 0 || len(committer.requests) != 0 {
 		t.Fatalf("tag write gate must run before manifest/catalog commit writes: paths=%#v requests=%#v", manifestWriter.paths, committer.requests)
+	}
+}
+
+func TestDMLExecutorReplacementCodecs(t *testing.T) {
+	for _, operation := range []string{"merge", "overwrite"} {
+		t.Run(operation, func(t *testing.T) {
+			writer := &recordingDMLDeleteObjectWriter{}
+			manifest := &fakeSQLManifestWriter{}
+			committer := &fakeDMLWorkflowCommitter{result: &api.CommitResult{SnapshotID: 11, CommitID: "commit", MetadataLocationHash: "metadata", Verified: true}}
+			opts, err := icebergwritecore.ParseParquetOptions(map[string]string{"write.parquet.compression-codec": "gzip"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := withSQLTestDMLExecutorMetadata(DMLActionExecutor{Workflow: dml.CommitWorkflow{ManifestWriter: manifest, Committer: committer}, TableLocation: "s3://warehouse/gold/orders", SnapshotID: 11, SequenceNumber: 10, ParquetOptions: opts}, 0, 1)
+			bat, cleanup := newReplacementExecutorBatch(t)
+			defer cleanup()
+			schema := api.Schema{SchemaID: 9, Fields: []api.SchemaField{{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeInt}}, {ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+			base := dml.CommitBase{Namespace: api.Namespace{"gold"}, Table: "orders", TargetRef: "main", BaseSnapshotID: 10, IdempotencyKey: "idem-" + operation, StatementID: "stmt-" + operation}
+			replacement := DMLReplacementDataBatch{Attrs: []string{"id", "name"}, Batch: bat, ObjectWriter: writer}
+			expected := 1
+			if operation == "merge" {
+				expected = 2
+				_, err = executor.CommitMerge(context.Background(), DMLMergeActionStreamRequest{Schema: schema, Base: base, DeleteSchemaID: 9, ObjectWriter: writer, MatchedUpdates: []DMLMatchedUpdateTarget{{DeleteTarget: DMLMatchedDeleteTarget{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/old.parquet", SpecID: 1}, HasRowOrdinal: true, PositionRows: []dml.PositionDeleteRow{{Pos: 0}}}}}, MatchedUpdateReplacementBatches: []DMLReplacementDataBatch{replacement}, UnmatchedAppendBatches: []DMLReplacementDataBatch{replacement}})
+			} else {
+				_, err = executor.CommitOverwrite(context.Background(), DMLOverwriteActionStreamRequest{Schema: schema, Base: base, Scope: dml.OverwriteTable, ObjectWriter: writer, ReplacementBatches: []DMLReplacementDataBatch{replacement}})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for path, data := range writer.objects {
+				if !strings.Contains(path, "/replacement/") {
+					continue
+				}
+				count++
+				file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(file.Metadata().RowGroups) == 0 {
+					t.Fatalf("no row groups in %s", path)
+				}
+				for _, group := range file.Metadata().RowGroups {
+					for _, col := range group.Columns {
+						if got := col.MetaData.Codec.String(); got != "GZIP" {
+							t.Fatalf("%s: codec %s", path, got)
+						}
+					}
+				}
+				reader := parquet.NewGenericReader[struct {
+					ID   int32   `parquet:"id"`
+					Name *string `parquet:"name,optional"`
+				}](bytes.NewReader(data))
+				rows := make([]struct {
+					ID   int32   `parquet:"id"`
+					Name *string `parquet:"name,optional"`
+				}, 1)
+				n, err := reader.Read(rows)
+				if n != 1 || (err != nil && err != io.EOF) || rows[0].ID != 42 || rows[0].Name == nil || *rows[0].Name != "replacement" {
+					t.Fatalf("%s: rows=%+v n=%d err=%v", path, rows, n, err)
+				}
+				if err := reader.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if count != expected || len(committer.requests) != 1 {
+				t.Fatalf("replacement objects=%d want=%d commits=%d", count, expected, len(committer.requests))
+			}
+		})
+	}
+}
+
+func TestDMLExecutorInvalidCodecFailsBeforeWrites(t *testing.T) {
+	_, invalid := icebergwritecore.ParseParquetOptions(map[string]string{"write.parquet.compression-codec": "invalid"})
+	if invalid == nil {
+		t.Fatal("expected invalid codec")
+	}
+	writer := &recordingDMLDeleteObjectWriter{}
+	manifests := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{}
+	executor := DMLActionExecutor{ParquetOptionsErr: invalid, Workflow: dml.CommitWorkflow{ManifestWriter: manifests, Committer: committer}}
+	for _, operation := range []string{"update", "merge", "overwrite"} {
+		t.Run(operation, func(t *testing.T) {
+			var err error
+			switch operation {
+			case "update":
+				_, err = executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{ObjectWriter: writer}})
+			case "merge":
+				_, err = executor.CommitMerge(context.Background(), DMLMergeActionStreamRequest{ObjectWriter: writer})
+			case "overwrite":
+				_, err = executor.CommitOverwrite(context.Background(), DMLOverwriteActionStreamRequest{ObjectWriter: writer})
+			}
+			if err == nil || !strings.Contains(err.Error(), "compression") {
+				t.Fatalf("expected codec error, got %v", err)
+			}
+			if len(writer.objects) != 0 || len(manifests.paths) != 0 || len(committer.requests) != 0 {
+				t.Fatalf("invalid codec produced writes: objects=%v manifests=%v commits=%v", writer.objects, manifests.paths, committer.requests)
+			}
+		})
 	}
 }

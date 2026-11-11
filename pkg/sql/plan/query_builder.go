@@ -6379,8 +6379,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.integerPrecisionTransparentBoundary = true
 	}
 	defer func() {
-		if err == nil && isRoot && builder.integerPrecision != nil {
-			builder.captureIntegerPrecisionOutputs(ctx)
+		if err == nil && isRoot {
+			builder.captureEnumSetResultTypes(ctx)
+			if builder.integerPrecision != nil {
+				builder.captureIntegerPrecisionOutputs(ctx)
+			}
 		}
 	}()
 
@@ -6934,7 +6937,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
+				field := enumSetResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+				if field != nil {
+					provenance := ctx.outputColumnProvenanceForProject(int32(i))
+					provenance.EnumSetResultType = field
+					ctx.setOutputColumnProvenance(int32(i), provenance)
+				}
 			}
 			// Window functions run above AGG, so their raw argument, partition,
 			// and ordering expressions must be materialized by the aggregate
