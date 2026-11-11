@@ -8513,6 +8513,9 @@ func (v *Vector) hasPlainFixedMetadata() bool {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return v.unionDictionaryOne(w, sel, mp)
+	}
 	if v.dataAliases(w) {
 		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
 			return v.UnionOne(source, 0, mp)
@@ -8592,14 +8595,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if w.IsConst() {
 		sel = 0
 	}
-	if w.IsDictionary() {
-		if err := v.copyDictionaryPayload(w, int64(oldLen), sel, mp); err != nil {
-			return err
-		}
-		if varlen {
-			v.areaDisjoint = preserveAreaDisjoint
-		}
-	} else if varlen {
+	if varlen {
 		var vs, ws []types.Varlena
 		ToSliceNoTypeCheck(v, &vs)
 		ToSliceNoTypeCheck(w, &ws)

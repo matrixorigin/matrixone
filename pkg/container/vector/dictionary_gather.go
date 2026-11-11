@@ -345,3 +345,22 @@ func (v *Vector) unionDictionaryMulti(w *Vector, row int64, count int, mp *mpool
 	}
 	return nil
 }
+
+// unionDictionaryOne reuses the selected bulk path for one logical row. It
+// keeps dictionary preflight and mapping outside the original scalar flat
+// frame without a complete input materialization. Only self-append needs an
+// accounted one-row snapshot before the destination changes representation.
+func (v *Vector) unionDictionaryOne(w *Vector, row int64, mp *mpool.MPool) error {
+	if v == w {
+		source, err := NewOffHeapVecWithTypeAndAllocation(v.typ, v.allocationAccount)
+		if err != nil {
+			return err
+		}
+		defer source.Free(mp)
+		if err := source.UnionBatch(w, row, 1, nil, mp); err != nil {
+			return err
+		}
+		return v.UnionOne(source, 0, mp)
+	}
+	return v.UnionBatch(w, row, 1, nil, mp)
+}
