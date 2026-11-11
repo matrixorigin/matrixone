@@ -4554,6 +4554,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		rootID = builder.pushDownGroupedSums(rootID)
 		// Preserve INNER-join reordering before introducing an existence boundary.
 		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
 		builder.reduceSetMembershipJoins(rootID, i)
