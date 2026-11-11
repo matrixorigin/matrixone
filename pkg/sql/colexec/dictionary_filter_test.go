@@ -27,7 +27,7 @@ import (
 )
 
 func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
-	for _, shape := range []string{"original-rows", "skip-divide-zero", "identity", "none"} {
+	for _, shape := range []string{"original-rows", "skip-divide-zero", "identity", "none", "memo"} {
 		t.Run(shape, func(t *testing.T) {
 			skipError := shape == "skip-divide-zero"
 			mp := mpool.MustNewZero()
@@ -64,6 +64,13 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			}
 			executors, err := NewExpressionExecutorsFromPlanExpressions(proc, predicates)
 			require.NoError(t, err)
+			var frame *DictionaryInputFrame
+			if shape == "memo" {
+				state := &memoExpressionState{executor: executors[1], refs: 1}
+				executors[1] = &memoRootExpressionExecutor{executor: &memoExpressionExecutor{state: state}, states: []*memoExpressionState{state}}
+				frame = &DictionaryInputFrame{}
+				t.Cleanup(func() { frame.Free(mp) })
+			}
 			t.Cleanup(func() {
 				for _, executor := range executors {
 					executor.Free()
@@ -71,7 +78,7 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			})
 			var scratch []int64
 			var parameter vector.FunctionParameterWrapper[bool]
-			got, all, err := SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil, nil)
+			got, all, err := SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil, frame)
 			require.NoError(t, err)
 			require.Equal(t, shape == "identity", all)
 			if len(want) == 0 {
@@ -82,11 +89,19 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			require.Equal(t, len(values), input.RowCount())
 			require.Equal(t, values, vector.MustFixedColNoTypeCheck[float64](input.Vecs[0]))
 			require.False(t, warnings.Warned(), "rejected rows must not emit division diagnostics")
+			if shape == "memo" {
+				vector.MustFixedColNoTypeCheck[float64](input.Vecs[0])[2] = 5
+				got, all, err = SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil, frame)
+				require.NoError(t, err)
+				require.False(t, all)
+				require.Equal(t, []int64{1}, got, "memo roots must reevaluate a reused predicate bank")
+			}
+
 		})
 	}
 }
 
-func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
+func TestPredicateScratchReusesOnlyReferencedColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
@@ -95,55 +110,42 @@ func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
 	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{10, 20, 30}, nil, mp))
-	for _, value := range []string{"unreferenced payload first", "unreferenced payload second", "unreferenced payload third"} {
-		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), false, mp))
+	for _, s := range []string{"unreferenced first payload", "unreferenced second payload", "unreferenced third payload"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(s), false, mp))
 	}
+	input.Vecs[0].GetNulls().Add(1)
+	input.Vecs[0].GetGrouping().Add(2)
+	input.Vecs[0].SetSorted(true)
 	input.SetRowCount(3)
 	executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
 	require.NoError(t, err)
 	t.Cleanup(executor.Free)
-	bases := make([]*vector.DictionaryBase, 2)
-	declined := make([]bool, 2)
-	t.Cleanup(func() {
-		for _, base := range bases {
-			if base != nil {
-				base.Release()
-			}
-		}
-	})
-	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined, nil, nil)
+	frame := &DictionaryInputFrame{}
+	t.Cleanup(func() { frame.Free(mp) })
+	frame.Begin(input, nil, mp)
+	first, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{2, 0}, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { first.Clean(mp) })
+	require.True(t, borrowed)
 	require.Nil(t, first.Vecs[1])
-	require.Nil(t, bases[1])
-	require.True(t, first.Vecs[0].IsDictionary())
-	base := bases[0]
-	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined, nil, nil)
+	require.Nil(t, frame.predicateVectors[1])
+	require.False(t, first.Vecs[0].HasBorrowedBacking())
+	saved := first.Vecs[0]
+	require.Equal(t, []int64{30, 10}, vector.MustFixedColNoTypeCheck[int64](saved))
+	require.True(t, saved.GetGrouping().Contains(0))
+	require.False(t, saved.HasNull())
+	require.False(t, saved.GetSorted())
+	second, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1}, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { second.Clean(mp) })
-	require.Same(t, base, bases[0])
-	require.Equal(t, int64(20), vector.GetFixedAtNoTypeCheck[int64](second.Vecs[0], 0))
-	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0))
-	headers := make([]*vector.Vector, 2)
-	headers[0] = second.Vecs[0]
-	saved := headers[0]
-	saved.CleanOnlyData()
-	second.Vecs[0] = nil
-	t.Cleanup(func() {
-		for _, v := range headers {
-			if v != nil {
-				v.Free(mp)
-			}
-		}
-	})
-	third, err := selectPredicateInput(proc, input, nil, executor, []int64{0}, nil, bases, declined, headers, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { third.Clean(mp) })
-	require.Same(t, saved, third.Vecs[0])
-	require.Nil(t, headers[0])
-	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](third.Vecs[0], 0))
-	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0), "an unretired sibling view must remain immutable")
-
+	require.True(t, borrowed)
+	require.Same(t, first, second)
+	require.Same(t, saved, second.Vecs[0])
+	require.True(t, second.Vecs[0].IsNull(0))
+	require.False(t, second.Vecs[0].HasGrouping())
+	require.True(t, second.Vecs[0].GetSorted())
+	require.Equal(t, []int64{10, 20, 30}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+	frame.End()
+	require.Nil(t, second.Vecs[0], "end evaluation clears borrowed bank headers")
+	require.Same(t, saved, frame.predicateVectors[0], "the frame still owns scratch")
 }
 
 func TestCompactPredicateRowsOriginalDomain(t *testing.T) {
@@ -191,4 +193,48 @@ func TestCompactPredicateRowsOriginalDomain(t *testing.T) {
 			}
 		}()
 	}
+}
+
+func TestPredicateScratchCapacityFallsBackAfterReleasingBanks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1536)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	require.NoError(t, err)
+	input := batch.NewWithSize(2)
+	t.Cleanup(func() { input.Clean(mp) })
+	rows := make([]int64, 128)
+	for i := range rows {
+		rows[i] = int64(i)
+	}
+	for i := range input.Vecs {
+		input.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[i], rows, nil, mp))
+	}
+	input.SetRowCount(len(rows))
+	frame := &DictionaryInputFrame{}
+	t.Cleanup(func() { frame.Free(mp) })
+	frame.Begin(input, allocation, mp)
+	for col := 0; col < 2; col++ {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(col)}}})
+		require.NoError(t, err)
+		t.Cleanup(executor.Free)
+		output, borrowed, err := frame.predicateBatch(proc, input, nil, executor, rows, allocation)
+		require.NoError(t, err)
+		require.Equal(t, col == 0, borrowed)
+		require.Equal(t, rows, vector.MustFixedColNoTypeCheck[int64](output.Vecs[col]))
+		if !borrowed {
+			output.Clean(mp)
+		}
+	}
+	require.Nil(t, frame.predicateVectors[0], "optional scratch must yield capacity to the valid fallback")
 }

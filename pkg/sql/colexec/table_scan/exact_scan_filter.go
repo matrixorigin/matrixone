@@ -219,19 +219,6 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 		tableScan.ctr.readerFilter = nil
 		return
 	}
-	if tableScan.ctr.readerWorkspace == nil {
-		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
-	}
-	if tableScan.ctr.readerHeaders == nil {
-		tableScan.ctr.readerHeaders = make([]*vector.Vector, len(tableScan.Types))
-	}
-	if tableScan.ctr.readerSnapshots == nil {
-		tableScan.ctr.readerSnapshots = make([]*vector.DictionaryVectorSlot, len(tableScan.Types))
-		for i := range tableScan.ctr.readerSnapshots {
-			tableScan.ctr.readerSnapshots[i] = &vector.DictionaryVectorSlot{}
-		}
-		tableScan.ctr.readerSelection = &vector.DictionaryVectorSlot{}
-	}
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
 		SnapshotSlots:   tableScan.ctr.readerSnapshots,
 		SelectionSlot:   tableScan.ctr.readerSelection,
@@ -266,5 +253,29 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.filterReadMetrics = true
 			tableScan.ctr.filterLateMaterialized = false
 		},
+	}
+}
+
+// prepareSelectionWorkspace is called only after the downstream edge admits
+// views. Flat-only scans never allocate publication/snapshot/map banks.
+func (tableScan *TableScan) prepareSelectionWorkspace() {
+	if tableScan.ctr.readerWorkspace == nil {
+		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
+	}
+	if tableScan.ctr.readerHeaders == nil {
+		tableScan.ctr.readerHeaders = make([]*vector.Vector, len(tableScan.Types))
+	}
+	if tableScan.ctr.readerSnapshots == nil {
+		tableScan.ctr.readerSnapshots = make([]*vector.DictionaryVectorSlot, len(tableScan.Types))
+		for i := range tableScan.ctr.readerSnapshots {
+			tableScan.ctr.readerSnapshots[i] = &vector.DictionaryVectorSlot{}
+		}
+		tableScan.ctr.readerSelection = &vector.DictionaryVectorSlot{}
+	}
+	if request := tableScan.ctr.readerFilter; request != nil {
+		request.Workspace = tableScan.ctr.readerWorkspace
+		request.ReusableHeaders = tableScan.ctr.readerHeaders
+		request.SnapshotSlots = tableScan.ctr.readerSnapshots
+		request.SelectionSlot = tableScan.ctr.readerSelection
 	}
 }

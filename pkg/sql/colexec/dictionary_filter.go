@@ -15,7 +15,6 @@
 package colexec
 
 import (
-	"errors"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -150,28 +149,16 @@ func SelectBatchColumns(input *batch.Batch, positions []int, rows []int64, mp *m
 func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int, executors []ExpressionExecutor, account *vector.AllocationAccountSelection, scratch *[]int64, parameter *vector.FunctionParameterWrapper[bool], analyzer process.Analyzer, beforeEval func(int, int), frame *DictionaryInputFrame) ([]int64, bool, error) {
 	*scratch = (*scratch)[:0]
 	current := input
-	var bases []*vector.DictionaryBase
-	var declined []bool
-	defer func() {
-		for _, base := range bases {
-			if base != nil {
-				base.Release()
-			}
-		}
-	}()
-
-	if frame != nil {
-		frame.Begin(current, account, proc.Mp())
-		defer func() { frame.Observe(analyzer); frame.End() }()
+	if frame == nil {
+		frame = &DictionaryInputFrame{}
+		defer frame.Free(proc.Mp())
 	}
+	frame.Begin(current, account, proc.Mp())
+	defer func() { frame.Observe(analyzer); frame.End() }()
 	var owned *batch.Batch
 	defer func() {
 		if owned != nil {
-			if frame != nil {
-				frame.recyclePredicate(owned, proc.Mp())
-			} else {
-				owned.Clean(proc.Mp())
-			}
+			owned.Clean(proc.Mp())
 		}
 	}()
 	selected := false
@@ -185,32 +172,18 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 		}
 		if selected {
 			if owned != nil {
-				if frame != nil {
-					frame.recyclePredicate(owned, proc.Mp())
-				} else {
-					owned.Clean(proc.Mp())
-				}
+				owned.Clean(proc.Mp())
 				owned = nil
 			}
-			if bases == nil {
-				bases = make([]*vector.DictionaryBase, len(input.Vecs))
-				declined = make([]bool, len(input.Vecs))
-			}
-			var reuse []*vector.Vector
-			if frame != nil {
-				if frame.predicateHeaders == nil {
-					frame.predicateHeaders = make([]*vector.Vector, len(input.Vecs))
-				}
-				reuse = frame.predicateHeaders
-			}
-			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined, reuse, frame)
+			next, borrowed, err := frame.predicateBatch(proc, input, loaded, executors[i], *scratch, account)
 			if err != nil {
 				return nil, false, err
 			}
-			owned, current = next, next
-			if frame != nil {
-				frame.Begin(current, account, proc.Mp())
+			if !borrowed {
+				owned = next
 			}
+			current = next
+			frame.Begin(current, account, proc.Mp())
 		} else if !ExpressionsAcceptDictionary(executors[i:i+1]) && current.HasDictionary() {
 			flat, err := current.FlatCopy(proc.Mp(), account)
 			if err != nil {
@@ -349,78 +322,4 @@ func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) 
 		return false
 	}
 	return true
-}
-
-func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool, reuse []*vector.Vector, frame *DictionaryInputFrame) (result *batch.Batch, retErr error) {
-	var columns []int
-	if !predicateColumns(executor, make([]bool, len(input.Vecs)), &columns) {
-		result, _, err := SelectBatchColumns(input, loaded, rows, proc.Mp(), account, false)
-		return result, err
-	}
-	output := batch.NewOffHeapWithSize(len(input.Vecs))
-	defer func() {
-		if retErr != nil {
-			output.Clean(proc.Mp())
-			if errors.Is(retErr, mpool.ErrAllocationAccountCapacity) || errors.Is(retErr, mpool.ErrAllocationAccountMismatch) {
-				result, _, retErr = SelectBatchColumns(input, columns, rows, proc.Mp(), account, false)
-			}
-		}
-	}()
-	if err := output.SetAllocationAccount(account); err != nil {
-		return nil, err
-	}
-	output.Attrs = append(output.Attrs, input.Attrs...)
-	output.Recursive, output.ShuffleIDX = input.Recursive, input.ShuffleIDX
-	output.SetRowCount(len(rows))
-	if len(columns) == 0 {
-		return output, nil
-	}
-	var rowSlot *vector.DictionaryVectorSlot
-	if frame != nil {
-		rowSlot = frame.selectionSlot
-	}
-	selection, err := vector.NewRowSelectionReuse(rows, input.RowCount(), proc.Mp(), account, rowSlot)
-	if err != nil {
-		return nil, err
-	}
-	defer selection.Release()
-	for _, col := range columns {
-		var spare **vector.Vector
-		if reuse != nil {
-			spare = &reuse[col]
-		}
-		source := input.Vecs[col]
-		if source == nil {
-			return nil, moerr.NewInvalidInput(proc.Ctx, "predicate references unloaded column")
-		}
-		if source.IsDictionary() {
-			output.Vecs[col], err = source.SelectDictionaryReuse(selection, proc.Mp(), account, spare)
-		} else {
-			if bases[col] == nil && !declined[col] {
-				var admitted bool
-				var slot *vector.DictionaryVectorSlot
-				if frame != nil {
-					slot = frame.snapshots[col]
-				}
-				bases[col], admitted, err = vector.TryFreezeVectorReuse(source, proc.Mp(), account, slot)
-				if err != nil {
-					return nil, err
-				}
-				declined[col] = !admitted
-			}
-			if bases[col] != nil {
-				output.Vecs[col], err = vector.NewDictionaryVectorReuse(bases[col], selection, proc.Mp(), account, spare)
-			} else {
-				output.Vecs[col], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), account)
-				if err == nil {
-					err = output.Vecs[col].Union(source, rows, proc.Mp())
-					source.CopyExpressionMetadataTo(output.Vecs[col])
-				}
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	return output, nil
 }

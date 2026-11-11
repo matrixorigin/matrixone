@@ -417,3 +417,37 @@ prefixes. Inspect emitted selected loops for per-value memmove removal. Full
 local Q1-Q22 timing and per-query resource acceptance remain mandatory; do not
 infer no allocation/copy regression from suite totals or absent instrumentation.
 Keep the entire correction local and do not push until all acceptance closes.
+
+
+## Approved ownership-metadata correction — private predicate scratch
+
+The requester authorized eliminating temporary ownership allocations while
+keeping the no-push/all-query-resource gate. Private selected predicate inputs
+now use execution-owned flat scratch, populated only for the current expression's
+referenced columns. This removes per-predicate frozen bases, retained leases,
+immutable row-map objects and temporary batch/header allocation. Existing native
+flat kernels consume the same surviving rows in the same order. The extra narrow
+column gathers must be counted, not assumed cheaper than retained views.
+
+The frame alone owns its batch and column banks. Returned predicate batches are
+borrowed only until the next predicate preparation. Boolean results are consumed
+before reuse. Ordinary function parameters/column executors borrow arguments;
+memo roots explicitly reset cached values before each Eval. Unknown executor
+trees retain independent owned gather fallback; no unsupported-input error or
+new public borrowed-vector/lease contract is introduced. Actual escaping scan
+or filter outputs retain the existing immutable publication protocol.
+
+On capacity refusal, release optional bank capacity and use the ordinary fresh
+owned-gather fallback, so unused retained scratch cannot cause a new rejection.
+Errors keep source values intact; End clears borrowed batch references and Free
+releases every bank exactly once. Account/schema generation changes dispose old
+scratch. Storage is bounded by prepared input width and batch/MPool limits; no
+global pool, queue, worker, wait or native ownership change is introduced.
+
+Reader publication/map/snapshot banks are initialized only after the downstream
+edge actually admits selected output. Flat-only scans keep their previous path.
+Held immutable sibling or output lifetime remains proved in vector ownership
+tests; private predicate scratch now has an explicit borrowed/reuse oracle.
+Validate original-row/error ordering, NULL/metadata, repeated memo roots,
+capacity-refusal cleanup and private-bank reuse before local all22 timing and
+per-query allocation/copy accounting. Keep regressions and coverage gaps blocking.

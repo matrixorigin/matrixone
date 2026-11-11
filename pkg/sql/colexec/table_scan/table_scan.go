@@ -85,9 +85,6 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
-	if tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 && tableScan.ctr.readerWorkspace == nil {
-		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
-	}
 	tableScan.configureLateMaterialization()
 	tableScan.prepareReaderFilter(proc)
 
@@ -147,6 +144,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(tableScan.ctr.allFilterExecutors) > 0 {
+			tableScan.prepareSelectionWorkspace()
+		}
 		// read data from storage engine
 		for col, workspace := range tableScan.ctr.readerWorkspace {
 			if workspace != nil {
