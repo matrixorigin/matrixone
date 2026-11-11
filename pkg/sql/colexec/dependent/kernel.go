@@ -160,6 +160,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 			return k, err
 		}
 	}
+	vm.ConfigureDictionaryBoundaries(k.root)
 	return k, nil
 }
 func (k *nativeKernel) read() (*batch.Batch, int, vm.Continuation, error) {
@@ -201,11 +202,11 @@ func (k *nativeKernel) close(cause error) error {
 	}
 	var err error
 	reset := func(_ vm.Operator, op vm.Operator) error {
-		op.Reset(k.proc, cause != nil, cause)
+		vm.Reset(op, k.proc, cause != nil, cause)
 		return nil
 	}
 	free := func(_ vm.Operator, op vm.Operator) error {
-		op.Free(k.proc, cause != nil, cause)
+		vm.Free(op, k.proc, cause != nil, cause)
 		if owner, ok := op.(interface {
 			ClearAllocationAccount(*mpool.AllocationAccount) error
 		}); ok {

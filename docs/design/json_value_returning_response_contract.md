@@ -417,6 +417,11 @@ invalid and valid Unicode keys, empty keys, gaps, ordering and overlap.
 - Review and deployment QA remain separate; this document and local tests do not
   establish reviewer acceptance.
 
+Earlier independent reviewers have not withdrawn their design-approval or
+mixed-binary requests. Those requests must be reconciled with the candidate
+shutdown-only policy by the responsible maintainers. Prior approvals retain
+their original scope and do not approve this revision.
+
 ### Persistence acceptance for shutdown upgrade
 
 | Boundary | Required terminal result | Evidence boundary |

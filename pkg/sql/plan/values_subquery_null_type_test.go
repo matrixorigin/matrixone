@@ -129,7 +129,7 @@ func findValuesUnionAll(query *plan.Query) *plan.Node {
 // declared column type. Otherwise the projected branch carries a raw VARCHAR
 // literal, the UNION ALL exposes VARCHAR for a T_array destination, and the
 // late insert-layer cast parses an already-materialized vector again
-// (Error 20101 "malformed vector input" with float32 bytes as the input text).
+// (Error 20301 "malformed vector input" with float32 bytes as the input text).
 func TestValuesWithSubqueriesTypedArrayBranches(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string

@@ -10441,7 +10441,9 @@ func strToStr(
 				v = bytes.TrimRight(v, " ")
 			}
 			s := convertByteSliceToString(v)
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
+			// A negative width follows the T_binary width:-1 convention and
+			// means no length limit; it must never truncate or reject.
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				// CHAR/VARCHAR over-length handling:
 				//   - trailing-space exemption: when the excess runes are all
 				//     trailing spaces, accept by truncating even in strict mode
@@ -10492,7 +10494,7 @@ func strToStr(
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
-			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && utf8.RuneCountInString(s) > destLen {
+			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -10801,7 +10803,7 @@ func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
 	// VECF64) into a false +Inf. float16/bf16 have no native arithmetic, so they widen to float32
 	// (exact, preserving finiteness). Integer targets clamp and can never be non-finite -- skipped.
 	fail := func(d float64) error {
-		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", d)
+		return moerr.NewInvalidInputNoCtxf("vector element cannot be NaN or Inf: %v", d)
 	}
 	switch v := any(out).(type) {
 	case []float32:

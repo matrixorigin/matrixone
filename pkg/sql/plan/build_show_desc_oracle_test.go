@@ -166,42 +166,44 @@ func TestDescColNameReplanRefiltersAfterStoredSpellingChange(t *testing.T) {
 	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"N_Name"},
-		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_NAME"}),
+		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_PAME"}),
 		"the first build filters the then-current stored spelling")
 	require.True(t, queryContainsStringLiteral(first.GetQuery(), "N_Name"))
 
-	nationCol.OriginName = "n_NAME"
+	nationCol.OriginName = "n_PAME"
 	reused, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, reused, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, reused, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a reused prepared DESC must filter by the current stored spelling")
 
 	fresh, err := runOneStmt(mock, t, "desc nation n_name")
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, fresh, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, fresh, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a fresh DESC filters by the current stored spelling")
-	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_NAME"))
+	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_PAME"))
 	require.False(t, queryContainsStringLiteral(reused.GetQuery(), "N_Name"))
 
 	// Authored LIKE and the wildcard/unknown shortcuts execute their real
 	// predicate over the current stored fields.
 	likeStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	wild, err := runOneStmt(mock, t, "desc nation `n_na%`")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	miss, err := runOneStmt(mock, t, "desc nation nosuch")
 	require.NoError(t, err)
-	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_NAME", "n_regionkey"}))
+	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_PAME", "n_regionkey"}))
 
 	// Pristine saved AST AFTER the evaluated witnesses.
 	require.Nil(t, sc.Like, "the derived predicate must not persist into the saved AST")
@@ -467,4 +469,60 @@ type descNoProviderSubscribedContext struct {
 
 func (c *descNoProviderSubscribedContext) GetQueryingSubscription() *SubscriptionMeta {
 	return c.sub
+}
+
+// The quoted wildcard argument is the SHOW COLUMNS LIKE filter: the
+// DESCRIBE form derives the identical bound predicate and the repository
+// expression executor keeps exactly the genuinely matching current
+// columns, with the escaped forms behaving verbatim like the authored
+// LIKE comparison.
+func TestDescQuotedWildcardFiltersThroughRealLikeEvaluation(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := newPlanTestProcess(t)
+	ctx := mock.CurrentContext()
+	fields := []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}
+
+	// Start from the parse: the quoted argument must reach the planner as
+	// a LIKE comparison, never as a named column.
+	stmt := descParseOne(t, ctx, "desc nation 'n_na%'")
+	defer stmt.Free()
+	sc := descShowColumns(t, stmt)
+	require.NotNil(t, sc.Like)
+	require.Nil(t, sc.ColName)
+
+	descStmt, err := runOneStmt(mock, t, "desc nation 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, descStmt, "n_na%", fields),
+		"the quoted prefix filter keeps the genuinely matching columns")
+
+	showStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name"},
+		descKeptByFilterPattern(t, proc, showStmt, "n_na%", fields),
+		"the authored SHOW COLUMNS LIKE form keeps the same rows")
+
+	allStmt, err := runOneStmt(mock, t, "desc nation '%'")
+	require.NoError(t, err)
+	require.Equal(t, fields,
+		descKeptByFilterPattern(t, proc, allStmt, "%", fields),
+		"the bare wildcard keeps every column")
+
+	missStmt, err := runOneStmt(mock, t, "desc nation 'nosuch%'")
+	require.NoError(t, err)
+	require.Empty(t,
+		descKeptByFilterPattern(t, proc, missStmt, "nosuch%", fields),
+		"a non-matching pattern keeps zero rows")
+
+	escStmt, err := runOneStmt(mock, t, "desc nation 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escStmt, `n\_name`, fields),
+		"the escaped underscore matches the literal column name only")
+
+	escShowStmt, err := runOneStmt(mock, t, "show columns from nation like 'n\\_name'")
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_name"},
+		descKeptByFilterPattern(t, proc, escShowStmt, `n\_name`, fields),
+		"the authored escaped LIKE form keeps the same single row")
 }

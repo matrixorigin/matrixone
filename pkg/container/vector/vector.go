@@ -40,9 +40,9 @@ import (
 )
 
 const (
-	FLAT     = iota // flat vector represent a uncompressed vector
-	CONSTANT        // const vector
-	DIST            // dictionary vector
+	FLAT       = iota // flat vector represent a uncompressed vector
+	CONSTANT          // const vector
+	DICTIONARY        // dictionary vector
 )
 
 // PrepareParamKind is the compatibility name for the conversion domain of a
@@ -200,6 +200,7 @@ func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
+	vec.requirePhysical()
 	if vec.IsConst() {
 		*ret = toSliceOfLengthNoTypeCheck[T](vec, 1)
 	} else {
@@ -208,6 +209,7 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	vec.requirePhysical()
 	if vec.IsConst() {
 		return toSliceOfLengthNoTypeCheck[T](vec, 1)
 	} else {
@@ -216,6 +218,7 @@ func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
+	vec.requirePhysical()
 	checkType[T](vec)
 	if vec.IsConst() {
 		*ret = util.UnsafeSliceCastToLength[T](vec.data, 1)
@@ -284,6 +287,7 @@ func (v *Vector) ResetWithSameType() {
 }
 
 func (v *Vector) ResetArea() {
+	v.requirePhysical()
 	v.releaseBorrowedArea()
 	v.area = v.area[:0]
 	v.areaDisjoint = v.length == 0
@@ -312,6 +316,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
+	v.requirePhysical()
 	length := 1
 	if !v.IsConst() {
 		length = v.length
@@ -324,6 +329,9 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) Capacity() int {
+	if v.IsDictionary() {
+		return v.length
+	}
 	typeSize := v.typ.TypeSize()
 	if typeSize == 0 {
 		return 0
@@ -334,6 +342,10 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
+	retained := 0
+	if v.IsDictionary() {
+		retained = int(v.DictionaryRetainedBytes())
+	}
 	binaryStringBytes := 0
 	if v.binaryStringRows != nil {
 		binaryStringBytes = v.binaryStringRows.Size()
@@ -348,7 +360,7 @@ func (v *Vector) Allocated() int {
 		}
 		binaryStringBytes += textStringBytes
 	}
-	return cap(v.data) +
+	return retained + cap(v.data) +
 		cap(v.area) +
 		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
@@ -358,6 +370,9 @@ func (v *Vector) Allocated() int {
 }
 
 func (v *Vector) SetLength(n int) {
+	if v.IsDictionary() && n != v.length {
+		v.requirePhysical()
+	}
 	if n < 0 {
 		panic("negative vector length")
 	}
@@ -565,7 +580,11 @@ func (v *Vector) Size() int {
 	if v.textStringRows != nil {
 		binaryStringBytes += v.textStringRows.Size()
 	}
-	return v.length*v.typ.TypeSize() + len(v.area) + binaryStringBytes +
+	area := len(v.area)
+	if v.IsDictionary() {
+		area = v.dictionaryState().logicalArea
+	}
+	return v.length*v.typ.TypeSize() + area + binaryStringBytes +
 		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		len(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0)))
 }
@@ -582,6 +601,7 @@ func (v *Vector) GetType() *types.Type {
 // A nonempty T_json result must already contain valid encoded JSON. Raw text
 // must go through the JSON cast/parser and a checked vector write instead.
 func (v *Vector) SetType(typ types.Type) {
+	v.requirePhysical()
 	if v.typ.IsVarlen() || typ.IsVarlen() {
 		// An empty logical range has no descriptors, even if reusable backing
 		// storage still contains stale bytes.
@@ -606,6 +626,9 @@ func (v *Vector) SetTypeAndFixData(
 		return moerr.NewInvalidInputNoCtx(
 			"SetTypeAndFixData cannot change from or to a varlen type",
 		)
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 
 	oldType := v.typ
@@ -632,6 +655,8 @@ func (v *Vector) SetTypeScale(scale int32) {
 	v.typ.Scale = scale
 }
 
+// GetNulls exposes logical row validity. A dictionary's returned bitmap is
+// read-only; materialize with EnsureWritable before changing it directly.
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
@@ -641,6 +666,7 @@ func (v *Vector) GetGrouping() *nulls.Nulls {
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
+	v.requirePhysical()
 	v.nsp.Clear()
 	if nsp == nil {
 		return
@@ -3794,13 +3820,16 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 }
 
 func (v *Vector) NeedDup() bool {
-	return v.AreaBackingKind() != OwnedMPoolUnique ||
+	return v.IsDictionary() || v.AreaBackingKind() != OwnedMPoolUnique ||
 		v.DataBackingKind() != OwnedMPoolUnique ||
 		v.nsp.HasBorrowedValidity()
 }
 
 // make sure the type check is done before calling this function
 func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
+	if v.IsDictionary() {
+		return getDictionaryFixedAt[T](v, idx)
+	}
 	length := v.length
 	if v.IsConst() {
 		idx = 0
@@ -3813,6 +3842,10 @@ func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
 // it is much inefficient than GetFixedAtNoTypeCheck
 // if type check is done before calling this function, use GetFixedAtNoTypeCheck
 func GetFixedAtWithTypeCheck[T any](v *Vector, idx int) T {
+	if v.IsDictionary() {
+		checkType[T](v)
+		return getDictionaryFixedAt[T](v, idx)
+	}
 	if v.IsConst() {
 		idx = 0
 	}
@@ -3829,6 +3862,9 @@ func (v *Vector) CloneBytesAt(i int) []byte {
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
+	if v.IsDictionary() {
+		return getDictionaryBytesAt(v, i)
+	}
 	length := v.length
 	if v.IsConst() {
 		i = 0
@@ -3865,6 +3901,9 @@ func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
 }
 
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsDictionary() {
+		return v.GetBytesAt(i)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3872,6 +3911,13 @@ func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
 }
 
 func (v *Vector) GetRawBytesAt(i int) []byte {
+	if v.IsDictionary() {
+		base, row := v.dictionaryPhysicalRow(i)
+		if base.IsConstNull() {
+			return nil
+		}
+		return base.GetRawBytesAt(row)
+	}
 	if v.typ.IsVarlen() {
 		return v.GetBytesAt(i)
 	} else {
@@ -3902,6 +3948,9 @@ func (v *Vector) CleanOnlyData() {
 
 // no copy. it is unsafe if the user cannot determine the vector's life
 func (v *Vector) UnsafeGetStringAt(i int) string {
+	if v.IsDictionary() {
+		return util.UnsafeBytesToString(v.GetBytesAt(i))
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3915,6 +3964,9 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 
 // always copy
 func (v *Vector) GetStringAt(i int) string {
+	if v.IsDictionary() {
+		return string(v.GetBytesAt(i))
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3925,6 +3977,13 @@ func (v *Vector) GetStringAt(i int) string {
 
 // GetArrayAt Returns []T at the specific index of the vector
 func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
+	if v.IsDictionary() {
+		base, row := v.dictionaryPhysicalRow(i)
+		if base.IsConstNull() {
+			return nil
+		}
+		return GetArrayAt[T](base, row)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -3934,6 +3993,9 @@ func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
 }
 
 func GetArrayAt2[T types.ArrayElement](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsDictionary() {
+		return GetArrayAt[T](v, i)
+	}
 	if v.IsConst() {
 		i = 0
 	}
@@ -4158,6 +4220,12 @@ func (v *Vector) IsGrouping() bool {
 }
 
 func (v *Vector) SetClass(class int) {
+	if v.IsDictionary() || class == DICTIONARY {
+		v.requirePhysical()
+		if class == DICTIONARY {
+			panic(moerr.NewInvalidStateNoCtx("dictionary construction requires an immutable base and selection"))
+		}
+	}
 	if v.typ.IsVarlen() && class != v.class {
 		v.areaDisjoint = v.length == 0
 	}
@@ -4472,6 +4540,7 @@ func (v *Vector) IsConstNull() bool {
 }
 
 func (v *Vector) GetArea() []byte {
+	v.requirePhysical()
 	return v.area
 }
 
@@ -4484,10 +4553,12 @@ func (v *Vector) VarlenaAreaIsDisjoint() bool {
 }
 
 func (v *Vector) GetData() []byte {
+	v.requirePhysical()
 	return v.data
 }
 
 func GetPtrAt[T any](v *Vector, idx int64) *T {
+	v.requirePhysical()
 	if v.IsConst() {
 		idx = 0
 	} else {
@@ -4500,6 +4571,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if v == nil {
 		return
 	}
+	v.releaseDictionary()
 
 	if v.dataLease != nil {
 		v.releaseBorrowedData()
@@ -4573,6 +4645,9 @@ func (p MarshalBinaryPlan) Size() int {
 }
 
 func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
+	if v.IsDictionary() {
+		return MarshalBinaryPlan{}, moerr.NewInvalidStateNoCtx("dictionary vectors must be materialized before serialization")
+	}
 	if v == nil || v.length < 0 {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
 	}
@@ -4911,6 +4986,16 @@ type vectorBinaryLayout struct {
 	sorted bool
 }
 
+// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
+// values are already materialized; the format contains no dictionary base or
+// selection. Decode it as FLAT without rewriting the caller's input bytes.
+func decodedPhysicalClass(class byte) byte {
+	if class == DICTIONARY {
+		return FLAT
+	}
+	return class
+}
+
 type vectorBinaryCursor struct {
 	data   []byte
 	offset int
@@ -4998,8 +5083,9 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
+	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		class[0],
+		physicalClass,
 		typ,
 		length,
 		vectorData,
@@ -5010,7 +5096,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  class[0],
+		class:  physicalClass,
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -5071,7 +5157,7 @@ func validateVectorBinary(
 	nsp *nulls.Nulls,
 	validateValues bool,
 ) error {
-	if class > DIST {
+	if class > CONSTANT {
 		return moerr.NewInvalidInputNoCtx("invalid vector class")
 	}
 	typeSize, err := canonicalVectorTypeSize(typ)
@@ -5267,9 +5353,11 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	}()
 	var err error
 
-	if v.class, err = types.ReadByteAsInt(r); err != nil {
+	encodedClass, err := types.ReadByteAsInt(r)
+	if err != nil {
 		return err
 	}
+	v.class = int(decodedPhysicalClass(byte(encodedClass)))
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
@@ -5456,6 +5544,7 @@ func (v *Vector) UnmarshalGroupingFromReader(
 }
 
 func (v *Vector) ToConst() {
+	v.requirePhysical()
 	if v.typ.IsVarlen() {
 		// A constant's single physical descriptor is logically broadcast.
 		v.areaDisjoint = false
@@ -5851,6 +5940,9 @@ func (v *Vector) dup(
 	areaOffHeap bool,
 	selection *AllocationAccountSelection,
 ) (*Vector, error) {
+	if v.IsDictionary() {
+		return v.materializeDictionary(mp, selection)
+	}
 	w := NewVecFromReuse()
 	w.offHeap = offHeap
 	if selection != nil {
@@ -5980,6 +6072,9 @@ func (v *Vector) cloneToFlatCompact(
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
 ) (*Vector, error) {
+	if v.IsDictionary() {
+		return v.materializeDictionary(mp, selection)
+	}
 	var w *Vector
 	if selection == nil {
 		w = NewVec(v.typ)
@@ -6112,6 +6207,11 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
+	}
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
@@ -6246,6 +6346,11 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
+	}
 	if negate && sels.Count() == 0 {
 		return nil
 	}
@@ -6620,6 +6725,11 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
+	}
 	if v.IsConst() {
 		return nil
 	}
@@ -6747,6 +6857,11 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
+	if v.IsDictionary() {
+		if err := v.EnsureFlat(mp); err != nil {
+			return err
+		}
+	}
 	if v.IsConst() {
 		return nil
 	}
@@ -11310,6 +11425,9 @@ func (v *Vector) window(
 	selection *AllocationAccountSelection,
 	logicalRows bool,
 ) (*Vector, error) {
+	if v.IsDictionary() {
+		return nil, moerr.NewInvalidStateNoCtx("dictionary windows require an accounted logical selection or explicit materialization")
+	}
 	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}

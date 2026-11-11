@@ -26,6 +26,7 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +81,36 @@ func newCloneBorrowTxnForR11(
 	txn.engine.cloneTxnCache.AddSharedFile(txn.op.Txn().ID, borrowedName)
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, txnLocalName)
 	return txn, fs, borrowed, txnLocalName, freshName
+}
+
+// pauseUnpublishedPendingScheduling closes the narrow scheduling window
+// three of the R24 controls assert through: the handoff enqueues a name
+// and immediately submits the engine's async drain worker on the GC pool,
+// so a synchronous queue snapshot can race a worker that already popped
+// the name — the CI failure this regression pins (job 129192523220,
+// ControlB/ControlD expected [name], actual []). Inside the window the
+// fixture pins the engine's pool pointer to nil under the engine's own
+// gcMu — the exact existing no-pool branch of
+// scheduleUnpublishedPendingDrain already handles this losslessly: the
+// names stay queued, the coalescing slot is cleared, nothing is faked.
+// The restore puts the LIVE pool back under the same lock; sync.Once
+// makes a repeated restore safe, and the single-goroutine test reaches
+// every require (the only FailNow sites) only after the explicit restore,
+// so all normal/FailNow paths observe the original pool before the
+// fixture's t.Cleanup gcPool.Release.
+func pauseUnpublishedPendingScheduling(e *Engine) (restore func()) {
+	e.gcMu.Lock()
+	savedPool := e.gcPool
+	e.gcPool = nil
+	e.gcMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.gcMu.Lock()
+			e.gcPool = savedPool
+			e.gcMu.Unlock()
+		})
+	}
 }
 
 // Control C at both retain funnels: the committed-borrowed witness
@@ -155,7 +186,13 @@ func TestIssue25590CloneBorrowedNeverHandedOffToQueueR24ControlC(t *testing.T) {
 		{name: txnLocalName},
 		{name: freshName},
 	}
+	// The queue snapshot below pins the handoff's exact move, so the
+	// fixture parks the drain submission the handoff issues right after
+	// the enqueue for the narrow handoff->snapshot window.
+	pause := pauseUnpublishedPendingScheduling(txn.engine)
+	defer pause() // FailNow/panic-safe path; the normal path restores below (sync.Once)
 	txn.handoffPendingObjectCleanupLocked(true)
+	pause()
 	txn.Unlock()
 
 	require.ElementsMatch(t, []string{txnLocalName, freshName},
@@ -163,6 +200,16 @@ func TestIssue25590CloneBorrowedNeverHandedOffToQueueR24ControlC(t *testing.T) {
 		"D1' control C: the handoff's moved split drops the borrowed name and moves exactly the txn-local and fresh siblings")
 	require.Empty(t, txn.pendingObjectCleanupNames(),
 		"the quiesced terminal handoff drains the transaction's list")
+
+	// The parked schedule leaves the moved names queue-owned with no
+	// worker in flight, so this control gives the queue's terminal state
+	// one explicit owner: with the LIVE pool back, the same terminal
+	// drain the B control exercises empties the queue and physically
+	// deletes both moved names (memory FS) — no unowned fixture resource.
+	ctx := context.Background()
+	require.NoError(t, txn.engine.deleteQueuedUnpublishedPendingOnce(ctx))
+	require.Empty(t, issue25590QueuedNames(txn.engine),
+		"control C terminal cleanup: the explicit drain empties the queue the parked schedule left owned")
 }
 
 // Control A: the intermediate retain — the failed-preparation class a
@@ -206,9 +253,15 @@ func TestIssue25590CloneTxnLocalDeletedByRollbackTerminalDrainR24ControlB(t *tes
 	require.Equal(t, []string{txnLocalName}, txn.pendingObjectCleanupNames(),
 		"control B setup: the txn-local share landed on the pending list")
 
-	// The exact shared terminal helper txn.Rollback runs.
+	// The exact shared terminal helper txn.Rollback runs. The snapshot
+	// below pins the terminal handoff's exact move, so the fixture parks
+	// the drain submission for the narrow handoff->snapshot window and
+	// restores the LIVE pool before the explicit drain below.
 	txn.Lock()
+	pause := pauseUnpublishedPendingScheduling(txn.engine)
+	defer pause() // FailNow/panic-safe path; the normal path restores below (sync.Once)
 	txn.finalizePendingObjectCleanup()
+	pause()
 	txn.Unlock()
 	require.Equal(t, []string{txnLocalName},
 		issue25590QueuedNames(txn.engine),
@@ -259,10 +312,16 @@ func TestIssue25590CloneBorrowedSurvivesRollbackDrainAndStaysReadableR24ControlD
 	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
 
 	// The rollback terminal's handoff moves exactly the fresh sibling.
+	// The sweep leg above ran under the LIVE pool (its real GC path),
+	// so the fixture parks only the handoff->snapshot window and restores
+	// the LIVE pool before the explicit drain below.
 	txn.Lock()
 	require.Equal(t, []string{freshName}, txn.pendingObjectCleanupNames(),
 		"control D setup: only the fresh sibling stayed on the transaction's list")
+	pause := pauseUnpublishedPendingScheduling(txn.engine)
+	defer pause() // FailNow/panic-safe path; the normal path restores below (sync.Once)
 	txn.finalizePendingObjectCleanup()
+	pause()
 	txn.Unlock()
 	require.Equal(t, []string{freshName}, issue25590QueuedNames(txn.engine),
 		"the rollback terminal queued exactly the fresh sibling")

@@ -866,6 +866,140 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 	)
 }
 
+// TestCDCFractionalBoundaryPublicPersistence proves the public SQL persistence
+// contract of #31426 through both real CREATE CDC serving paths: fractional
+// StartTs/EndTs must persist at full RFC3339Nano precision in
+// mo_catalog.mo_cdc_task.  The pre-fix RFC3339 formatting silently truncated
+// the fraction, so exact-string equality against fractional inputs is the
+// discriminating oracle; both fractions have non-zero trailing digits, and the
+// explicit 'Z' offset keeps the persisted strings independent of the session
+// time zone.  Task cdc_frac_engine runs through the engine path (compile-side
+// ValidateAndFill, the 'internal' form used by every existing public CDC
+// fixture); task cdc_frac_client runs through a real MySQL client connection
+// without 'internal', which StmtKind routes to the frontend path
+// (handleCreateCdc, frontend ValidateAndFill).
+func TestCDCFractionalBoundaryPublicPersistence(t *testing.T) {
+	runSQLIntegration(t,
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+
+			// CREATE CDC registers the daemon task through the CN task service;
+			// admit it before creation as in the other public CDC cases.
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				ctxWait, cancelWait := context.WithTimeout(ctx, 60*time.Second)
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctxWait, 0)
+				cancelWait()
+			}
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			exec := testutils.GetSQLExecutor(cn)
+
+			// Catalog CDC matching compares the persisted database identifier;
+			// keep the fixture lowercase as in TestCDCNoFullPublicLifecycle.
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			sinkDBName := dbName + "_sink"
+			tableName := "cdc_frac_source"
+			pitrName := "pitr_frac_boundary"
+			engineTask := "cdc_frac_engine"
+			clientTask := "cdc_frac_client"
+			defer cleanupSQLIntegration(t, cn,
+				"drop cdc task "+engineTask+" internal",
+				"drop cdc task "+clientTask+" internal",
+				"drop pitr "+pitrName+" internal",
+				"drop database if exists "+sinkDBName,
+				"drop database if exists "+dbName)
+
+			mustExec := func(database, statement string) {
+				res, execErr := exec.Exec(ctx, statement, executor.Options{}.WithDatabase(database))
+				require.NoError(t, execErr, statement)
+				res.Close()
+			}
+			mustExec("", "create database "+dbName)
+			mustExec(dbName, "create table "+tableName+" (id int primary key, value varchar(32))")
+			// CDC sinks into an existing target namespace; create it before the
+			// task so the asynchronous runner cannot mask the catalog assertion.
+			mustExec("", "create database "+sinkDBName)
+			// NoFull admission requires PITR coverage of the source namespace.
+			mustExec(dbName, "create pitr "+pitrName+" for database "+dbName+" range 3 'h' internal")
+
+			port := fmt.Sprintf("%d", cn.GetServiceConfig().CN.Frontend.Port)
+			uri := "mysql://sys#dump:111@127.0.0.1:" + port
+			// Millisecond and nanosecond fractions without trailing zeros:
+			// RFC3339Nano preserves both exactly.  EndTs stays in the future so
+			// the runner cannot complete the task before the catalog read.
+			const startTs = "2025-01-02T03:04:05.123Z"
+			const endTs = "2027-01-02T04:05:06.123456789Z"
+			createStmt := "'" + uri + "' 'matrixone' '" + uri + "' '" +
+				dbName + ":" + sinkDBName + "' {" +
+				"'Level'='database','NoFull'='true'," +
+				"'StartTs'='" + startTs + "','EndTs'='" + endTs + "'" +
+				"}"
+
+			// Engine path: the 'internal' form used by the existing public CDC
+			// fixtures, served by Scope.CreateCDC (compile-side ValidateAndFill).
+			mustExec(dbName, "create cdc "+engineTask+" "+createStmt+" internal")
+
+			// Frontend path: a real MySQL client connection without 'internal'
+			// is routed by StmtKind to handleCreateCdc (frontend ValidateAndFill).
+			clientDB, err := sql.Open("mysql", "dump:111@tcp(127.0.0.1:"+port+")/")
+			require.NoError(t, err)
+			defer clientDB.Close()
+			_, err = clientDB.ExecContext(ctx, "create cdc "+clientTask+" "+createStmt)
+			require.NoError(t, err, "frontend-path CREATE CDC")
+
+			// CREATE CDC persists the catalog row inside AddCDCTask before it
+			// returns; the bounded poll only covers transaction snapshot
+			// visibility of that synchronous insert.
+			readBoundaries := func(taskName string) (string, string, bool) {
+				res, queryErr := exec.Exec(ctx,
+					"select start_ts, end_ts from mo_catalog.mo_cdc_task where task_name='"+taskName+"'",
+					executor.Options{})
+				if queryErr != nil {
+					t.Logf("CDC fractional boundary catalog query failed: %v", queryErr)
+					return "", "", false
+				}
+				defer res.Close()
+				var start, end string
+				found := false
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					start = executor.GetStringRows(cols[0])[0]
+					end = executor.GetStringRows(cols[1])[0]
+					found = true
+					return false
+				})
+				return start, end, found
+			}
+			assertExactBoundaries := func(taskName string) {
+				var gotStart, gotEnd string
+				require.Eventually(t, func() bool {
+					var found bool
+					gotStart, gotEnd, found = readBoundaries(taskName)
+					return found
+				}, 30*time.Second, 200*time.Millisecond,
+					"CREATE CDC did not persist the task row")
+				require.Equal(t, startTs, gotStart, "persisted start_ts lost the fractional precision")
+				require.Equal(t, endTs, gotEnd, "persisted end_ts lost the fractional precision")
+
+				// Consumer oracle: the reader parses the persisted strings back
+				// into the exact physical replay boundaries; a truncated catalog
+				// value would shift them to whole seconds.
+				parsedStart, parseErr := frontend.CDCStrToTS(gotStart)
+				require.NoError(t, parseErr)
+				require.Equal(t, time.Date(2025, 1, 2, 3, 4, 5, 123000000, time.UTC).UnixNano(), parsedStart.Physical())
+				parsedEnd, parseErr := frontend.CDCStrToTS(gotEnd)
+				require.NoError(t, parseErr)
+				require.Equal(t, time.Date(2027, 1, 2, 4, 5, 6, 123456789, time.UTC).UnixNano(), parsedEnd.Physical())
+			}
+			assertExactBoundaries(engineTask)
+			assertExactBoundaries(clientTask)
+		},
+	)
+}
+
 // TestCDCNoFullPublicTakeoverLifecycle proves the cross-CN ownership boundary
 // against the real task and watermark tables.  The test deliberately moves the
 // durable daemon claim from CN A to CN B while A's runner-selected cancellation

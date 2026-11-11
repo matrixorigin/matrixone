@@ -175,10 +175,21 @@ func (c *consumer) Start(ctx context.Context) {
 			}
 			return
 		}
+		if !c.checkRole(ctx) {
+			continue
+		}
+		if err := c.logClient.claimRequiredLsn(ctx); err != nil {
+			c.log.Error("failed to claim required LSN", zap.Error(err))
+			continue
+		}
+		c.lastRequiredLsn = 0
 
 		// Initialize the consumer.
 		if err := c.init(ctx); err != nil {
 			c.log.Error("consumer failed to init", zap.Error(err))
+			if errors.Is(err, errRequiredLsnConflict) {
+				continue
+			}
 
 			// init failed, fall back to the original state and try again.
 			c.cleanState(ctx, c.cleanStateInterval)
@@ -188,6 +199,10 @@ func (c *consumer) Start(ctx context.Context) {
 		// Consume the log entries in datasync shard continuously.
 		if err := c.loop(ctx, c.loopWorkInterval); err == nil {
 			// role has changed, cannot do the data sync stuff.
+			continue
+		} else if errors.Is(err, errRequiredLsnConflict) {
+			// A higher term can have the same leader ID. Reclaim in the next
+			// run without clearing another term's required-LSN ownership.
 			continue
 		}
 
@@ -348,6 +363,9 @@ func (c *consumer) completeData(ctx context.Context) error {
 func (c *consumer) cleanState(ctx context.Context, interval time.Duration) {
 	var count int
 	for ctx.Err() == nil {
+		if !c.checkRole(ctx) {
+			return
+		}
 		count++
 		if count > 1 {
 			timer := time.NewTimer(interval)
@@ -360,21 +378,25 @@ func (c *consumer) cleanState(ctx context.Context, interval time.Duration) {
 		}
 		c.log.Info("start to clean state", zap.Int("count", count))
 
-		// First, reset the synced LSN. Fetch the latest lsn and set it to
-		// syncedLsn, then the truncation will truncate the log entries before
-		// it because they are useless.
+		// Read the latest LSN before clearing this run's retention claim.
+		// Publish the new synced LSN only after the reset is confirmed.
 		latestLsn, err := c.logClient.getLatestLsnWithRetry(ctx)
 		if err != nil {
 			c.log.Error("failed to get latest LSN", zap.Error(err))
 			continue
 		}
-		c.syncedLsn.Store(latestLsn)
 
-		// Second, set required LSN to 0.
-		if err := c.logClient.setRequiredLsnWithRetry(ctx, 0); err != nil {
+		// Clear the retention claim only for this run's replicated owner and
+		// revision. The readback is part of resetRequiredLsn.
+		if err := c.logClient.resetRequiredLsn(ctx); err != nil {
 			c.log.Error("failed to set required LSN", zap.Error(err))
+			if errors.Is(err, errRequiredLsnConflict) {
+				return
+			}
 			continue
 		}
+		c.syncedLsn.Store(latestLsn)
+		c.lastRequiredLsn = 0
 
 		c.log.Info("end of cleaning state", zap.Int("count", count))
 		return
@@ -403,6 +425,9 @@ func (c *consumer) loop(ctx context.Context, interval time.Duration) error {
 			}
 			if err := c.consumeEntries(ctx, entries, false); err != nil {
 				c.log.Error("failed to consume entries", zap.Error(err))
+				if errors.Is(err, errRequiredLsnConflict) {
+					return err
+				}
 
 				// If the error is ErrFileNotFound, probably means that the file in
 				// source file service has been GCed.

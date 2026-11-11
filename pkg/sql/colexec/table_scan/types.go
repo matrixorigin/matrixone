@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -52,6 +53,11 @@ type container struct {
 	filterLateMaterialized    bool
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
+	domainSources             []localDomainSourceState
+	domainProbes              []localDomainProbeState
+	domainRows                []int64
+	domainsReady              bool
+	domainEmpty               bool
 }
 
 // jsonScanState is allocated and charged only when this scan has JSON_VALUE
@@ -90,8 +96,10 @@ type TableScan struct {
 	Attrs              []string
 	Types              []plan.Type
 	TableID            uint64
-	FilterExprs        []*plan.Expr       // static inline filters (from plan.Node.FilterList, set at compile time)
-	RuntimeFilterExprs []*plan.Expr       // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
+	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	LocalDomainBuilds  []runtimefilter.LocalDomainBinding
+	LocalDomainProbes  []runtimefilter.LocalDomainBinding
 	ReadPolicy         fileservice.Policy // added to the read context's fileservice policy
 
 	vm.OperatorBase
@@ -135,6 +143,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	tableScan.ctr.jsonState.close()
 	tableScan.ctr.jsonState = nil
 
@@ -176,6 +185,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	tableScan.ctr.jsonState.close()
 	tableScan.ctr.jsonState = nil
 

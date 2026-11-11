@@ -248,7 +248,7 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 		binary.LittleEndian.PutUint64(slotOf[i:i+8], ^uint64(0))
 	}
 	fallbackLastX := -1
-	var fallbackSums *[AggBatchSize]types.Decimal128
+	var fallbackSums []types.Decimal128
 	var fallbackCnts []int64
 
 	for i, grp := range groups {
@@ -297,7 +297,7 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]types.Decimal128
+	var sums []types.Decimal128
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -368,7 +368,7 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 	}
 
 	lastX1, lastX2 := -1, -1
-	var sums1 *[AggBatchSize]types.Decimal128
+	var sums1 []types.Decimal128
 	var sums2 []types.Decimal128
 	var cnts1, cnts2 []int64
 	for i, grp := range groups {
@@ -767,7 +767,7 @@ func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vector
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]types.Decimal128
+	var sums []types.Decimal128
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
