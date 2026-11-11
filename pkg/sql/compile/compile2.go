@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -153,6 +154,7 @@ func (c *Compile) Compile(
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
+	triggerStatementPlanCompiledFault(c.proc.Ctx, queryPlan)
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -161,6 +163,28 @@ func (c *Compile) Compile(
 	}
 
 	return c.proc.GetQueryContextError()
+}
+
+const indexDDLPlanCompiledFault = "index-ddl-plan-compiled"
+
+// triggerStatementPlanCompiledFault exposes a deterministic boundary between
+// planning and pre-pipeline locking for cross-CN schema-change tests. Fault
+// injection is disabled in production, so ordinary compilation pays only the
+// enabled-state check.
+func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan) {
+	if !fault.Status() || queryPlan == nil {
+		return
+	}
+	if queryPlan.GetDdl().GetCreateIndex() != nil {
+		fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+		return
+	}
+	for _, action := range queryPlan.GetDdl().GetAlterTable().GetActions() {
+		if action.GetAddIndex() != nil {
+			fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+			return
+		}
+	}
 }
 
 // Run executes the pipeline and returns the result.
@@ -275,6 +299,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var coordinatorPhaseBase time.Duration
 	var allocationAttempt *statementAllocationAttempt
 	finishAllocationAttempt := func() error {
+		if runC != nil {
+			runC.closePipelineSpoolsAfterReadersStopped()
+			defer runC.endImportMemory()
+		}
 		if allocationAttempt == nil {
 			return nil
 		}
@@ -358,7 +386,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				resourceRecorder.recordAllocationAccountTerminal(snapshot)
 			}
 		}
-		err = runC.ensureAllocationAccountLifecycle(exporter)
+		err = runC.beginImportMemory()
+		if err == nil {
+			err = runC.ensureAllocationAccountLifecycle(exporter)
+		}
 		if err == nil {
 			allocationAttempt, err = runC.beginAllocationAccountAttempt()
 		}
@@ -369,7 +400,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
-			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
@@ -385,6 +415,21 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 				break
 			}
+		}
+		var smaller *importDOPRetryError
+		if errors.As(err, &smaller) {
+			if finishErr := finishAllocationAttempt(); finishErr != nil {
+				return nil, errors.Join(err, finishErr)
+			}
+			if runC != c {
+				runC.Release()
+			}
+			runC, err = c.recompileImportMemory(execTopContext, smaller.next)
+			if err != nil {
+				return nil, err
+			}
+			runC.InitPipelineContextToRetryQuery()
+			continue
 		}
 		if preRunWall == 0 {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
@@ -883,6 +928,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
+	runC.importMemoryPrepared = c.isPrepare || c.importMemoryPrepared
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if recovered := recover(); recovered != nil {

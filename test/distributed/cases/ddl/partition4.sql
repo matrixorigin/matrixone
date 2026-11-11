@@ -85,3 +85,15 @@ insert into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES
 (1, 2000.00, '1991-07-01');
 select * from insert_ignore_06 order by sale_id;
 drop table insert_ignore_06;
+
+-- The public generate_series cardinality selects S3 writes for these inserts.
+-- Three populated partitions must forward every metadata frame on both writes.
+drop table if exists partition_write_frames;
+create table partition_write_frames(id bigint) partition by range(id)(partition p0 values less than (0), partition p1 values less than (100000), partition p2 values less than maxvalue);
+insert into partition_write_frames select result from generate_series(-100000, 100000, 1) g;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+insert into partition_write_frames select result from generate_series(-100000, 100000, 1) g;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+delete from partition_write_frames where id < 0;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+drop table partition_write_frames;

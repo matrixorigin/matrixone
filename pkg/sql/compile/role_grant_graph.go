@@ -32,9 +32,7 @@ func roleGrantGraphFrontier(ctx context.Context, eng engine.Engine, service stri
 	if rt == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "missing service runtime for role grant graph")
 	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if ok && valid && version >= defines.MORPCVersion11 {
+	if supportsLogtailReadBarrier(service) {
 		barrier, available := getLogtailReadBarrier(eng)
 		if !available {
 			return timestamp.Timestamp{}, moerr.NewNotSupported(ctx,
@@ -103,4 +101,14 @@ func LockRoleGrantGraph(ctx context.Context, eng engine.Engine, proc *process.Pr
 		currentSnapshot: txnOp.SnapshotTS,
 		updateSnapshot:  txnOp.UpdateSnapshot,
 	}, "role grant graph")
+}
+
+func supportsLogtailReadBarrier(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion11
 }

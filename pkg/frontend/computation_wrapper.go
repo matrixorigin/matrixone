@@ -704,6 +704,11 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentOptimizerHintsValue, err := owner.GetSessionSysVar("optimizer_hints")
+	if err != nil {
+		return nil, nil, nil, "", false, err
+	}
+	currentOptimizerHints, _ := currentOptimizerHintsValue.(string)
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -778,7 +783,8 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+		prepareStmt.optimizerHints != currentOptimizerHints
 
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, FK-check state, protocol, or compatibility mode changed.
@@ -820,6 +826,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
+		prepareStmt.optimizerHints = currentOptimizerHints
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.

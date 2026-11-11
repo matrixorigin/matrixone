@@ -33,6 +33,10 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 func (connector *Connector) Prepare(proc *process.Process) error {
 	if connector.ctr.sp == nil {
 		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+		if memory := proc.Base.ImportMemory; memory != nil {
+			connector.ctr.sp.SetCacheMemoryLimit(memory.UnitBytes)
+		}
+		proc.RegisterPipelineSpool(connector.ctr.sp, connector.Reg)
 	}
 
 	if connector.OpAnalyzer == nil {
