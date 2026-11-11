@@ -922,6 +922,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
+			require.False(t, b.Vecs[1].HasBorrowedBacking(), "owned/unused demand must avoid transient cache leases")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "projected-column-use", out, cacheVectors, queryMP, fs, []int{0, 1}, request)

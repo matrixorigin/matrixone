@@ -531,3 +531,14 @@ existing budgeted CopyIntoBatches/spill-partition path already copies values int
 owned storage. This completes the same real-consumer handoff on build roots,
 including non-producer roots configured individually. It does not change dedup,
 computed-key admission, retained batch format, spill, or build lifetime.
+
+
+Honor the same eventual-column demand at the initial single pinned read, not
+only after filtering. Owned/unused columns take the existing owned decoder path
+instead of creating transient cache-owner/pin leases and then converting them.
+Retained/unknown columns preserve admitted cache borrowing. A reusable request
+mask aligns with the early-column list; no extra read or payload cache is added.
+The nil-policy behavior remains unchanged; incompatible masks conservatively
+copy owned. The real persisted-reader fixture verifies predicates still see full
+input while owned/unused cache columns do not acquire borrowed backing. Restored
+copying must remain measured against main; this is not a waived copy budget.

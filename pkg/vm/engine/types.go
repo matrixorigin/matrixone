@@ -1335,6 +1335,7 @@ type ReaderFilterRequest struct {
 	// Missing/unknown policies retain all columns. It never changes filter inputs.
 	ColumnUses       []ReaderColumnUse
 	selectionScratch *ReaderSelectionScratch
+	borrowColumns    []bool
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
 	// next callback. A supporting reader retains views or gathers that mapping
@@ -1365,6 +1366,21 @@ func (r *ReaderFilterRequest) ColumnUse(column, width int) ReaderColumnUse {
 		return ReaderColumnRetain
 	}
 	return use
+}
+
+// BorrowColumns lets the single pinned read honor the eventual representation.
+// Owned/unused columns use the original owned decoder path without transient
+// cache leases. The mask is request-local and consumed before publication.
+func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
+	if cap(r.borrowColumns) < len(positions) {
+		r.borrowColumns = make([]bool, len(positions))
+	} else {
+		r.borrowColumns = r.borrowColumns[:len(positions)]
+	}
+	for i, pos := range positions {
+		r.borrowColumns[i] = r.ColumnUse(pos, width) == ReaderColumnRetain
+	}
+	return r.borrowColumns
 }
 
 // SelectionScratch is execution-lane local and bounded by the scan schema.

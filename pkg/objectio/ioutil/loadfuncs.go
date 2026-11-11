@@ -157,7 +157,7 @@ func LoadColumnsDataInto(
 	policy fileservice.Policy,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	return loadColumnsDataInto(ctx, columns, typs, fs, location, destinations,
-		sels, visibilityTS, m, policy, false, false)
+		sels, visibilityTS, m, policy, false, false, nil)
 }
 
 // LoadColumnsDataIntoReadonly materializes complete, non-appendable columns
@@ -175,14 +175,15 @@ func LoadColumnsDataIntoReadonly(
 	policy fileservice.Policy,
 ) (fromCache bool, err error) {
 	_, fromCache, err = loadColumnsDataInto(ctx, columns, typs, fs, location,
-		destinations, nil, nil, m, policy, true, false)
+		destinations, nil, nil, m, policy, true, false, nil)
 	return
 }
 
 // LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
-// validation capability; every other shape uses ordinary owned materialization.
-func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy) (bool, error) {
-	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true)
+// validation capability and an admitted per-column borrow policy. A nil policy
+// preserves full borrowing; an incompatible policy conservatively copies owned.
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true, allowBorrow)
 	return hit, err
 }
 
@@ -199,6 +200,7 @@ func loadColumnsDataInto(
 	policy fileservice.Policy,
 	readonlyArea bool,
 	borrowedColumns bool,
+	allowBorrow []bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
@@ -304,7 +306,7 @@ func loadColumnsDataInto(
 	}
 
 	for i := range columns {
-		if borrowedColumns {
+		if borrowedColumns && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
 			var borrowed bool
 			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m)
 			if err != nil {
