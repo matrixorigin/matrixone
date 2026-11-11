@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r44-2026-11-11` |
+| Design revision | `python-udf-current-stage-r45-2026-11-12` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `4df268ea5f21882599fdfd6f415b67f849b99675` (official SQL task ownership migrations and grammar preserved; Query routine tag 24 and MORPC 134 unchanged; pending consolidated 4.0.7 offset 53) |
-| Approval | Feature owner approved the r1 current-stage scope on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r44 contract preserves r43's routine semantics and follows official main 4df268ea5f21882599fdfd6f415b67f849b99675: retain its three SQL task cluster migrations alongside all nine routine tenant migrations, yielding pending 4.0.7/53 (36 tenant, 17 cluster entries). Query fields 23/24 and MORPC 134 are unchanged; no separate development-history successor or Python MORPC gate is added. Independent Architecture and SQL/Planner approval remains pending; no production or security scope is added. Historical approval facts remain in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `12679d7993eca1fb5355711eeb60e30ee522592f` (official ENUM/SET result metadata at Query field 24; routine dependencies use field 25; MORPC 134 and pending catalog 4.0.7/53 unchanged) |
+| Approval | Feature owner approved the r1 test/development scope in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r45 proposal preserves r44 semantics and pending catalog 4.0.7/53 (36 tenant, 17 cluster entries). It retains official ENUM/SET metadata at Query field 24 and moves the unmerged routine dependency envelope to 25. MORPC 134 and external Arrow/Flight ABI are unchanged. Independent Architecture and SQL/Planner approval remains pending; no production or security scope is added. Historical facts remain in the [approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -155,14 +155,15 @@ still validate account, descriptors and the external worker contract.
 
 The shared `Query` protobuf preserves official `correlation = 19`,
 `integer_precision = 20`, `select_lock_references = 21`, and
-`execution_dependent_access = 22`, and `local_runtime_filter_domains = 23`;
-this PR uses the next free field, `routine_dependencies = 24`. All six survive
+`execution_dependent_access = 22`, `local_runtime_filter_domains = 23`, and `enum_set_result_types = 24`;
+this PR uses the next free field, `routine_dependencies = 25`. All seven survive
 serialization and generated descriptor lookup; deep-copy preserves independent
 local-domain targets, lock and routine identities without aliasing, and retains
 the official execution-dependent access flag.
-Official main `2f6fcc772175d0c0e80ad97aac6d44360c513347` owns field 23 for
-local runtime-filter domains, so the unmerged routine envelope moves to 24.
-Earlier candidate routine tags 20/21/22/23 are replaced, never
+Official main `12679d7993eca1fb5355711eeb60e30ee522592f` owns field 24 for
+output-aligned declared ENUM/SET domains, so the unmerged routine envelope moves
+to 25. Both metadata contracts survive serialization and independent deep-copy.
+Earlier candidate routine tags 20/21/22/23/24 are replaced, never
 interpreted as aliases of official fields with different semantics.
 Cached-plan admission retains the official cancellation check after metadata
 validation and preserves the existing parsed-statement and transaction owners.
