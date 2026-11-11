@@ -25,14 +25,14 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":                    {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21, "local_runtime_filter_domains": 23},
+		"Query":                    {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21, "local_runtime_filter_domains": 23, "enum_set_result_types": 24},
 		"Type":                     {"numeric_attributes": 14},
 		"Expr":                     {"candidate_filter": 27},
 		"CreateDatabase":           {"defaults": 5},
 		"AlterDatabase":            {"defaults": 3},
 		"CreateTable":              {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults":         {"collation_revision": 6},
-		"ColDef":                   {"result_column_kind": 23},
+		"ColDef":                   {"result_column_kind": 23, "enum_set_result_type": 25},
 		"UpdateCtx":                {"partition_index_ctx": 20},
 		"PreInsertCtx":             {"preserve_input": 18},
 		"PartitionIndexCtx":        {"parent_ref": 1, "parent_table": 2, "partition_col": 3},
