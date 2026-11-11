@@ -1,6 +1,6 @@
 # DECIMAL UNSIGNED and ZEROFILL attributes
 
-Catalog-upgrade routing follows [the current 4.0.7 design](20261028-catalog-upgrade-407.md); draft version-chain references below do not define additional supported upgrade sources or handlers.
+Catalog-upgrade routing follows [the current 4.0.7 design](20261028-catalog-upgrade-407.md); draft version-chain and offset references below reflect review history and do not define additional supported upgrade sources or handlers.
 
 Issue: [#30940](https://github.com/matrixorigin/matrixone/issues/30940)
 (consolidated tracker, includes the independent report
