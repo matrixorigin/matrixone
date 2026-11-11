@@ -80,3 +80,43 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 	_, err = reader.QueryText(0, []byte("$.keep"), false)
 	require.ErrorIs(t, err, io.ErrClosedPipe)
 }
+
+func TestJSONReaderStringTextMatchesUnquote(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	builder, err := NewJSONReaderBuilder(mp, nil)
+	require.NoError(t, err)
+	defer builder.Close()
+	literals := []string{`""`, `"plain"`, `"\"quoted\""`, `"slash\\line\n"`, `"猫🌍"`, `"\u0000"`}
+	want := make([]string, len(literals))
+	for i, literal := range literals {
+		value, err := bytejson.ParseFromString(literal)
+		require.NoError(t, err)
+		want[i], err = value.Unquote()
+		require.NoError(t, err)
+		require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"items":[`+literal+`]}`), false))
+	}
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	closed := false
+	defer func() {
+		if !closed {
+			reader.Close()
+		}
+	}()
+	path := *jsonReaderPath(t, "$.items[*]")
+	owned := make([]string, len(literals))
+	for row := range literals {
+		for _, legacyFloat := range []bool{false, true} {
+			got, err := reader.QueryTextAtPath(row, path, legacyFloat)
+			require.NoError(t, err)
+			require.True(t, got.Exists)
+			require.Equal(t, byte(bytejson.TpCodeString), got.Type)
+			require.Equal(t, want[row], got.Text)
+			owned[row] = got.Text
+		}
+	}
+	reader.Close()
+	closed = true
+	require.Equal(t, want, owned, "selected strings remain owned after reader close")
+}

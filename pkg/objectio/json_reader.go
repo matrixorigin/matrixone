@@ -521,6 +521,10 @@ func (r *cacheJSONQueryResult) selectText(simple, legacyFloat bool) (vector.JSON
 		}
 		value = value.GetArrayElem(0)
 	}
+	// String unquoting is the stored UTF-8 payload; convert to owned text.
+	if value.Type == bytejson.TpCodeString {
+		return vector.JSONTextSelection{Exists: true, Text: string(value.GetString()), Type: byte(value.Type)}, nil
+	}
 	if value.IsNull() {
 		return vector.JSONTextSelection{Exists: true, ValueNull: true}, nil
 	}
