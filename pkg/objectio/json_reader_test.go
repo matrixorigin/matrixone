@@ -251,7 +251,7 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	source := vector.NewVec(types.T_json.ToType())
 	defer source.Free(mp)
-	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL","number":123}`)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
 	data := privateJSONColumnForTest(t, source)
@@ -286,6 +286,22 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 					err = io.ErrUnexpectedEOF
 				}
 				value.Close()
+			}
+			if err == nil {
+				localMP := mpool.MustNewZero()
+				output := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), localMP)
+				err = output.PreExtendAndReset(1)
+				if err == nil {
+					var value vector.JSONTextSelection
+					var appended bool
+					value, appended, err = view.(vector.JSONDirectTextReader).QueryTextTo(0, []byte("$.number"), false, 512, vector.MustFunctionResult[types.Varlena](output))
+					value.Close()
+					if err == nil && (!appended || string(output.GetResultVector().GetBytesAt(0)) != "123") {
+						err = io.ErrUnexpectedEOF
+					}
+				}
+				output.Free()
+				mpool.DeleteMPool(localMP)
 			}
 			results <- err
 		}()
