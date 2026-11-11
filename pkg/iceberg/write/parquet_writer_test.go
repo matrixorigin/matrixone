@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, file.Root().Column("id").ID())
 	require.Equal(t, 2, file.Root().Column("name").ID())
-	requireParquetColumnPlainEncoded(t, file, "name")
+	requireParquetColumnDictionaryEncoded(t, file, "name")
 	require.Equal(t, int64(2), dataFile.RecordCount)
 	require.Equal(t, int64(buf.Len()), dataFile.FileSizeInBytes)
 	require.Equal(t, int64(2), dataFile.ValueCounts[1])
@@ -528,6 +529,7 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
 			SourceID: 2, Name: "created_month", Transform: "month",
 		}}},
+		ParquetOptions:      ParquetOptions{codec: "gzip"},
 		TableLocation:       "s3://warehouse/sales/orders",
 		WriterID:            "stmt-1",
 		TargetFileSizeBytes: 1,
@@ -545,8 +547,13 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		require.NotEmpty(t, factory.objects[file.FilePath])
 		require.True(t, strings.HasPrefix(file.FilePath, "s3://warehouse/sales/orders/data/created_month="))
 		seenPartitions[file.Partition["created_month"].(int32)] = true
-		_, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
+		pf, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
 		require.NoError(t, err)
+		for _, group := range pf.Metadata().RowGroups {
+			for _, column := range group.Columns {
+				require.Equal(t, "GZIP", column.MetaData.Codec.String())
+			}
+		}
 	}
 	require.True(t, seenPartitions[int32((2026-1970)*12+5)])
 	require.True(t, seenPartitions[int32((2026-1970)*12+6)])
@@ -695,8 +702,9 @@ func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 	require.Empty(t, writer.active)
 }
 
-func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path string) {
+func requireParquetColumnDictionaryEncoded(t *testing.T, file *parquet.File, path string) {
 	t.Helper()
+	found := 0
 	for _, rowGroup := range file.Metadata().RowGroups {
 		for _, column := range rowGroup.Columns {
 			if strings.Join(column.MetaData.PathInSchema, ".") != path {
@@ -706,12 +714,13 @@ func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path str
 			for _, encoding := range column.MetaData.Encoding {
 				encodings = append(encodings, encoding.String())
 			}
-			require.Contains(t, encodings, "PLAIN")
+			require.Contains(t, encodings, "RLE_DICTIONARY")
 			require.NotContains(t, encodings, "DELTA_LENGTH_BYTE_ARRAY")
-			return
+			require.Positive(t, column.MetaData.DictionaryPageOffset)
+			found++
 		}
 	}
-	require.Failf(t, "column not found", "column path %s was not found in parquet metadata", path)
+	require.Equal(t, len(file.Metadata().RowGroups), found, "column %s in every row group", path)
 }
 
 type memoryDataFileFactory struct {
@@ -747,4 +756,244 @@ func (s *abortTrackingDataFileSink) Abort() error {
 	s.aborted = true
 	s.Reset()
 	return nil
+}
+
+func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	values := []string{"repeat", "repeat", "", "世界"}
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(values[i%len(values)]), i == 3, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	for _, tc := range []struct {
+		name, value, codec string
+		absent             bool
+	}{
+		{"default", "", "ZSTD", true}, {"zstd", " ZsTd ", "ZSTD", false},
+		{"snappy", "snappy", "SNAPPY", false}, {"gzip", "gzip", "GZIP", false},
+		{"brotli", "brotli", "BROTLI", false}, {"lz4", "lz4", "LZ4_RAW", false},
+		{"uncompressed", "uncompressed", "UNCOMPRESSED", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			props := map[string]string{}
+			if !tc.absent {
+				props[parquetCompressionProperty] = tc.value
+			}
+			opts, err := ParseParquetOptions(props)
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "test.parquet", ParquetOptions: opts}, &buf)
+			require.NoError(t, err)
+			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			_, err = writer.Close(ctx)
+			require.NoError(t, err)
+			file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+			for _, group := range file.Metadata().RowGroups {
+				require.LessOrEqual(t, group.NumRows, int64(parquetWriteMaxRowsPerRowGroup))
+				for _, col := range group.Columns {
+					require.Equal(t, tc.codec, col.MetaData.Codec.String())
+				}
+			}
+			requireParquetColumnDictionaryEncoded(t, file, "name")
+			reader := parquet.NewGenericReader[struct {
+				Name *string `parquet:"name,optional"`
+			}](bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+			rows := make([]struct {
+				Name *string `parquet:"name,optional"`
+			}, 8193)
+			n, err := reader.Read(rows)
+			require.True(t, err == nil || err == io.EOF)
+			require.Equal(t, len(rows), n)
+			for i, row := range rows {
+				if i == 3 {
+					require.Nil(t, row.Name)
+				} else {
+					require.NotNil(t, row.Name)
+					require.Equal(t, values[i%len(values)], *row.Name)
+				}
+			}
+		})
+	}
+	for _, value := range []string{"", "  ", "lzo"} {
+		_, err := ParseParquetOptions(map[string]string{parquetCompressionProperty: value})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), parquetCompressionProperty)
+	}
+}
+
+func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(strconv.Itoa(i)), false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "unique.parquet"}, &buf)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = writer.Close(ctx)
+	require.NoError(t, err)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+	reader := parquet.NewGenericReader[struct {
+		Name *string `parquet:"name,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		Name *string `parquet:"name,optional"`
+	}, 8193)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, len(rows), n)
+	for i, row := range rows {
+		require.NotNil(t, row.Name)
+		require.Equal(t, strconv.Itoa(i), *row.Name)
+	}
+}
+
+func TestParquetRowGroupStringBudget(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"a", "b"})
+	a, b := vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())
+	// The first two rows exactly fill the aggregate budget; the third crosses it.
+	valuesA := []string{strings.Repeat("a", (1<<19)-8), "", "z", strings.Repeat("x", (1<<20)+1), "tail"}
+	valuesB := []string{strings.Repeat("b", (1<<19)-8), "", "", "", ""}
+	for i := range valuesA {
+		require.NoError(t, vector.AppendBytes(a, []byte(valuesA[i]), false, mp))
+		require.NoError(t, vector.AppendBytes(b, []byte(valuesB[i]), false, mp))
+	}
+	bat.Vecs[0], bat.Vecs[1] = a, b
+	bat.SetRowCount(len(valuesA))
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "a", Type: api.IcebergType{Kind: api.TypeString}}, {ID: 2, Name: "b", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "budget.parquet"}, &buf)
+	require.NoError(t, err)
+	for _, indexes := range [][]int{{0}, {1, 2}, {3}, {4}} {
+		require.NoError(t, w.WriteRows(ctx, bat.Attrs, bat, indexes))
+	}
+	fileInfo, err := w.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), fileInfo.RecordCount)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	counts := make([]int64, 0, len(file.Metadata().RowGroups))
+	for _, group := range file.Metadata().RowGroups {
+		counts = append(counts, group.NumRows)
+	}
+	require.Equal(t, []int64{2, 1, 1, 1}, counts)
+	reader := parquet.NewGenericReader[struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}, 5)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, 5, n)
+	for i := range rows {
+		require.Equal(t, valuesA[i], rows[i].A)
+		require.Equal(t, valuesB[i], rows[i].B)
+	}
+}
+
+type failingParquetSink struct{}
+
+func (failingParquetSink) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "error.parquet", ParquetOptions: ParquetOptions{codec: "uncompressed"}}, failingParquetSink{})
+	require.NoError(t, err)
+	require.Error(t, w.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = w.Close(ctx)
+	require.Error(t, err)
+}
+
+type qaFlushSink struct {
+	bytes.Buffer
+	fail    bool
+	cancel  context.CancelFunc
+	aborted bool
+}
+
+func (s *qaFlushSink) Write(p []byte) (int, error) {
+	if s.fail {
+		return 0, io.ErrClosedPipe
+	}
+	n, err := s.Buffer.Write(p)
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	return n, err
+}
+func (s *qaFlushSink) Close() error { return nil }
+func (s *qaFlushSink) Abort() error { s.aborted = true; s.Reset(); return nil }
+
+func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
+	for _, mode := range []string{"failure", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			mp := mpool.MustNewZero()
+			bat := batch.New([]string{"name"})
+			vec := vector.NewVec(types.T_varchar.ToType())
+			// The first row forces a flush; the second observes cancellation after it.
+			require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+			require.NoError(t, vector.AppendBytes(vec, []byte("tail"), false, mp))
+			bat.Vecs[0] = vec
+			bat.SetRowCount(2)
+			defer bat.Clean(mp)
+			sink := &qaFlushSink{fail: mode == "failure"}
+			if mode == "cancel" {
+				sink.cancel = cancel
+			}
+			w, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+				Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}},
+				TableLocation: "s3://warehouse/test", ParquetOptions: ParquetOptions{codec: "uncompressed"},
+			}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
+			require.NoError(t, err)
+			err = w.WriteBatch(ctx, bat.Attrs, bat)
+			require.Error(t, err)
+			if mode == "cancel" {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			require.NoError(t, w.Abort(context.Background()))
+			require.True(t, sink.aborted)
+			require.Empty(t, sink.Bytes())
+			require.Empty(t, w.OrphanPaths())
+			files, err := w.Close(context.Background())
+			require.NoError(t, err)
+			require.Empty(t, files)
+		})
+	}
 }
