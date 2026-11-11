@@ -49,6 +49,16 @@ func (fl *BatchFreeList) Len() int {
 	return len(fl.pool)
 }
 
+// Peek returns the next reusable batch without changing ownership. Sinker uses
+// it only on its owning goroutine to budget an append before it mutates data.
+func (fl *BatchFreeList) Peek(fromTop int) *batch.Batch {
+	index := len(fl.pool) - 1 - fromTop
+	if index < 0 || index >= len(fl.pool) {
+		return nil
+	}
+	return fl.pool[index]
+}
+
 func (fl *BatchFreeList) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
 	if fl.attrs == nil {
 		fl.attrs = attrs

@@ -23,6 +23,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -203,6 +204,7 @@ type External struct {
 	Es         *ExternalParam
 	reader     ExternalFileReader // unified file reader
 	fileOpened bool               // whether a file is currently active
+	inputLease *rscthrottler.InputLease
 
 	vm.OperatorBase
 	colexec.Projection
@@ -334,7 +336,8 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 		external.fileOpened = false
 	}
 	if external.ctr.buf != nil {
-		external.ctr.buf.CleanOnlyData()
+		external.ctr.buf.Clean(proc.Mp())
+		external.ctr.buf = nil
 	}
 	if external.Es != nil {
 		// Release Iceberg-only execution state without changing External's legacy
@@ -351,7 +354,18 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 	allocSize := int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {
 		allocSize += external.ProjectAllocSize
-		external.ResetProjection(proc)
+		if external.inputLease != nil {
+			// ResetForNextQuery retains function-result and constant vectors.
+			// They still belong to I, so destroy them before returning its slot.
+			// PrepareProjection rebuilds the executors for the next generation.
+			external.FreeProjection(proc)
+		} else {
+			external.ResetProjection(proc)
+		}
+	}
+	if external.inputLease != nil {
+		external.inputLease.Release()
+		external.inputLease = nil
 	}
 
 	if external.OpAnalyzer != nil {
@@ -380,6 +394,10 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.ctr.buf = nil
 	}
 	external.FreeProjection(proc)
+	if external.inputLease != nil {
+		external.inputLease.Release()
+		external.inputLease = nil
+	}
 }
 
 func (param *ExternalParam) releaseIcebergObjectIORef() {
