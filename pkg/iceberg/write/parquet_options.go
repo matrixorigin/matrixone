@@ -15,6 +15,10 @@
 package write
 
 import (
+	"strings"
+	"sync"
+
+	kzstd "github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/brotli"
@@ -23,7 +27,6 @@ import (
 	"github.com/parquet-go/parquet-go/compress/snappy"
 	"github.com/parquet-go/parquet-go/compress/uncompressed"
 	"github.com/parquet-go/parquet-go/compress/zstd"
-	"strings"
 )
 
 const parquetCompressionProperty = "write.parquet.compression-codec"
@@ -58,6 +61,27 @@ func (o ParquetOptions) compression() compress.Codec {
 	case "uncompressed":
 		return &uncompressed.Codec{}
 	default:
-		return &zstd.Codec{}
+		return &limitedZstd{}
 	}
+}
+
+// limitedZstd holds one lazily initialized encoder per writer owner. EncodeAll
+// permits concurrent calls and the embedded codec supplies standard decoding.
+type limitedZstd struct {
+	zstd.Codec
+	once sync.Once
+	enc  *kzstd.Encoder
+	err  error
+}
+
+func (c *limitedZstd) Encode(dst, src []byte) ([]byte, error) {
+	c.once.Do(func() {
+		c.enc, c.err = kzstd.NewWriter(nil, kzstd.WithEncoderLevel(kzstd.SpeedDefault),
+			kzstd.WithWindowSize(128<<10), kzstd.WithLowerEncoderMem(true),
+			kzstd.WithEncoderConcurrency(1), kzstd.WithZeroFrames(true), kzstd.WithEncoderCRC(false))
+	})
+	if c.err != nil {
+		return dst[:0], c.err
+	}
+	return c.enc.EncodeAll(src, dst[:0]), nil
 }
