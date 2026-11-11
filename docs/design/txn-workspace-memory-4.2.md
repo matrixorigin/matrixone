@@ -100,3 +100,21 @@ rowid merge ownership and refusal. Its transaction cost remains a 5% QA gate.
 
 Existing cn_spill_byte_bound, workspace_filter and update_workspace SQL BVT also
 passed with nonempty per-case terminal reports and no failures/skips/abnormalities.
+
+## Integration follow-up: captured-prefix publication
+
+The first exact-head Linux CI found that append-at-tail dump publication changed
+visibility for readers retaining a prefix offset. Metadata now replaces the first
+source anchor within each statement region and snapshot side. All replacements
+are staged before sources retire; previously captured prefixes and rollback
+boundaries therefore keep their meaning. A deterministic overlay fails before
+this fix and passes afterward; the regression reads the old region from object
+storage before and after real statement rollback and cleanup drain. Independent
+review approved the final anchor delta and the three focused engine regressions.
+
+The old GC fixture reused names after cleanup handoff, which is unsafe under the
+new retained-obligation contract. It now records fresh real objects first, checks
+pool-rejected names remain retained, rejects republication of cleanup-owned names,
+and independently verifies deletion after explicit drain. Linux-only incremental
+SCA findings were corrected without changing allocation or lifecycle semantics.
+Final owning-package, exact-head CI and runtime acceptance remain separate gates.

@@ -237,28 +237,6 @@ func reclaimableCgroupCache(statPath string) (uint64, bool) {
 	return reclaimable - writeback, true
 }
 
-// cgroupStatPath locates memory.stat for a pid on the single-level fallback path,
-// trying cgroup v2 first and then v1's memory controller.
-func cgroupStatPath(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[0] == "0" && parts[1] == "" {
-			return filepath.Join("/sys/fs/cgroup", parts[2], "memory.stat")
-		}
-		if strings.Contains(","+parts[1]+",", ",memory,") {
-			return filepath.Join("/sys/fs/cgroup/memory", parts[2], "memory.stat")
-		}
-	}
-	return ""
-}
-
 // readCgroupUint reads a single-value cgroup file. Zero is a valid usage;
 // missing, empty, malformed and "max" values are unavailable.
 func readCgroupUint(path string) (uint64, bool) {

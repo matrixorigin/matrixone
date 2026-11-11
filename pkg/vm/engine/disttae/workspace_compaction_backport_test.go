@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -251,6 +253,105 @@ func TestBackportWorkspaceDumpDeleteResolveRollback(t *testing.T) {
 			}
 			require.Equal(t, 1, rows, "the aborted insert must never be resurrected by staged metadata")
 			require.Equal(t, reuseSlot, replacementFound)
+			require.NoError(t, txn.checkWorkspaceAccountingLocked())
+		})
+	}
+}
+
+// A prefix captured before a later statement must retain exactly its old rows
+// after a dump spanning both regions, and after rollback of the newer region.
+func TestBackportWorkspaceDumpPreservesCapturedPrefixAndRollbackRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		statementBoundary bool
+		snapshot          int
+	}{
+		{"statement_and_snapshot", true, 1},
+		{"snapshot_inside_statement_region", false, 1},
+		{"statement_boundary_inside_snapshot_prefix", true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			statementBoundary := tc.statementBoundary
+			ctx := context.Background()
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			// This oracle tests publication positions, not host pressure. Keep real
+			// capacity accounting while isolating it from the host's live sampler.
+			budget := process.MustNewHashBuildBudget(16<<20, 8<<20)
+			parent, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			require.NoError(t, txn.proc.SetHashBuildBudgetForTesting(parent))
+			t.Cleanup(parent.Close)
+
+			colexec.NewServer("")
+			txn.tableCache = new(sync.Map)
+			txn.tablesInVain = make(map[uint64]int)
+			txn.batchSelectList = make(map[*batch.Batch][]int64)
+			txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
+			txn.tnStores = []DNStore{{}}
+			fs, err := colexec.GetSharedFSFromProc(txn.proc)
+			require.NoError(t, err)
+			txn.engine.fs = fs
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			tbl.tableDef = &pbplan.TableDef{Cols: []*pbplan.ColDef{
+				{Name: "pk", Seqnum: 0, Primary: true, Typ: pbplan.Type{Id: int32(types.T_int64)}},
+				{Name: catalog.Row_ID, Seqnum: 1, Typ: pbplan.Type{Id: int32(types.T_Rowid)}},
+			}, Pkey: &pbplan.PrimaryKeyDef{PkeyColName: "pk"}}
+			tbl.proc.Store(txn.proc)
+			op := newTxnOperatorForTestWithWorkspace(t, txn)
+			txn.op = op
+			if statementBoundary {
+				op.EXPECT().EnterRollbackStmt()
+				op.EXPECT().ExitRollbackStmt()
+			}
+			for _, value := range []int64{111, 222} {
+				b := newInsertBatchWithRowIDForTest(t, txn.proc, []int64{value})
+				txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, accountId: 1, databaseId: 7, tableId: 42, databaseName: "db", tableName: "tbl", bat: b})
+			}
+			const capturedPrefix = 1
+			if statementBoundary {
+				txn.offsets = []int{capturedPrefix}
+				txn.statementID = 1
+			}
+			txn.snapshotWriteOffset.Store(int64(tc.snapshot))
+			t.Cleanup(func() {
+				for i := range txn.writes {
+					txn.releaseWorkspaceEntryBatchLocked(i)
+				}
+				txn.closeWorkspaceAllocation()
+			})
+			readPrefix := func(offset int) []int64 {
+				var values []int64
+				txn.ForEachTableWrites(7, 42, offset, func(e Entry) {
+					require.Equal(t, catalog.BlockMeta_BlockInfo, e.bat.Attrs[0])
+					info := objectio.DecodeBlockInfo(e.bat.Vecs[0].GetBytesAt(0))
+					rows := batch.NewWithSize(1)
+					defer rows.Clean(txn.proc.Mp())
+					require.NoError(t, blockio.CopyBlockData(ctx, info.MetaLoc[:], nil, []uint16{0}, []types.Type{types.T_int64.ToType()}, rows, fs, txn.proc.Mp()))
+					values = append(values, vector.MustFixedColNoTypeCheck[int64](rows.Vecs[0])...)
+					require.Same(t, e.bat, txn.cnObjsSummary[*info.BlockID.Object()].objBat)
+				})
+				return values
+			}
+			txn.Lock()
+			var rows int
+			err = txn.dumpInsertBatchLocked(ctx, fs, 0, &rows)
+			txn.Unlock()
+			require.NoError(t, err)
+			require.Equal(t, 2, rows)
+			require.Len(t, txn.writes, 2, "dump replaces source anchors without moving the captured boundary")
+			require.Equal(t, []int64{111}, readPrefix(capturedPrefix))
+			require.Equal(t, []int64{111, 222}, readPrefix(int(txn.WriteOffset())))
+			require.NoError(t, txn.checkWorkspaceAccountingLocked())
+			if !statementBoundary {
+				return
+			}
+			require.NoError(t, txn.RollbackLastStatement(ctx))
+			require.Len(t, txn.writes, 1)
+			require.Equal(t, []int64{111}, readPrefix(capturedPrefix))
+			require.NoError(t, txn.engine.DrainUnpublishedPendingForTest(ctx))
+			require.Equal(t, []int64{111}, readPrefix(capturedPrefix), "GC of the rolled-back region must not delete the earlier object's file")
 			require.NoError(t, txn.checkWorkspaceAccountingLocked())
 		})
 	}

@@ -1116,6 +1116,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, fs fileservic
 }
 
 type workspaceDumpStage struct {
+	anchors   []int
 	records   []*stagedWorkspaceRecord
 	retired   []int
 	persisted []string
@@ -1131,17 +1132,25 @@ func (s *workspaceDumpStage) abort(txn *Transaction) {
 	txn.retainDefiniteOrphansLocked(s.persisted, "workspace dump staging failed")
 }
 func (s *workspaceDumpStage) publish(txn *Transaction) int {
-	for _, st := range s.records {
-		txn.publishStagedWorkspaceRecordLocked(st)
-	}
 	rows := 0
 	for _, idx := range s.retired {
 		if txn.writes[idx].typ == INSERT {
 			rows += txn.writes[idx].bat.RowCount()
 		}
-		txn.releaseWorkspaceEntryBatchLocked(idx)
+	}
+	anchors := make(map[int]struct{}, len(s.anchors))
+	for i, st := range s.records {
+		anchor := s.anchors[i]
+		anchors[anchor] = struct{}{}
+		txn.publishStagedWorkspaceRecordAtLocked(st, anchor)
+	}
+	for _, idx := range s.retired {
+		if _, anchor := anchors[idx]; !anchor {
+			txn.releaseWorkspaceEntryBatchLocked(idx)
+		}
 	}
 	s.records = nil
+	s.anchors = nil
 	s.retired = nil
 	s.persisted = nil
 	return rows
@@ -1149,7 +1158,14 @@ func (s *workspaceDumpStage) publish(txn *Transaction) int {
 
 // Sources remain retained until all writers, metadata copies and admissions succeed.
 func (txn *Transaction) dumpWorkspaceTablesLocked(ctx context.Context, fs fileservice.FileService, offset, typ int, skip map[uint64]bool, tables map[tableKey]engine.Relation, pkCount *int, combined ...*workspaceDumpStage) (err error) {
-	groups := make(map[workspaceTableKey][]int)
+	// Keep every replacement inside its captured statement/snapshot prefix.
+	type dumpGroup struct {
+		workspaceTableKey
+		region        int
+		afterSnapshot bool
+	}
+	groups := make(map[dumpGroup][]int)
+	snapshot := txn.GetSnapshotWriteOffset()
 	for i := offset; i < len(txn.writes); i++ {
 		e := &txn.writes[i]
 		if e.bat == nil || e.bat.IsEmpty() || e.isCatalog() || e.typ != typ || e.fileName != "" || skip[e.tableId] {
@@ -1157,10 +1173,13 @@ func (txn *Transaction) dumpWorkspaceTablesLocked(ctx context.Context, fs filese
 		}
 		key := workspaceTableKey{tableKey: tableKey{accountId: e.accountId, databaseId: e.databaseId, dbName: e.databaseName, name: e.tableName}, autoIncrEpoch: e.autoIncrEpoch, autoIncrEpochKnown: e.autoIncrEpochKnown}
 		if _, ok := tables[key.tableKey]; ok {
-			groups[key] = append(groups[key], i)
+			region, _ := slices.BinarySearch(txn.offsets, i+1)
+			group := dumpGroup{key, region, i >= snapshot}
+			groups[group] = append(groups[group], i)
 		}
 	}
-	var stages []*stagedWorkspaceRecord
+	stages := make([]*stagedWorkspaceRecord, 0, len(groups))
+	var anchors []int
 	var persisted []string
 	var retired []int
 	defer func() {
@@ -1218,11 +1237,13 @@ func (txn *Transaction) dumpWorkspaceTablesLocked(ctx context.Context, fs filese
 			return writeErr
 		}
 		stages = append(stages, stage)
+		anchors = append(anchors, indexes[0])
 		retired = append(retired, indexes...)
 	}
-	prepared := workspaceDumpStage{records: stages, retired: retired, persisted: persisted}
+	prepared := workspaceDumpStage{records: stages, anchors: anchors, retired: retired, persisted: persisted}
 	if len(combined) > 0 {
 		combined[0].records = append(combined[0].records, prepared.records...)
+		combined[0].anchors = append(combined[0].anchors, prepared.anchors...)
 		combined[0].retired = append(combined[0].retired, prepared.retired...)
 		combined[0].persisted = append(combined[0].persisted, prepared.persisted...)
 		return nil
@@ -1477,6 +1498,9 @@ func (txn *Transaction) stageWorkspaceRecordLocked(typ int, accountId uint32, da
 	return &stagedWorkspaceRecord{Entry: Entry{typ: typ, accountId: accountId, databaseId: databaseId, tableId: tableId, databaseName: databaseName, tableName: tableName, fileName: fileName, bat: copied, tnStore: tnStore, autoIncrEpoch: autoIncrEpoch, autoIncrEpochKnown: autoIncrEpochKnown, skipTransfer: skipTransfer, pkCheckPos: -1, pkCheckReady: true}, admittedNames: txn.recordedUnpublishedObjectNamesLocked(typ, inputBat)}, nil
 }
 func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRecord) {
+	txn.publishStagedWorkspaceRecordAtLocked(s, -1)
+}
+func (txn *Transaction) publishStagedWorkspaceRecordAtLocked(s *stagedWorkspaceRecord, anchor int) {
 	txn.hasS3Op.Store(true)
 	if s == nil {
 		return
@@ -1507,7 +1531,7 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 		}
 	}
 
-	txn.appendWorkspaceEntryLocked(Entry{
+	entry := Entry{
 		typ:                s.typ,
 		accountId:          s.accountId,
 		tableId:            s.tableId,
@@ -1522,7 +1546,14 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 		skipTransfer:       s.skipTransfer,
 		autoIncrEpoch:      s.autoIncrEpoch,
 		autoIncrEpochKnown: s.autoIncrEpochKnown,
-	})
+	}
+	if anchor < 0 {
+		txn.appendWorkspaceEntryLocked(entry)
+	} else {
+		txn.releaseWorkspaceEntryBatchLocked(anchor)
+		txn.writes[anchor] = entry
+		txn.accountWorkspaceEntryLocked(&txn.writes[anchor])
+	}
 	if len(s.admittedNames) > 0 {
 		txn.engine.unpublishedPending.mu.Lock()
 		txn.engine.finishReservationProducersLocked(s.admittedNames)

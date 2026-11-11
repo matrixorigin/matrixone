@@ -154,7 +154,7 @@ func (txn *Transaction) handoffPendingObjectCleanupLocked(quiesced bool) error {
 		return nil
 	}
 	epoch := txn.statementLifecycle.Load()
-	var moved []string
+	moved := make([]string, 0, len(txn.pendingObjectCleanup))
 	var kept []pendingObjectCleanupItem
 	for i := range txn.pendingObjectCleanup {
 		it := &txn.pendingObjectCleanup[i]
@@ -791,7 +791,7 @@ func (txn *Transaction) recordedUnpublishedObjectNamesLocked(
 	}
 	col, area := vector.MustVarlenaRawData(vec)
 	var (
-		names []string
+		names = make([]string, 0, len(col))
 		seen  map[string]struct{}
 	)
 	for i := range col {
@@ -948,7 +948,7 @@ func (txn *Transaction) retainUnrecordedS3ObjectsAtLocked(
 	if len(persisted) == 0 {
 		return
 	}
-	var unrecorded []string
+	unrecorded := make([]string, 0, len(persisted))
 	for _, n := range persisted {
 		if txn.hasRecordedUnpublishedObjectName(n) {
 			continue // owned by its record's lifecycle
