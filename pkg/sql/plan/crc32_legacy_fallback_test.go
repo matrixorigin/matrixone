@@ -128,8 +128,15 @@ func TestCRC32LegacyGeneratedFallbackForeignKeySetNull(t *testing.T) {
 	require.True(t, recursiveInsert, "SET NULL must use the legacy update insert path")
 	addLegacyCRC32GeneratedFixture(t, table)
 	got, err := runOneStmt(mock, t, sql)
-	require.Nil(t, got)
-	require.ErrorContains(t, err, "legacy DML planner cannot write a legacy CRC32 JSON generated column")
+	require.NoError(t, err, "the FK action does not change the CRC32 input or generated value")
+	require.NotNil(t, got)
+	recursiveInsert = false
+	for _, node := range got.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_INSERT && node.InsertCtx != nil && node.InsertCtx.TableDef != nil && node.InsertCtx.TableDef.Name == "self_ref_cascade" {
+			recursiveInsert = true
+		}
+	}
+	require.True(t, recursiveInsert, "SET NULL must preserve the legacy update insert path")
 }
 
 func TestCRC32LegacyGeneratedFallbackIncludesVirtual(t *testing.T) {
