@@ -779,3 +779,13 @@ Review must independently cover owned output, escaped and multibyte strings,
 512/513 character boundaries, binary payload errors and both reader owners;
 then repeat all fixed five-pair performance gates with preparation and copies
 included where required. No path cache or alternate decoder is introduced.
+
+### Local-domain scan filtering (candidate revision 42)
+
+An upstream local-domain probe can remove rows after a storage read has
+published JSON versions. Apply the probe's exact surviving-row selection to
+all published readers before shrinking the batch, as for other scan filters.
+The publication remains scoped to that read and is closed on reset, free, or
+failure; a selection failure terminates execution. A regression must exercise
+the actual probe together with JSON publication, including a removed row and
+the retained values' mapping.

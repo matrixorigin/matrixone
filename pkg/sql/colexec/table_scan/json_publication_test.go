@@ -29,8 +29,11 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -269,4 +272,66 @@ func TestTableScanWithoutJSONDemandDoesNotAllocateState(t *testing.T) {
 	require.Zero(t, allocations)
 	require.Nil(t, scan.ctr.jsonState)
 	require.Equal(t, before, budget.Snapshot().Used)
+}
+
+func TestTableScanLocalDomainKeepsJSONPublicationAligned(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetMessageBoard(message.NewMessageBoard())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
+	defer domain.Close()
+	producer, err := domain.Begin(proc, 0, 1)
+	require.NoError(t, err)
+	keys := testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, producer.AddVector(proc.Ctx, keys, 2))
+	producer.Complete(false)
+
+	ctrl := gomock.NewController(t)
+	reader := mock_frontend.NewMockReader(ctrl)
+	reader.EXPECT().Close().Return(nil).AnyTimes()
+	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ []string, _ *pb.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+			keys := []int64{1, 0, 2}
+			for row, document := range []string{`{"keep":"first"}`, `{"keep":"discard"}`, `{"keep":"last"}`} {
+				require.NoError(t, vector.AppendFixed(out.Vecs[0], keys[row], row == 1, mp))
+				value, err := types.ParseStringToByteJson(document)
+				require.NoError(t, err)
+				raw, err := value.Marshal()
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(out.Vecs[1], raw, false, mp))
+			}
+			out.SetRowCount(3)
+			publication := objectio.JSONReadSetFromContext(ctx)
+			require.NotNil(t, publication)
+			return false, publication.PublishMutableColumnsForEvaluation(out.Vecs, mp, out.RowCount())
+		})
+	scan := NewArgument().WithTypes([]pb.Type{{Id: int32(types.T_int64)}, {Id: int32(types.T_json)}})
+	defer func() { scan.Free(proc, false, nil); scan.Release() }()
+	scan.Attrs = []string{"id", "doc"}
+	scan.Reader = reader
+	scan.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id", ProbeNDV: 10000}}
+	scan.SetAnalyzeControl(0, true)
+	scan.SetMaxParallel(1)
+	require.NoError(t, scan.Prepare(proc))
+	require.NoError(t, scan.RequestJSONInputs(proc, []int{1}))
+	result, err := scan.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Batch.RowCount())
+	versions, err := scan.PublishJSONInputs(proc, result.Batch, []int{1})
+	require.NoError(t, err)
+	defer colexec.CloseJSONInputVersions(versions)
+	path, err := types.ParseStringToPath("$.keep")
+	require.NoError(t, err)
+	for row, want := range []string{"first", "last"} {
+		selected, err := versions.Readers[1].QueryTextAtPath(row, path, false)
+		require.NoError(t, err)
+		require.Equal(t, want, selected.Text)
+	}
 }
