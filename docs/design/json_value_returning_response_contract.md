@@ -684,3 +684,27 @@ matched legacy baseline and input fixtures remain unchanged.
 
 Review decision: report standalone unaccounted timings only as separate
 mechanism observations. They cannot establish the warm performance gate.
+
+### Scoped text reads and memory-only admission (candidate revision 38)
+
+Five matched pairs with statement accounting enabled did not meet the warm or
+small-document SQL goals. A warm profile attributed substantial CPU to
+creating a retained cursor for each lookup; the seven-argument text path also
+performs multiple interfaces per row. A cold SQL profile showed that opening
+the statement generation for JSON-only memory accounting sampled the spill
+filesystem even when the query did not request spill authority.
+
+Use the ownership dependency's synchronous, owned-text selection for the
+two-argument reader path and for text-returning seven-argument queries. Preserve
+the legacy NULL-before-path order and the contract's path-before-document-NULL
+order, all response policies, source/conversion errors and 512-character
+checking. Typed and JSON outputs retain the cursor path. A projection-owned
+reader can be borrowed for one evaluation while its existing binding remains
+live; it need not create another retained window for that call.
+
+Use the dependency's narrow memory-only admission, which keeps the same query
+and CN memory limits and original generation. Full resource-budget callers
+promote that generation and initialize spill limits before obtaining a
+spill-capable handle. There is no new cache, timer, byte trust flag or alternate
+JSON decoder. Re-run semantic, lifecycle, race, SQL and all paired performance
+gates, retaining the earlier failed measurements.
