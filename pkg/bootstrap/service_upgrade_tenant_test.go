@@ -36,6 +36,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type cancelAfterUpgradeTxn struct {
+	executor.SQLExecutor
+	cancel context.CancelFunc
+	err    error
+	called bool
+}
+
+func (e *cancelAfterUpgradeTxn) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	e.called = true
+	e.err = e.SQLExecutor.ExecTxn(ctx, fn, opts)
+	e.cancel()
+	return e.err
+}
+
 func Test_asyncUpgradeTenantTask(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -424,7 +438,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 		sid,
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -443,7 +457,6 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3") &&
 					strings.Contains(sql, "state = 2"):
 					finalized.Store(true)
-					cancel()
 					return executor.Result{AffectedRows: 1}, nil
 				default:
 					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
@@ -466,11 +479,15 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
-			s.exec = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			txnExec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
+			observed := &cancelAfterUpgradeTxn{SQLExecutor: txnExec, cancel: cancel}
+			s.exec = observed
 
 			s.asyncUpgradeTenantTask(ctx)
+			require.True(t, observed.called, "upgrade transaction did not run")
+			require.NoError(t, observed.err)
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},

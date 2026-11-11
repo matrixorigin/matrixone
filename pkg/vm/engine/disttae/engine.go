@@ -1304,6 +1304,12 @@ func (e *Engine) AcquireLogtailReadBarrier(
 	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
+func (e *Engine) AcquirePeerLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, bool, error) {
+	return e.pClient.AcquirePeerLogtailReadBarrier(ctx)
+}
+
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals
 func (e *Engine) RunGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
