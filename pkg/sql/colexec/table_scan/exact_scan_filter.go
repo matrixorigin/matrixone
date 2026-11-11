@@ -204,12 +204,10 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.earlyColumns[i] = i
 		}
 	}
-	tableScan.ctr.dictionaryOnlyReader = false
 	if len(tableScan.ctr.earlyColumns) == 0 && tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 &&
 		len(tableScan.Attrs) == len(tableScan.Types) {
-		// The eager path already loads every column. Request the same scheduling
-		// with a selection result only when the destination later admits views.
-		tableScan.ctr.dictionaryOnlyReader = true
+		// Keep the eager path's all-column schedule. Scoped filtering may
+		// still avoid intermediate copies when publication requires owned data.
 		tableScan.ctr.earlyColumns = make([]int, len(tableScan.Types))
 		for i := range tableScan.ctr.earlyColumns {
 			tableScan.ctr.earlyColumns[i] = i

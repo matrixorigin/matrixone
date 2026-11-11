@@ -211,7 +211,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(tableScan.ctr.allFilterExecutors) > 0 && len(tableScan.ctr.buf.ExtraBuf) == 0 {
+			if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && !tableScan.ctr.padCharToFullLength && len(tableScan.ctr.allFilterExecutors) > 0 && len(tableScan.ctr.buf.ExtraBuf) == 0 {
 				selection, selectErr := tableScan.selectReaderFilter(proc, tableScan.ctr.buf, nil)
 				if selectErr != nil {
 					return vm.CancelResult, selectErr

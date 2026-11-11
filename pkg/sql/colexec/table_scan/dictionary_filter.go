@@ -49,23 +49,20 @@ func (tableScan *TableScan) selectReaderFilter(proc *process.Process, bat *batch
 // prepareColumnUses distinguishes values leaving projection from private inputs.
 // Directly forwarded columns take priority over computed uses of the same input.
 func (tableScan *TableScan) prepareColumnUses() {
-	owned := tableScan.ctr.dictionaryBoundary.PrefersOwnedOutput()
+	owned := !tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() || tableScan.ctr.dictionaryBoundary.PrefersOwnedOutput()
 	if tableScan.ctr.columnUsesReady && tableScan.ctr.columnUsesOwned == owned {
 		return
 	}
 	tableScan.ctr.columnUsesReady = true
 	tableScan.ctr.columnUsesOwned = owned
 	tableScan.ctr.columnUses = nil
-	if len(tableScan.ProjectList) == 0 {
+	if len(tableScan.ProjectList) == 0 || len(tableScan.ProjectExecutors) != len(tableScan.ProjectList) {
 		if owned {
 			tableScan.ctr.columnUses = make([]engine.ReaderColumnUse, len(tableScan.Types))
 			for i := range tableScan.ctr.columnUses {
 				tableScan.ctr.columnUses[i] = engine.ReaderColumnOwned
 			}
 		}
-		return
-	}
-	if len(tableScan.ProjectExecutors) != len(tableScan.ProjectList) {
 		return
 	}
 	uses := make([]engine.ReaderColumnUse, len(tableScan.Types))
@@ -78,6 +75,12 @@ func (tableScan *TableScan) prepareColumnUses() {
 		clear(seen)
 		columns = columns[:0]
 		if !colexec.CollectSingleBatchInputColumns(executor, seen, &columns) {
+			if owned {
+				for column := range uses {
+					uses[column] = engine.ReaderColumnOwned
+				}
+				tableScan.ctr.columnUses = uses
+			}
 			return
 		}
 		use := engine.ReaderColumnOwned

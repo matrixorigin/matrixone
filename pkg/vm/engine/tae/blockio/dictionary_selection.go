@@ -35,14 +35,20 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 	scratch := request.SelectionScratch(len(positions))
 	defer scratch.Clear()
 	width := len(output.Vecs)
+	retain := true
 	for _, pos := range positions {
 		source := output.Vecs[pos]
 		use := request.ColumnUse(pos, width)
 		if use == engine.ReaderColumnUnused {
 			continue
 		}
-		if use == engine.ReaderColumnOwned && !source.IsConst() && !source.IsDictionary() && !source.HasBorrowedBacking() && source.CanDetach(vector.BackingData) && source.CanDetach(vector.BackingArea) {
-			continue
+		if use == engine.ReaderColumnOwned {
+			if !source.IsDictionary() && !source.HasBorrowedBacking() && source.CanDetach(vector.BackingData) && source.CanDetach(vector.BackingArea) {
+				continue
+			}
+			// An owned destination must not gain a borrowed dictionary header.
+			// Use the existing owned fallback for this exceptional mixed batch.
+			retain = false
 		}
 		scratch.Columns = append(scratch.Columns, pos)
 		scratch.Sources = append(scratch.Sources, source)
@@ -79,9 +85,13 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 		snapshots = scratch.Snapshots
 	}
 	if len(sources) > 0 {
-		admitted, err := vector.TrySelectDictionaryVectorsWithWorkspace(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse, snapshots, request.SelectionSlot)
-		if err != nil {
-			return err
+		admitted := false
+		var err error
+		if retain {
+			admitted, err = vector.TrySelectDictionaryVectorsWithWorkspace(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse, snapshots, request.SelectionSlot)
+			if err != nil {
+				return err
+			}
 		}
 		if !admitted {
 			for i, source := range sources {

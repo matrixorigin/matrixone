@@ -106,3 +106,52 @@ func TestReaderSelectionScratchFailureReleasesPrefix(t *testing.T) {
 		require.Equal(t, []int32{10, 20, 30, 40}, vector.MustFixedColNoTypeCheck[int32](v))
 	}
 }
+
+func TestOwnedReaderSelectionDoesNotPublishBorrowedViews(t *testing.T) {
+	for _, shape := range []string{"window", "constant"} {
+		t.Run(shape, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			output := batch.NewOffHeapWithSize(1)
+			t.Cleanup(func() { output.Clean(mp) })
+			require.NoError(t, output.SetAllocationAccount(allocation))
+			if shape == "constant" {
+				output.Vecs[0], err = vector.NewConstFixedWithAllocation(types.T_int64.ToType(), int64(40), 4, mp, allocation)
+				require.NoError(t, err)
+			} else {
+				source, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), allocation)
+				require.NoError(t, err)
+				t.Cleanup(func() { source.Free(mp) })
+				require.NoError(t, vector.AppendFixedList(source, []int64{10, 20, 30, 40}, nil, mp))
+				output.Vecs[0], err = source.WindowWithAllocation(0, 4, mp, allocation)
+				require.NoError(t, err)
+			require.False(t, output.Vecs[0].CanDetach(vector.BackingData))
+			}
+			output.SetRowCount(4)
+			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned}}
+			require.NoError(t, publishReaderSelection(output, []int{0}, []int64{3, 1, 3}, request, mp))
+			require.Equal(t, 3, output.RowCount())
+			require.False(t, output.HasDictionary())
+			require.False(t, output.Vecs[0].HasBorrowedBacking())
+			require.True(t, output.Vecs[0].CanDetach(vector.BackingData))
+			want := []int64{40, 20, 40}
+			if shape == "constant" {
+				want = []int64{40, 40, 40}
+			}
+			for row, value := range want {
+				require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], row))
+			}
+		})
+	}
+}

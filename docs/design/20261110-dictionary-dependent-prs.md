@@ -735,3 +735,29 @@ No TPC-H gain may be attributed to this leaf admission alone. A separate local
 owned-output-reader-selection-design.md proposes reusing internal scoped filtering
 while requiring owned publication; it is not implemented or approved yet.
 The r41 all-query/resource gate remains blocked. All C/D designs are preserved.
+
+
+### Approved owned-output reader selection wiring — 2026-11-12
+
+The requester approved owned-output-reader-selection-design.md and instructed
+fixing the remaining regressions. Decouple internal selected filtering from
+outgoing dictionary permission. An existing accounted reader request installs
+Select for ordinary non-padding mode even with a flat-only parent; remove the
+private dictionaryOnlyReader bypass. Keep the same all-column read schedule,
+unsupported-reader/summary/missing-account fallbacks and mutable CHAR-padding
+Apply path. No new dictionary capability is declared on consumers.
+
+No output permission forces owned required/forwarded columns; unknown projection
+classification conservatively owns all needed columns. Reconfiguration shares
+this effective ownership cache key. Flat-only scans allocate no publication/
+snapshot/map banks. Other selected-reader publication must respect owned demand:
+private ordinary constants may shrink logically, while unshrinkable owned inputs
+use the existing owned gather fallback rather than gaining dictionary headers.
+
+Actual TableScan entry controls cover the Q22-shaped predicate chain, repeated
+generations, accepting/flat parents, missing allocation, unsupported reader,
+summary and CHAR-padding modes, plus block-I/O ownership and refusal contracts.
+Confirm actual kernel/scope activation before claiming a TPC-H gain. Preserve
+all all-query/resource gates, local six-suite protocol and C/D follow-up designs.
+No cache/GC/budget/type/kernel/public-interface change or push is authorized by
+this wiring while performance acceptance remains unresolved.

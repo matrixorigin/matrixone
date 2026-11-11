@@ -51,7 +51,6 @@ type container struct {
 	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
-	dictionaryOnlyReader      bool
 	readerWorkspace           []*vector.Vector
 	readerHeaders             []*vector.Vector
 	readerSnapshots           []*vector.DictionaryVectorSlot
