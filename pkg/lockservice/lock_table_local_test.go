@@ -2008,10 +2008,19 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 				_, err = s.Lock(ctx, table, newTestRows(1), txnB, sharedRows)
 				require.NoError(t, err)
 
-				waitCtx, waitCancel := context.WithTimeout(ctx, time.Millisecond*50)
-				defer waitCancel()
+				waitCtx, waitCancel := context.WithCancel(ctx)
+				waiterDone := make(chan struct{})
+				defer func() {
+					waitCancel()
+					select {
+					case <-waiterDone:
+					case <-time.After(100 * time.Millisecond):
+						t.Fatalf("canceled waiter did not exit within 100ms")
+					}
+				}()
 				done := make(chan error, 1)
 				go func() {
+					defer close(waiterDone)
 					_, lockErr := s.Lock(
 						waitCtx,
 						table,
@@ -2022,7 +2031,8 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 					done <- lockErr
 				}()
 				waitWaiters(t, s, table, newTestRows(1)[0], 1)
-				require.ErrorIs(t, <-done, context.DeadlineExceeded)
+				waitCancel()
+				require.ErrorIs(t, <-done, context.Canceled)
 
 				lt := s.tableGroups.get(0, table).(*localLockTable)
 				checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA, txnB}, nil, nil)
