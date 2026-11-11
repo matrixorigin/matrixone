@@ -17,7 +17,8 @@ Internal ALTER COPY and LIKE carry the old bound expressions when replaying
 unchanged definitions. Referenced column types and positions must remain valid;
 a changed expression or incompatible input is not an implicit lossless change.
 Existing folded defaults without source expressions keep their stored values.
-New folded CRC32 JSON defaults retain their bound source for later replay.
+The existing JSON text feature guard keeps new CRC32 JSON default expressions
+visible through ordinary constant folding and catalog serialization.
 
 The legacy DML planner does not calculate generated columns. The current
 candidate retains its rejection for a legacy CRC32 generated expression on

@@ -1036,19 +1036,19 @@ func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
 				Func: &ObjectRef{Obj: int64(21)<<32 | 1, ObjName: "cast"}, Args: []*Expr{arg},
 			}}}
 		}
-		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID)<<32 | CRC32LegacyOverload, ObjName: "crc32"}, Args: []*Expr{arg}}}}
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID) << 32, ObjName: "crc32"}, Args: []*Expr{arg}}}}
 		owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
 		data, err := owner.Marshal()
 		require.NoError(t, err)
 		decoded := &TableDef{}
 		require.NoError(t, decoded.Unmarshal(data))
-		found, err := ContainsCRC32JSONTextBytes(decoded)
+		features, err := RequiredRemoteExpressionFeatures(decoded)
 		require.NoError(t, err)
-		require.Equal(t, tc.textCast, found)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
 		folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
-		found, err = ContainsCRC32JSONTextBytes(folded)
+		features, err = RequiredRemoteExpressionFeatures(folded)
 		require.NoError(t, err)
-		require.Equal(t, tc.textCast, found)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
 	}
 }
 

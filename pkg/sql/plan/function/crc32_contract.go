@@ -14,7 +14,5 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 // Keep the historic execution identity stable for persisted and remote plans.
-const CRC32LegacyOverload = plan.CRC32LegacyOverload
+const CRC32LegacyOverload = 0

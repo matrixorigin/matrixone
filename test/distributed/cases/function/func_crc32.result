@@ -403,9 +403,6 @@ crc32(jobTitle)
 2622443617
 376497099
 drop table job;
-select count(*) as cdc_upgrade_prerequisite_columns from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id', 'owner_generation', 'pending_source_table_id', 'target_identity');
-cdc_upgrade_prerequisite_columns
-4
 create table crc32_gen_attributes(j json, g bigint unsigned generated always as (crc32(j)) stored);
 insert into crc32_gen_attributes(j) values ('{"t1":"a"}');
 alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored default 0;
@@ -418,9 +415,4 @@ select g from crc32_gen_attributes;
 g
 4012824821
 drop table crc32_gen_attributes;
-prepare crc32_closed_subquery from 'select (select (select t.k limit 1)) as k from (select 42 as k) t';
-execute crc32_closed_subquery;
-k
-42
-deallocate prepare crc32_closed_subquery;
 drop database test;

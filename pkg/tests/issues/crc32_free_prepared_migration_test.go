@@ -33,10 +33,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A WHERE clause on an ordinary table is not a CRC32 dependency. Exercise the
-// actual source and destination routines on distinct same-build CNs, rather
-// than treating successful SQL parsing or a synthetic plan as migration.
-func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
+// Exercise ordinary and parameterized CRC32 prepared statements through the
+// actual source and destination routines on distinct same-build CNs.
+func TestCRC32AndPlainPreparedMigrateBetweenCNs(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 		defer cancel()
@@ -63,8 +62,8 @@ func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
 			_, err := admin.ExecContext(cleanup, "drop database if exists "+dbName)
 			require.NoError(t, err)
 		}()
-		execSQLRequire(t, ctx, admin, "create table "+dbName+".t(id int primary key)")
-		execSQLRequire(t, ctx, admin, "insert into "+dbName+".t values(1),(2)")
+		execSQLRequire(t, ctx, admin, "create table "+dbName+".t(id int primary key,j json)")
+		execSQLRequire(t, ctx, admin, `insert into `+dbName+`.t values(1,'{"t1":"a"}'),(2,'{"t1":"b"}')`)
 		commitTS := sourceCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
 		require.False(t, commitTS.IsEmpty())
 		testutils.WaitLogtailApplied(t, commitTS, targetCN)
@@ -85,6 +84,10 @@ func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
 		}
 		_, err = source.ExecContext(ctx, "prepare crc_where from 'select id from "+dbName+".t where id=1'")
 		require.NoError(t, err)
+		_, err = source.ExecContext(ctx, "prepare crc_json from 'select crc32(j) from "+dbName+".t where id=?'")
+		require.NoError(t, err)
+		_, err = source.ExecContext(ctx, "set @crc_id=1")
+		require.NoError(t, err)
 		assertRow := func(conn *sql.Conn) {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, "execute crc_where")
@@ -99,7 +102,14 @@ func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Equal(t, []int{1}, got)
 		}
+		assertChecksum := func(conn *sql.Conn) {
+			t.Helper()
+			var got uint64
+			require.NoError(t, conn.QueryRowContext(ctx, "execute crc_json using @crc_id").Scan(&got))
+			require.Equal(t, uint64(4012824821), got)
+		}
 		assertRow(source)
+		assertChecksum(source)
 
 		var sourceID, targetID uint32
 		require.NoError(t, source.QueryRowContext(ctx, "select connection_id()").Scan(&sourceID))
@@ -136,12 +146,17 @@ func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
 		}
 		// A failed admission must not damage the original prepared handle.
 		assertRow(source)
+		assertChecksum(source)
 		require.NoError(t, err)
 		require.NotNil(t, response)
 		snapshot := response.MigrateConnFromResponse
 		require.NotNil(t, snapshot)
-		require.Len(t, snapshot.PrepareStmts, 1)
-		require.Equal(t, "crc_where", snapshot.PrepareStmts[0].Name)
+		require.Len(t, snapshot.PrepareStmts, 2)
+		names := map[string]bool{}
+		for _, stmt := range snapshot.PrepareStmts {
+			names[stmt.Name] = true
+		}
+		require.Equal(t, map[string]bool{"crc_where": true, "crc_json": true}, names)
 		require.True(t, snapshot.PreparedStmtLongDataChecked)
 		require.True(t, snapshot.PreparedStmtCursorsChecked)
 		require.True(t, snapshot.LastInsertIDExported)
@@ -171,6 +186,8 @@ func TestCRC32FreePreparedWhereMigratesBetweenCNs(t *testing.T) {
 		require.True(t, response.MigrateConnToResponse.Success)
 		// No target PREPARE is issued by the test; replay must install the handle.
 		assertRow(target)
+		assertChecksum(target)
 		assertRow(source)
+		assertChecksum(source)
 	})
 }

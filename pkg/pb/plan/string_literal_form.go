@@ -1340,41 +1340,6 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	return
 }
 
-// CRC32LegacyOverload is the original execution identity in stored expressions.
-const CRC32LegacyOverload = 0
-
-// isCRC32JSONTextBytes recognizes a JSON-to-text CRC32 binding so folded
-// expressions retain their source provenance. It is independent of peer
-// capability.
-func isCRC32JSONTextBytes(expr *Expr) bool {
-	if expr == nil {
-		return false
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != crc32FunctionID {
-		return false
-	}
-	if int32(fn.Func.Obj) != CRC32LegacyOverload || len(fn.Args) != 1 || fn.Args[0] == nil || fn.Args[0].Typ.Id != planTextTypeID {
-		return false
-	}
-	cast := fn.Args[0].GetF()
-	return cast != nil && cast.Func != nil && strings.EqualFold(cast.Func.ObjName, "cast") &&
-		int32(cast.Func.Obj) == 1 && len(cast.Args) > 0 && cast.Args[0] != nil && cast.Args[0].Typ.Id == planJSONTypeID
-}
-
-// ContainsCRC32JSONTextBytes identifies the new CRC32 identity, including in
-// folded source expressions. Callers use it to preserve catalog semantics.
-func ContainsCRC32JSONTextBytes(owner any) (bool, error) {
-	found := false
-	err := VisitExpressionsInOwner(owner, func(expr *Expr) error {
-		return VisitExprTree(expr, func(current *Expr) error {
-			found = found || isCRC32JSONTextBytes(current)
-			return nil
-		})
-	})
-	return found, err
-}
-
 // isASCIIInt32Result identifies the new physical result contract of ASCII.
 // Older serialized plans use the same overload IDs with UINT8 results, so the
 // result type must participate in the feature check; gating every ASCII call

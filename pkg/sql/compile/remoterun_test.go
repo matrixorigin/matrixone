@@ -1653,7 +1653,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
-	t.Run("CRC32 JSON text identity retains existing result gate", func(t *testing.T) {
+	t.Run("CRC32 JSON text retains existing cast gate", func(t *testing.T) {
 		crc := crc32JSONTextProtocolExpr(t, 0)
 		pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{crc}}}}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)

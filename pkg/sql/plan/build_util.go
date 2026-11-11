@@ -1261,11 +1261,7 @@ func buildDefaultExprWithColumnsForceDomain(
 		}
 	}
 
-	crc32Text, err := plan.ContainsCRC32JSONTextBytes(defaultExpr)
-	if err != nil {
-		return nil, err
-	}
-	if lit := newExpr.GetLit(); lit != nil && (exprContainsHexOverload(defaultExpr, 0) || crc32Text) {
+	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
 		// Preserve resolved types rather than reparsing display SQL after upgrade.
 		lit.Src = DeepCopyExpr(defaultExpr)
 	}

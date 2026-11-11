@@ -42,6 +42,26 @@ func legacyCRC32Expr() *planpb.Expr {
 	}}}
 }
 
+// Detect the actual new binding in test owners without adding a production
+// compatibility identity for a normal CRC32 plus JSON-to-TEXT cast.
+func containsCRC32JSONTextCall(owner any) (bool, error) {
+	found := false
+	err := planpb.VisitExpressionsInOwner(owner, func(expr *planpb.Expr) error {
+		return planpb.VisitExprTree(expr, func(current *planpb.Expr) error {
+			f := current.GetF()
+			if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) ||
+				len(f.Args) != 1 || f.Args[0] == nil || f.Args[0].Typ.Id != int32(types.T_text) {
+				return nil
+			}
+			cast := f.Args[0].GetF()
+			found = found || (cast != nil && cast.Func != nil && cast.Func.Obj == function.EncodeOverloadID(function.CAST, 1) &&
+				len(cast.Args) > 0 && cast.Args[0] != nil && cast.Args[0].Typ.Id == int32(types.T_json))
+			return nil
+		})
+	})
+	return found, err
+}
+
 func TestCRC32LegacyCheckCopyReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -260,7 +280,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	proc.Ctx = context.Background()
 	got, err = buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
-	containsText, err := planpb.ContainsCRC32JSONTextBytes(got)
+	containsText, err := containsCRC32JSONTextCall(got)
 	require.NoError(t, err)
 	require.True(t, containsText, "new DDL opts into text semantics")
 }
@@ -333,7 +353,7 @@ func TestCRC32LegacyGeneratedDMLPlans(t *testing.T) {
 			base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
 			built, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
-			containsText, err := planpb.ContainsCRC32JSONTextBytes(built)
+			containsText, err := containsCRC32JSONTextCall(built)
 			require.NoError(t, err)
 			require.False(t, containsText, "DML must not rebind legacy catalog expressions")
 			found := false
@@ -419,7 +439,7 @@ func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			containsText, err := planpb.ContainsCRC32JSONTextBytes(built)
+			containsText, err := containsCRC32JSONTextCall(built)
 			require.NoError(t, err)
 			require.False(t, containsText)
 			var target *planpb.TableDef
@@ -474,7 +494,7 @@ func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {
 	require.Nil(t, unchangedCRC32ColumnClauses(source, col, typ).Default)
 }
 
-func TestCRC32FoldedDefaultRetainsIdentity(t *testing.T) {
+func TestCRC32DefaultRetainsJSONTextContract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))))`, 1)
@@ -483,9 +503,27 @@ func TestCRC32FoldedDefaultRetainsIdentity(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	got, err := buildDefaultExprWithColumns(proc.Ctx, col, planpb.Type{Id: int32(types.T_uint64)}, proc, nil)
 	require.NoError(t, err)
-	require.NotNil(t, got.Expr.GetLit())
-	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.ContainsCRC32JSONTextBytes(got)
+	// The existing JSON text feature guard intentionally prevents folding this
+	// expression away, preserving the generic protocol and catalog contract.
+	require.Nil(t, got.Expr.GetLit())
+	data, err := got.Marshal()
 	require.NoError(t, err)
-	require.True(t, required)
+	var decoded planpb.Default
+	require.NoError(t, decoded.Unmarshal(data))
+	for _, saved := range []*planpb.Default{got, &decoded} {
+		func() {
+			found, err := containsCRC32JSONTextCall(saved)
+			require.NoError(t, err)
+			require.True(t, found)
+			features, err := planpb.RequiredRemoteExpressionFeatures(saved)
+			require.NoError(t, err)
+			require.True(t, features.JSONOpaqueTextContracts)
+			exec, err := colexec.NewExpressionExecutor(proc, saved.Expr)
+			require.NoError(t, err)
+			defer exec.Free()
+			result, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, uint64(4012824821), vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+		}()
+	}
 }

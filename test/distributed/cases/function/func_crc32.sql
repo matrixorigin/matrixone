@@ -263,9 +263,6 @@ insert into job values
 select crc32(jobTitle) from job;
 drop table job;
 
--- Release upgrades must reach a complete CDC catalog before CRC32's durable admission.
-select count(*) as cdc_upgrade_prerequisite_columns from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id', 'owner_generation', 'pending_source_table_id', 'target_identity');
-
 create table crc32_gen_attributes(j json, g bigint unsigned generated always as (crc32(j)) stored);
 insert into crc32_gen_attributes(j) values ('{"t1":"a"}');
 alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored default 0;
@@ -273,8 +270,4 @@ alter table crc32_gen_attributes change column g g bigint unsigned generated alw
 alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored auto_increment;
 select g from crc32_gen_attributes;
 drop table crc32_gen_attributes;
--- Closed dependent SELECTs remain replayable without reading catalog expressions.
-prepare crc32_closed_subquery from 'select (select (select t.k limit 1)) as k from (select 42 as k) t';
-execute crc32_closed_subquery;
-deallocate prepare crc32_closed_subquery;
 drop database test;

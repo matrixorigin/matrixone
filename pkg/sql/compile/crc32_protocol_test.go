@@ -79,9 +79,7 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 			require.NoError(t, err)
 			require.Equal(t, tc.mediumInt, features.MediumIntAssignmentBounds)
-			containsText, err := planpb.ContainsCRC32JSONTextBytes(qry)
-			require.NoError(t, err)
-			require.Equal(t, tc.crc32JSON, containsText)
+			require.Equal(t, tc.crc32JSON, features.JSONOpaqueTextContracts)
 			require.Equal(t, tc.floatConversion, features.FloatConversionSemantics)
 			require.Equal(t, tc.version, remoteExpressionProtocolVersion(features))
 			owner := &planpb.TableDef{}
