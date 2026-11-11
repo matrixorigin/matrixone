@@ -333,5 +333,6 @@ func TestTableScanLocalDomainKeepsJSONPublicationAligned(t *testing.T) {
 		selected, err := versions.Readers[1].QueryTextAtPath(row, path, false)
 		require.NoError(t, err)
 		require.Equal(t, want, selected.Text)
+		selected.Close()
 	}
 }

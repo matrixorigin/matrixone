@@ -164,7 +164,8 @@ func TestJSONCastReaderIsolationAndPartialFailure(t *testing.T) {
 				defer value.Close()
 				text, err := value.Text()
 				require.NoError(t, err)
-				require.Equal(t, want, text)
+				defer text.Close()
+				require.Equal(t, want, text.Text)
 			}
 			raw := source.GetBytesAt(0)
 			if oid == types.T_json {
@@ -576,6 +577,83 @@ func TestJSONValueReaderTextErrorClassification(t *testing.T) {
 				require.Empty(t, warnings.warnings)
 			}
 		})
+	}
+}
+
+func TestJSONValueReaderAdmissionFailuresAreHard(t *testing.T) {
+	for _, mode := range []struct {
+		name     string
+		contract bool
+		text     bool
+	}{{"legacy", false, true}, {"text-contract", true, true}, {"typed-contract", true, false}} {
+		for _, path := range []string{"$.keep", "$.arr[*]"} {
+			t.Run(mode.name+"/"+path, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				raw := mustJsonBinaryString(t, `{"keep":"123","arr":[1,2]}`)
+				inputs := []FunctionTestInput{
+					NewFunctionTestInput(types.T_json.ToType(), []string{raw, raw}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{path}, nil),
+				}
+				expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, nil)
+				if mode.contract {
+					if mode.text {
+						target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+						null := NewFunctionTestConstInput(target, []string{""}, []bool{true})
+						inputs = append(inputs, null,
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil), null,
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueDefaultResponse}, nil),
+							NewFunctionTestConstInput(target, []string{"fallback"}, nil))
+						expected = NewFunctionTestResult(target, false, []string{"", ""}, nil)
+					} else {
+						null := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true})
+						inputs = append(inputs, null,
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil), null,
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueDefaultResponse}, nil),
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{42}, nil))
+						expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, nil)
+					}
+				}
+				fc := NewFunctionTestCase(proc, inputs, expected, JsonValue)
+				defer fc.Free()
+				want := errors.New("JSON reader admission denied")
+				var live uint64
+				remaining := -1
+				admission := func(n uint64) (func(), error) {
+					if remaining == 0 {
+						return nil, want
+					}
+					if remaining > 0 {
+						remaining--
+					}
+					live += n
+					return func() { live -= n }, nil
+				}
+				builder, err := vector.NewJSONReaderBuilder(proc.Mp(), nil, admission)
+				require.NoError(t, err)
+				defer builder.Close()
+				for range 2 {
+					require.NoError(t, builder.Append([]byte(raw), false))
+				}
+				reader, err := builder.Finish()
+				require.NoError(t, err)
+				defer reader.Close()
+				baseline := live
+				remaining = 0
+				if mode.contract && !mode.text {
+					remaining = 1 // OpenCursor succeeds; the query/text allocation fails.
+				}
+				require.NoError(t, fc.result.PreExtendAndReset(2))
+				err = JsonValueWithReader(reader, fc.parameters, fc.result, proc, 2, nil)
+				require.ErrorIs(t, err, want, "ON ERROR cannot swallow allocation failures")
+				require.Equal(t, baseline, live, "failed execution must release partial reservations")
+				remaining = -1
+				require.NoError(t, fc.result.PreExtendAndReset(2))
+				require.NoError(t, JsonValueWithReader(reader, fc.parameters, fc.result, proc, 2, nil))
+				require.Equal(t, baseline, live, "successful rows must release text and query reservations")
+				reader.Close()
+				require.Zero(t, live)
+			})
+		}
 	}
 }
 

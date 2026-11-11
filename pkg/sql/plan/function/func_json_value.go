@@ -49,12 +49,13 @@ const (
 )
 
 type jsonValueExtracted struct {
-	selected vector.JSONQueryResult
-	state    jsonValueState
-	value    bytejson.ByteJson
-	text     string
-	path     string
-	err      error
+	selected  vector.JSONQueryResult
+	ownedText vector.JSONOwnedText
+	state     jsonValueState
+	value     bytejson.ByteJson
+	text      string
+	path      string
+	err       error
 }
 
 // jsonValueInputParameter reads a document or path without assuming that the
@@ -403,9 +404,12 @@ func jsonValueExecuteCore(
 		}
 
 		var extracted jsonValueExtracted
+		var selectedText vector.JSONTextSelection
 		if len(readers) != 0 {
 			if textResult != nil {
-				selected, selectionErr := readers[0].QueryTextAtPath(int(row), parsedPath, false)
+				var selectionErr error
+				selectedText, selectionErr = readers[0].QueryTextAtPath(int(row), parsedPath, false)
+				selected := selectedText
 				if selectionErr == nil && selected.Exists && !selected.InputNull && !selected.ValueNull && !selected.Multiple && !selected.TextError {
 					var conversionErr error
 					if !textImplicit {
@@ -418,7 +422,9 @@ func jsonValueExecuteCore(
 						value, conversionErr = jsonValueText(value, textTarget)
 					}
 					if conversionErr == nil {
-						if err := textResult.AppendBytes(util.UnsafeStringToBytes(value), false); err != nil {
+						err := textResult.AppendBytes(util.UnsafeStringToBytes(value), false)
+						selectedText.Close()
+						if err != nil {
 							return err
 						}
 						continue
@@ -427,7 +433,9 @@ func jsonValueExecuteCore(
 						appendJSONValueWarning(proc, conversionErr, true)
 					}
 					extracted = jsonValueExtracted{state: jsonValueOneValue, path: pathText, err: conversionErr}
-					if err := jsonValueApplyResponse(extracted, onError, row, appendNull, appendDefault, jsonValueContext(proc)); err != nil {
+					err := jsonValueApplyResponse(extracted, onError, row, appendNull, appendDefault, jsonValueContext(proc))
+					selectedText.Close()
+					if err != nil {
 						return err
 					}
 					continue
@@ -440,6 +448,8 @@ func jsonValueExecuteCore(
 			extracted = jsonValueExtractAtPath(doc, docType, false, parsedPath, pathText)
 		}
 		processErr := func() error {
+			defer selectedText.Close()
+			defer extracted.ownedText.Close()
 			switch extracted.state {
 			case jsonValueSQLNull:
 				if err := appendNull(); err != nil {
@@ -1058,20 +1068,25 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 		}
 		selected, err := reader.QueryText(row, path, legacyFloat)
 		if err != nil {
+			selected.Close()
 			if selected.InvalidPath {
 				return moerr.NewInvalidArgNoCtx("json_value", "invalid path expression")
 			}
 			return err
 		}
 		if !selected.Exists || selected.InputNull || selected.ValueNull || selected.Multiple {
-			if err := writer.AppendMustNullForBytesResult(); err != nil {
+			err := writer.AppendMustNullForBytesResult()
+			selected.Close()
+			if err != nil {
 				return err
 			}
 			continue
 		}
 		// The writer copies before returning, so this read-only view cannot
 		// escape or expose the retained document backing.
-		if err := writer.AppendBytes(util.UnsafeStringToBytes(selected.Text), false); err != nil {
+		err = writer.AppendBytes(util.UnsafeStringToBytes(selected.Text), false)
+		selected.Close()
+		if err != nil {
 			return err
 		}
 	}
@@ -1145,12 +1160,17 @@ func jsonValueExtractReaderAtPath(cursor vector.JSONCursor, row int, path bytejs
 		}
 	}
 	if legacyFloat {
-		e.text, e.err = selected.TextWithLegacyFloat()
+		e.ownedText, e.err = selected.TextWithLegacyFloat()
 	} else {
-		e.text, e.err = selected.Text()
+		e.ownedText, e.err = selected.Text()
 	}
+	e.text = e.ownedText.Text
 	if e.err != nil {
-		e.state = jsonValueSourceParseError
+		if vector.IsJSONTextConversionError(e.err) {
+			e.state = jsonValueSourceParseError
+		} else {
+			e.state = jsonValueHardError
+		}
 	} else {
 		e.state = jsonValueOneValue
 	}
