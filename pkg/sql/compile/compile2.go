@@ -275,6 +275,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var coordinatorPhaseBase time.Duration
 	var allocationAttempt *statementAllocationAttempt
 	finishAllocationAttempt := func() error {
+		if runC != nil {
+			runC.closePipelineSpoolsAfterReadersStopped()
+			defer runC.endImportMemory()
+		}
 		if allocationAttempt == nil {
 			return nil
 		}
@@ -358,7 +362,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				resourceRecorder.recordAllocationAccountTerminal(snapshot)
 			}
 		}
-		err = runC.ensureAllocationAccountLifecycle(exporter)
+		err = runC.beginImportMemory()
+		if err == nil {
+			err = runC.ensureAllocationAccountLifecycle(exporter)
+		}
 		if err == nil {
 			allocationAttempt, err = runC.beginAllocationAccountAttempt()
 		}
@@ -369,7 +376,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
-			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
@@ -385,6 +391,21 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 				break
 			}
+		}
+		var smaller *importDOPRetryError
+		if errors.As(err, &smaller) {
+			if finishErr := finishAllocationAttempt(); finishErr != nil {
+				return nil, errors.Join(err, finishErr)
+			}
+			if runC != c {
+				runC.Release()
+			}
+			runC, err = c.recompileImportMemory(execTopContext, smaller.next)
+			if err != nil {
+				return nil, err
+			}
+			runC.InitPipelineContextToRetryQuery()
+			continue
 		}
 		if preRunWall == 0 {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
@@ -883,6 +904,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
+	runC.importMemoryPrepared = c.isPrepare || c.importMemoryPrepared
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if recovered := recover(); recovered != nil {
