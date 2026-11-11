@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
 	"strconv"
@@ -996,4 +997,117 @@ func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
 			require.Empty(t, files)
 		})
 	}
+}
+
+type pressureDataFileFactory struct {
+	memoryDataFileFactory
+	remaining int64
+	limited   bool
+}
+
+func (f *pressureDataFileFactory) AvailableMemory() (int64, bool) {
+	return f.remaining, f.limited
+}
+
+func TestFanoutMemoryPressureRotatesUnpartitioned(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"id"})
+	vec := vector.NewVec(types.T_int32.ToType())
+	for i := int32(0); i < 3; i++ {
+		require.NoError(t, vector.AppendFixed[int32](vec, i, false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+	for _, limited := range []bool{false, true} {
+		factory := &pressureDataFileFactory{memoryDataFileFactory: memoryDataFileFactory{objects: make(map[string]*bytes.Buffer)}, remaining: 1, limited: limited}
+		writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+			Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeInt}}}},
+			TableLocation: "s3://warehouse/table",
+		}, factory)
+		require.NoError(t, err)
+		require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+		files, err := writer.Close(ctx)
+		require.NoError(t, err)
+		if limited {
+			require.Len(t, files, 3)
+		} else {
+			require.Len(t, files, 1)
+		}
+		var rows int64
+		for _, file := range files {
+			rows += file.RecordCount
+			_, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
+			require.NoError(t, err)
+		}
+		require.Equal(t, int64(3), rows)
+	}
+}
+
+func TestFanoutMemoryPressureClosesPartitionsInLRUOrder(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"region"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"a", "b", "a"} {
+		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+	factory := &pressureDataFileFactory{memoryDataFileFactory: memoryDataFileFactory{objects: make(map[string]*bytes.Buffer)}}
+	writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+		Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "region", Type: api.IcebergType{Kind: api.TypeString}}}},
+		PartitionSpec: api.PartitionSpec{Fields: []api.PartitionField{{SourceID: 1, FieldID: 1000, Name: "region", Transform: "identity"}}},
+		TableLocation: "s3://warehouse/table",
+	}, factory)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.Len(t, writer.active, 2)
+	factory.limited, factory.remaining = true, 1
+	require.NoError(t, writer.relieveMemoryPressure(ctx))
+	require.Empty(t, writer.active)
+	require.Len(t, writer.files, 2)
+	require.Equal(t, "b", writer.files[0].Partition["region"])
+	require.Equal(t, "a", writer.files[1].Partition["region"])
+	files, err := writer.Close(ctx)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+}
+
+type failingAbortSink struct {
+	writeErr, abortErr error
+	closed, aborted    bool
+}
+
+func (s *failingAbortSink) Write([]byte) (int, error) { return 0, s.writeErr }
+func (s *failingAbortSink) Close() error              { s.closed = true; return nil }
+func (s *failingAbortSink) Abort() error              { s.aborted = true; return s.abortErr }
+
+func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"id"})
+	vec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed[int32](vec, 1, false, mp))
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	writeErr, abortErr := errors.New("write failure"), errors.New("abort failure")
+	sink := &failingAbortSink{writeErr: writeErr, abortErr: abortErr}
+	writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+		Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}}}},
+		TableLocation: "s3://warehouse/table",
+	}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = writer.Close(ctx)
+	require.ErrorIs(t, err, writeErr)
+	require.ErrorIs(t, err, abortErr)
+	require.True(t, sink.aborted)
+	require.False(t, sink.closed)
+	require.Len(t, writer.OrphanPaths(), 1)
+	require.NoError(t, writer.Abort(ctx))
+	require.Len(t, writer.OrphanPaths(), 1)
 }

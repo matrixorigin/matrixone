@@ -87,6 +87,18 @@ func (b *dmlMemoryBudget) usedBytes() int64 {
 	return b.used
 }
 
+func (b *dmlMemoryBudget) availableMemory() (int64, bool) {
+	if b == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.limit <= 0 {
+		return 0, false
+	}
+	return max(0, b.limit-b.used), true
+}
+
 // retainedDMLBatchBytes deliberately over-counts vector and slice headers. The
 // budget is a safety boundary, not a profiler; conservative accounting keeps
 // allocator overhead and the short-lived Commit request views inside the cap.
