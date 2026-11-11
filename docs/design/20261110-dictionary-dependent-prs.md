@@ -611,3 +611,26 @@ Keep changes local and unpushed until accepted. Only then merge newest
 authoritative main, rerun semantically affected evidence and complete the
 mandatory self-review/pre-push gates. Results belong in comments, with genuinely
 superseded tables collapsed after replacements are posted.
+
+
+### Approved batch copy selection — 2026-11-12
+
+The requester approved a narrow exception to the preceding public-interface
+restriction: select stateless bulk-copy functions once per input generation.
+`GetUnionMultiFunction` and `GetUnionBatchFunction` inspect the source batch;
+only a complete flat/constant batch may bypass dictionary dispatch. Mixed,
+missing or unknown sources retain the generic API. Returned functions capture
+no vectors, buffers, leases or allocation accounts. All ordinary admission,
+alias/COW, metadata, capacity and partial-failure rules remain in the existing
+payload functions. No cache tier, pool or new representation is introduced.
+
+LoopJoin binds probe copying on each new input assignment, including reused
+headers. Build batches are immutable for their JoinMap lifetime; bind range
+copying when the build batch changes and discard that identity on the next
+probe generation, terminal probe, cancellation, failure, Reset and Free.
+Continuation within the same input retains its binding. This change aims to
+remove repeated representation dispatch from Q11's bulk-copy calls; inspect
+actual call/frame overhead and measure all queries before claiming any gain.
+
+The local all-query/resource gates above remain unchanged, as do the separate
+C/D designs. No push is authorized before acceptance.

@@ -97,15 +97,19 @@ func (ctr *container) appendJoinedRange(
 	start int,
 	count int,
 ) error {
+	if ctr.buildCopyBatch != buildBat || ctr.buildCopy == nil {
+		ctr.buildCopy = vector.GetUnionBatchFunction(buildBat.Vecs)
+		ctr.buildCopyBatch = buildBat
+	}
 	for k, rp := range ap.ResultCols {
 		switch rp.Rel {
 		case 0:
-			if err := ctr.resBat.Vecs[k].UnionMulti(
+			if err := ctr.probeCopy(ctr.resBat.Vecs[k],
 				inBat.Vecs[rp.Pos], int64(probeRow), count, proc.Mp()); err != nil {
 				return err
 			}
 		case 1:
-			if err := ctr.resBat.Vecs[k].UnionBatch(
+			if err := ctr.buildCopy(ctr.resBat.Vecs[k],
 				buildBat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
 				return err
 			}
@@ -372,6 +376,7 @@ func (ctr *container) probe(
 	defer func() {
 		if err != nil {
 			ctr.clearProbeResume()
+			ctr.clearBulkCopy()
 		}
 	}()
 
@@ -594,6 +599,7 @@ func (ctr *container) probe(
 	}
 
 	ctr.inBat = nil
+	ctr.clearBulkCopy()
 	ctr.probeIdx = 0
 	ctr.resBat.SetRowCount(rowCountIncrease)
 	result.Batch = ctr.resBat

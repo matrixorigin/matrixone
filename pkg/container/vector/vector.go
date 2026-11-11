@@ -8668,6 +8668,10 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if w.IsDictionary() {
 		return v.unionDictionaryMulti(w, sel, cnt, mp)
 	}
+	return v.unionMultiFlat(w, sel, cnt, mp)
+}
+
+func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -9124,7 +9128,10 @@ func (v *Vector) unionBatch(
 	if w.IsDictionary() {
 		return v.admitDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
 	}
+	return v.unionBatchFlat(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+}
 
+func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8, stringSourceOverrides []types.StringSource, mp *mpool.MPool, selectedAreaBytes, preflightRowCount int, preflighted bool) error {
 	areaWasDisjoint := v.areaDisjoint
 	if selectedAreaBytes < 0 {
 		return mpool.ErrAllocationAccountInvalid
