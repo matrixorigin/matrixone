@@ -16,7 +16,11 @@ package types
 
 import (
 	"encoding/base64"
+	"math"
+	"math/rand"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -307,5 +311,93 @@ func TestStringToArray(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+// Keep the original whole-string normalization as an independent compatibility oracle.
+func stringToArraySplitReference[T RealNumbers](str string) ([]T, error) {
+	input := strings.ReplaceAll(str, " ", "")
+	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) || len(input) == 2 {
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+	}
+	parts := strings.Split(input[1:len(input)-1], ",")
+	if len(parts) > MaxArrayDimension {
+		return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+	}
+	result := make([]T, len(parts))
+	for i, part := range parts {
+		value, err := stringToT[T](part)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = value
+	}
+	return result, nil
+}
+
+func checkArrayLiteralCompatibility[T RealNumbers](t *testing.T, input string) {
+	t.Helper()
+	want, wantErr := stringToArraySplitReference[T](input)
+	got, gotErr := StringToArray[T](input)
+	if wantErr != nil {
+		require.EqualError(t, gotErr, wantErr.Error())
+		return
+	}
+	require.NoError(t, gotErr)
+	// Compare bits, including signed zero and NaN, rather than floating-point equality.
+	require.Equal(t, ArrayToBytes(want), ArrayToBytes(got))
+}
+
+func FuzzStringToArrayCompatibility(f *testing.F) {
+	for _, input := range []string{
+		"", " ", "[]", " [ ] ", "[0]", "[-0,+0,NaN,+Inf,-Inf]",
+		"[1, 2 ,3]", " [ 1 e - 2 , + 3 . 0 ] ", "[0x1p2,1_2.5]",
+		"[1,]", "[,1]", "[1,,2]", "[1e999]", "[1e-999]", "[1]x", "[[1]]",
+		"[\t1]", "\t[1]", "[1\n]", "[1\u00a02]", "[1 \t 2]", "[1 2]", "[x]",
+		"[1.000000000000000000000001,-3.4028234663852886e38,1e-45]",
+		"[" + strings.Repeat("0,", MaxArrayDimension-1) + "0]",
+		"[x," + strings.Repeat("0,", MaxArrayDimension-1) + "0]",
+	} {
+		f.Add(input)
+	}
+	rng := rand.New(rand.NewSource(42))
+	for range 64 {
+		parts := make([]string, 1+rng.Intn(8))
+		for i := range parts {
+			part := strconv.FormatFloat(math.Float64frombits(rng.Uint64()), 'g', -1, 64)
+			if rng.Intn(2) == 0 {
+				part = strings.Join(strings.Split(part, ""), " ")
+			}
+			parts[i] = part
+		}
+		f.Add(" [ " + strings.Join(parts, ", ") + " ] ")
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		checkArrayLiteralCompatibility[float32](t, input)
+		checkArrayLiteralCompatibility[float64](t, input)
+	})
+}
+
+func BenchmarkStringToArrayScan(b *testing.B) {
+	parts := make([]string, 1024)
+	for i := range parts {
+		parts[i] = strconv.FormatFloat(math.Sin(float64(i))*123.456, 'g', -1, 32)
+	}
+	for _, sep := range []string{",", ", "} {
+		input := "[" + strings.Join(parts, sep) + "]"
+		for _, impl := range []struct {
+			name  string
+			parse func(string) ([]float32, error)
+		}{{"split", stringToArraySplitReference[float32]}, {"scan", StringToArray[float32]}} {
+			b.Run(strconv.Itoa(len(sep))+"/"+impl.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					result, err := impl.parse(input)
+					if err != nil || len(result) != len(parts) {
+						b.Fatalf("invalid benchmark result: length=%d error=%v", len(result), err)
+					}
+				}
+			})
+		}
 	}
 }

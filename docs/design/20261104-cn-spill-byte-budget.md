@@ -18,6 +18,8 @@ Each persisted object's blocks must be full except for its last block. This is r
 
 The sinker owns the staged run. Its per-batch bounds remain aligned with staged batches and travel with a popped partial batch. The remaining budget subtracts both staged and current charges. A bound cannot be replaced with physical `Batch.Size()` after aliasing or sorting.
 
+When a caller supplies a smaller import buffer window, the effective run target is the smaller of that window and the staged-memory target. Merge output then splits only at full row blocks: the entire run already bounds materialized payload, and the admitted IO envelope covers vector capacity rounding. Applying the allocation-capacity cutoff again could split a block before the final block and violate stats-only iteration. Borrowed and constant reusable destinations are normalized before appending; allocation forecasts must account for that normalization.
+
 A whole-input conservative bound is computed per column using the greater of physical area and expanded live payload. For append-built disjoint vectors, the existing area proof avoids a descriptor scan. If the whole input fits, retain the bulk-copy path. For a bulk input copied in block-sized windows, the physical size increment plus constant expansion accounts for the materialized window. Bounds and size arithmetic are checked for overflow.
 
 When the whole-input bound does not fit, examine the candidate rows and admit the prefix before the first row that would exceed the remaining budget. Equality fits and triggers a spill. A zero-length prefix has two cases:

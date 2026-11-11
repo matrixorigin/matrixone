@@ -123,9 +123,10 @@ func TestGetObjectJoinsAcceptedPrefixWhenChunkAdmissionIsSealed(t *testing.T) {
 	controlled := newControlledAcceptedJob()
 	worker := &prefixRejectGetChunkWorker{controlled: controlled}
 	returned := make(chan error, 1)
+	ctx := fetchTestContext(t, 2)
 	go func() {
-		_, err := GetObjectFromUpstreamWithWorker(
-			context.Background(), newTwoChunkMetadataExecutor(), "object", worker, "account", "publication",
+		_, err := fetchObjectChunks(
+			ctx, newTwoChunkMetadataExecutor(), "object", worker, "account", "publication", 1,
 		)
 		returned <- err
 	}()
@@ -168,9 +169,10 @@ func TestGetObjectJoinsRemainingChunksAfterResultFailure(t *testing.T) {
 	controlled := newControlledAcceptedJob()
 	worker := &resultFailureGetChunkWorker{controlled: controlled}
 	returned := make(chan error, 1)
+	ctx := fetchTestContext(t, 2)
 	go func() {
-		_, err := GetObjectFromUpstreamWithWorker(
-			context.Background(), newTwoChunkMetadataExecutor(), "object", worker, "account", "publication",
+		_, err := fetchObjectChunks(
+			ctx, newTwoChunkMetadataExecutor(), "object", worker, "account", "publication", 1,
 		)
 		returned <- err
 	}()
