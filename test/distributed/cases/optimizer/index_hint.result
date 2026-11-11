@@ -579,7 +579,7 @@ where user_id='u1' and run_id='r1'
 and idempotency_key in ('first','second','third')
 and session_id=1 and payload<30;
 -- @regex("Index Table Scan.*uq_user_run_key", true)
--- @regex("prefix_in[(]__mo_index_idx_col[)]", true)
+-- @regex("__mo_index_idx_col in", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -591,8 +591,8 @@ Project  𝄀
               Block Filter Cond: (keyset_access.user_id = 'u1'), (keyset_access.run_id = 'r1'), (keyset_access.session_id = 1), (keyset_access.payload < 30)  𝄀
               Runtime Filter Probe: keyset_access.id  𝄀
         ->  Index Table Scan on keyset_access.uq_user_run_key [ForceOneCN]  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
-              Block Filter Cond: prefix_in(__mo_index_idx_col)
+              Filter Cond: __mo_index_idx_col in ([F\x01u1\x00F\x01r1\x00F\x01first\x00 F\x01u1\x00F\x01r1\x00F\x01second\x00 F\x01u1\x00F\x01r1\x00F\x01third\x00])  𝄀
+              Block Filter Cond: __mo_index_idx_col in ([F\x01u1\x00F\x01r1\x00F\x01first\x00 F\x01u1\x00F\x01r1\x00F\x01second\x00 F\x01u1\x00F\x01r1\x00F\x01third\x00])
 select id,payload from keyset_access ignore index(uq_user_run_key)
 where user_id='u1' and run_id='r1'
 and idempotency_key in ('first','second','third')

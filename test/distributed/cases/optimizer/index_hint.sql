@@ -338,7 +338,7 @@ insert into keyset_access values
 (6,'u2','r1','first',1,60);
 -- @separator:table
 -- @regex("Index Table Scan.*uq_user_run_key",true)
--- @regex("prefix_in[(]__mo_index_idx_col[)]",true)
+-- @regex("__mo_index_idx_col in",true)
 explain select id,payload from keyset_access
 where user_id='u1' and run_id='r1'
   and idempotency_key in ('first','second','third')

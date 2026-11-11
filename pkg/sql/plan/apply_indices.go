@@ -1669,6 +1669,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)))
 	}
 	if !allowedByScanStats() {
+		// A rejected broad scan estimate can hide a complete unique key set,
+		// including when a nonunique candidate was ranked first. Only admit
+		// one after exact lowering establishes its actual candidate bound.
+		if !pointBlocked {
+			if retID, idxTableNodeID := builder.applyBoundedUniqueKeySet(indexes, node, scanSnapshot, sortedSelectivity); idxTableNodeID >= 0 {
+				return retID
+			}
+		}
 		if keySetSize == 0 {
 			return nodeID
 		}
@@ -1726,6 +1734,61 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//no index applied
 	return nodeID
+}
+
+// applyBoundedUniqueKeySet considers only complete unique key sets when the
+// ordinary scan gate rejected the initially selected candidate. Preparation
+// does not publish a node; an exact, non-NULL IN vector must exist before its
+// deduplicated cardinality can justify admission or candidate ranking.
+func (builder *QueryBuilder) applyBoundedUniqueKeySet(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64) (int32, int32) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1
+	}
+	bestSelectivity := sortedSelectivity
+	var best *preparedIndexJoin
+	var bestFilters []int32
+	for _, idxDef := range indexes {
+		filters, ok := completeUniqueKeySetFilters(idxDef, node)
+		if !ok {
+			continue
+		}
+		prepared, err := builder.prepareIndexJoin(idxDef, node, KeySetIndexCondition, filters, snapshot)
+		if err != nil || prepared == nil {
+			continue
+		}
+		keyCount, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		rows := float64(keyCount)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filterSelectivity *= node.FilterList[pos].Selectivity
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		candidateSelectivity := min(filterSelectivity, selectivity)
+		if candidateSelectivity >= bestSelectivity {
+			continue
+		}
+		bestSelectivity, best, bestFilters = candidateSelectivity, prepared, filters
+	}
+	if best == nil {
+		return -1, -1
+	}
+	retID, idxTableNodeID := builder.publishIndexJoin(best, node)
+	builder.applyExtraFiltersOnIndex(best.idxDef, node, builder.qry.Nodes[idxTableNodeID], bestFilters)
+	return retID, idxTableNodeID
 }
 
 // regularIndexColumnMap describes the values available in a regular index scan.
@@ -2586,11 +2649,21 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	return expr
 }
 
-func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+type preparedIndexJoin struct {
+	idxDef      *IndexDef
+	idxTag      int32
+	idxObjRef   *ObjectRef
+	idxTableDef *TableDef
+	idxFilter   *plan.Expr
+}
+
+// prepareIndexJoin may decline an optional key set without publishing a scan or
+// changing the original node. Its exact key count can then be used for costing.
+func (builder *QueryBuilder) prepareIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (*preparedIndexJoin, error) {
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
@@ -2609,8 +2682,25 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	// A declined key-set lowering must not publish an invalid scan or mutate
 	// the original scan. The caller will retry the ordinary access paths.
 	if filterType == KeySetIndexCondition && idxFilter == nil {
+		return nil, nil
+	}
+	return &preparedIndexJoin{idxDef: idxDef, idxTag: idxTag, idxObjRef: idxObjRef, idxTableDef: idxTableDef, idxFilter: idxFilter}, nil
+}
+
+func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	prepared, err := builder.prepareIndexJoin(idxDef, node, filterType, filterIdx, scanSnapshot)
+	if err != nil {
+		panic(err)
+	}
+	if prepared == nil {
 		return -1, -1
 	}
+	return builder.publishIndexJoin(prepared, node)
+}
+
+func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node *plan.Node) (int32, int32) {
+	idxDef, idxTag := prepared.idxDef, prepared.idxTag
+	idxObjRef, idxTableDef, idxFilter := prepared.idxObjRef, prepared.idxTableDef, prepared.idxFilter
 	builder.addNameByColRef(idxTag, idxTableDef)
 
 	// recod index table scan info
@@ -3192,4 +3282,3 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	}
 	return accessID, nil
 }
-

@@ -36,7 +36,13 @@ func compositeKeySetScan(p *Plan) *planpb.Node {
 			continue
 		}
 		fn := node.FilterList[0].GetF()
-		if fn == nil || fn.Func.ObjName != "prefix_in" || len(fn.Args) != 2 {
+		if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+			continue
+		}
+		if fn.Func.ObjName == "in" && node.IndexScanInfo.IsUnique && len(node.IndexScanInfo.Parts) > 1 && fn.Args[1].GetVec() != nil {
+			return node
+		}
+		if fn.Func.ObjName != "prefix_in" {
 			continue
 		}
 		if list := fn.Args[1].GetList(); list != nil && len(list.List) > 0 {
@@ -84,12 +90,22 @@ func TestCompositeIndexKeySetAccess(t *testing.T) {
 			require.NotNil(t, scan)
 			require.Equal(t, tc.index, scan.IndexScanInfo.IndexName)
 			require.True(t, planHasIndexJoin(p))
-			tuples := scan.FilterList[0].GetF().Args[1].GetList()
-			require.NotNil(t, tuples)
-			require.Len(t, tuples.List, tc.points)
-			for _, tuple := range tuples.List {
-				require.NotNil(t, tuple.GetVec())
-				require.NotEmpty(t, tuple.GetVec().GetData())
+			fn := scan.FilterList[0].GetF()
+			if scan.IndexScanInfo.IsUnique {
+				require.Equal(t, "in", fn.Func.ObjName)
+				require.NotNil(t, fn.Args[1].GetVec())
+				keys := vector.NewVec(types.T_any.ToType())
+				require.NoError(t, keys.UnmarshalBinary(fn.Args[1].GetVec().Data))
+				require.Equal(t, tc.points, keys.Length())
+			} else {
+				require.Equal(t, "prefix_in", fn.Func.ObjName)
+				tuples := fn.Args[1].GetList()
+				require.NotNil(t, tuples)
+				require.Len(t, tuples.List, tc.points)
+				for _, tuple := range tuples.List {
+					require.NotNil(t, tuple.GetVec())
+					require.NotEmpty(t, tuple.GetVec().GetData())
+				}
 			}
 		})
 	}
@@ -109,7 +125,9 @@ func TestCompositeIndexKeySetAtCardinalityLimit(t *testing.T) {
 	require.NoError(t, err)
 	scan := compositeKeySetScan(p)
 	require.NotNil(t, scan)
-	require.Len(t, scan.FilterList[0].GetF().Args[1].GetList().List, maxCompositePoints)
+	keys := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, keys.UnmarshalBinary(scan.FilterList[0].GetF().Args[1].GetVec().Data))
+	require.Equal(t, maxCompositePoints, keys.Length())
 }
 
 func TestCompositeIndexKeySetFallbacks(t *testing.T) {

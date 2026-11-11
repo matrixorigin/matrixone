@@ -81,6 +81,69 @@ func keySetIndexSupported(idxDef *IndexDef) bool {
 	return true
 }
 
+// completeUniqueKeySetFilters finds one IN dimension and equality predicates
+// for every other user part. The returned positions still need lowering before
+// their cardinality can be used as an exact index-candidate bound.
+func completeUniqueKeySetFilters(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
+	if idxDef == nil || !idxDef.Unique || len(idxDef.Parts) < 2 ||
+		node == nil || node.TableDef == nil || len(node.BindingTags) == 0 || !keySetIndexSupported(idxDef) {
+		return nil, false
+	}
+	equalities := make(map[int32]int32)
+	sets := make(map[int32]int32)
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if !hasNonNilFunctionArgs(fn, 2) {
+			continue
+		}
+		kind, col := checkIndexFilter(fn)
+		if kind == EqualIndexCondition && col.RelPos == node.BindingTags[0] {
+			equalities[col.ColPos] = int32(i)
+			continue
+		}
+		if pos, _, ok := indexKeySetFilter(expr); ok && fn.Args[0].GetCol().RelPos == node.BindingTags[0] {
+			sets[pos] = int32(i)
+		}
+	}
+	filters := make([]int32, 0, len(idxDef.Parts))
+	inCount := 0
+	for _, part := range idxDef.Parts {
+		pos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok {
+			return nil, false
+		}
+		if filter, ok := equalities[pos]; ok {
+			filters = append(filters, filter)
+		} else if filter, ok := sets[pos]; ok {
+			filters = append(filters, filter)
+			inCount++
+		} else {
+			return nil, false
+		}
+	}
+	return filters, inCount == 1
+}
+
+// exactUniqueKeySetSize accepts only the completed IN vector produced by
+// replaceKeySetCondition. UnmarshalBinary borrows the immutable plan bytes.
+func exactUniqueKeySetSize(expr *plan.Expr) (int, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 || fn.Args[1].GetVec() == nil {
+		return 0, false
+	}
+	literal := fn.Args[1].GetVec()
+	if len(literal.Data) == 0 || len(literal.Data) > maxCompositePointBytes {
+		return 0, false
+	}
+	keys := vector.NewVec(types.T_any.ToType())
+	if err := keys.UnmarshalBinary(literal.Data); err != nil || keys.GetType().Oid != types.T_varchar ||
+		keys.IsConst() || keys.HasNull() || !keys.GetSorted() || keys.Length() < 1 ||
+		keys.Length() > maxCompositePoints || int32(keys.Length()) != literal.Len {
+		return 0, false
+	}
+	return keys.Length(), true
+}
+
 // marshalKeySetElement builds an independent one-row vector. Window borrows the
 // entire variable-length payload, and marshaling it for each row would copy the
 // whole IN list repeatedly. scratch owns only the selected row and is reused.
@@ -140,7 +203,21 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 	rowVec := vector.NewVec(*inVec.GetType())
 	defer rowVec.Free(mp)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	tuples := make([]*plan.Expr, inVec.Length())
+	// A complete unique-index key is stored as serial(all user parts), with
+	// no primary-key suffix. Probe it by exact bytes: prefix matching can also
+	// admit a different string whose next byte is an escaped NUL.
+	exact := idxDef.Unique && len(filterPos) == len(idxDef.Parts)
+	var exactKeys *vector.Vector
+	var tuples []*plan.Expr
+	if exact {
+		if types.T(leadingColExpr.Typ.Id) != types.T_varchar {
+			return nil
+		}
+		exactKeys = vector.NewVec(makeTypeByPlan2Type(leadingColExpr.Typ))
+		defer exactKeys.Free(mp)
+	} else {
+		tuples = make([]*plan.Expr, inVec.Length())
+	}
 	serializedKeyBytes := 0
 	for row := 0; row < inVec.Length(); row++ {
 		data, err := marshalKeySetElement(inVec, rowVec, row, mp)
@@ -161,14 +238,14 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 				serialArgs[i] = DeepCopyExpr(fn.Args[1])
 			}
 		}
-		tuples[row], err = bindFuncExprAndConstFold(
+		tuple, err := bindFuncExprAndConstFold(
 			builder.GetContext(), builder.compCtx.GetProcess(),
 			indexTableLookupSerialFunc(idxDef), serialArgs,
 		)
-		if err != nil {
+		if err != nil || tuple == nil {
 			return nil
 		}
-		tupleVec := tuples[row].GetVec()
+		tupleVec := tuple.GetVec()
 		if tupleVec == nil {
 			return nil
 		}
@@ -176,17 +253,51 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 		if serializedKeyBytes > maxCompositePointBytes {
 			return nil
 		}
+		if exact {
+			// UnmarshalBinary borrows the expression's bytes. AppendBytes copies
+			// the one value into our owned vector before either can be released.
+			key := vector.NewVec(types.T_any.ToType())
+			if err := key.UnmarshalBinary(tupleVec.GetData()); err != nil ||
+				key.GetType().Oid != types.T_varchar || key.Length() != 1 || key.IsNull(0) {
+				return nil
+			}
+			value := key.GetBytesAt(0)
+			if len(value) == 0 {
+				return nil
+			}
+			if err := vector.AppendBytes(exactKeys, value, false, mp); err != nil {
+				return nil
+			}
+		} else {
+			tuples[row] = tuple
+		}
 	}
-	rightArg := &plan.Expr{
-		Typ:  leadingColExpr.Typ,
-		Expr: &plan.Expr_List{List: &plan.ExprList{List: tuples}},
+	var rightArg *plan.Expr
+	funcName := "prefix_in"
+	if exact {
+		exactKeys.InplaceSortAndCompact()
+		data, err := exactKeys.MarshalBinary()
+		if err != nil || exactKeys.Length() == 0 || len(data) > maxCompositePointBytes {
+			return nil
+		}
+		rightArg = &plan.Expr{Typ: leadingColExpr.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: int32(exactKeys.Length()), Data: data,
+		}}}
+		funcName = "in"
+	} else {
+		rightArg = &plan.Expr{Typ: leadingColExpr.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: tuples}}}
 	}
 	expr, err := bindFuncExprAndConstFold(
-		builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in",
+		builder.GetContext(), builder.compCtx.GetProcess(), funcName,
 		[]*plan.Expr{leadingColExpr, rightArg},
 	)
-	if err != nil {
+	if err != nil || expr == nil {
 		return nil
+	}
+	if exact {
+		if _, ok := exactUniqueKeySetSize(expr); !ok {
+			return nil
+		}
 	}
 	expr.Selectivity = compositeFilterSel
 	return expr

@@ -1,0 +1,220 @@
+drop database if exists unique_keyset_large;
+create database unique_keyset_large;
+use unique_keyset_large;
+create table gate (id int primary key, a int not null, b int, payload int, unique key uq_gate(a,b));
+insert into gate select result, 1, null, result from generate_series(1,500) g;
+insert into gate select result, 1, null, result from generate_series(501,1000) g;
+insert into gate select result, 1, null, result from generate_series(1001,1500) g;
+insert into gate select result, 1, null, result from generate_series(1501,2000) g;
+insert into gate select result, 1, null, result from generate_series(2001,2500) g;
+insert into gate select result, 1, null, result from generate_series(2501,3000) g;
+insert into gate select result, 1, null, result from generate_series(3001,3500) g;
+insert into gate select result, 1, null, result from generate_series(3501,4000) g;
+insert into gate select result, 1, null, result from generate_series(4001,4500) g;
+insert into gate select result, 1, null, result from generate_series(4501,5000) g;
+insert into gate select result, 1, null, result from generate_series(5001,5500) g;
+insert into gate select result, 1, null, result from generate_series(5501,6000) g;
+insert into gate select result, 1, null, result from generate_series(6001,6500) g;
+insert into gate select result, 1, null, result from generate_series(6501,7000) g;
+insert into gate select result, 1, null, result from generate_series(7001,7500) g;
+insert into gate select result, 1, null, result from generate_series(7501,8000) g;
+insert into gate select result, 1, null, result from generate_series(8001,8500) g;
+insert into gate select result, 1, null, result from generate_series(8501,9000) g;
+insert into gate select result, 1, null, result from generate_series(9001,9500) g;
+insert into gate select result, 1, null, result from generate_series(9501,10000) g;
+insert into gate select result, 1, null, result from generate_series(10001,10500) g;
+insert into gate select result, 1, null, result from generate_series(10501,11000) g;
+insert into gate select result, 1, null, result from generate_series(11001,11500) g;
+insert into gate select result, 1, null, result from generate_series(11501,12000) g;
+insert into gate select result, 1, null, result from generate_series(12001,12500) g;
+insert into gate select result, 1, null, result from generate_series(12501,13000) g;
+insert into gate select result, 1, null, result from generate_series(13001,13500) g;
+insert into gate select result, 1, null, result from generate_series(13501,14000) g;
+insert into gate select result, 1, null, result from generate_series(14001,14500) g;
+insert into gate select result, 1, null, result from generate_series(14501,15000) g;
+insert into gate select result, 1, null, result from generate_series(15001,15500) g;
+insert into gate select result, 1, null, result from generate_series(15501,16000) g;
+insert into gate select result, 1, null, result from generate_series(16001,16500) g;
+insert into gate select result, 1, null, result from generate_series(16501,17000) g;
+insert into gate select result, 1, null, result from generate_series(17001,17500) g;
+insert into gate select result, 1, null, result from generate_series(17501,18000) g;
+insert into gate select result, 1, null, result from generate_series(18001,18500) g;
+insert into gate select result, 1, null, result from generate_series(18501,19000) g;
+insert into gate select result, 1, null, result from generate_series(19001,19500) g;
+insert into gate select result, 1, null, result from generate_series(19501,20000) g;
+insert into gate select result, 1, null, result from generate_series(20001,20500) g;
+insert into gate select result, 1, null, result from generate_series(20501,21000) g;
+insert into gate select result, 1, null, result from generate_series(21001,21500) g;
+insert into gate select result, 1, null, result from generate_series(21501,22000) g;
+insert into gate select result, 1, null, result from generate_series(22001,22500) g;
+insert into gate select result, 1, null, result from generate_series(22501,23000) g;
+insert into gate select result, 1, null, result from generate_series(23001,23500) g;
+insert into gate select result, 1, null, result from generate_series(23501,24000) g;
+insert into gate select result, 1, null, result from generate_series(24001,24500) g;
+insert into gate select result, 1, null, result from generate_series(24501,25000) g;
+insert into gate select result, 1, null, result from generate_series(25001,25500) g;
+insert into gate select result, 1, null, result from generate_series(25501,26000) g;
+insert into gate select result, 1, null, result from generate_series(26001,26500) g;
+insert into gate select result, 1, null, result from generate_series(26501,27000) g;
+insert into gate select result, 1, null, result from generate_series(27001,27500) g;
+insert into gate select result, 1, null, result from generate_series(27501,28000) g;
+insert into gate select result, 1, null, result from generate_series(28001,28500) g;
+insert into gate select result, 1, null, result from generate_series(28501,29000) g;
+insert into gate select result, 1, null, result from generate_series(29001,29500) g;
+insert into gate select result, 1, null, result from generate_series(29501,30000) g;
+insert into gate select result, 1, null, result from generate_series(30001,30500) g;
+insert into gate select result, 1, null, result from generate_series(30501,31000) g;
+insert into gate select result, 1, null, result from generate_series(31001,31500) g;
+insert into gate select result, 1, null, result from generate_series(31501,32000) g;
+insert into gate select result, 1, null, result from generate_series(32001,32500) g;
+insert into gate select result, 1, null, result from generate_series(32501,33000) g;
+insert into gate select result, 1, null, result from generate_series(33001,33500) g;
+insert into gate select result, 1, null, result from generate_series(33501,34000) g;
+insert into gate select result, 1, null, result from generate_series(34001,34500) g;
+insert into gate select result, 1, null, result from generate_series(34501,35000) g;
+insert into gate select result, 1, null, result from generate_series(35001,35500) g;
+insert into gate select result, 1, null, result from generate_series(35501,36000) g;
+insert into gate select result, 1, null, result from generate_series(36001,36500) g;
+insert into gate select result, 1, null, result from generate_series(36501,37000) g;
+insert into gate select result, 1, null, result from generate_series(37001,37500) g;
+insert into gate select result, 1, null, result from generate_series(37501,38000) g;
+insert into gate select result, 1, null, result from generate_series(38001,38500) g;
+insert into gate select result, 1, null, result from generate_series(38501,39000) g;
+insert into gate select result, 1, null, result from generate_series(39001,39500) g;
+insert into gate select result, 1, null, result from generate_series(39501,40000) g;
+insert into gate select result, 1, null, result from generate_series(40001,40500) g;
+insert into gate select result, 1, null, result from generate_series(40501,41000) g;
+insert into gate select result, 1, null, result from generate_series(41001,41500) g;
+insert into gate select result, 1, null, result from generate_series(41501,42000) g;
+insert into gate select result, 1, null, result from generate_series(42001,42500) g;
+insert into gate select result, 1, null, result from generate_series(42501,43000) g;
+insert into gate select result, 1, null, result from generate_series(43001,43500) g;
+insert into gate select result, 1, null, result from generate_series(43501,44000) g;
+insert into gate select result, 1, null, result from generate_series(44001,44500) g;
+insert into gate select result, 1, null, result from generate_series(44501,45000) g;
+insert into gate select result, 1, null, result from generate_series(45001,45500) g;
+insert into gate select result, 1, null, result from generate_series(45501,46000) g;
+insert into gate select result, 1, null, result from generate_series(46001,46500) g;
+insert into gate select result, 1, null, result from generate_series(46501,47000) g;
+insert into gate select result, 1, null, result from generate_series(47001,47500) g;
+insert into gate select result, 1, null, result from generate_series(47501,48000) g;
+insert into gate select result, 1, null, result from generate_series(48001,48500) g;
+insert into gate select result, 1, null, result from generate_series(48501,49000) g;
+insert into gate select result, 1, null, result from generate_series(49001,49500) g;
+insert into gate select result, 1, null, result from generate_series(49501,50000) g;
+insert into gate select result, 1, null, result from generate_series(50001,50500) g;
+insert into gate select result, 1, null, result from generate_series(50501,51000) g;
+insert into gate select result, 1, null, result from generate_series(51001,51500) g;
+insert into gate select result, 1, null, result from generate_series(51501,52000) g;
+insert into gate select result, 1, null, result from generate_series(52001,52500) g;
+insert into gate select result, 1, null, result from generate_series(52501,53000) g;
+insert into gate select result, 1, null, result from generate_series(53001,53500) g;
+insert into gate select result, 1, null, result from generate_series(53501,54000) g;
+insert into gate select result, 1, null, result from generate_series(54001,54500) g;
+insert into gate select result, 1, null, result from generate_series(54501,55000) g;
+insert into gate select result, 1, null, result from generate_series(55001,55500) g;
+insert into gate select result, 1, null, result from generate_series(55501,56000) g;
+insert into gate select result, 1, null, result from generate_series(56001,56500) g;
+insert into gate select result, 1, null, result from generate_series(56501,57000) g;
+insert into gate select result, 1, null, result from generate_series(57001,57500) g;
+insert into gate select result, 1, null, result from generate_series(57501,58000) g;
+insert into gate select result, 1, null, result from generate_series(58001,58500) g;
+insert into gate select result, 1, null, result from generate_series(58501,59000) g;
+insert into gate select result, 1, null, result from generate_series(59001,59500) g;
+insert into gate select result, 1, null, result from generate_series(59501,59998) g;
+insert into gate values (59999,1,1,59999),(60000,1,2,60000);
+select count(*) from gate;
+➤ count(*)[-5,64,0]  𝄀
+60000
+select mo_ctl('dn','flush','unique_keyset_large.gate');
+➤ mo_ctl(dn, flush, unique_keyset_large.gate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set @idx=(select distinct index_table_name from mo_catalog.mo_indexes where name='uq_gate' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='unique_keyset_large' and relname='gate'));
+select mo_ctl('dn','flush',concat('unique_keyset_large.',@idx));
+➤ mo_ctl(dn, flush, concat(unique_keyset_large., @idx))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table gate;
+-- @regex(".*", true)
+➤ approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(a)[-5,64,0]  ¦  approx_count_distinct(b)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+59601  ¦  1  ¦  2  ¦  59601
+explain verbose select payload from gate;
+-- @regex("Table Scan.*cost=60000[.]00", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project[1] (cost=60000.00 outcnt=60000.00 selectivity=1.0000 dop=0 blockNum=9 rowsize=100.00)  𝄀
+  Output: gate.payload  𝄀
+  ->  Table Scan[0] on unique_keyset_large.gate (cost=60000.00 outcnt=60000.00 selectivity=1.0000 dop=0 blockNum=9 rowsize=16.15)  𝄀
+        Output: gate.payload  𝄀
+        Table: 'gate' (0:'payload') shuffle: range(id)
+explain select payload from gate where a=1 and b in (1,2);
+-- @regex("Index Table Scan.*uq_gate", true)
+-- @regex("__mo_index_idx_col in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (gate.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on unique_keyset_large.gate [ForceOneCN]  𝄀
+              Filter Cond: (gate.a = 1), gate.b in ([1 2])  𝄀
+              Block Filter Cond: (gate.a = 1)  𝄀
+              Runtime Filter Probe: gate.id  𝄀
+        ->  Index Table Scan on gate.uq_gate [ForceOneCN]  𝄀
+              Filter Cond: __mo_index_idx_col in ([:\x15\x01:\x15\x01 :\x15\x01:\x15\x02])  𝄀
+              Block Filter Cond: __mo_index_idx_col in ([:\x15\x01:\x15\x01 :\x15\x01:\x15\x02])
+select payload from gate where a=1 and b in (1,2) order by payload;
+➤ payload[4,32,0]  𝄀
+59999  𝄀
+60000
+select payload from gate ignore index(uq_gate) where a=1 and b in (1,2) order by payload;
+➤ payload[4,32,0]  𝄀
+59999  𝄀
+60000
+select payload from gate where a=1 and b in (1,null) order by payload;
+➤ payload[4,32,0]  𝄀
+59999
+select payload from gate ignore index(uq_gate) where a=1 and b in (1,null) order by payload;
+➤ payload[4,32,0]  𝄀
+59999
+create table nulkeys (id int primary key, a int not null, b varchar(16) not null, payload int, unique key uq_ab(a,b));
+insert into nulkeys values (1,1,'a',10),(2,1,concat('a',char(0)),20),(3,1,concat('a',char(0),'b'),30),(4,1,'z',40);
+explain select id,hex(b),payload from nulkeys where a=1 and b in ('a','z','a');
+-- @regex("Index Table Scan.*uq_ab", true)
+-- @regex("__mo_index_idx_col in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (nulkeys.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on unique_keyset_large.nulkeys [ForceOneCN]  𝄀
+              Filter Cond: (nulkeys.a = 1), nulkeys.b in ([a z])  𝄀
+              Block Filter Cond: (nulkeys.a = 1)  𝄀
+              Runtime Filter Probe: nulkeys.id  𝄀
+        ->  Index Table Scan on nulkeys.uq_ab [ForceOneCN]  𝄀
+              Filter Cond: __mo_index_idx_col in ([:\x15\x01F\x01a\x00 :\x15\x01F\x01z\x00])  𝄀
+              Block Filter Cond: __mo_index_idx_col in ([:\x15\x01F\x01a\x00 :\x15\x01F\x01z\x00])
+select id,hex(b),payload from nulkeys where a=1 and b in ('a','z','a') order by id;
+➤ id[4,32,0]  ¦  hex(b)[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  61  ¦  10  𝄀
+4  ¦  7A  ¦  40
+select id,hex(b),payload from nulkeys ignore index(uq_ab) where a=1 and b in ('a','z','a') order by id;
+➤ id[4,32,0]  ¦  hex(b)[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  61  ¦  10  𝄀
+4  ¦  7A  ¦  40
+drop database unique_keyset_large;
