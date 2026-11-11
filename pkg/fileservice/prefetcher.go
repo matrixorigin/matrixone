@@ -43,6 +43,8 @@ type ObjectPrefetch struct {
 	Ranges   []PrefetchRange
 	Needs    []PrefetchRange
 	Scan     *PrefetchScan
+	// deletes is the file service's count of deleted objects when the request was made.
+	deletes uint64
 }
 
 // PrefetchRange is a range of an object.
@@ -73,6 +75,7 @@ func (s *PrefetchScan) live() bool {
 // object has Needs only when both requests are satisfied by cached ranges.
 func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
+	r.deletes = min(r.deletes, o.deletes)
 	if o.share() > r.share() {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
 	}
@@ -386,6 +389,7 @@ func (p *prefetcher) close(ctx context.Context) {
 
 func (s *S3FS) PrefetchObject(_ context.Context, req ObjectPrefetch) error {
 	if s.prefetcher != nil && req.Size > 0 {
+		req.deletes = s.diskCache.prefetched.deletes.Load()
 		s.prefetcher.add(req)
 	}
 	return nil
@@ -448,7 +452,10 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	if err != nil {
 		return
 	}
-	s.diskCache.prefetched.store(s.diskCache.pathForFile(path.File), req.Size)
+	// A size told before an object was deleted may be another object's at that path.
+	if req.deletes == s.diskCache.prefetched.deletes.Load() {
+		s.diskCache.prefetched.store(s.diskCache.pathForFile(path.File), req.Size)
+	}
 	if err := s.PrefetchFile(ctx, req.FilePath); err != nil {
 		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))

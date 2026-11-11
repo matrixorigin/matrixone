@@ -247,3 +247,39 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	require.Equal(t, int64(1), d.downloadConns.Load(), "its connection is released")
 	require.True(t, d.cache.Contains(d.pathForFile("object")))
 }
+
+// Deleting an object forgets the size a prefetch told of: after the path is written again
+// at another length, a read to the end of it reads the new object whole.
+func TestDeleteForgetsPrefetchedSize(t *testing.T) {
+	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+	ctx := context.Background()
+	require.NoError(t, fs.Delete(ctx, "object"))
+	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	require.False(t, known)
+
+	longer := make([]byte, 2*len(data))
+	for i := range longer {
+		longer[i] = byte(i*11 + i/313)
+	}
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(longer)), Data: longer}}, Policy: SkipAllCache}))
+	got, err := readFullObjectOf(fs, 0, -1)
+	require.NoError(t, err)
+	require.Equal(t, longer, got)
+}
+
+// A prefetch queued before an object is deleted is dropped, and one already taken from the
+// queue does not store the size it was told.
+func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	ctx := context.Background()
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
+	require.True(t, fs.prefetcher.isQueued("object"))
+	taken := fs.prefetcher.entries["object"].req
+	require.NoError(t, fs.Delete(ctx, "object"))
+	require.False(t, fs.prefetcher.isQueued("object"), "the delete drops the queued prefetch")
+
+	fs.prefetchObject(ctx, taken)
+	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	require.False(t, known, "a prefetch made before the delete does not store its size")
+}
