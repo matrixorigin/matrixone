@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -166,7 +167,13 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 			frame.pooledRows = scratch
 		}
 	}
-	defer func() { frame.Observe(analyzer); frame.End() }()
+	defer func() {
+		if *parameter != nil && (*parameter).GetSourceVector().IsDictionary() {
+			*parameter = nil
+		}
+		frame.Observe(analyzer)
+		frame.End()
+	}()
 	var owned *batch.Batch
 	defer func() {
 		if owned != nil {
@@ -335,4 +342,62 @@ func CollectSingleBatchInputColumns(executor ExpressionExecutor, seen []bool, co
 		return false
 	}
 	return true
+}
+
+// Only these wrapper-based kernels have an audited synchronous read contract.
+// Unknown functions, flow-control and specialized native executors keep the
+// owned predicate bank; dictionary capability alone is not a lifetime proof.
+func predicateBorrowsInputs(executor ExpressionExecutor) bool {
+	switch e := executor.(type) {
+	case *ColumnExpressionExecutor, *FixedVectorExpressionExecutor:
+		return true
+	case *FunctionExpressionExecutor:
+		switch e.fid {
+		case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
+			function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN, function.ISNULL, function.ISNOTNULL:
+		default:
+			return false
+		}
+		if e.dictionaryInput == nil || e.freeFn != nil || e.resetFn != nil {
+			return false
+		}
+		for _, child := range e.parameterExecutor {
+			if !predicateBorrowsInputs(child) {
+				return false
+			}
+		}
+		return true
+	case *memoRootExpressionExecutor:
+		return predicateBorrowsInputs(e.executor)
+	case *memoExpressionExecutor:
+		return predicateBorrowsInputs(e.state.executor)
+	default:
+		return false
+	}
+}
+
+// Release borrowed parameter/result aliases before the next selection or End.
+// Memo roots reset before Eval too; clearing here closes error and reuse paths.
+func clearPredicateInputs(executor ExpressionExecutor) {
+	switch e := executor.(type) {
+	case *FunctionExpressionExecutor:
+		clear(e.parameterResults)
+		clear(e.dictionaryParameters)
+		clear(e.selectedParameterResults)
+		for _, child := range e.parameterExecutor {
+			clearPredicateInputs(child)
+		}
+	case *memoRootExpressionExecutor:
+		e.resetCachedValues()
+		clearPredicateInputs(e.executor)
+	case *memoExpressionExecutor:
+		e.state.cached = nil
+		clearPredicateInputs(e.state.executor)
+	case *decimalTypedExecutor:
+		clearPredicateInputs(e.root)
+	case *decimalMulSubExecutor:
+		clearPredicateInputs(e.root)
+	case *decimalChainExecutor:
+		clearPredicateInputs(e.root)
+	}
 }

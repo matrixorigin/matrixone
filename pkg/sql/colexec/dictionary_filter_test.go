@@ -130,10 +130,10 @@ func TestPredicateScratchReusesOnlyReferencedColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, borrowed)
 	require.Nil(t, first.Vecs[1])
-	require.Nil(t, frame.predicateVectors[1])
-	require.False(t, first.Vecs[0].HasBorrowedBacking())
+	require.Empty(t, frame.predicateVectors)
+	require.True(t, first.Vecs[0].IsDictionary())
 	saved := first.Vecs[0]
-	require.Equal(t, []int64{30, 10}, vector.MustFixedColNoTypeCheck[int64](saved))
+	require.Equal(t, []int64{30, 10}, []int64{vector.GetFixedAtNoTypeCheck[int64](saved, 0), vector.GetFixedAtNoTypeCheck[int64](saved, 1)})
 	require.True(t, saved.GetGrouping().Contains(0))
 	require.False(t, saved.HasNull())
 	require.False(t, saved.GetSorted())
@@ -148,7 +148,8 @@ func TestPredicateScratchReusesOnlyReferencedColumns(t *testing.T) {
 	require.Equal(t, []int64{10, 20, 30}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
 	frame.End()
 	require.Nil(t, second.Vecs[0], "end evaluation clears borrowed bank headers")
-	require.Same(t, saved, frame.predicateVectors[0], "the frame still owns scratch")
+	require.Zero(t, saved.Length(), "End retires scoped borrowed headers")
+	require.Empty(t, frame.predicateVectors, "logical reads need no owned predicate payload")
 }
 
 func TestCompactPredicateRowsOriginalDomain(t *testing.T) {
@@ -231,7 +232,9 @@ func TestPredicateScratchCapacityFallsBackAfterReleasingBanks(t *testing.T) {
 		executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(col)}}})
 		require.NoError(t, err)
 		t.Cleanup(executor.Free)
-		output, borrowed, err := frame.predicateBatch(proc, input, nil, executor, rows, allocation)
+		// A function without an audited borrow contract uses owned scratch.
+		wrapper := &FunctionExpressionExecutor{parameterExecutor: []ExpressionExecutor{executor}}
+		output, borrowed, err := frame.predicateBatch(proc, input, nil, wrapper, rows, allocation)
 		require.NoError(t, err)
 		require.Equal(t, col == 0, borrowed)
 		require.Equal(t, rows, vector.MustFixedColNoTypeCheck[int64](output.Vecs[col]))

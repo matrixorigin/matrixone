@@ -30,11 +30,13 @@ import (
 // Masked evaluation compacts operands first, so those vectors cannot match these
 // full-domain input slots. The frame is execution-lane local, never concurrent.
 type DictionaryInputFrame struct {
-	pooledRows       *[]int64
-	predicateInput   *batch.Batch
-	predicateVectors []*vector.Vector
-	predicateSeen    []bool
-	predicateColumns []int
+	predicateScope    vector.DictionarySelectionScope
+	predicateExecutor ExpressionExecutor
+	pooledRows        *[]int64
+	predicateInput    *batch.Batch
+	predicateVectors  []*vector.Vector
+	predicateSeen     []bool
+	predicateColumns  []int
 	// Gathers counts committed materializations in the current owner generation.
 	Gathers                                      uint64
 	gatherRows, gatherBytes                      uint64
@@ -60,7 +62,16 @@ func (f *DictionaryInputFrame) Begin(bat *batch.Batch, allocation *vector.Alloca
 	copy(f.inputs, bat.Vecs)
 }
 
+func (f *DictionaryInputFrame) endPredicateScope() {
+	if f.predicateExecutor != nil {
+		clearPredicateInputs(f.predicateExecutor)
+		f.predicateExecutor = nil
+	}
+	f.predicateScope.End()
+}
+
 func (f *DictionaryInputFrame) End() {
+	f.endPredicateScope()
 	clear(f.inputs)
 	clear(f.ready)
 	if f.predicateInput != nil {
@@ -68,6 +79,8 @@ func (f *DictionaryInputFrame) End() {
 	}
 }
 func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
+	f.endPredicateScope()
+	f.predicateScope.Free(mp)
 	if f.pooledRows != nil {
 		vector.PutSels(*f.pooledRows)
 		*f.pooledRows = nil
@@ -178,6 +191,7 @@ func (f *DictionaryInputFrame) releasePredicateBuffers(mp *mpool.MPool) {
 // The result is borrowed only through this Eval and its Boolean result scan.
 // Unknown executors receive independent owned input via the existing fallback.
 func (f *DictionaryInputFrame) predicateBatch(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection) (result *batch.Batch, borrowed bool, retErr error) {
+	f.endPredicateScope()
 	if len(f.predicateSeen) != len(input.Vecs) {
 		f.predicateSeen = make([]bool, len(input.Vecs))
 	} else {
@@ -193,7 +207,6 @@ func (f *DictionaryInputFrame) predicateBatch(proc *process.Process, input *batc
 		if err := f.predicateInput.SetAllocationAccount(account); err != nil {
 			return nil, false, err
 		}
-		f.predicateVectors = make([]*vector.Vector, len(input.Vecs))
 	}
 	output := f.predicateInput
 	clear(output.Vecs)
@@ -202,11 +215,27 @@ func (f *DictionaryInputFrame) predicateBatch(proc *process.Process, input *batc
 	output.SetRowCount(len(rows))
 	defer func() {
 		if retErr != nil && errors.Is(retErr, mpool.ErrAllocationAccountCapacity) {
+			f.predicateScope.Free(proc.Mp())
 			f.releasePredicateBuffers(proc.Mp())
 			result, _, retErr = SelectBatchColumns(input, f.predicateColumns, rows, proc.Mp(), account, false)
 			borrowed = false
 		}
 	}()
+	if predicateBorrowsInputs(executor) {
+		admitted, err := f.predicateScope.Bind(input.Vecs, output.Vecs, f.predicateColumns, rows, input.RowCount(), proc.Mp(), account)
+		if err != nil {
+			return nil, false, err
+		}
+		if admitted {
+			f.predicateExecutor = executor
+			return output, true, nil
+		}
+	}
+
+	if len(f.predicateVectors) != len(input.Vecs) {
+		f.predicateVectors = make([]*vector.Vector, len(input.Vecs))
+	}
+
 	for _, col := range f.predicateColumns {
 		source := input.Vecs[col]
 		if source == nil {

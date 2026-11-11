@@ -70,7 +70,7 @@ func (d *dictionaryVector) Release() {
 func (*dictionaryVector) Bytes() []byte { return nil }
 
 func (d *dictionaryVector) AccountedBytes() int64 {
-	if d == nil {
+	if d == nil || d.refs.Load() < 0 {
 		return 0
 	}
 	return d.base.RetainedBytes() + d.rows.RetainedBytes()
