@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -27,8 +28,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type jsonValueWarningRecord struct {
+	code uint16
+	text string
+}
+
+type jsonValueWarningRecorder struct {
+	process.Session
+	warnings []jsonValueWarningRecord
+}
+
+func (r *jsonValueWarningRecorder) AppendWarningDiagnostic(code uint16, text string) {
+	r.warnings = append(r.warnings, jsonValueWarningRecord{code: code, text: text})
+}
 
 func TestJsonValueReaderExecutorIsolation(t *testing.T) {
 	for _, contract := range []bool{false, true} {
@@ -259,6 +275,8 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			warnings := &jsonValueWarningRecorder{}
+			proc.Session = warnings
 			target := types.New(types.T_varchar, test.width, 0)
 			if test.implicit {
 				target = types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
@@ -281,9 +299,11 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 			type outcome struct {
 				text, failure string
 				null          bool
+				warnings      []jsonValueWarningRecord
 			}
 			run := func(immutable bool) outcome {
 				t.Helper()
+				warnings.warnings = nil
 				require.NoError(t, fc.result.PreExtendAndReset(1))
 				var e error
 				if immutable {
@@ -292,17 +312,21 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 					e = JsonValue(fc.parameters, fc.result, proc, 1, nil)
 				}
 				if e != nil {
-					return outcome{failure: e.Error()}
+					return outcome{failure: e.Error(), warnings: warnings.warnings}
 				}
 				result := fc.result.GetResultVector()
 				if result.IsNull(0) {
-					return outcome{null: true}
+					return outcome{null: true, warnings: warnings.warnings}
 				}
-				return outcome{text: string(result.GetBytesAt(0))}
+				return outcome{text: string(result.GetBytesAt(0)), warnings: warnings.warnings}
 			}
 			ordinary := run(false)
 			frozen := run(true)
 			require.Equal(t, ordinary, frozen)
+			if test.name == "width-513" || test.name == "composite-explicit" {
+				require.Len(t, frozen.warnings, 1)
+				require.Equal(t, uint16(moerr.WARN_DATA_TRUNCATED), frozen.warnings[0].code)
+			}
 			if test.wantError {
 				require.Contains(t, frozen.failure, "invalid path expression")
 			} else if test.wantNull {
@@ -353,6 +377,147 @@ func TestJSONValueReaderTextOutputCapacityFailureIsTerminal(t *testing.T) {
 	require.NoError(t, JsonValueWithReader(reader, fc.parameters, result, proc, 1, nil))
 	reader.Close()
 	require.Equal(t, payload, string(result.GetResultVector().GetBytesAt(0)))
+}
+
+func TestJSONValueReaderTextResponseModesMatchMutableInput(t *testing.T) {
+	for _, test := range []struct {
+		name, document, path string
+		onEmpty, onError     int64
+		wantNull, wantError  bool
+		warning              bool
+	}{
+		{"width-null", `{"keep":"` + strings.Repeat("猫", 513) + `"}`, "$.keep", jsonValueNullResponse, jsonValueNullResponse, true, false, true},
+		{"width-error", `{"keep":"` + strings.Repeat("猫", 513) + `"}`, "$.keep", jsonValueNullResponse, jsonValueErrorResponse, false, true, false},
+		{"composite-null", `{"keep":{"x":1}}`, "$.keep", jsonValueNullResponse, jsonValueNullResponse, true, false, true},
+		{"composite-error", `{"keep":{"x":1}}`, "$.keep", jsonValueNullResponse, jsonValueErrorResponse, false, true, false},
+		{"missing-error", `{"keep":1}`, "$.missing", jsonValueErrorResponse, jsonValueNullResponse, false, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &jsonValueWarningRecorder{}
+			proc.Session = warnings
+			// An explicitly typed target rejects composite values.
+			target := types.New(types.T_varchar, 512, 0)
+			raw := mustJsonBinaryString(t, test.document)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{raw}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{test.path}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.onEmpty}, nil),
+				NewFunctionTestConstInput(target, []string{"empty"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.onError}, nil),
+				NewFunctionTestConstInput(target, []string{"fallback"}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, []string{""}, nil), JsonValue)
+			defer fc.Free()
+			reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+			require.NoError(t, err)
+			defer reader.Close()
+			type outcome struct {
+				failure  string
+				null     bool
+				warnings []jsonValueWarningRecord
+			}
+			run := func(immutable bool) outcome {
+				warnings.warnings = nil
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+				var err error
+				if immutable {
+					err = JsonValueWithReader(reader, fc.parameters, fc.result, proc, 1, nil)
+				} else {
+					err = JsonValue(fc.parameters, fc.result, proc, 1, nil)
+				}
+				result := outcome{warnings: warnings.warnings}
+				if err != nil {
+					result.failure = err.Error()
+				} else {
+					result.null = fc.result.GetResultVector().IsNull(0)
+				}
+				return result
+			}
+			ordinary, frozen := run(false), run(true)
+			require.Equal(t, ordinary, frozen)
+			require.Equal(t, test.wantNull, frozen.null)
+			require.Equal(t, test.wantError, frozen.failure != "")
+			if test.warning {
+				require.Len(t, frozen.warnings, 1)
+				require.Equal(t, uint16(moerr.WARN_DATA_TRUNCATED), frozen.warnings[0].code)
+			} else {
+				require.Empty(t, frozen.warnings)
+			}
+		})
+	}
+}
+
+type failingJSONTextReader struct {
+	vector.JSONReader
+	err       error
+	textError bool
+}
+
+func (r *failingJSONTextReader) QueryTextAtPath(int, bytejson.Path, bool) (vector.JSONTextSelection, error) {
+	return vector.JSONTextSelection{TextError: r.textError}, r.err
+}
+
+func TestJSONValueReaderTextErrorClassification(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mode      int64
+		textError bool
+		cancel    bool
+		wantNull  bool
+		wantError bool
+	}{
+		{"source-null", jsonValueNullResponse, true, false, true, false},
+		{"source-default", jsonValueDefaultResponse, true, false, false, false},
+		{"source-error", jsonValueErrorResponse, true, false, false, true},
+		{"hard-default", jsonValueDefaultResponse, false, false, false, true},
+		{"cancel-default", jsonValueDefaultResponse, false, true, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &jsonValueWarningRecorder{}
+			proc.Session = warnings
+			target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+			raw := mustJsonBinaryString(t, `{"keep":"value"}`)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{raw}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.keep"}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.mode}, nil),
+				NewFunctionTestConstInput(target, []string{"fallback"}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, []string{""}, nil), JsonValue)
+			defer fc.Free()
+			reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+			require.NoError(t, err)
+			defer reader.Close()
+			want := errors.New("injected text selection failure")
+			if test.cancel {
+				want = context.Canceled
+			}
+			injected := &failingJSONTextReader{JSONReader: reader, err: want, textError: test.textError}
+			require.NoError(t, fc.result.PreExtendAndReset(1))
+			err = jsonValueWithAdmittedReader(injected, fc.parameters, fc.result, proc, 1, nil)
+			if test.wantError {
+				require.ErrorIs(t, err, want)
+			} else if test.wantNull {
+				require.NoError(t, err)
+				require.True(t, fc.result.GetResultVector().IsNull(0))
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "fallback", string(fc.result.GetResultVector().GetBytesAt(0)))
+			}
+			if test.textError && test.mode != jsonValueErrorResponse {
+				require.Len(t, warnings.warnings, 1)
+				require.Equal(t, uint16(moerr.ER_INVALID_JSON_TEXT), warnings.warnings[0].code)
+			} else {
+				require.Empty(t, warnings.warnings)
+			}
+		})
+	}
 }
 
 type cancelDuringJSONQueryReader struct {

@@ -328,7 +328,9 @@ func jsonValueExecuteCore(
 	appendValue func(jsonValueExtracted) (conversionErr, outputErr error),
 	appendNull func() error,
 	appendDefault func(uint64, bool) error,
-	textSelection bool,
+	textResult *vector.FunctionResult[types.Varlena],
+	textTarget types.Type,
+	textImplicit bool,
 	readers ...vector.JSONReader,
 ) error {
 	var docParam jsonValueInputParameter
@@ -351,7 +353,7 @@ func jsonValueExecuteCore(
 	}
 
 	var cursor vector.JSONCursor
-	if len(readers) != 0 && !textSelection {
+	if len(readers) != 0 && textResult == nil {
 		var err error
 		cursor, err = readers[0].OpenCursor()
 		if err != nil {
@@ -402,8 +404,33 @@ func jsonValueExecuteCore(
 
 		var extracted jsonValueExtracted
 		if len(readers) != 0 {
-			if textSelection {
-				extracted = jsonValueExtractReaderTextAtPath(readers[0], int(row), parsedPath, pathText)
+			if textResult != nil {
+				selected, selectionErr := readers[0].QueryTextAtPath(int(row), parsedPath, false)
+				if selectionErr == nil && selected.Exists && !selected.InputNull && !selected.ValueNull && !selected.Multiple && !selected.TextError {
+					var conversionErr error
+					if !textImplicit {
+						conversionErr = jsonValueRequireScalarType(bytejson.TpCode(selected.Type))
+					}
+					value := selected.Text
+					if conversionErr == nil {
+						value, conversionErr = jsonValueText(value, textTarget)
+					}
+					if conversionErr == nil {
+						if err := textResult.AppendBytes(util.UnsafeStringToBytes(value), false); err != nil {
+							return err
+						}
+						continue
+					}
+					if onError != jsonValueErrorResponse {
+						appendJSONValueWarning(proc, conversionErr, true)
+					}
+					extracted = jsonValueExtracted{state: jsonValueOneValue, path: pathText, err: conversionErr}
+					if err := jsonValueApplyResponse(extracted, onError, row, appendNull, appendDefault, jsonValueContext(proc)); err != nil {
+						return err
+					}
+					continue
+				}
+				extracted = jsonValueExtractReaderTextSelection(selected, selectionErr, pathText)
 			} else {
 				extracted = jsonValueExtractReaderAtPath(cursor, int(row), parsedPath, pathText, false, true)
 			}
@@ -546,7 +573,7 @@ func jsonValueTextResult(
 			}
 			value, null := defaults.GetStrValue(row)
 			return rs.AppendBytes(value, null)
-		}, true, readers...)
+		}, rs, target, implicitText, readers...)
 }
 
 func jsonValueJSONResult(
@@ -583,7 +610,7 @@ func jsonValueJSONResult(
 				return err
 			}
 			return rs.AppendByteJson(defaultJSON, false)
-		}, false, readers...)
+		}, nil, types.Type{}, false, readers...)
 }
 
 func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
@@ -619,7 +646,7 @@ func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
 			}
 			value, null := defaults.GetValue(row)
 			return rs.Append(value, null)
-		}, false, readers...)
+		}, nil, types.Type{}, false, readers...)
 }
 
 func jsonValueText(value string, target types.Type) (string, error) {
@@ -644,7 +671,11 @@ func jsonValueScalarText(extracted jsonValueExtracted) (string, error) {
 }
 
 func jsonValueRequireScalar(extracted jsonValueExtracted) error {
-	if extracted.value.Type == bytejson.TpCodeObject || extracted.value.Type == bytejson.TpCodeArray {
+	return jsonValueRequireScalarType(extracted.value.Type)
+}
+
+func jsonValueRequireScalarType(typ bytejson.TpCode) error {
+	if typ == bytejson.TpCodeObject || typ == bytejson.TpCodeArray {
 		return moerr.NewInvalidInputNoCtx("JSON_VALUE composite cannot be converted to a scalar")
 	}
 	return nil
@@ -1045,11 +1076,8 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 	return nil
 }
 
-// Text targets need only owned text and the selected type. The reader's
-// synchronous selection uses the same validated path query as a cursor while
-// avoiding a retained per-evaluation handle.
-func jsonValueExtractReaderTextAtPath(reader vector.JSONReader, row int, path bytejson.Path, pathText string) jsonValueExtracted {
-	selected, err := reader.QueryTextAtPath(row, path, false)
+// Map non-success text selections to the shared response/error machinery.
+func jsonValueExtractReaderTextSelection(selected vector.JSONTextSelection, err error, pathText string) jsonValueExtracted {
 	extracted := jsonValueExtracted{path: pathText}
 	if err != nil {
 		extracted.err = err
