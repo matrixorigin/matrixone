@@ -234,7 +234,13 @@ func constructCreateTableSQLWithFormat(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			buf.WriteString(" COMMENT ")
+			if legacySchemaHash {
+				// The persisted DUMP fingerprint uses the original spelling.
+				buf.WriteString("'" + col.Comment + "'")
+			} else {
+				buf.WriteString(formatDDLComment(col.Comment, noBackslashEscapes))
+			}
 		}
 		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
 			buf.WriteString(" MONGODB_PATH '")
@@ -615,7 +621,11 @@ func constructCreateTableSQLWithFormat(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					if legacySchemaHash {
+						comment = " COMMENT='" + kv.Value + "'"
+					} else {
+						comment = " COMMENT=" + formatDDLComment(kv.Value, noBackslashEscapes)
+					}
 				} else if kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
@@ -1200,6 +1210,12 @@ func formatDDLString(value string, noBackslashEscapes bool) string {
 		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 	}
 	return formatStrLit(value)
+}
+
+// The CREATE/ALTER parser stores comments with single quotes already doubled.
+// Undo that catalog spelling before quoting the value for the replay mode.
+func formatDDLComment(value string, noBackslashEscapes bool) string {
+	return formatDDLString(strings.ReplaceAll(value, "''", "'"), noBackslashEscapes)
 }
 
 func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {

@@ -21,7 +21,10 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // SHOW CREATE TABLE must print a string default so that replaying the
@@ -116,7 +119,7 @@ func TestShowCreateResultReplaysDefaultsInSessionMode(t *testing.T) {
 	mock.ctxt.tables[source.Name] = source
 	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
 
-	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
 		t.Run(mode, func(t *testing.T) {
 			mock.ctxt.SetSqlModeOverride(mode)
 			show, err := mysql.ParseOneWithSQLMode(t.Context(), "show create table show_mode_src", 1, mode)
@@ -142,6 +145,65 @@ func TestShowCreateResultReplaysDefaultsInSessionMode(t *testing.T) {
 				require.True(t, proto.Equal(want.Default.Expr, got.Default.Expr),
 					"%s: source default %q, replay default %q", name, want.Default.OriginString, got.Default.OriginString)
 			}
+		})
+	}
+}
+
+func TestShowCreateResultReplaysCommentsInSessionMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	source, err := buildTestCreateTableStmt(mock, `create table show_comment_src (
+		v text comment 'c\\"q\\" and it''s\nline'
+	) comment='t\\path and it''s'`)
+	require.NoError(t, err)
+	require.Equal(t, "c\\\"q\\\" and it''s\nline", FindColumn(source.Cols, "v").Comment)
+	comment := func(def *plan.TableDef) string {
+		for _, tableDef := range def.Defs {
+			if properties := tableDef.GetProperties(); properties != nil {
+				for _, property := range properties.Properties {
+					if property.Key == catalog.SystemRelAttr_Comment {
+						return property.Value
+					}
+				}
+			}
+		}
+		return ""
+	}
+	require.Equal(t, "t\\path and it''s", comment(source))
+	mock.ctxt.tables[source.Name] = source
+	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+	before := proto.Clone(source)
+	legacy, err := ConstructCreateTableSQLForSchemaHash(source)
+	require.NoError(t, err)
+	require.Contains(t, legacy, `COMMENT 'c\"q\" and it''s`)
+
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(mode, func(t *testing.T) {
+			mock.ctxt.SetSqlModeOverride(mode)
+			show, err := mysql.ParseOneWithSQLMode(t.Context(), "show create table show_comment_src", 1, mode)
+			require.NoError(t, err)
+			defer show.Free()
+			shown, err := BuildPlan(&mock.ctxt, show, false)
+			require.NoError(t, err)
+			query := shown.GetQuery()
+			root := query.GetNodes()[query.GetSteps()[0]]
+			ddl := root.ProjectList[1].GetLit().GetSval()
+			for generation := 0; generation < 2; generation++ {
+				replay, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
+				require.NoError(t, err, "public DDL: %q", ddl)
+				rebuilt, err := BuildPlan(&mock.ctxt, replay, false)
+				replay.Free()
+				require.NoError(t, err)
+				next := rebuilt.GetDdl().GetCreateTable().TableDef
+				require.Equal(t, FindColumn(source.Cols, "v").Comment, FindColumn(next.Cols, "v").Comment)
+				require.Equal(t, comment(source), comment(next))
+				var parsed tree.Statement
+				ddl, parsed, err = ConstructCreateTableSQL(&mock.ctxt, next, nil, false, nil)
+				require.NoError(t, err)
+				if parsed != nil {
+					parsed.Free()
+				}
+			}
+			require.True(t, proto.Equal(before, source), "rendering must not mutate shared metadata")
 		})
 	}
 }
