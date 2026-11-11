@@ -433,10 +433,14 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	var policy fileservice.Policy
 	if node.GetNarrowScan() {
-		return fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+		policy = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
 	}
-	return 0
+	if node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		policy |= fileservice.IndexFileObject
+	}
+	return policy
 }
 
 func (s *Scope) FreeOperator(c *Compile) {

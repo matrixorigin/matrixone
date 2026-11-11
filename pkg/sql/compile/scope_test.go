@@ -624,37 +624,45 @@ func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
 func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 	for _, skip := range []bool{false, true} {
 		for _, fromObjRef := range []bool{false, true} {
-			proc := testutil.NewProcess(t)
-			proc.BuildPipelineContext(context.Background())
-			reader := &mockReaderForParallelOrderBy{}
-			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
-			tableDef := &plan.TableDef{TblId: 42}
-			if fromObjRef {
-				// A rewritten scan can carry its table only in the object reference.
-				tableDef.TblId = 0
-				node.ObjRef = &plan.ObjectRef{Obj: 42}
+			for _, entries := range []bool{false, true} {
+				proc := testutil.NewProcess(t)
+				proc.BuildPipelineContext(context.Background())
+				reader := &mockReaderForParallelOrderBy{}
+				node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
+				if entries {
+					node.TableDef = &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries}
+				}
+				tableDef := &plan.TableDef{TblId: 42}
+				if fromObjRef {
+					// A rewritten scan can carry its table only in the object reference.
+					tableDef.TblId = 0
+					node.ObjRef = &plan.ObjectRef{Obj: 42}
+				}
+				scope := &Scope{
+					RootOp: table_scan.NewArgument(),
+					Proc:   proc,
+					DataSource: &Source{
+						R:        reader,
+						Rel:      &mockRelationForMembershipFilter{},
+						TableDef: tableDef,
+						node:     node,
+					},
+				}
+				require.NoError(t, scope.Run(&Compile{proc: proc}))
+				want := fileservice.Policy(0)
+				if skip {
+					want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+				}
+				if entries {
+					want |= fileservice.IndexFileObject
+				}
+				require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
+				wantGroup := uint64(0)
+				if want != 0 {
+					wantGroup = 42
+				}
+				require.Equal(t, []uint64{wantGroup}, reader.readGroups, "the reads of a scan with a policy are grouped by their table")
 			}
-			scope := &Scope{
-				RootOp: table_scan.NewArgument(),
-				Proc:   proc,
-				DataSource: &Source{
-					R:        reader,
-					Rel:      &mockRelationForMembershipFilter{},
-					TableDef: tableDef,
-					node:     node,
-				},
-			}
-			require.NoError(t, scope.Run(&Compile{proc: proc}))
-			want := fileservice.Policy(0)
-			if skip {
-				want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
-			}
-			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
-			wantGroup := uint64(0)
-			if skip {
-				wantGroup = 42
-			}
-			require.Equal(t, []uint64{wantGroup}, reader.readGroups, "narrow reads are grouped by their table")
 		}
 	}
 }

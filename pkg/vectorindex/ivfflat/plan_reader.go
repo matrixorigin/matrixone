@@ -780,6 +780,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
 	ctx = fileservice.WithPreloadGroup(ctx, tableDef.TblId)
+	if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|fileservice.IndexFileObject)
+	}
 	var statsStart time.Time
 	if s.executionStats != nil {
 		statsStart = time.Now()

@@ -384,7 +384,13 @@ func (p *prefetcher) close(ctx context.Context) {
 	}
 }
 
-func (s *S3FS) PrefetchObject(_ context.Context, req ObjectPrefetch) error {
+func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
+	// An object the index-file cache keeps whole is downloaded there, not into the disk
+	// cache.
+	if GetFileServicePolicy(ctx).Any(IndexFileObject) && s.pinsObjects() {
+		s.pinObjects(req.FilePath)
+		return nil
+	}
 	if s.prefetcher != nil && req.Size > 0 {
 		s.prefetcher.add(req)
 	}
