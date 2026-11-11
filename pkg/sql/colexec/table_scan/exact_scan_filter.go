@@ -252,6 +252,11 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.filterLateMaterialized = false
 		},
 	}
+	if tableScan.OutputAllocation != nil && !tableScan.ctr.padCharToFullLength {
+		tableScan.ctr.readerFilter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			return tableScan.selectReaderFilter(proc, bat, loaded)
+		}
+	}
 }
 
 // prepareSelectionWorkspace is called only after the downstream edge admits

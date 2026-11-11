@@ -226,12 +226,6 @@ func (tableScan *TableScan) readBatch(
 	if tableScan.ctr.readerFilter != nil {
 		tableScan.prepareColumnUses()
 		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
-		tableScan.ctr.readerFilter.Select = nil
-		if tableScan.OutputAllocation != nil && !tableScan.ctr.padCharToFullLength {
-			tableScan.ctr.readerFilter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-				return tableScan.selectReaderFilter(proc, bat, loaded)
-			}
-		}
 	}
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {

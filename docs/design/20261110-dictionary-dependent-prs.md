@@ -761,3 +761,19 @@ Confirm actual kernel/scope activation before claiming a TPC-H gain. Preserve
 all all-query/resource gates, local six-suite protocol and C/D follow-up designs.
 No cache/GC/budget/type/kernel/public-interface change or push is authorized by
 this wiring while performance acceptance remains unresolved.
+
+
+### Owned reader activation and callback lifetime — 2026-11-12
+
+The wiring was implemented as e257b0a316. Direct r43 counters confirm Q22 now
+executes370 reader selections and185 scoped SUBSTRING calls over1,363,614rows
+per warm suite; it no longer stays on the flat-only path. Q22 measured copy/store
+traffic fell about118MiB and MPool allocation traffic about12MiB. Standard r43
+still fails all-query acceptance (including Q6+12.8%, Q15+9.9% wall).
+
+Within the approved wiring, Select is now prepared once with ReaderFilterRequest,
+like Apply, rather than recreated on every block read. Process/allocation and
+CHAR-padding mode belong to Prepare/Reset; dynamic column-use ownership remains
+checked at read entry. The existing scan owning tests cover those transitions.
+No cache, public interface, arithmetic or benchmark gate changed. A separate
+private cache-constructor closure simplification is proposed, not yet approved.
