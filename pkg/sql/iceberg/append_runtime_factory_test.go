@@ -17,10 +17,12 @@ package iceberg
 import (
 	"bytes"
 	"context"
-	"github.com/parquet-go/parquet-go"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/stretchr/testify/require"
 
@@ -281,6 +283,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		nextReq := request
 		nextReq.StatementID = "stmt-after-budget-failure"
 		nextReq.IdempotencyKey = nextReq.StatementID
+		nextReq.MaxParallel = 1
 		next, err := f.NewCoordinator(ctx, nextReq)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, next.Abort(ctx, nil)) })
@@ -288,6 +291,99 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		require.NoError(t, next.Append(ctx, bat))
 		require.NoError(t, next.Commit(ctx))
 		require.Equal(t, nextReq.IdempotencyKey, commitReq.IdempotencyKey)
+	})
+	t.Run("pressure_upload_cancel_and_recover", func(t *testing.T) {
+		commitReq = api.CommitRequest{}
+		// Keep two partitions live while pressure closes files, and pause the
+		// second upload so the first has already transferred ownership.
+		savedMeta := rawMeta
+		rawMeta = bytes.Replace(rawMeta, []byte(`"partition-specs": [{"spec-id": 0, "fields": []}]`), []byte(`"partition-specs": [{"spec-id": 0, "fields": [{"source-id": 2, "field-id": 1000, "name": "region", "transform": "identity"}]}]`), 1)
+		rawMeta = bytes.Replace(rawMeta, []byte(`"name": "amount", "required": false, "type": "long"`), []byte(`"name": "amount", "required": false, "type": "string"`), 1)
+		defer func() { rawMeta = savedMeta }()
+		started := make(chan string, 1)
+		uploaded := make(chan string, 1)
+		gated := &pressureUploadFS{ETLFileService: fs, started: started, uploaded: uploaded}
+		f := NewAppendRuntimeCoordinatorFactory(factory.opts)
+		f.opts.ObjectIOProvider = icebergio.ScopedProvider{FileService: gated}
+		f.opts.Config.Write.DMLMaxMemory = 4 << 20
+		req := request
+		req.StatementID = "pressure-cancel"
+		req.IdempotencyKey = req.StatementID
+		req.MaxParallel = 2
+		coord, err := f.NewCoordinator(ctx, req)
+		require.NoError(t, err)
+		scope := coord.(*appendRuntimeSharedCoordinatorScope)
+		inner := scope.shared.inner.(*AppendRuntimeCoordinator)
+		require.NoError(t, coord.Begin(ctx, req))
+		secondReq := req
+		secondReq.ParallelID = 1
+		secondScope, err := f.NewCoordinator(ctx, secondReq)
+		require.NoError(t, err)
+		require.Same(t, scope.shared, secondScope.(*appendRuntimeSharedCoordinatorScope).shared)
+		require.NoError(t, secondScope.Begin(ctx, secondReq))
+		mp := mpool.MustNewZero()
+		bat := batch.New([]string{"id", "region", "amount"})
+		bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())}
+		defer bat.Clean(mp)
+		for i := 0; i < 100; i++ {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(fmt.Sprintf("p%d", i%2)), false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte{byte(i)}, 64<<10), false, mp))
+		}
+		bat.SetRowCount(100)
+		cancelCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- coord.Append(cancelCtx, bat) }()
+		var uncertain string
+		select {
+		case uncertain = <-started:
+			require.Greater(t, inner.memoryBudget.usedBytes(), weight)
+			cancel()
+		case err := <-done:
+			t.Fatalf("append returned before second pressure upload: %v", err)
+		case <-time.After(10 * time.Second):
+			cancel()
+			t.Fatal("pressure upload not reached")
+		}
+		select {
+		case err := <-done:
+			require.Error(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("append did not return")
+		}
+		require.NoError(t, secondScope.Abort(context.Background(), context.Canceled))
+		require.NoError(t, coord.Abort(context.Background(), context.Canceled))
+		require.True(t, inner.closed)
+		require.Empty(t, f.shared.entries)
+		first := <-uploaded
+		require.Len(t, store.orphanFiles, 2)
+		require.ElementsMatch(t, []string{"s3://" + first, "s3://" + uncertain}, []string{store.orphanFiles[0].FilePath, store.orphanFiles[1].FilePath})
+		schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}, {ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}}, {ID: 3, Name: "amount", Type: api.IcebergType{Kind: api.TypeString}}}}
+		spec := api.PartitionSpec{Fields: []api.PartitionField{{SourceID: 2, FieldID: 1000, Name: "region", Transform: "identity"}}}
+		metaBytes := retainedDMLDataFileMetadataBytesForSchema(schema, spec)
+		require.Equal(t, weight+2*metaBytes, inner.memoryBudget.usedBytes(), "only preserved and uploaded/uncertain metadata remain")
+		require.Empty(t, commitReq.Updates)
+		f.opts.ObjectIOProvider = icebergio.ScopedProvider{FileService: fs}
+		nextReq := req
+		nextReq.StatementID = "after-pressure-cancel"
+		nextReq.IdempotencyKey = nextReq.StatementID
+		nextReq.MaxParallel = 1
+		next, err := f.NewCoordinator(ctx, nextReq)
+		require.NoError(t, err)
+		require.NoError(t, next.Begin(ctx, nextReq))
+		nextBatch := batch.New([]string{"id", "region", "amount"})
+		nextBatch.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())}
+		defer nextBatch.Clean(mp)
+		require.NoError(t, vector.AppendFixed(nextBatch.Vecs[0], int64(1), false, mp))
+		require.NoError(t, vector.AppendBytes(nextBatch.Vecs[1], []byte("p"), false, mp))
+		require.NoError(t, vector.AppendBytes(nextBatch.Vecs[2], []byte("ok"), false, mp))
+		nextBatch.SetRowCount(1)
+		require.NoError(t, next.Append(ctx, nextBatch))
+		require.NoError(t, next.Commit(ctx))
+		require.Equal(t, nextReq.IdempotencyKey, commitReq.IdempotencyKey)
+		require.Empty(t, f.shared.entries)
+		store.orphanFiles = nil
 	})
 	commitReq = api.CommitRequest{}
 	coord, err := factory.NewCoordinator(ctx, request)
@@ -976,4 +1072,28 @@ type metricsCatalogClient struct {
 
 func (m *metricsCatalogClient) ReportMetrics(context.Context, api.MetricsReportRequest) error {
 	return nil
+}
+
+// pressureUploadFS blocks the second data-object upload until cancellation.
+type pressureUploadFS struct {
+	fileservice.ETLFileService
+	started, uploaded chan string
+	calls             int
+}
+
+func (f *pressureUploadFS) Write(ctx context.Context, vec fileservice.IOVector) error {
+	if strings.HasSuffix(vec.FilePath, ".parquet") {
+		f.calls++
+		if f.calls == 2 {
+			f.started <- vec.FilePath
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if err := f.ETLFileService.Write(ctx, vec); err != nil {
+			return err
+		}
+		f.uploaded <- vec.FilePath
+		return nil
+	}
+	return f.ETLFileService.Write(ctx, vec)
 }
