@@ -280,7 +280,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	}
 
 	lastX := -1
-	var aggs *[AggBatchSize]T
+	var aggs []T
 	var aggVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]

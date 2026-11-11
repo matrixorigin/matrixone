@@ -67,6 +67,28 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	return rbat, nil
 }
 
+// CopyBatchWithAllocation creates an independent copy under the destination owner.
+func CopyBatchWithAllocation(bat *batch.Batch, proc *process.Process, selection *vector.AllocationAccountSelection) (*batch.Batch, error) {
+	if selection == nil {
+		return CopyBatch(bat, proc)
+	}
+	dst := batch.NewOffHeapWithSize(len(bat.Vecs))
+	if err := dst.SetAllocationAccount(selection); err != nil {
+		return nil, err
+	}
+	dst.Attrs = append(dst.Attrs, bat.Attrs...)
+	for i, src := range bat.Vecs {
+		v, err := src.CloneToFlatCompactWithAllocation(proc.Mp(), selection)
+		if err != nil {
+			dst.Clean(proc.Mp())
+			return nil, err
+		}
+		dst.SetVector(int32(i), v)
+	}
+	dst.SetRowCount(bat.RowCount())
+	return dst, nil
+}
+
 func TableIsLoggingTable(dbName string, tableName string) bool {
 	if tableName == "statement_info" && dbName == "system" {
 		return true

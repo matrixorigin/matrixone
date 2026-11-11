@@ -515,9 +515,14 @@ INSERT INTO t_like_ci VALUES (3, 'Application');
 INSERT INTO t_like_ci VALUES (4, 'Banana');
 SELECT * FROM t_like_ci WHERE name LIKE 'app%' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-2  ¦  apple
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  Application
 SELECT * FROM t_like_ci WHERE name LIKE 'APP%' ORDER BY id;
-➤ id[4,32,0]  ¦  name[12,100,0]
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  Application
 SELECT * FROM t_like_ci WHERE name LIKE '%le' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  Apple  𝄀
