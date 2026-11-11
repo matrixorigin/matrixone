@@ -443,7 +443,7 @@ func TestIssue26796DumpAllClearsVacatedSlotsThroughFullSlice(t *testing.T) {
 	// the dump annotates file entries with a TN store and registers CN
 	// objects under the transaction's summary map
 	txn.tnStores = []metadata.TNService{{}}
-	txn.cnObjsSummary = map[types.Objectid]Summary{}
+	txn.cnObjsSummary = map[cnObjectKey]Summary{}
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 	txn.Unlock()
 

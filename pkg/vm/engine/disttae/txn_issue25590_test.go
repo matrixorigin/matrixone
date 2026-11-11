@@ -82,7 +82,7 @@ func newIssue25590TxnForTest(t *testing.T, stmts int) (*Transaction, *process.Pr
 		engine:          &Engine{},
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[deletedBlockKey][]int64)},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
@@ -576,8 +576,8 @@ func TestIssue25590RetirementKeepsSurvivingEntriesAcrossDumpAndRollback(t *testi
 	txn.tableCache = new(sync.Map)
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[deletedBlockKey][]int64)}
+	txn.cnObjsSummary = make(map[cnObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// thresholds far above the working set: admissions never dump on their
@@ -709,8 +709,8 @@ func TestIssue25590AdmissionFailureKeepsRollbackBoundaryExact(t *testing.T) {
 	txn.tableCache = new(sync.Map)
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[deletedBlockKey][]int64)}
+	txn.cnObjsSummary = make(map[cnObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// no dumps during the setup statements
@@ -921,8 +921,8 @@ func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
 	txn.tableCache = new(sync.Map)
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[deletedBlockKey][]int64)}
+	txn.cnObjsSummary = make(map[cnObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.writeWorkspaceThreshold = 1 << 40
@@ -2651,7 +2651,7 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 	t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	require.Equal(t, 1, txn.deletedBlocks.size(),
 		"the two dumped-row deletes register one pending block deletion")
-	markedOffsets := len(txn.deletedBlocks.offsets[obj2FirstBlock])
+	markedOffsets := len(txn.deletedBlocks.offsets[deletedBlockKey{blockID: obj2FirstBlock, tableID: issue25590TableID}])
 	require.Equal(t, 2, markedOffsets)
 	txn.EndStatement()
 
@@ -2671,7 +2671,7 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 	require.Equal(t, 1, txn.deletedBlocks.size(),
 		"the failed compaction may not consume the pending deletions")
 	require.Equal(t, 2,
-		len(txn.deletedBlocks.offsets[obj2FirstBlock]),
+		len(txn.deletedBlocks.offsets[deletedBlockKey{blockID: obj2FirstBlock, tableID: issue25590TableID}]),
 		"both marked offsets of the un-rewritten dirty object stay pending")
 
 	// No original metadata batch may be retired before this statement's
@@ -2697,7 +2697,7 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 	txn.EndStatement()
 	require.Equal(t, 1, txn.deletedBlocks.size(),
 		"a rollback after the interrupted admission keeps the pending deletions")
-	require.Equal(t, 2, len(txn.deletedBlocks.offsets[obj2FirstBlock]))
+	require.Equal(t, 2, len(txn.deletedBlocks.offsets[deletedBlockKey{blockID: obj2FirstBlock, tableID: issue25590TableID}]))
 	require.NotNil(t, txn.writes[metaIdx].bat)
 	require.Equal(t, metaRowCount, txn.writes[metaIdx].bat.RowCount())
 	require.Len(t, txn.writes, 1)
@@ -3031,8 +3031,8 @@ func TestIssue25590CompactSecondPublishFailureKeepsEveryOriginal(t *testing.T) {
 		"a second-publication failure must not append any replacement; the pre-staging pass left the first one behind")
 	require.Equal(t, 2, txn.deletedBlocks.size(),
 		"the failed compaction keeps every affected object's pending deletions")
-	require.Equal(t, 2, len(txn.deletedBlocks.offsets[obj2Block1]))
-	require.Equal(t, 2, len(txn.deletedBlocks.offsets[obj2Block2]))
+	require.Equal(t, 2, len(txn.deletedBlocks.offsets[deletedBlockKey{blockID: obj2Block1, tableID: issue25590TableID}]))
+	require.Equal(t, 2, len(txn.deletedBlocks.offsets[deletedBlockKey{blockID: obj2Block2, tableID: issue25590TableID}]))
 
 	// Both originals stay byte-identical: same objects, same order.
 	require.Equal(t, shape1, issue25590StatsNamesOfMeta(t, txn, metaIdx1),
@@ -6088,7 +6088,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	require.Len(t, txn.writes, 1)
 	require.Equal(t, usedBefore, account.Snapshot().Used)
 	require.Equal(t, 1, txn.deletedBlocks.size())
-	require.Len(t, txn.deletedBlocks.offsets[tailFirstBlock], 2)
+	require.Len(t, txn.deletedBlocks.offsets[deletedBlockKey{blockID: tailFirstBlock, tableID: ctblID}], 2)
 	require.Len(t, failFS.persistedSnapshot(), objCount, "memory refusal must precede dirty replacement persistence")
 
 	// The pinned bound: every per-object reservation a replacement's
@@ -6113,7 +6113,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	// them; wiping them resurrects the deleted rows.
 	require.Equal(t, 1, txn.deletedBlocks.size(),
 		"the refused compaction keeps the dirty object's pending deletions")
-	require.Len(t, txn.deletedBlocks.offsets[tailFirstBlock], 2,
+	require.Len(t, txn.deletedBlocks.offsets[deletedBlockKey{blockID: tailFirstBlock, tableID: ctblID}], 2,
 		"both marked offsets survive the refused pass")
 
 	// The original metadata batch is byte-identical - its release is
@@ -6657,9 +6657,9 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 			"round %d: the original metadata batch is byte-identical", round)
 		require.Equal(t, 2, txn.deletedBlocks.size(),
 			"round %d: both dirty objects' pending deletions stay for the retry", round)
-		require.Len(t, txn.deletedBlocks.offsets[headFirstBlock], 2,
+		require.Len(t, txn.deletedBlocks.offsets[deletedBlockKey{blockID: headFirstBlock, tableID: ctblID}], 2,
 			"round %d: the head object's marks stay exact", round)
-		require.Len(t, txn.deletedBlocks.offsets[tailFirstBlock], 2,
+		require.Len(t, txn.deletedBlocks.offsets[deletedBlockKey{blockID: tailFirstBlock, tableID: ctblID}], 2,
 			"round %d: the tail object's marks stay exact", round)
 		issue25590AssertLiveMapSize(t, txn, objCount,
 			"round %d: the staged record's admission retracted - only the dump's objects stay recorded", round)
@@ -8973,7 +8973,7 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 		require.Equal(t, 1, txn.deletedBlocks.size(),
 			"the full delete marks the object's single block")
-		require.Len(t, txn.deletedBlocks.offsets[block], rows,
+		require.Len(t, txn.deletedBlocks.offsets[deletedBlockKey{blockID: block, tableID: ctblID}], rows,
 			"the object's every row is a pending deletion")
 		txn.EndStatement()
 	}
