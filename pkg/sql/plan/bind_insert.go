@@ -85,7 +85,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmtWithCTEReuse(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false, len(stmt.OnDuplicateUpdate) == 0 && !stmt.HasReturning())
 	if err != nil {
 		return 0, err
 	}
@@ -3101,6 +3101,10 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 }
 
 func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, error) {
+	return builder.initInsertReplaceStmtWithCTEReuse(bindCtx, astRows, astCols, objRef, tableDef, isReplace, colRefAsDefault, false)
+}
+
+func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool, shareScalarSource bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -3182,6 +3186,13 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 
 	default:
 		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+	}
+
+	// CTAS executes an ordinary INSERT SELECT, not the top-level SELECT
+	// optimizer. Share only the proven scalar source before adding target
+	// conversions, defaults, deduplication or write nodes.
+	if astSelect != nil && shareScalarSource {
+		lastNodeID = builder.reuseCTEs(lastNodeID, true)
 	}
 
 	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
