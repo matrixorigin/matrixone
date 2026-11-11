@@ -162,6 +162,7 @@ func main() {
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
 		runner.mergeOnReadDeleteCase,
+		runner.appendBudgetRowsCase,
 	}
 	failed := false
 	for _, fn := range cases {
@@ -1048,6 +1049,28 @@ func (r *caseRunner) emptyStringReadCase(ctx context.Context) caseResult {
 		return failedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, "empty string read result mismatch")
 	}
 	return passedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, nil)
+}
+
+// appendBudgetRowsCase keeps the payload wide enough to exercise file rotation
+// when the service uses a small DML budget. A default-budget run is a control.
+func (r *caseRunner) appendBudgetRowsCase(ctx context.Context) caseResult {
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
+	sqls := []string{
+		fmt.Sprintf("INSERT INTO %s SELECT 1000 + result, 1, result, repeat('x', 32768) FROM generate_series(1, 128) g", table),
+		fmt.Sprintf("SELECT count(*), count(distinct order_id), sum(amount), sum(length(region)), sum(region != repeat('x', 32768)) FROM %s WHERE order_id BETWEEN 1001 AND 1128", table),
+	}
+	expected := []string{"128\t128\t8256\t4194304\t0"}
+	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, nil, err.Error())
+	}
+	actual, err := queryLines(ctx, r.db, sqls[1])
+	if err != nil {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, err.Error())
+	}
+	if !sameLines(expected, actual) {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, "append rows mismatch")
+	}
+	return passedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, nil)
 }
 
 func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {
