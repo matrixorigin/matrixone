@@ -62,6 +62,44 @@ func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+// TestHashJoinBuildPropagatesCancellationIdentity pins the consumer-side half
+// of the JoinMap build-error contract.  A build that only observed its
+// pipeline cancel must stay cancellation-shaped at the probe operator so scope
+// aggregation can recover the causal execution error (for example a foreign-key
+// constraint failure) instead of reporting the cleanup fallout.
+func TestHashJoinBuildPropagatesCancellationIdentity(t *testing.T) {
+	tc := newMarkSpillTestCase(t)
+	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	require.NoError(t, probe.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	message.SendJoinMapResult(
+		message.NewJoinMapBuildErrorResult(context.Canceled),
+		tc.arg.JoinMapTag,
+		tc.arg.IsShuffle,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+	)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrInternal),
+		"canceled build must not surface as a substantive internal error")
+	require.Nil(t, result.Batch)
+	require.Zero(t, probe.calls.Load(), "a canceled build must not emit probe rows")
+
+	tc.arg.Reset(tc.proc, true, err)
+	probe.Reset(tc.proc, true, err)
+	tc.arg.Free(tc.proc, true, err)
+	probe.Free(tc.proc, true, err)
+	tc.barg.Free(tc.proc, true, err)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 // TestHashMarkJoinWaitForBuildHonorsCancellation verifies the unhappy path in
 // which the build never publishes a terminal JoinMap. Cancellation must abort
 // the dependency wait without reading or emitting any probe row.
