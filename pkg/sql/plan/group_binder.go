@@ -70,9 +70,13 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		b.ctx.groups = append(b.ctx.groups, expr)
 	}
 
-	if b.ctx.isGroupingSet {
+	if isRoot && b.ctx.isGroupingSet {
+		// Only the complete grouping expression belongs to this set. Its
+		// recursive operands need not be keys, nor does a miss mean key zero.
 		astStr := tree.String(astExpr, dialect.MYSQL)
-		b.ctx.groupingFlag[b.ctx.groupByAst[astStr]] = true
+		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+			b.ctx.groupingFlag[colPos] = true
+		}
 	}
 
 	return expr, err

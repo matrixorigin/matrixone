@@ -97,4 +97,64 @@ create table nullable_result as select g,h,sum(v) s,grouping(g,h) flag
 from nullable_src group by g,h with rollup;
 select * from nullable_result order by g,h,flag;
 
+-- DISTINCT 属于合并后的 SELECT；不带 DISTINCT 时必须保留显式重复集合。
+select g from src group by grouping sets ((g),(g)) order by g;
+select distinct g from src group by grouping sets ((g),(g)) order by g;
+create table repeated_keys as select g from src group by grouping sets ((g),(g));
+select * from repeated_keys order by g;
+create table distinct_keys as select distinct g from src group by grouping sets ((g),(g));
+select * from distinct_keys order by g;
+select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+create table distinct_limit as select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+select * from distinct_limit order by g;
+select distinct g from src group by g,h with rollup order by g;
+
+-- 完整的表达式才是分组键，递归操作数不能标记其它键在当前集合出现。
+select g,h+1 hh,sum(v) s from src group by cube(g,h+1) order by g,hh;
+create table expression_cube as select g,h+1 hh,sum(v) s from src group by cube(g,h+1);
+select * from expression_cube order by g,hh;
+select g,h+1 hh,sum(v) s from src group by grouping sets ((g,h+1),(h+1),()) order by g,hh;
+create table expression_sets as select g,h+1 hh,sum(v) s
+from src group by grouping sets ((g,h+1),(h+1),());
+select * from expression_sets order by g,hh;
+select g,abs(h) hh,sum(v) s from src group by cube(g,abs(h)) order by g,hh;
+select g,h+1 hh,sum(v) s from src group by cube(1,2) order by g,hh;
+
+-- 输入主键唯一，不代表缺失该键的小计分支可删除聚合。
+create table pk_src(id int primary key);
+insert into pk_src values(1),(2);
+select id from pk_src group by id order by id;
+select id from pk_src group by id with rollup order by id;
+create table pk_rollup as select id from pk_src group by id with rollup;
+select * from pk_rollup order by id;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_rollup' and column_name='id';
+insert into pk_rollup values(null);
+select count(*) from pk_rollup where id is null;
+select id from pk_src group by cube(id) order by id;
+create table pk_cube as select id from pk_src group by cube(id);
+select * from pk_cube order by id;
+create table pk_ordinary as select id from pk_src group by id;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_ordinary' and column_name='id';
+insert into pk_ordinary values(null);
+
+-- 空分组集合即使没有聚合函数也要执行一次全局分组。
+select 1 k from src group by grouping sets (());
+select 1 k from src group by grouping sets ((),());
+create table constant_empty_sets as select 1 k from src group by grouping sets ((),());
+select * from constant_empty_sets order by k;
+select 1 k from empty_src group by grouping sets (());
+select 1 k from empty_src group by grouping sets ((),());
+create table constant_empty_input as select 1 k from empty_src group by grouping sets ((),());
+select * from constant_empty_input order by k;
+select distinct 1 k from src group by grouping sets ((),());
+create table distinct_empty_sets as select distinct 1 k from empty_src group by grouping sets ((),());
+select * from distinct_empty_sets;
+select 1 k from src order by k;
+select 1 k from empty_src;
+select 1 k from src group by grouping sets (()) having 1=0;
+select 1 k from empty_src group by grouping sets (()) having 1=0;
+select g from src group by grouping sets (());
+
 drop database grouping_ctas_test;

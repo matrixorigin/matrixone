@@ -246,4 +246,186 @@ null  ¦  null  ¦  12  ¦  3  𝄀
 null  ¦  10  ¦  5  ¦  0  𝄀
 1  ¦  null  ¦  7  ¦  0  𝄀
 1  ¦  null  ¦  7  ¦  1
+select g from src group by grouping sets ((g),(g)) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+2
+select distinct g from src group by grouping sets ((g),(g)) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+create table repeated_keys as select g from src group by grouping sets ((g),(g));
+select * from repeated_keys order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+2
+create table distinct_keys as select distinct g from src group by grouping sets ((g),(g));
+select * from distinct_keys order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+create table distinct_limit as select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+select * from distinct_limit order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+select distinct g from src group by g,h with rollup order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select g,h+1 hh,sum(v) s from src group by cube(g,h+1) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+create table expression_cube as select g,h+1 hh,sum(v) s from src group by cube(g,h+1);
+select * from expression_cube order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+select g,h+1 hh,sum(v) s from src group by grouping sets ((g,h+1),(h+1),()) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  11  ¦  9
+create table expression_sets as select g,h+1 hh,sum(v) s
+from src group by grouping sets ((g,h+1),(h+1),());
+select * from expression_sets order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  11  ¦  9
+select g,abs(h) hh,sum(v) s from src group by cube(g,abs(h)) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  10  ¦  14  𝄀
+null  ¦  20  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select g,h+1 hh,sum(v) s from src group by cube(1,2) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+create table pk_src(id int primary key);
+insert into pk_src values(1),(2);
+select id from pk_src group by id order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from pk_src group by id with rollup order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_rollup as select id from pk_src group by id with rollup;
+select * from pk_rollup order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_rollup' and column_name='id';
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  YES
+insert into pk_rollup values(null);
+select count(*) from pk_rollup where id is null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select id from pk_src group by cube(id) order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_cube as select id from pk_src group by cube(id);
+select * from pk_cube order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_ordinary as select id from pk_src group by id;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_ordinary' and column_name='id';
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  NO
+insert into pk_ordinary values(null);
+constraint violation: Column 'id' cannot be null
+select 1 k from src group by grouping sets (());
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+create table constant_empty_sets as select 1 k from src group by grouping sets ((),());
+select * from constant_empty_sets order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select 1 k from empty_src group by grouping sets (());
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from empty_src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+create table constant_empty_input as select 1 k from empty_src group by grouping sets ((),());
+select * from constant_empty_input order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select distinct 1 k from src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1
+create table distinct_empty_sets as select distinct 1 k from empty_src group by grouping sets ((),());
+select * from distinct_empty_sets;
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from src order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+1
+select 1 k from empty_src;
+➤ k[-5,64,0]
+select 1 k from src group by grouping sets (()) having 1=0;
+➤ k[-5,64,0]
+select 1 k from empty_src group by grouping sets (()) having 1=0;
+➤ k[-5,64,0]
+select g from src group by grouping sets (());
+SQL syntax error: column "src.g" must appear in the GROUP BY clause or be used in an aggregate function
 drop database grouping_ctas_test;

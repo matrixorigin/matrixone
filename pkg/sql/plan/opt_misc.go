@@ -844,6 +844,13 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
 		return
 	}
+	for _, present := range node.GroupingFlag {
+		if !present {
+			// A subtotal synthesizes NULL for omitted keys. Replacing it with
+			// the input projection loses both that value and its grouping.
+			return
+		}
+	}
 	scan := builder.qry.Nodes[node.Children[0]]
 	if scan.NodeType != plan.Node_TABLE_SCAN {
 		return
