@@ -24,6 +24,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -504,58 +505,17 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	// Evaluate through the shared string-to-fixed template (the same shape
+	// CeilStr uses): its row loop skips NULL rows instead of falling through
+	// to ParseFloat with an empty value, so mixed nullable batches keep the
+	// NULL results the pre-widening implicitly-cast routes returned.
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
@@ -833,15 +793,74 @@ func TruncateText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 // CeilText executes CEIL's two-argument direct TEXT overload; the
-// one-argument TEXT overload keeps the string parser via CeilStr.
+// one-argument TEXT overload keeps the exact integer domain through
+// CeilTextUnary.
 func CeilText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return textDualDomainMathMulti("ceil", ceilInt64, ceilUint64, ceilTextCrossesInt64Limit, ivecs, result, proc, length, selectList)
 }
 
 // FloorText executes FLOOR's two-argument direct TEXT overload; the
-// one-argument TEXT overload keeps the string parser via FloorStr.
+// one-argument TEXT overload keeps the exact integer domain through
+// FloorTextUnary.
 func FloorText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return textDualDomainMathMulti("floor", floorInt64, floorUint64, nil, ivecs, result, proc, length, selectList)
+}
+
+// dualDomainUnaryMathText evaluates one TEXT row of the single-argument CEIL
+// and FLOOR spellings. The two spellings have no digits argument, so an
+// integer's ceiling and floor are the integer itself: integer strings keep
+// the exact INT64 and UINT64 values the pre-widening UINT64 tie produced
+// (CEIL(CAST('9007199254740993' AS TEXT)) stays 9007199254740993, whose
+// float64 rounding used to return 9007199254740992; magnitudes up to
+// 18446744073709551615 stay exact too), while integer tokens beyond the
+// uint64 domain keep the UINT64 cast argument's out-of-range error instead of
+// a silently rounded float. Anything the integer parsers reject at syntax
+// falls back to the pre-widening string parser (strconv.ParseFloat), keeping
+// the decimal, negative and exponent strings the widened omitted-length
+// CAST/CONVERT-to-CHAR results need (#32336, #32374) with the VARCHAR
+// overload's values and diagnostics. Both integer domains and every float
+// fallback result pack exactly into the scale-0 DECIMAL128(38,0) the one
+// argument TEXT overloads return, whose rendering equals the base's UINT64
+// and INT64 displays; only the decimal-string rows stop showing the FLOAT64
+// display's trailing ".0".
+func dualDomainUnaryMathText(
+	ctx context.Context,
+	v string,
+	fractionalCore func(float64) float64,
+) (types.Decimal128, error) {
+	s := strings.TrimSpace(v)
+	if iv, err := parseSignedCastString(s, 64); err == nil {
+		return types.Decimal128FromInt64(iv), nil
+	}
+	un, uerr := parseUnsignedCastString(s, 64)
+	if uerr == nil {
+		return types.Decimal128{B0_63: un, B64_127: 0}, nil
+	}
+	// Integer tokens that run out of the uint64 domain keep the implicit
+	// TEXT->UINT64 cast argument's error (strToUnsigned) instead of a
+	// silently rounded approximation.
+	if errors.Is(uerr, strconv.ErrRange) {
+		return types.Decimal128{}, moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
+	}
+	f, ferr := strconv.ParseFloat(v, 64)
+	if ferr != nil {
+		return types.Decimal128{}, ferr
+	}
+	return types.Decimal128FromFloat64(fractionalCore(f), 38, 0)
+}
+
+// CeilTextUnary executes CEIL's one-argument direct TEXT overload.
+func CeilTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v string) (types.Decimal128, error) {
+		return dualDomainUnaryMathText(proc.Ctx, v, math.Ceil)
+	}, selectList)
+}
+
+// FloorTextUnary executes FLOOR's one-argument direct TEXT overload.
+func FloorTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v string) (types.Decimal128, error) {
+		return dualDomainUnaryMathText(proc.Ctx, v, math.Floor)
+	}, selectList)
 }
 
 func truncateFloat64(x float64, digits int64) float64 {

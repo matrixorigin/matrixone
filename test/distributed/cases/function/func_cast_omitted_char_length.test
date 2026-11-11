@@ -147,7 +147,10 @@ select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"'
 
 -- CEIL and FLOOR keep the string/numeric parsing semantics for the TEXT cast
 -- results: decimal and negative strings parse as floating-point values on
--- the string overload, for both CAST and CONVERT spellings.
+-- the direct TEXT overloads, for both CAST and CONVERT spellings. The
+-- one-argument overloads carry scale-0 DECIMAL128 (see the exact-integer
+-- section below), so the values render in the integer domain without the
+-- old FLOAT64 display's trailing ".0".
 select ceil(cast('1.2' as char)) as ceil_cast,
        floor(cast('1.2' as char)) as floor_cast,
        ceil(convert('-1.2', char)) as ceil_convert_neg,
@@ -353,3 +356,49 @@ select ceil(cast('-1.2' as text), 0);
 select floor(cast('-1.2' as text), 0);
 select round(cast('99999999999999999999999' as text));
 drop table if exists func_cast_omit_char_ub;
+
+-- [review round] Preserve the exact integer domain of the single-argument
+-- CEIL/FLOOR on TEXT: the FLOAT64 string parser the one-argument overloads
+-- first used parsed through float64, silently returning 9007199254740992
+-- for 9007199254740993 (the FLOOR spelling equally) and shrinking
+-- 18446744073709551615 to 18446744073709552000. The one-argument TEXT
+-- overloads now parse the same dual integer domains as their two-argument
+-- siblings and carry scale-0 DECIMAL128: every integer string keeps the
+-- exact value the base binary's UINT64 tie produced, decimal and negative
+-- strings keep the string parser's values, and base-prefixed or
+-- space-padded integers parse like the implicit cast did.
+select ceil(cast('9007199254740993' as text)) as ceil_2p53p1,
+       floor(cast('9007199254740993' as text)) as floor_2p53p1,
+       ceil(cast('9223372036854775807' as text)) as ceil_imax_1arg,
+       floor(cast('9223372036854775807' as text)) as floor_imax_1arg,
+       ceil(cast('9223372036854775808' as text)) as ceil_upper_1arg,
+       floor(cast('9223372036854775808' as text)) as floor_upper_1arg,
+       ceil(cast('18446744073709551615' as text)) as ceil_umax_1arg,
+       floor(cast('18446744073709551615' as text)) as floor_umax_1arg,
+       ceil(cast('-9223372036854775808' as text)) as ceil_imin_1arg,
+       floor(cast(' 42 ' as text)) as floor_trim_1arg,
+       ceil(cast('0x10' as text)) as ceil_hex_1arg;
+-- the widened omitted-length composition feeds the same direct overload
+select ceil(cast('9007199254740993' as char)) as ceil_comp_2p53p1,
+       floor(convert('9007199254740993', char)) as floor_comp_2p53p1;
+
+-- [review round] Handle the NULL rows of TEXT columns before the string
+-- executor: FLOOR over a mixed nullable TEXT batch used to append the NULL
+-- result and still parse the NULL row's empty value through
+-- strconv.ParseFloat, failing the whole query instead of returning 1 and
+-- NULL like the pre-widening NULL-preserving UINT64 route. NULL rows keep
+-- NULL results and every non-NULL row keeps its own value.
+drop table if exists func_cast_omit_char_unary;
+create table func_cast_omit_char_unary (v text);
+insert into func_cast_omit_char_unary values ('9007199254740993'), (null), ('1'), ('-1.2');
+select ceil(v) from func_cast_omit_char_unary;
+select floor(v) from func_cast_omit_char_unary;
+select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
+
+-- integer tokens beyond the uint64 domain keep the out-of-range error the
+-- base binary's UINT64 cast produced for these rows, instead of a silently
+-- rounded float; non-numeric strings keep the string parser's error.
+select ceil(cast('99999999999999999999999' as text));
+select floor(cast('18446744073709551617' as text));
+select ceil(cast('中文' as text));
+drop table if exists func_cast_omit_char_unary;

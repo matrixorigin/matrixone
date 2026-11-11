@@ -7712,20 +7712,23 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				// TEXT must bind directly: CEIL's UINT64 overload is listed
-				// first, so a by-cast tie from the omitted-length
-				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
-				// otherwise cast TEXT to UINT64, whose strconv.ParseUint
-				// rejects decimals like '1.2' and negative strings. The
-				// string parsing overload preserves the pre-widening
-				// VARCHAR behavior for both spellings.
+				// One-argument CEIL binds TEXT directly with a dual-domain
+				// executor: integer strings keep the exact INT64 and UINT64
+				// values the pre-widening UINT64 tie produced
+				// (CEIL(CAST('9007199254740993' AS TEXT)) and the FLOOR
+				// spelling stay exact instead of silently rounding through
+				// float64), while the decimal, negative and exponent strings
+				// the widened omitted-length CAST/CONVERT-to-CHAR results need
+				// (#32336, #32374) keep the string parser's values through a
+				// float fallback. Scale-0 DECIMAL128 carries both integer
+				// domains exactly and renders like the base's UINT64 route.
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_decimal128.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return CeilStr
+					return CeilTextUnary
 				},
 			},
 			{
@@ -7978,19 +7981,22 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				// TEXT must bind directly: FLOOR's UINT64 overload is listed
-				// first, so a by-cast tie from the omitted-length
-				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
-				// otherwise cast TEXT to UINT64, rejecting decimals like
-				// '-1.2'. The string parsing overload preserves the
-				// pre-widening VARCHAR behavior for both spellings.
+				// One-argument FLOOR binds TEXT directly with a dual-domain
+				// executor: integer strings keep the exact INT64 and UINT64
+				// values the pre-widening UINT64 tie produced, while the
+				// decimal, negative and exponent strings the widened
+				// omitted-length CAST/CONVERT-to-CHAR results need
+				// (#32336, #32374) keep the string parser's values through a
+				// float fallback, and NULL rows keep NULL results. Scale-0
+				// DECIMAL128 carries both integer domains exactly and
+				// renders like the base's UINT64 route.
 				overloadId: 13,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_decimal128.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return FloorStr
+					return FloorTextUnary
 				},
 			},
 			{

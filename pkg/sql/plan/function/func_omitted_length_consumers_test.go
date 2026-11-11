@@ -32,49 +32,216 @@ import (
 // the TEXT results bind the string overloads DIRECTLY (no inserted implicit
 // narrowing cast) and keep executing the string parsing paths.
 
-// TestCeilFloorTextKeepStringNumericParsing covers the CEIL/FLOOR regression:
-// with the TEXT target tied into CEIL's UINT64 overload, strconv.ParseUint
-// rejected decimal and negative strings like '1.2' and '-1.2'.
+// TestCeilFloorTextKeepStringNumericParsing covers the one-argument CEIL and
+// FLOOR TEXT overloads end to end: decimal, negative and exponent strings
+// keep the pre-widening string-parser values the widening restored (review
+// round: '1.2' and '-1.2' parse again instead of the UINT64 cast rejecting
+// them), integer strings keep the exact INT64 and UINT64 values the
+// pre-widening UINT64 tie produced (review round: the FLOAT64 parser
+// silently rounded 9007199254740993 down to 9007199254740992 and constricted
+// the accepted unsigned domain), and NULL rows keep NULL results instead of
+// failing the whole query (review round: FLOOR over a mixed nullable TEXT
+// batch appended the NULL result and still parsed the NULL row's empty
+// value through strconv.ParseFloat).
 func TestCeilFloorTextKeepStringNumericParsing(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
+	parseDecs := func(vals []string) []types.Decimal128 {
+		out := make([]types.Decimal128, len(vals))
+		for i, v := range vals {
+			d, err := types.ParseDecimal128(v, 38, 0)
+			require.NoError(t, err, "test fixture %q must parse", v)
+			out[i] = d
+		}
+		return out
+	}
+
+	// The one-argument TEXT overload must bind directly: a by-cast match
+	// would restore the UINT64 (or other first-overload) selection, whose
+	// parser rejects decimal and negative strings.
+	for _, name := range []string{"ceil", "floor"} {
+		get, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_text.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_decimal128, get.GetReturnType().Oid,
+			"%s(text) must keep the exact dual-domain return", name)
+		_, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.False(t, shouldCast,
+			"%s(text) must bind the direct TEXT overload, not by a narrowing cast", name)
+	}
+
+	// Row-level checks of the registered one-argument TEXT executors: each
+	// row batch mixes decimal strings, the exact-integer controls that used
+	// to round through float64, the pre-widening UINT64 tie's upper range,
+	// base-prefixed tokens, whitespace and a NULL row.
 	for _, tc := range []struct {
-		name   string
-		inputs []string
-		expect []float64
-		op     fEvalFn
+		name    string
+		op      fEvalFn
+		inputs  []string
+		nullIn  []bool
+		expects []string
 	}{
 		{
-			name:   "ceil",
-			inputs: []string{"1.2", "-1.2", "2.5", "2"},
-			expect: []float64{2, -1, 3, 2},
-			op:     CeilStr,
+			name: "ceil",
+			op:   CeilTextUnary,
+			inputs: []string{
+				"1.2", "-1.2", "2.5", "2", "9007199254740993",
+				"9223372036854775807", "9223372036854775808", "18446744073709551615",
+				"-9223372036854775808", " 42 ", "0x10", "1e2", "",
+			},
+			nullIn: []bool{false, false, false, false, false, false, false, false,
+				false, false, false, false, true},
+			expects: []string{
+				"2", "-1", "3", "2", "9007199254740993",
+				"9223372036854775807", "9223372036854775808", "18446744073709551615",
+				"-9223372036854775808", "42", "16", "100", "0",
+			},
 		},
 		{
-			name:   "floor",
-			inputs: []string{"1.2", "-1.2", "2.5", "2"},
-			expect: []float64{1, -2, 2, 2},
-			op:     FloorStr,
+			name: "floor",
+			op:   FloorTextUnary,
+			inputs: []string{
+				"1.2", "-1.2", "2.5", "2", "9007199254740993",
+				"9223372036854775807", "9223372036854775808", "18446744073709551615",
+				"-9223372036854775808", " 42 ", "0x10", "1e2", "",
+			},
+			nullIn: []bool{false, false, false, false, false, false, false, false,
+				false, false, false, false, true},
+			expects: []string{
+				"1", "-2", "2", "2", "9007199254740993",
+				"9223372036854775807", "9223372036854775808", "18446744073709551615",
+				"-9223372036854775808", "42", "16", "100", "0",
+			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The TEXT overload must bind directly: a by-cast match would
-			// restore the UINT64 (or other first-overload) selection.
-			get, err := GetFunctionByName(proc.Ctx, tc.name, []types.Type{types.T_text.ToType()})
-			require.NoError(t, err)
-			require.Equal(t, types.T_float64, get.GetReturnType().Oid)
-			_, shouldCast := get.ShouldDoImplicitTypeCast()
-			require.False(t, shouldCast,
-				"%s(text) must bind the string overload directly, not by a narrowing cast", tc.name)
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), tc.inputs, tc.nullIn)},
+				NewFunctionTestResult(types.T_decimal128.ToType(), false,
+					parseDecs(tc.expects), tc.nullIn),
+				tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s text rows', err info is '%s'", tc.name, info))
+		})
+	}
 
+	// The mixed nullable TEXT batch the review reproduced: FLOOR over
+	// ('1'), (NULL) used to fail the whole query through the NULL parsing
+	// defect. Every row must keep its own result.
+	for _, tc := range []struct {
+		name   string
+		op     fEvalFn
+		expect string
+	}{
+		{"ceil", CeilTextUnary, "1"},
+		{"floor", FloorTextUnary, "1"},
+	} {
+		t.Run(tc.name+"/mixed-null-batch", func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"1", "", "9007199254740993"},
+					[]bool{false, true, false})},
+				NewFunctionTestResult(types.T_decimal128.ToType(), false,
+					parseDecs([]string{tc.expect, "0", "9007199254740993"}),
+					[]bool{false, true, false}),
+				tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s mixed nullable', err info is '%s'", tc.name, info))
+		})
+	}
+
+	// Rows the integer parsers reject at syntax or range keep working or
+	// fail as the contract says: non-numeric strings keep the string
+	// parser's error, integer tokens beyond the uint64 domain keep the
+	// UINT64 cast argument's out-of-range error instead of a silently
+	// rounded float, and float fallbacks that exceed the DECIMAL128(38,0)
+	// result range keep the float-to-decimal conversion error.
+	for _, tc := range []struct {
+		name   string
+		op     fEvalFn
+		inputs []string
+	}{
+		{"ceil-not-numeric", CeilTextUnary, []string{"中文"}},
+		{"floor-not-numeric", FloorTextUnary, []string{"ab"}},
+		{"ceil-above-uint64", CeilTextUnary, []string{"18446744073709551617"}},
+		{"floor-above-uint64", FloorTextUnary, []string{"99999999999999999999999"}},
+		{"ceil-float-above-decimal128", CeilTextUnary, []string{"1e300"}},
+		{"floor-float-above-decimal128", FloorTextUnary, []string{"-1e300"}},
+	} {
+		t.Run("reject-"+tc.name, func(t *testing.T) {
 			nulls := make([]bool, len(tc.inputs))
 			fcTC := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), tc.inputs, nulls)},
+				NewFunctionTestResult(types.T_decimal128.ToType(), true,
+					parseDecs([]string{"0"}), nulls),
+				tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is 'reject %s', err info is '%s'", tc.name, info))
+		})
+	}
+
+	// The VARCHAR one-argument spellings keep their own string parsers and
+	// the FLOAT64 return, and their executors must skip the NULL rows of
+	// mixed batches the same way: FloorStr's hand-rolled row loop used to
+	// append the NULL result and still parse the NULL row's empty value,
+	// failing the whole query.
+	for _, tc := range []struct {
+		name   string
+		op     fEvalFn
+		inputs []string
+		nullIn []bool
+		expect []float64
+	}{
+		{
+			name:   "ceil-varchar",
+			op:     CeilStr,
+			inputs: []string{"1.2", "-1.2", "2.5", "2"},
+			expect: []float64{2, -1, 3, 2},
+		},
+		{
+			name:   "floor-varchar",
+			op:     FloorStr,
+			inputs: []string{"1.2", "-1.2", "2.5", "2"},
+			expect: []float64{1, -2, 2, 2},
+		},
+		{
+			name:   "ceil-varchar-mixed-nulls",
+			op:     CeilStr,
+			inputs: []string{"1", "", "2.5"},
+			nullIn: []bool{false, true, false},
+			expect: []float64{1, 0, 3},
+		},
+		{
+			name:   "floor-varchar-mixed-nulls",
+			op:     FloorStr,
+			inputs: []string{"1", "", "2.5"},
+			nullIn: []bool{false, true, false},
+			expect: []float64{1, 0, 2},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nulls := tc.nullIn
+			if nulls == nil {
+				nulls = make([]bool, len(tc.inputs))
+			}
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.inputs, nulls)},
 				NewFunctionTestResult(types.T_float64.ToType(), false, tc.expect, nulls),
 				tc.op)
 			s, info := fcTC.Run()
-			require.True(t, s, fmt.Sprintf("case is '%s text', err info is '%s'", tc.name, info))
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.name, info))
 		})
+	}
+
+	// The one-argument VARCHAR overload keeps binding its FLOAT64 string
+	// parser directly: widening must not move it onto the TEXT overloads.
+	for _, name := range []string{"ceil", "floor"} {
+		get, err := GetFunctionByName(proc.Ctx, name,
+			[]types.Type{types.T_varchar.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, get.GetReturnType().Oid,
+			"%s(varchar) must keep the string parser overload", name)
+		_, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.False(t, shouldCast, "%s(varchar) must bind its own overload directly", name)
 	}
 }
 
@@ -864,8 +1031,8 @@ func TestRoundTruncateCeilFloorTextKeepUnsignedUpperRange(t *testing.T) {
 // T_text overload arguments now ignore non-TEXT inputs, so the temporal
 // sources keep the base's bind-time rejection while every bare TEXT input
 // keeps the direct dual-domain overload, and the string-typed sources keep
-// their pre-widening routes (int64 for ROUND/TRUNCATE, the string parser for
-// the one-argument CEIL/FLOOR).
+// their pre-widening routes (int64 for ROUND/TRUNCATE, the exact dual-domain
+// one-argument executors for CEIL/FLOOR).
 func TestRoundFamilyTemporalInputsKeepBindTimeRejection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -935,14 +1102,15 @@ func TestRoundFamilyTemporalInputsKeepBindTimeRejection(t *testing.T) {
 		require.False(t, shouldCast, "%s(text...) must still bind directly", tc.name)
 	}
 
-	// The one-argument CEIL/FLOOR string parsers stay reachable for TEXT and
-	// VARCHAR inputs with the string-parsing FLOAT64 return type.
+	// The one-argument CEIL/FLOOR TEXT overloads keep the dual-domain
+	// executors with the exact-integer DECIMAL128 return; the VARCHAR
+	// spellings keep the string-parsing FLOAT64 return type.
 	for _, name := range []string{"ceil", "floor"} {
 		get, err := GetFunctionByName(proc.Ctx, name,
 			[]types.Type{types.T_text.ToType()})
 		require.NoError(t, err)
-		require.Equal(t, types.T_float64, get.GetReturnType().Oid,
-			"%s(text) must keep the string parser overload", name)
+		require.Equal(t, types.T_decimal128, get.GetReturnType().Oid,
+			"%s(text) must keep the dual-domain exact overload", name)
 
 		get, err = GetFunctionByName(proc.Ctx, name,
 			[]types.Type{types.T_varchar.ToType()})
