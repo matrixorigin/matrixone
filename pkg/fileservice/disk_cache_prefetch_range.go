@@ -20,6 +20,7 @@ import (
 	"math/bits"
 	"os"
 	pathpkg "path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -198,6 +199,9 @@ func (d *DiskCache) prefetchRead(
 		start := windowStart + int64(first)*block
 		end := windowStart + int64(last+1)*block
 		fl := newPrefetchFlight(start, end, now)
+		// The read outlives the read that starts it, not the cache or a delete of the
+		// object.
+		fl.ctx, fl.cancel = context.WithCancel(context.WithoutCancel(ctx))
 		if f.m == nil {
 			f.m = make(map[string][]*prefetchFlight)
 		}
@@ -243,11 +247,9 @@ func (d *DiskCache) prefetchRead(
 	for i, r := range runs {
 		go func(fl *prefetchFlight) {
 			defer f.reads.Done()
-			// The read outlives the read that starts it, not the cache.
-			readCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			defer cancel()
-			defer context.AfterFunc(closing, cancel)()
-			err := fl.read(readCtx, open)
+			defer fl.cancel()
+			defer context.AfterFunc(closing, fl.cancel)()
+			err := fl.read(fl.ctx, open)
 			content := fl.content()
 			if err == nil && len(content) == 0 {
 				err = io.ErrUnexpectedEOF
@@ -329,6 +331,12 @@ type prefetchFlight struct {
 	began      time.Time
 	buf        []byte
 
+	// ctx is the read's; cancel ends it. ended is closed when the flight, and the cache
+	// write of its range, are done.
+	ctx    context.Context
+	cancel context.CancelFunc
+	ended  chan struct{}
+
 	mu       sync.Mutex
 	n        int64         // bytes of buf read
 	finished bool          // no more bytes arrive
@@ -336,7 +344,28 @@ type prefetchFlight struct {
 }
 
 func newPrefetchFlight(start, end int64, now time.Time) *prefetchFlight {
-	return &prefetchFlight{start: start, end: end, began: now, buf: make([]byte, end-start), progress: make(chan struct{})}
+	return &prefetchFlight{start: start, end: end, began: now, buf: make([]byte, end-start),
+		progress: make(chan struct{}), ended: make(chan struct{})}
+}
+
+// dropPrefetches cancels the reads of prefetch ranges of the object at diskPath and
+// waits for them and their cache writes to end, or ctx.
+func (d *DiskCache) dropPrefetches(ctx context.Context, diskPath string) error {
+	f := &d.prefetchFlights
+	f.mu.Lock()
+	flights := slices.Clone(f.m[diskPath])
+	for _, fl := range flights {
+		fl.cancel()
+	}
+	f.mu.Unlock()
+	for _, fl := range flights {
+		select {
+		case <-fl.ended:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // read reads the range through open into buf, chunk by chunk, publishing each chunk,
@@ -500,4 +529,5 @@ func (d *DiskCache) endPrefetch(diskPath string, fl *prefetchFlight) {
 	}
 	f.mu.Unlock()
 	fl.finish()
+	close(fl.ended)
 }

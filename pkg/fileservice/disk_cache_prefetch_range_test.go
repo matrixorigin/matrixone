@@ -528,3 +528,81 @@ func TestCloseCancelsPrefetchRangeReads(t *testing.T) {
 		t.Fatal("close waits for a blocked prefetch range read")
 	}
 }
+
+// stallingStorage serves the first after bytes of the first read, then holds it until
+// its context ends or release is closed.
+type stallingStorage struct {
+	ObjectStorage
+	after    int
+	reads    atomic.Int64
+	stalled  chan struct{}
+	release  chan struct{}
+	canceled atomic.Bool
+}
+
+func (s *stallingStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	r, err := s.ObjectStorage.Read(ctx, key, min, max)
+	if err != nil || s.reads.Add(1) > 1 {
+		return r, err
+	}
+	return &stallingReader{r: r, s: s, ctx: ctx, left: s.after}, nil
+}
+
+type stallingReader struct {
+	r    io.ReadCloser
+	s    *stallingStorage
+	ctx  context.Context
+	left int
+}
+
+func (r *stallingReader) Read(p []byte) (int, error) {
+	if r.left == 0 {
+		r.left = -1
+		close(r.s.stalled)
+		select {
+		case <-r.ctx.Done():
+			r.s.canceled.Store(true)
+			return 0, r.ctx.Err()
+		case <-r.s.release:
+		}
+	}
+	if r.left > 0 && len(p) > r.left {
+		p = p[:r.left]
+	}
+	n, err := r.r.Read(p)
+	if r.left > 0 {
+		r.left -= n
+	}
+	return n, err
+}
+
+func (r *stallingReader) Close() error { return r.r.Close() }
+
+// Deleting an object stops the read of a prefetch range under way before its range is
+// cached: after a delete and recreation, another offset of that range is read from the
+// new object.
+func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 64<<10, 256<<10)
+	ctx := context.Background()
+	storage := &stallingStorage{ObjectStorage: fs.storage, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.storage = storage
+
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, data[100:110], vec.Entries[0].Data)
+	vec.Release()
+	<-storage.stalled
+
+	require.NoError(t, fs.Delete(ctx, "object"))
+	require.True(t, storage.canceled.Load(), "the delete cancels the read under way")
+	close(storage.release)
+	fs.diskCache.prefetchFlights.reads.Wait()
+	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object")))
+
+	recreated := slices.Clone(data)
+	for i := range recreated {
+		recreated[i] ^= 0xff
+	}
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(recreated)), Data: recreated}}, Policy: SkipDiskCache | SkipMemoryCache}))
+	require.Equal(t, recreated[30000:30010], readRangeOf(t, fs, 0, 30000, 10))
+}
