@@ -5583,6 +5583,20 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		}
 	}
 
+	// ON/USING 使用连接前的输入类型；只有上层 binding 输出受到本次 NULL 扩展。
+	// 必须在绑定上层表达式之前更新，否则 MARK 等优化会消费基表的过强证明。
+	// binding.types 可能指向目录或派生投影，替换类型副本而不修改源类型。
+	for childIdx, childCtx := range []*BindContext{leftCtx, rightCtx} {
+		for _, binding := range childCtx.bindings {
+			for i, typ := range binding.types {
+				output := outputTypeAfterNullExtension(node, childIdx, *typ)
+				if output.NotNullable != typ.NotNullable {
+					binding.types[i] = &output
+				}
+			}
+		}
+	}
+
 	return nodeID, nil
 }
 

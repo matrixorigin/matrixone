@@ -892,6 +892,60 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+// 非空证明必须在 MARK 消费之前包含外连接 NULL 扩展，不能等到最终列重映射。
+func TestNotInOuterJoinNullability(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		mark        bool
+	}{
+		{"left null extended fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey) from nation l left join nation r on l.n_nationkey=r.n_nationkey)", true},
+		{"right null extended fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(r.n_regionkey,l.n_nationkey) from nation l right join nation r on l.n_nationkey=r.n_nationkey)", true},
+		{"full join", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey) from nation l full join nation r on l.n_nationkey=r.n_nationkey)", true},
+		{"derived outer join", "select n_nationkey from nation where n_nationkey not in (select coalesce(d.x,d.y) from (select l.n_regionkey x,r.n_nationkey y from nation l left join nation r on l.n_nationkey=r.n_nationkey) d)", true},
+		{"nested outer join", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey) from nation l left join (nation r join nation s on r.n_nationkey=s.n_nationkey) on l.n_nationkey=r.n_nationkey)", true},
+		{"null extended probe", "select l.n_nationkey from nation l left join nation r on l.n_nationkey=r.n_nationkey where coalesce(l.n_regionkey,r.n_nationkey) not in (select n_nationkey from nation)", true},
+		{"inner safe fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey) from nation l join nation r on l.n_nationkey=r.n_nationkey)", false},
+		{"preserved side fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(r.n_regionkey,l.n_nationkey) from nation l left join nation r on l.n_nationkey=r.n_nationkey)", false},
+		{"constant fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey,7) from nation l left join nation r on l.n_nationkey=r.n_nationkey)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["nation"].Cols[2].Typ.NotNullable = false
+			p, err := buildSingleStmt(mock, t, tc.query)
+			require.NoError(t, err)
+			qry := p.GetQuery()
+			require.NotNil(t, qry)
+			var marks, antis int
+			var visit func(int32)
+			visit = func(id int32) {
+				node := qry.Nodes[id]
+				if node.NodeType == plan.Node_JOIN {
+					if node.JoinType == plan.Node_MARK {
+						marks++
+					} else if node.JoinType == plan.Node_ANTI {
+						antis++
+					}
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, step := range qry.Steps {
+				visit(step)
+			}
+			if tc.mark {
+				require.Positive(t, marks, "nullable membership must retain three-valued MARK semantics")
+				require.Zero(t, antis)
+			} else {
+				require.Positive(t, antis, "proven non-null membership retains the ANTI optimization")
+				require.Zero(t, marks)
+			}
+			// 同一基表的多个 binding 不能反向修改目录里的 NOT NULL 约束。
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+		})
+	}
+}
+
 // test derived table plan building
 func TestUnionSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)

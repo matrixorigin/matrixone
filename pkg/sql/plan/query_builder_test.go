@@ -1243,6 +1243,42 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestJoinBindingNullExtension(t *testing.T) {
+	for _, tc := range []struct {
+		join                      string
+		leftNonNull, rightNonNull bool
+	}{
+		{"inner join", true, true},
+		{"left join", true, false},
+		{"right join", false, true},
+		{"full join", false, false},
+	} {
+		for _, cond := range []string{"on l.n_nationkey=r.n_nationkey", "using(n_nationkey)"} {
+			t.Run(tc.join+"/"+cond, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+					"select * from nation l "+tc.join+" nation r "+cond, 1)
+				require.NoError(t, err)
+				from := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From
+				id, err := builder.buildFrom(from.Tables, bindCtx, true)
+				require.NoError(t, err)
+				require.Equal(t, tc.leftNonNull, bindCtx.bindingByTable["l"].types[0].NotNullable)
+				require.Equal(t, tc.rightNonNull, bindCtx.bindingByTable["r"].types[0].NotNullable)
+				// 当前连接的 ON/USING 在 NULL 扩展之前比较两个非空输入。
+				on := builder.qry.Nodes[id].OnList
+				require.Len(t, on, 1)
+				require.True(t, on[0].Typ.NotNullable)
+				for _, arg := range on[0].GetF().Args {
+					require.True(t, arg.Typ.NotNullable)
+				}
+				require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			})
+		}
+	}
+}
+
 func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)

@@ -1725,4 +1725,27 @@ select y from nullable_fallback where y not in (select 1/n from conditional_src)
 select y from nullable_fallback where y not in (select 1/n from conditional_src where n<>0) order by y;
 select y from nullable_fallback where y not in (select 1/n from conditional_src where false) order by y;
 select y from nullable_fallback where y not in (select max(n) from conditional_src where false) order by y;
+
+-- 外连接的 NULL 扩展必须在依赖非空性的成员关系优化之前可见。
+create table membership_probe(v int not null);
+create table membership_left(id int not null,x int);
+create table membership_right(id int not null,y int not null);
+insert into membership_probe values(42);
+insert into membership_left values(1,null);
+insert into membership_right values(2,9);
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_right r right join membership_left l on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l full join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(d.x,d.y) from (select l.x,r.y from membership_left l left join membership_right r on l.id=r.id) d);
+select l.id from membership_left l left join membership_right r on l.id=r.id where coalesce(l.x,r.y) not in (select v from membership_probe);
+-- 非空常量或保留侧 fallback 仍能证明非空；INNER 空结果不等于包含 NULL。
+select v from membership_probe where v not in (select coalesce(l.x,r.y,7) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(r.y,l.id) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l inner join membership_right r on l.id=r.id);
+update membership_right set id=1;
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+truncate membership_left;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
 drop database ctas_output_nullability;
