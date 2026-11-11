@@ -27,13 +27,13 @@ permissions:
   contents: read
 
 jobs:
-  cs-ut-smoke:
+  cs-ut-full-canary:
     if: >-
       github.repository == 'matrixorigin/matrixone' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.number == 32524) ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'))
     runs-on: cs-mty-large-7c14g
-    timeout-minutes: 40
+    timeout-minutes: 210
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -54,12 +54,23 @@ jobs:
         with:
           setup-java: true
           go-version-file: "${{ github.workspace }}/go.mod"
-      - name: Configure and run a small race-enabled UT package
+      - name: Prepare Python UDF contract tests
+        if: ${{ hashFiles('pkg/udf/python/worker/requirements.txt') != '' }}
+        timeout-minutes: 10
+        uses: matrixorigin/CI/actions/setup-python-udf@main
+      - name: Run complete x86 UT suite without upstream secrets
         run: |
           set -euo pipefail
           make config
-          make -j2 cgo
-          go test -race -short -timeout 15m ./pkg/container/types
+          make ut UT_CONFIGURED=1 UT_PARALLEL=3 UT_TIMEOUT=40 UT_SHARD=all
+      - name: Upload UT reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs-ut-full-report
+          path: ut-report/
+          if-no-files-found: warn
+          retention-days: 7
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
