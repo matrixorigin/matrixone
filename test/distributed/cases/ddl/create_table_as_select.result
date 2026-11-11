@@ -2692,7 +2692,44 @@ select v from membership_probe where v not in (select coalesce(r.y,l.id) from me
 select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l inner join membership_right r on l.id=r.id);
 ➤ v[4,32,0]  𝄀
 42
+select coalesce(l.x,(select y from membership_right where id=0)) as v from membership_left l;
+➤ v[4,32,0]  𝄀
+null
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) as v from membership_left l;
+➤ v[4,32,0]  𝄀
+null
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0 limit 1)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select count(*) from membership_right having count(*)<0)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select coalesce(l.x,(select y from membership_right where id=0)) as probe from membership_left l) d where d.probe not in (select v from membership_probe);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0),7) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select 7)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from membership_probe where v not in (select coalesce(l.x,cast(exists(select y from membership_right where id=0) as signed)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into membership_right values(3,10);
+select coalesce(l.x,(select y from membership_right)) from membership_left l;
+internal error: scalar subquery returns more than 1 row
+delete from membership_right where id=3;
 update membership_right set id=1;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
 select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
 ➤ v[4,32,0]  𝄀
 9

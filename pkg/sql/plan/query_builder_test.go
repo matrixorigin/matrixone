@@ -1243,6 +1243,40 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestScalarSubqueryBindingNullability(t *testing.T) {
+	for _, tc := range []struct {
+		expr    string
+		nonNull bool
+	}{
+		{"(select r_regionkey from region where r_regionkey=0)", false},
+		{"(select r_regionkey from region limit 1)", false},
+		{"(select r_regionkey from region limit 0)", false},
+		{"(select r_regionkey from region where r_regionkey=l.n_nationkey)", false},
+		{"(select count(*) from region having count(*)<0)", false},
+		{"exists(select r_regionkey from region where r_regionkey=0)", true},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
+			bindCtx := NewBindContext(builder, nil)
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+				"select "+tc.expr+" from nation l", 1)
+			require.NoError(t, err)
+			clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+			_, err = builder.buildFrom(clause.From.Tables, bindCtx, true)
+			require.NoError(t, err)
+			binder := NewProjectionBinder(builder, bindCtx, nil)
+			bindCtx.binder = binder
+			expr, err := binder.BindExpr(clause.Exprs[0].Expr, 0, true)
+			require.NoError(t, err)
+			require.NotNil(t, expr.GetSub())
+			require.Equal(t, tc.nonNull, expr.Typ.NotNullable,
+				"scalar zero-row semantics must be visible before parent binding and optimization")
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+		})
+	}
+}
+
 func TestJoinBindingNullExtension(t *testing.T) {
 	for _, tc := range []struct {
 		join                      string

@@ -1743,7 +1743,23 @@ select l.id from membership_left l left join membership_right r on l.id=r.id whe
 select v from membership_probe where v not in (select coalesce(l.x,r.y,7) from membership_left l left join membership_right r on l.id=r.id);
 select v from membership_probe where v not in (select coalesce(r.y,l.id) from membership_left l left join membership_right r on l.id=r.id);
 select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l inner join membership_right r on l.id=r.id);
+-- 标量子查询的投影非空不代表零行时非空；相关和非相关场景都必须保留 UNKNOWN。
+select coalesce(l.x,(select y from membership_right where id=0)) as v from membership_left l;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0)) from membership_left l);
+select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) as v from membership_left l;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0 limit 1)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select count(*) from membership_right having count(*)<0)) from membership_left l);
+select count(*) from (select coalesce(l.x,(select y from membership_right where id=0)) as probe from membership_left l) d where d.probe not in (select v from membership_probe);
+-- 真实非空 fallback、单行 literal 和 EXISTS 不受零行 scalar 规则影响。
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0),7) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select 7)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,cast(exists(select y from membership_right where id=0) as signed)) from membership_left l);
+insert into membership_right values(3,10);
+select coalesce(l.x,(select y from membership_right)) from membership_left l;
+delete from membership_right where id=3;
 update membership_right set id=1;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
 select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
 select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
 truncate membership_left;

@@ -907,6 +907,14 @@ func TestNotInOuterJoinNullability(t *testing.T) {
 		{"inner safe fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey) from nation l join nation r on l.n_nationkey=r.n_nationkey)", false},
 		{"preserved side fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(r.n_regionkey,l.n_nationkey) from nation l left join nation r on l.n_nationkey=r.n_nationkey)", false},
 		{"constant fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,r.n_nationkey,7) from nation l left join nation r on l.n_nationkey=r.n_nationkey)", false},
+		{"scalar uncorrelated", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select r_regionkey from region where r_regionkey=0)) from nation l)", true},
+		{"scalar correlated", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select r.r_regionkey from region r where r.r_regionkey=l.n_nationkey)) from nation l)", true},
+		{"scalar limit one is not existence", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select r_regionkey from region limit 1)) from nation l)", true},
+		{"scalar aggregate with having", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select count(*) from region having count(*)<0)) from nation l)", true},
+		{"scalar nullable probe", "select d.n_nationkey from (select l.n_nationkey,coalesce(l.n_regionkey,(select r_regionkey from region where r_regionkey=0)) as v from nation l) d where d.v not in (select n_nationkey from nation)", true},
+		{"scalar nested expression", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,abs((select r_regionkey from region where r_regionkey=0))) from nation l)", true},
+		{"scalar safe fallback", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select r_regionkey from region),7) from nation l)", false},
+		{"scalar literal control", "select n_nationkey from nation where n_nationkey not in (select coalesce(l.n_regionkey,(select 7)) from nation l)", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)

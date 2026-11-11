@@ -569,6 +569,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		// 标量子查询零行时返回 NULL，投影非空或至多一行都不能证明结果非空。
+		// 父表达式及后续 MARK 等优化必须在绑定阶段就能看到这个契约。
+		returnExpr.Typ.NotNullable = false
 	}
 
 	return returnExpr, nil
