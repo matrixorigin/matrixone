@@ -1656,7 +1656,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 
 	if !gs.canServeCatalogForAccount(key.AccId) {
 		logutil.Infof("skip stats refresh before catalog ready, key=%v", key)
-		return nil
+		return nil, moerr.NewInternalErrorNoCtxf("catalog is not ready for account %d", key.AccId)
 	}
 
 	// Get table definition

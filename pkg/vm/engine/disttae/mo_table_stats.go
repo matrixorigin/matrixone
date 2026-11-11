@@ -1705,10 +1705,18 @@ func buildTablePairsFromCache(
 		key := [2]uint64{accs[i], dbs[i]}
 		groups[key] = append(groups[key], i)
 	}
-	cc := eng.(*Engine).GetLatestCatalogCache()
+	distEng := eng.(*Engine)
+	cc := distEng.GetLatestCatalogCache()
 	ts := snapshot.ToTimestamp()
+	lazyCatalogEnabled := distEng.pClient.lazyCatalog != nil && distEng.pClient.lazyCatalog.isEnabled()
+	if lazyCatalogEnabled && !cc.CanServe(snapshot) {
+		return nil
+	}
 	items := make([]*cache.TableItem, len(tbls))
 	for key, indices := range groups {
+		if lazyCatalogEnabled && !distEng.pClient.CanServeAccount(uint32(key[0]), ts) {
+			continue
+		}
 		if len(indices) == 1 {
 			i := indices[0]
 			items[i] = cc.GetTableByIdAndTime(uint32(key[0]), key[1], tbls[i], ts)

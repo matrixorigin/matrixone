@@ -436,6 +436,7 @@ func TestSession(t *testing.T) {
 
 	/* ---- 8.5 send activate-account response ---- */
 	{
+		activeBefore := ss.Active()
 		target := mockTimestamp(4, 0)
 		err = ss.SendActivateAccountForCatalogResponse(
 			context.Background(),
@@ -450,7 +451,7 @@ func TestSession(t *testing.T) {
 			nil,
 		)
 		require.NoError(t, err)
-		require.Equal(t, 0, ss.Active())
+		require.Equal(t, activeBefore, ss.Active())
 	}
 
 	/* ---- 9. publish update response ---- */

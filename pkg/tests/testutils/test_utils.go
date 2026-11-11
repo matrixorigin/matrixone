@@ -444,7 +444,9 @@ func DBExistsWithAccountE(
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	require.NoError(t, activateTenantCatalogIfNeeded(ctx, cn, account))
+	if err := activateTenantCatalogIfNeeded(ctx, cn, account); err != nil {
+		return false, err
+	}
 	res, err := exec.Exec(
 		ctx,
 		"show databases",
@@ -499,7 +501,9 @@ func TableExistsWithAccountE(
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	require.NoError(t, activateTenantCatalogIfNeeded(ctx, cn, account))
+	if err := activateTenantCatalogIfNeeded(ctx, cn, account); err != nil {
+		return false, err
+	}
 	res, err := exec.Exec(
 		ctx,
 		"show tables",

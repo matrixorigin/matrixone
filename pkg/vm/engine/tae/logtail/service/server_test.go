@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -444,6 +445,11 @@ func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	return timestamp.Timestamp{}, timestamp.Timestamp{}
 }
 
+func (m *tableLogtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	_, ts := m.Now()
+	return ts, nil
+}
+
 func (m *tableLogtailer) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, []func(), error) {
@@ -644,6 +650,7 @@ func TestPullActivationPhase1FiltersRowsBeforeEnqueue(t *testing.T) {
 			},
 		}},
 		waterline:          NewWaterliner(),
+		rootCtx:            context.Background(),
 		activationTailChan: make(chan *catalogActivationPhase1, 1),
 		pullWorkerPool:     make(chan struct{}, 1),
 	}
@@ -677,31 +684,36 @@ func TestPullActivationPhase1FiltersRowsBeforeEnqueue(t *testing.T) {
 func newActivationQueueTestServer(t *testing.T, queueCap int) (*LogtailServer, morpcStream, *Session) {
 	t.Helper()
 
-	cfg := options.NewDefaultLogtailServerCfg()
-	server := &LogtailServer{
-		logger:            mockMOLogger(),
-		cfg:               cfg,
-		ssmgr:             NewSessionManager(),
-		rootCtx:           context.Background(),
-		activationReqChan: make(chan catalogActivation, queueCap),
-	}
-	server.pool.responses = NewLogtailResponsePool()
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
+	server.activationReqChan = make(chan catalogActivation, queueCap)
 
 	stream := mockMorpcStream(&normalStream{}, 1, 1024)
-	session := server.ssmgr.GetSession(
-		server.rootCtx,
-		server.logger,
-		server.pool.responses,
-		server,
-		stream,
-		server.cfg.ResponseSendTimeout,
-		server.cfg.RPCStreamPoisonTime,
-		server.cfg.LogtailCollectInterval,
-	)
+	session, err := server.getSession(stream)
+	require.NoError(t, err)
+	t.Cleanup(session.PostClean)
 	require.NoError(t, session.configureLazyCatalogSubscription(&logtail.SubscribeRequest{
 		Table:                 &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 		LazyCatalog:           true,
 		InitialActiveAccounts: []uint32{0},
 	}))
 	return server, stream, session
+}
+
+func TestLogtailServerCloseDrainsCatalogActivation(t *testing.T) {
+	server, stream, session := newActivationQueueTestServer(t, 1)
+	require.NoError(t, server.onActivateAccountForCatalog(t.Context(), stream,
+		&logtail.ActivateAccountForCatalogRequest{AccountId: 10, Seq: 1}))
+	require.True(t, session.beginLazyCatalogActivation(20, 2))
+	var released atomic.Int32
+	phase := &catalogActivationPhase1{
+		activation: catalogActivation{accountID: 20, seq: 2, session: session},
+	}
+	phase.closeCBs[0] = func() { released.Add(1) }
+	server.activationTailChan <- phase
+
+	require.NoError(t, server.Close())
+	require.Empty(t, server.activationReqChan)
+	require.Empty(t, server.activationTailChan)
+	require.Empty(t, session.lazyCatalog.activatingSeqByAccount)
+	require.Equal(t, int32(1), released.Load())
 }

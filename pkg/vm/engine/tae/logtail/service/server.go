@@ -574,13 +574,10 @@ func (s *LogtailServer) getSession(stream morpcStream) (*Session, error) {
 func (s *LogtailServer) onActivateAccountForCatalog(
 	ctx context.Context, stream morpcStream, req *logtail.ActivateAccountForCatalogRequest,
 ) error {
-	logger := s.logger
-	session := s.ssmgr.GetSession(
-		s.rootCtx, logger, s.pool.responses, s, stream,
-		s.cfg.ResponseSendTimeout,
-		s.cfg.RPCStreamPoisonTime,
-		s.cfg.LogtailCollectInterval,
-	)
+	session, err := s.getSession(stream)
+	if err != nil {
+		return err
+	}
 
 	accountID := req.GetAccountId()
 	seq := req.GetSeq()
@@ -596,6 +593,12 @@ func (s *LogtailServer) onActivateAccountForCatalog(
 		session:   session,
 	}
 
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	if err := s.rootCtx.Err(); err != nil {
+		session.abortLazyCatalogActivation(accountID, seq)
+		return err
+	}
 	select {
 	case <-s.rootCtx.Done():
 		session.abortLazyCatalogActivation(accountID, seq)
@@ -603,6 +606,9 @@ func (s *LogtailServer) onActivateAccountForCatalog(
 	case <-ctx.Done():
 		session.abortLazyCatalogActivation(accountID, seq)
 		return moerr.AttachCause(ctx, ctx.Err())
+	case <-session.sessionCtx.Done():
+		session.abortLazyCatalogActivation(accountID, seq)
+		return context.Cause(session.sessionCtx)
 	case s.activationReqChan <- act:
 		return nil
 	}
@@ -792,7 +798,15 @@ func (s *LogtailServer) activationPullWorker(ctx context.Context) {
 // pullActivationPhase1 concurrently pulls historical row-level delta for all
 // three catalog tables and sends the combined result to activationTailChan.
 func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogActivation) {
-	s.pullWorkerPool <- struct{}{}
+	select {
+	case s.pullWorkerPool <- struct{}{}:
+	case <-ctx.Done():
+		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+		return
+	case <-act.session.sessionCtx.Done():
+		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+		return
+	}
 	defer func() { <-s.pullWorkerPool }()
 
 	s.logger.Info("activation phase1 start",
@@ -856,14 +870,22 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 	}
 
 	for {
+		s.lifecycleMu.RLock()
+		if s.rootCtx.Err() != nil || ctx.Err() != nil || act.session.sessionCtx.Err() != nil {
+			s.lifecycleMu.RUnlock()
+			return
+		}
 		select {
 		case <-ctx.Done():
+			s.lifecycleMu.RUnlock()
 			s.logger.Error("context done during activation phase1 enqueue", zap.Error(ctx.Err()))
 			return
 		case s.activationTailChan <- &result:
 			enqueued = true
+			s.lifecycleMu.RUnlock()
 			return
 		default:
+			s.lifecycleMu.RUnlock()
 			s.logger.Warn("activation tail chan full, retrying")
 			time.Sleep(time.Second)
 		}
@@ -1281,6 +1303,7 @@ func (s *LogtailServer) Close() error {
 	// held. Drain every phase-1
 	// batch left behind by a stopped sender before returning ownership.
 	s.drainPhase1Tails()
+	s.drainCatalogActivations()
 	s.lifecycleMu.Unlock()
 	s.clearPendingSessionErrors()
 	// The sender has stopped, so no queued event can still transfer its batch
@@ -1307,6 +1330,21 @@ func (s *LogtailServer) drainPhase1Tails() {
 		select {
 		case tail := <-s.subTailChan:
 			releaseLogtailPhase(tail)
+		default:
+			return
+		}
+	}
+}
+
+func (s *LogtailServer) drainCatalogActivations() {
+	for {
+		select {
+		case act := <-s.activationReqChan:
+			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+		case phase := <-s.activationTailChan:
+			phase.closeAll()
+			act := phase.activation
+			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
 		default:
 			return
 		}
