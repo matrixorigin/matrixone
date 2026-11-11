@@ -39,6 +39,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from ._driver_params import single_driver_parameters
 from ._telemetry import observe, pool_wait
 from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .restore import AsyncRestoreManager
@@ -1303,7 +1304,9 @@ class AsyncClient(BaseMatrixOneClient):
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
                             result = await conn.exec_driver_sql(
-                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                                escaped_sql,
+                                single_driver_parameters(params),
+                                execution_options={'no_parameters': params is None},
                             )
                         else:
                             result = await conn.exec_driver_sql(escaped_sql)
