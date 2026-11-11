@@ -720,3 +720,18 @@ gather is unnecessary, not its full latency cost. All normal all-query/resource
 gates stay open, including copy-coverage gaps. Requalify locally with the existing
 six-suite one-process/arm protocol and preserve all C/D content and old evidence.
 Keep changes unpushed and the PR draft until acceptance is complete.
+
+
+### SUBSTRING activation finding — 2026-11-12
+
+The approved leaf admission was implemented as04b83286d0 and locally tested.
+Full-path r42 counters, including memo-aware scope events and direct kernel
+input classes, show Q22 still executes402 flat SUBSTRING calls over2,927,528rows
+per warm suite, with zero selected/scoped calls in both arms. The r40 unit
+control proved a copy was avoidable inside SelectPredicateRows, not that Q22's
+scan reached that entry. readBatch ties Select and the all-columns-early request
+to output dictionary permission, leaving flat-consumer edges on legacy filtering.
+No TPC-H gain may be attributed to this leaf admission alone. A separate local
+owned-output-reader-selection-design.md proposes reusing internal scoped filtering
+while requiring owned publication; it is not implemented or approved yet.
+The r41 all-query/resource gate remains blocked. All C/D designs are preserved.
