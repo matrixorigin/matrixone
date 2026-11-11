@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -360,6 +361,21 @@ func predicateBorrowsInputs(executor ExpressionExecutor) bool {
 			// during Eval. The RHS must remain outside the selected row domain.
 			if e.fixedMembershipList() == nil {
 				return false
+			}
+		case function.SUBSTRING:
+			// The CHAR/VARCHAR kernels read through wrappers and copy their
+			// result bytes. Initially admit only literal-style integer bounds;
+			// other overloads and argument executors keep the owned bank.
+			overload := int32(e.overloadID)
+			if overload < 0 || overload > 3 || len(e.parameterExecutor) != 2+int(overload/2) {
+				return false
+			}
+			for _, bound := range e.parameterExecutor[1:] {
+				fixed, ok := bound.(*FixedVectorExpressionExecutor)
+				if !ok || fixed.resultVector == nil || !fixed.resultVector.IsConst() ||
+					fixed.resultVector.GetType().Oid != types.T_int64 || fixed.resultVector.HasGrouping() || fixed.resultVector.IsPreparedJSONComparisonParam() {
+					return false
+				}
 			}
 		default:
 			return false

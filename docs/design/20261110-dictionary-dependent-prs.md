@@ -696,3 +696,27 @@ warnings, scalar broadcast, representation normalization and NULL reuse. Add no
 public interface, planner/type change, arithmetic kernel, cache, literal pool or
 new ownership mechanism. C/D designs and all local all-query/resource acceptance
 requirements remain intact; the current PR stays unpushed until accepted.
+
+
+### Approved scoped SUBSTRING predicate admission — 2026-11-12
+
+The requester approved local scoped-substring-predicate-design.md after the
+b703b87e8c validity repair. Admit only the existing CHAR/VARCHAR SUBSTRING
+kernels (overloads0-3), with ordinary fixed scalar int64 offset/length executors,
+to the synchronous predicate borrow allowlist. Keep the existing dictionary
+capability, recursive argument proof and no-reset/no-free requirements. Unknown
+shapes/overloads retain the owned bank. Do not change string kernels, Unicode
+normalization, metadata semantics, public APIs, representation or accounting.
+
+DictionarySelectionScope and the reader's existing IOVector pin own source
+lifetime until End. SUBSTRING appends owned output bytes and metadata; fixed-list
+IN retains no probe alias. Verify actual admission without a phone gather,
+reordered/repeated/NULL domains, inline and area output, Unicode/binary metadata,
+source reset, conservative fallback and capacity refusal/reclamation.
+
+The r39 traces show similar frontend/join-map/shuffle waits in both arms; they
+do not attribute r37's Q22 wall slowdown. The tiny r40 control proves the phone
+gather is unnecessary, not its full latency cost. All normal all-query/resource
+gates stay open, including copy-coverage gaps. Requalify locally with the existing
+six-suite one-process/arm protocol and preserve all C/D content and old evidence.
+Keep changes unpushed and the PR draft until acceptance is complete.
