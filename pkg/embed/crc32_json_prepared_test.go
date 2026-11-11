@@ -89,6 +89,11 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			floor, valid := value.(int64)
 			return ok && valid && floor >= defines.MORPCVersion129
 		}, 90*time.Second, 100*time.Millisecond, "existing result-type authoring admission did not complete")
+		exec(`create table crc32_constant_default(id int primary key,c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))))`)
+		exec("insert into crc32_constant_default(id) values(1)")
+		var constantDefaultCRC uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select c from crc32_constant_default where id=1").Scan(&constantDefaultCRC))
+		require.Equal(t, uint64(4012824821), constantDefaultCRC)
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)
 		exec("insert into generated_crc(id,j) select 2,j from generated_crc where id=1")

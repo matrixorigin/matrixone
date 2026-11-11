@@ -16,6 +16,9 @@ while a newly bound untyped parameter specializes to its actual input domain.
 Internal ALTER COPY and LIKE carry the old bound expressions when replaying
 unchanged definitions. Referenced column types and positions must remain valid;
 a changed expression or incompatible input is not an implicit lossless change.
+An explicitly changed generated expression binds with current semantics and
+COPY rebuilds its values and dependent indexes; it is not presented as
+preserving the old expression.
 Existing folded defaults without source expressions keep their stored values.
 The existing JSON text feature guard keeps new CRC32 JSON default expressions
 visible through ordinary constant folding and catalog serialization.

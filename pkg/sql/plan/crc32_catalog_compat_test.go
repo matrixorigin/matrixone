@@ -391,6 +391,56 @@ func TestCRC32PersistedDDLUsesExistingAdmission(t *testing.T) {
 	}
 }
 
+func TestCRC32JSONMatchesExplicitTextCastAdmission(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := mock.ctxt.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	keys := []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolAuthoringFloor}
+	type savedValue struct {
+		value   any
+		present bool
+	}
+	saved := make(map[string]savedValue, len(keys))
+	for _, key := range keys {
+		value, present := rt.GetGlobalVariables(key)
+		saved[key] = savedValue{value, present}
+	}
+	t.Cleanup(func() {
+		for _, key := range keys {
+			if saved[key].present {
+				rt.SetGlobalVariables(key, saved[key].value)
+			} else if value, present := rt.GetGlobalVariables(key); present {
+				rt.CompareAndDeleteGlobalVariables(key, value)
+			}
+		}
+	})
+	for _, tc := range []struct {
+		name    string
+		version int64
+		allowed bool
+	}{
+		{name: "before existing text contract", version: int64(defines.MORPCVersion106)},
+		{name: "at existing text contract", version: int64(defines.MORPCVersion129), allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range keys {
+				rt.SetGlobalVariables(key, tc.version)
+			}
+			for _, sql := range []string{
+				`create table crc32_direct(j json,c bigint unsigned generated always as (crc32(j)) stored)`,
+				`create table crc32_explicit(j json,c bigint unsigned generated always as (crc32(cast(j as char))) stored)`,
+			} {
+				_, err := runOneStmt(mock, t, sql)
+				if tc.allowed {
+					require.NoError(t, err, sql)
+				} else {
+					require.ErrorContains(t, err, "local catalog admission protocol version 129", sql)
+				}
+			}
+		})
+	}
+}
+
 func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 	for _, sql := range []string{
 		`create table constraint_test.crc32_copy like constraint_test.t_on_update_gen`,

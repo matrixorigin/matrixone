@@ -154,6 +154,8 @@ func TestCRC32JSONWithIndexSearchRetainsExistingGate(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
 	require.NoError(t, validateVectorPartitionDestination(c.proc, p))
+	require.Error(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	require.Error(t, validateRemoteExpressionDestination(c.proc, p, features))
 	client.version = defines.MORPCVersion129
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
