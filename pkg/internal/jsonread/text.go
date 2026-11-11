@@ -53,6 +53,27 @@ func releaseBytes(release func()) {
 	}
 }
 
+// DirectText returns a temporary view for synchronous copying into a result
+// vector, or formats a bounded scalar into the caller's scratch. The view must
+// never escape the sealed reader. A negative limit permits any string length.
+func DirectText(value bytejson.ByteJson, legacyFloat bool, limit int, scratch []byte) ([]byte, bool, error) {
+	if value.Type == bytejson.TpCodeString {
+		text := value.GetString()
+		if limit >= 0 && len(text) > limit {
+			return nil, false, nil
+		}
+		return text, true, nil
+	}
+	text, ok, err := value.AppendUnquotedScalar(scratch, legacyFloat)
+	if err != nil {
+		return nil, false, &conversionError{err: err}
+	}
+	if ok && limit >= 0 && len(text) > limit {
+		return nil, false, nil
+	}
+	return text, ok, nil
+}
+
 // CopyText admits the formatter's temporary storage and an independently
 // owned result before allocating either. The result reservation belongs to
 // the caller; formatting failures are tagged separately from budget errors.

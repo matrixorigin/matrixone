@@ -49,6 +49,7 @@ type cacheJSONReader struct {
 	repeatedRow int
 	admission   vector.JSONReaderMemoryAdmission
 	releaseMeta func()
+	scratch     [128]byte // fixed formatting space, included in handle admission
 }
 
 // IsPrivateJSONCacheReader recognizes only a live private cache-backed owner.
@@ -309,17 +310,25 @@ func (r *cacheJSONReader) loadQueryRow(row int, result *cacheJSONQueryResult) (b
 	if r == nil || result.lease == nil {
 		return bytejson.ByteJson{}, io.ErrClosedPipe
 	}
+	value, isNull, err := r.loadValue(row)
+	result.sqlNull = isNull
+	return value, err
+}
+
+func (r *cacheJSONReader) loadValue(row int) (bytejson.ByteJson, bool, error) {
+	if r == nil || r.column == nil {
+		return bytejson.ByteJson{}, false, io.ErrClosedPipe
+	}
 	if row < 0 || row >= r.length {
-		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("invalid JSON reader query")
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtx("invalid JSON reader query")
 	}
 	physicalRow := r.physicalRow(row)
 	if r.column.IsNull(uint64(physicalRow)) {
-		result.sqlNull = true
-		return bytejson.ByteJson{}, nil
+		return bytejson.ByteJson{}, true, nil
 	}
 	raw := r.column.GetBytesAt(physicalRow)
 	value := bytejson.ByteJson{Type: raw[0], Data: raw[1:]}
-	return value, nil
+	return value, false, nil
 }
 
 func (r *cacheJSONReader) fillQuery(row int, path *bytejson.Path, result *cacheJSONQueryResult) error {
@@ -571,20 +580,18 @@ func (r *cacheJSONReader) QueryText(row int, pathBytes []byte, legacyFloat bool)
 	if r == nil || r.lease == nil {
 		return vector.JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
-	defer result.clearValue()
-	value, err := r.loadQueryRow(row, &result)
+	value, isNull, err := r.loadValue(row)
 	if err != nil {
 		return vector.JSONTextSelection{}, err
 	}
-	if result.sqlNull {
+	if isNull {
 		return vector.JSONTextSelection{InputNull: true}, nil
 	}
 	path, err := bytejson.ParseJsonPath(string(pathBytes))
 	if err != nil {
 		return vector.JSONTextSelection{InvalidPath: true}, err
 	}
-	return queryCacheTextFromValue(value, path, &result, legacyFloat)
+	return r.queryTextFromValue(value, path, legacyFloat)
 }
 
 // QueryTextAtPath accepts an already parsed path and borrows the reader only
@@ -593,12 +600,29 @@ func (r *cacheJSONReader) QueryTextAtPath(row int, path bytejson.Path, legacyFlo
 	if r == nil || r.lease == nil {
 		return vector.JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
-	defer result.clearValue()
-	if err := r.fillQuery(row, &path, &result); err != nil {
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
 		return vector.JSONTextSelection{}, err
 	}
-	return result.selectText(path.IsSimple(), legacyFloat)
+	if isNull {
+		return vector.JSONTextSelection{InputNull: true}, nil
+	}
+	return r.queryTextFromValue(value, path, legacyFloat)
+}
+
+func (r *cacheJSONReader) queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, legacyFloat bool) (vector.JSONTextSelection, error) {
+	release, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
+	if err != nil {
+		return vector.JSONTextSelection{}, err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
+	defer result.clearValue()
+	return queryCacheTextFromValue(value, path, &result, legacyFloat)
 }
 
 func queryCacheTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *cacheJSONQueryResult, legacyFloat bool) (vector.JSONTextSelection, error) {
@@ -610,6 +634,62 @@ func queryCacheTextFromValue(value bytejson.ByteJson, path bytejson.Path, result
 		return vector.JSONTextSelection{}, err
 	}
 	return result.selectText(path.IsSimple(), legacyFloat)
+}
+
+func (r *cacheJSONReader) QueryTextTo(row int, pathBytes []byte, legacyFloat bool, limit int, target *vector.FunctionResult[types.Varlena]) (vector.JSONTextSelection, bool, error) {
+	if r == nil || r.lease == nil {
+		return vector.JSONTextSelection{}, false, io.ErrClosedPipe
+	}
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
+		return vector.JSONTextSelection{}, false, err
+	}
+	if isNull {
+		return vector.JSONTextSelection{InputNull: true}, false, nil
+	}
+	path, err := bytejson.ParseJsonPath(string(pathBytes))
+	if err != nil {
+		return vector.JSONTextSelection{InvalidPath: true}, false, err
+	}
+	return r.queryTextTo(value, path, legacyFloat, limit, target)
+}
+
+func (r *cacheJSONReader) QueryTextAtPathTo(row int, path bytejson.Path, legacyFloat bool, limit int, target *vector.FunctionResult[types.Varlena]) (vector.JSONTextSelection, bool, error) {
+	if r == nil || r.lease == nil {
+		return vector.JSONTextSelection{}, false, io.ErrClosedPipe
+	}
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
+		return vector.JSONTextSelection{}, false, err
+	}
+	if isNull {
+		return vector.JSONTextSelection{InputNull: true}, false, nil
+	}
+	return r.queryTextTo(value, path, legacyFloat, limit, target)
+}
+
+func (r *cacheJSONReader) queryTextTo(value bytejson.ByteJson, path bytejson.Path, legacyFloat bool, limit int, target *vector.FunctionResult[types.Varlena]) (vector.JSONTextSelection, bool, error) {
+	if target != nil && path.IsSimple() {
+		selected, exists, _, err := value.QueryWithMemory(&path, nil)
+		if err != nil {
+			return vector.JSONTextSelection{}, false, err
+		}
+		if !exists {
+			return vector.JSONTextSelection{}, false, nil
+		}
+		if selected.IsNull() {
+			return vector.JSONTextSelection{Exists: true, ValueNull: true}, false, nil
+		}
+		text, direct, formatErr := jsonread.DirectText(selected, legacyFloat, limit, r.scratch[:0])
+		if formatErr != nil {
+			return vector.JSONTextSelection{TextError: true}, false, formatErr
+		}
+		if direct {
+			return vector.JSONTextSelection{}, true, target.AppendBytes(text, false)
+		}
+	}
+	selection, err := r.queryTextFromValue(value, path, legacyFloat)
+	return selection, false, err
 }
 
 // QueryText loads a frozen row and uses the existing path parser and query.

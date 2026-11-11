@@ -40,7 +40,8 @@ var (
 // backing private; exported operations return owned data or opaque results.
 // Consumers own each returned handle and close it exactly once. Implementations
 // must reject malformed documents before publication and preserve backing
-// lifetime for all retained windows and query results.
+// lifetime for all retained windows and query results. Independent readers may
+// be used concurrently; operations on one reader are sequential.
 type JSONReader interface {
 	OpenCursor() (JSONCursor, error)
 	QueryText(int, []byte, bool) (JSONTextSelection, error)
@@ -53,6 +54,14 @@ type JSONReader interface {
 	Query(int, *bytejson.Path) (JSONQueryResult, error)
 	IsNull(int) (bool, error)
 	Close()
+}
+
+// JSONDirectTextReader copies eligible values directly into an accounted
+// function result. Unsupported values fall back to the owned selection.
+// No source bytes escape the reader, and append failures are returned.
+type JSONDirectTextReader interface {
+	QueryTextTo(int, []byte, bool, int, *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error)
+	QueryTextAtPathTo(int, bytejson.Path, bool, int, *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error)
 }
 
 // JSONQueryResult never exposes borrowed bytes. Each result owns an independent
@@ -174,6 +183,7 @@ type jsonReader struct {
 	repeatedRow int
 	admission   JSONReaderMemoryAdmission
 	releaseMeta func()
+	scratch     [128]byte // fixed formatting space, included in handle admission
 }
 
 // IsPrivateJSONReader recognizes this package's live immutable owner without
@@ -552,17 +562,25 @@ func (r *jsonReader) loadQueryRow(row int, result *jsonQueryResult) (bytejson.By
 	if r == nil || result.lease == nil {
 		return bytejson.ByteJson{}, io.ErrClosedPipe
 	}
+	value, isNull, err := r.loadValue(row)
+	result.sqlNull = isNull
+	return value, err
+}
+
+func (r *jsonReader) loadValue(row int) (bytejson.ByteJson, bool, error) {
+	if r == nil || r.column == nil {
+		return bytejson.ByteJson{}, false, io.ErrClosedPipe
+	}
 	if row < 0 || row >= r.length {
-		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("invalid JSON reader query")
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtx("invalid JSON reader query")
 	}
 	physicalRow := r.physicalRow(row)
 	if r.column.IsNull(uint64(physicalRow)) {
-		result.sqlNull = true
-		return bytejson.ByteJson{}, nil
+		return bytejson.ByteJson{}, true, nil
 	}
 	raw := r.column.GetBytesAt(physicalRow)
 	value := bytejson.ByteJson{Type: raw[0], Data: raw[1:]}
-	return value, nil
+	return value, false, nil
 }
 
 func (r *jsonReader) fillQuery(row int, path *bytejson.Path, result *jsonQueryResult) error {
@@ -800,20 +818,18 @@ func (r *jsonReader) QueryText(row int, pathBytes []byte, legacyFloat bool) (JSO
 	if r == nil || r.lease == nil {
 		return JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := jsonQueryResult{lease: r.lease, selection: r.column.allocationAccount, admission: r.admission}
-	defer result.clearValue()
-	value, err := r.loadQueryRow(row, &result)
+	value, isNull, err := r.loadValue(row)
 	if err != nil {
 		return JSONTextSelection{}, err
 	}
-	if result.sqlNull {
+	if isNull {
 		return JSONTextSelection{InputNull: true}, nil
 	}
 	path, err := bytejson.ParseJsonPath(string(pathBytes))
 	if err != nil {
 		return JSONTextSelection{InvalidPath: true}, err
 	}
-	return queryTextFromValue(value, path, &result, legacyFloat)
+	return r.queryTextFromValue(value, path, legacyFloat)
 }
 
 // QueryTextAtPath accepts an already parsed path and borrows the reader only
@@ -822,12 +838,25 @@ func (r *jsonReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bo
 	if r == nil || r.lease == nil {
 		return JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := jsonQueryResult{lease: r.lease, selection: r.column.allocationAccount, admission: r.admission}
-	defer result.clearValue()
-	if err := r.fillQuery(row, &path, &result); err != nil {
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
 		return JSONTextSelection{}, err
 	}
-	return result.selectText(path.IsSimple(), legacyFloat)
+	if isNull {
+		return JSONTextSelection{InputNull: true}, nil
+	}
+	return r.queryTextFromValue(value, path, legacyFloat)
+}
+
+func (r *jsonReader) queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, legacyFloat bool) (JSONTextSelection, error) {
+	release, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderQueryResultSize))
+	if err != nil {
+		return JSONTextSelection{}, err
+	}
+	defer releaseJSONReaderMetadata(release)
+	result := jsonQueryResult{lease: r.lease, selection: r.column.allocationAccount, admission: r.admission}
+	defer result.clearValue()
+	return queryTextFromValue(value, path, &result, legacyFloat)
 }
 
 func queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *jsonQueryResult, legacyFloat bool) (JSONTextSelection, error) {
@@ -839,6 +868,65 @@ func queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *jso
 		return JSONTextSelection{}, err
 	}
 	return result.selectText(path.IsSimple(), legacyFloat)
+}
+
+// QueryTextTo keeps the NULL-before-path ordering of QueryText. Eligible
+// scalars are copied directly into the result; other cases retain the ordinary
+// selection and its independent memory reservation.
+func (r *jsonReader) QueryTextTo(row int, pathBytes []byte, legacyFloat bool, limit int, target *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error) {
+	if r == nil || r.lease == nil {
+		return JSONTextSelection{}, false, io.ErrClosedPipe
+	}
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
+		return JSONTextSelection{}, false, err
+	}
+	if isNull {
+		return JSONTextSelection{InputNull: true}, false, nil
+	}
+	path, err := bytejson.ParseJsonPath(string(pathBytes))
+	if err != nil {
+		return JSONTextSelection{InvalidPath: true}, false, err
+	}
+	return r.queryTextTo(value, path, legacyFloat, limit, target)
+}
+
+func (r *jsonReader) QueryTextAtPathTo(row int, path bytejson.Path, legacyFloat bool, limit int, target *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error) {
+	if r == nil || r.lease == nil {
+		return JSONTextSelection{}, false, io.ErrClosedPipe
+	}
+	value, isNull, err := r.loadValue(row)
+	if err != nil {
+		return JSONTextSelection{}, false, err
+	}
+	if isNull {
+		return JSONTextSelection{InputNull: true}, false, nil
+	}
+	return r.queryTextTo(value, path, legacyFloat, limit, target)
+}
+
+func (r *jsonReader) queryTextTo(value bytejson.ByteJson, path bytejson.Path, legacyFloat bool, limit int, target *FunctionResult[types.Varlena]) (JSONTextSelection, bool, error) {
+	if target != nil && path.IsSimple() {
+		selected, exists, _, err := value.QueryWithMemory(&path, nil)
+		if err != nil {
+			return JSONTextSelection{}, false, err
+		}
+		if !exists {
+			return JSONTextSelection{}, false, nil
+		}
+		if selected.IsNull() {
+			return JSONTextSelection{Exists: true, ValueNull: true}, false, nil
+		}
+		text, direct, formatErr := jsonread.DirectText(selected, legacyFloat, limit, r.scratch[:0])
+		if formatErr != nil {
+			return JSONTextSelection{TextError: true}, false, formatErr
+		}
+		if direct {
+			return JSONTextSelection{}, true, target.AppendBytes(text, false)
+		}
+	}
+	selection, err := r.queryTextFromValue(value, path, legacyFloat)
+	return selection, false, err
 }
 
 // QueryText loads a frozen row and uses the existing path parser and query.

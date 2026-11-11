@@ -101,6 +101,11 @@ the handle after copying into the caller-owned destination. Handle copies share
 one release; none may be used after any copy is closed. Formatting reserves
 temporary storage before conversion, then retains a separate output charge.
 Allocation/admission errors are terminal, not JSON_VALUE conversion errors.
+For a simple path, an eligible string or bounded numeric/literal can instead be
+copied synchronously into the existing accounted function result. Source bytes
+never leave the reader; each reader's fixed scalar-formatting scratch is part
+of its accounted handle. Calls on one reader are sequential; independent
+readers can be used concurrently. Other paths and types use the owned selection.
 
 Memory-only admission obtains memory authority for the existing execution
 generation, not spill authority. Promotion initializes spill capacity on that
