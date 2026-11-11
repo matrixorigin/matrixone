@@ -8,7 +8,11 @@ permissions:
 jobs:
   probe:
     if: github.repository == 'matrixorigin/matrixone' && github.event.pull_request.number == 32557
-    runs-on: cs-mty-large-7c14g
+    strategy:
+      fail-fast: false
+      matrix:
+        site: [mnl2, jed, ruh]
+    runs-on: cs-${{ matrix.site }}-large-7c14g
     timeout-minutes: 5
     steps:
       - name: Probe public object-storage endpoints (no credentials)
