@@ -529,6 +529,7 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
 			SourceID: 2, Name: "created_month", Transform: "month",
 		}}},
+		ParquetOptions:      ParquetOptions{codec: "gzip"},
 		TableLocation:       "s3://warehouse/sales/orders",
 		WriterID:            "stmt-1",
 		TargetFileSizeBytes: 1,
@@ -546,8 +547,13 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		require.NotEmpty(t, factory.objects[file.FilePath])
 		require.True(t, strings.HasPrefix(file.FilePath, "s3://warehouse/sales/orders/data/created_month="))
 		seenPartitions[file.Partition["created_month"].(int32)] = true
-		_, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
+		pf, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
 		require.NoError(t, err)
+		for _, group := range pf.Metadata().RowGroups {
+			for _, column := range group.Columns {
+				require.Equal(t, "GZIP", column.MetaData.Codec.String())
+			}
+		}
 	}
 	require.True(t, seenPartitions[int32((2026-1970)*12+5)])
 	require.True(t, seenPartitions[int32((2026-1970)*12+6)])
@@ -930,4 +936,64 @@ func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
 	require.Error(t, w.WriteBatch(ctx, bat.Attrs, bat))
 	_, err = w.Close(ctx)
 	require.Error(t, err)
+}
+
+type qaFlushSink struct {
+	bytes.Buffer
+	fail    bool
+	cancel  context.CancelFunc
+	aborted bool
+}
+
+func (s *qaFlushSink) Write(p []byte) (int, error) {
+	if s.fail {
+		return 0, io.ErrClosedPipe
+	}
+	n, err := s.Buffer.Write(p)
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	return n, err
+}
+func (s *qaFlushSink) Close() error { return nil }
+func (s *qaFlushSink) Abort() error { s.aborted = true; s.Reset(); return nil }
+
+func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
+	for _, mode := range []string{"failure", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			mp := mpool.MustNewZero()
+			bat := batch.New([]string{"name"})
+			vec := vector.NewVec(types.T_varchar.ToType())
+			// The first row forces a flush; the second observes cancellation after it.
+			require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+			require.NoError(t, vector.AppendBytes(vec, []byte("tail"), false, mp))
+			bat.Vecs[0] = vec
+			bat.SetRowCount(2)
+			defer bat.Clean(mp)
+			sink := &qaFlushSink{fail: mode == "failure"}
+			if mode == "cancel" {
+				sink.cancel = cancel
+			}
+			w, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+				Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}},
+				TableLocation: "s3://warehouse/test", ParquetOptions: ParquetOptions{codec: "uncompressed"},
+			}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
+			require.NoError(t, err)
+			err = w.WriteBatch(ctx, bat.Attrs, bat)
+			require.Error(t, err)
+			if mode == "cancel" {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			require.NoError(t, w.Abort(context.Background()))
+			require.True(t, sink.aborted)
+			require.Empty(t, sink.Bytes())
+			require.Empty(t, w.OrphanPaths())
+			files, err := w.Close(context.Background())
+			require.NoError(t, err)
+			require.Empty(t, files)
+		})
+	}
 }
