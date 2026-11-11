@@ -1,0 +1,310 @@
+drop database if exists composite_unique_in_index;
+create database composite_unique_in_index;
+use composite_unique_in_index;
+create table digits (n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table events (
+id varchar(64) not null, user_id varchar(128) not null,
+run_id varchar(64) not null, session_id varchar(64) not null,
+event_idx bigint not null, event_type varchar(64) not null,
+idempotency_key varchar(128), payload_json text not null,
+primary key (user_id,id),
+unique key uq_user_run_key (user_id,run_id,idempotency_key),
+key idx_session (user_id,session_id,run_id,event_idx),
+key idx_type (user_id,run_id,event_type,event_idx)
+);
+insert into events
+select concat('id',a.n+b.n*10+c.n*100+d.n*1000),
+'target','long-run','session',a.n+b.n*10+c.n*100+d.n*1000,'tool_result',
+case a.n+b.n*10+c.n*100+d.n*1000
+when 1 then 'user_intent:x'
+when 2 then 'user_intent_applied:x'
+when 3 then 'user_intent_returned:x'
+else concat('event:',a.n+b.n*10+c.n*100+d.n*1000) end,
+'{}'
+from digits a cross join digits b cross join digits c cross join digits d
+where a.n+b.n*10+c.n*100+d.n*1000 < 5000;
+select count(*) from events;
+➤ count(*)[-5,64,0]  𝄀
+5000
+explain analyze select payload_json,event_idx,session_id from events
+where user_id='target' and run_id='long-run'
+and idempotency_key='user_intent:x';
+-- @regex("Index Table Scan on events[.]uq_user_run_key", true)
+-- @regex("Table Scan on composite_unique_in_index[.]events[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=1\s+outputRows=1\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=56 bytes OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=56 bytes (min=56 bytes, max=56 bytes)  𝄀
+  ->  Join  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=104 bytes OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=0 bytes, max=24 bytes)  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (events.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on composite_unique_in_index.events [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=1ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=128 bytes OutputSize=80 bytes ReadSize=95.38 KiB|0 bytes|70.64 KiB MemorySize=211 bytes (min=211 bytes, max=211 bytes)  𝄀
+              Filter Cond: prefix_eq(events.__mo_cpkey_col), (events.idempotency_key = 'user_intent:x'), (events.run_id = 'long-run')  𝄀
+              Block Filter Cond: (events.idempotency_key = 'user_intent:x'), (events.user_id = 'target'), (events.run_id = 'long-run'), prefix_eq(events.__mo_cpkey_col)  𝄀
+              Runtime Filter Probe: events.__mo_cpkey_col  𝄀
+        ->  Index Table Scan on events.uq_user_run_key [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=84 bytes OutputSize=24 bytes ReadSize=122.23 KiB|0 bytes|73.49 KiB MemorySize=109 bytes (min=109 bytes, max=109 bytes)  𝄀
+              Filter Cond: (__mo_index_idx_col = 'F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00')  𝄀
+              Block Filter Cond: (__mo_index_idx_col = 'F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00')
+explain analyze select payload_json,event_idx,session_id from events
+where user_id='target' and run_id='long-run' and session_id='session'
+and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x');
+-- @regex("Index Table Scan on events[.]uq_user_run_key", true)
+-- @regex("Table Scan on composite_unique_in_index[.]events[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=3\s+outputRows=3\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=168 bytes OutputSize=168 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=168 bytes (min=168 bytes, max=168 bytes)  𝄀
+  ->  Join  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=3 (min=3, max=3) InputSize=312 bytes OutputSize=168 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72 bytes (min=0 bytes, max=72 bytes)  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (events.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on composite_unique_in_index.events [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=384 bytes OutputSize=240 bytes ReadSize=95.38 KiB|0 bytes|0 bytes MemorySize=636 bytes (min=636 bytes, max=636 bytes)  𝄀
+              Filter Cond: prefix_eq(events.__mo_cpkey_col), events.idempotency_key in ([user_intent:x user_intent_applied:x user_intent_returned:x]), (events.run_id = 'long-run'), (events.session_id = 'session')  𝄀
+              Block Filter Cond: events.idempotency_key in ([user_intent:x user_intent_applied:x user_intent_returned:x]), (events.user_id = 'target'), (events.run_id = 'long-run'), (events.session_id = 'session'), prefix_eq(events.__mo_cpkey_col)  𝄀
+              Runtime Filter Probe: events.__mo_cpkey_col  𝄀
+        ->  Index Table Scan on events.uq_user_run_key [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=269 bytes OutputSize=72 bytes ReadSize=122.23 KiB|0 bytes|0 bytes MemorySize=344 bytes (min=344 bytes, max=344 bytes)  𝄀
+              Filter Cond: __mo_index_idx_col in ([F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_applied:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_returned:x\x00])  𝄀
+              Block Filter Cond: __mo_index_idx_col in ([F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_applied:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_returned:x\x00])
+select event_idx,session_id from events
+where user_id='target' and run_id='long-run' and session_id='session'
+and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x')
+order by event_idx;
+➤ event_idx[-5,64,0]  ¦  session_id[12,-1,0]  𝄀
+1  ¦  session  𝄀
+2  ¦  session  𝄀
+3  ¦  session
+explain analyze select event_idx,session_id,payload_json from events force index(uq_user_run_key)
+where user_id='target' and run_id='long-run' and session_id='session'
+and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x')
+order by event_idx;
+-- @regex("Index Table Scan on events[.]uq_user_run_key", true)
+-- @regex("Table Scan on composite_unique_in_index[.]events[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=3\s+outputRows=3\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=168 bytes OutputSize=168 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=168 bytes (min=168 bytes, max=168 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=168 bytes OutputSize=168 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=336 bytes (min=168 bytes, max=168 bytes)  𝄀
+        Sort Key: events.event_idx INTERNAL  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=3 (min=3, max=3) InputSize=312 bytes OutputSize=168 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72 bytes (min=0 bytes, max=72 bytes)  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (events.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on composite_unique_in_index.events [ForceOneCN]  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=384 bytes OutputSize=240 bytes ReadSize=95.38 KiB|0 bytes|0 bytes MemorySize=636 bytes (min=636 bytes, max=636 bytes)  𝄀
+                    Filter Cond: prefix_eq(events.__mo_cpkey_col), events.idempotency_key in ([user_intent:x user_intent_applied:x user_intent_returned:x]), (events.run_id = 'long-run'), (events.session_id = 'session')  𝄀
+                    Block Filter Cond: events.idempotency_key in ([user_intent:x user_intent_applied:x user_intent_returned:x]), (events.user_id = 'target'), (events.run_id = 'long-run'), (events.session_id = 'session'), prefix_eq(events.__mo_cpkey_col)  𝄀
+                    Runtime Filter Probe: events.__mo_cpkey_col  𝄀
+              ->  Index Table Scan on events.uq_user_run_key [ForceOneCN]  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=269 bytes OutputSize=72 bytes ReadSize=122.23 KiB|0 bytes|0 bytes MemorySize=344 bytes (min=344 bytes, max=344 bytes)  𝄀
+                    Filter Cond: __mo_index_idx_col in ([F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_applied:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_returned:x\x00])  𝄀
+                    Block Filter Cond: __mo_index_idx_col in ([F\x01target\x00F\x01long-run\x00F\x01user_intent:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_applied:x\x00 F\x01target\x00F\x01long-run\x00F\x01user_intent_returned:x\x00])
+select event_idx,session_id from events force index(uq_user_run_key)
+where user_id='target' and run_id='long-run' and session_id='session'
+and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x')
+order by event_idx;
+➤ event_idx[-5,64,0]  ¦  session_id[12,-1,0]  𝄀
+1  ¦  session  𝄀
+2  ¦  session  𝄀
+3  ¦  session
+select event_idx from events
+where user_id='target' and run_id='long-run'
+and idempotency_key in ('user_intent:x','user_intent:x','absent')
+order by event_idx;
+➤ event_idx[-5,64,0]  𝄀
+1
+prepare in_stmt from 'select event_idx from events where user_id=? and run_id=? and idempotency_key in (?,?,?) order by event_idx';
+set @u='target', @r='long-run', @k1='user_intent:x', @k2='user_intent_applied:x', @k3='user_intent_returned:x';
+execute in_stmt using @u,@r,@k1,@k2,@k3;
+➤ event_idx[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @k3=null;
+execute in_stmt using @u,@r,@k1,@k2,@k3;
+➤ event_idx[-5,64,0]  𝄀
+1  𝄀
+2
+set @k1='absent', @k2='absent', @k3='absent';
+execute in_stmt using @u,@r,@k1,@k2,@k3;
+➤ event_idx[-5,64,0]
+deallocate prepare in_stmt;
+insert into events values ('null-key','target','long-run','session',5000,'tool_result',null,'{"null":true}');
+select event_idx from events
+where user_id='target' and run_id='long-run'
+and idempotency_key in ('user_intent:x',null,'user_intent_applied:x')
+order by event_idx;
+➤ event_idx[-5,64,0]  𝄀
+1  𝄀
+2
+select event_idx from events
+where user_id='target'
+and idempotency_key in ('user_intent:x','user_intent_applied:x','user_intent_returned:x')
+order by event_idx;
+➤ event_idx[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select event_idx from events
+where user_id in ('absent-user','target') and run_id='long-run'
+and idempotency_key='user_intent_returned:x'
+order by event_idx;
+➤ event_idx[-5,64,0]  𝄀
+3
+create table prefix_trailing (
+id int primary key, a int, b varchar(20), payload int,
+unique key uk_prefix_trailing (a,b(3))
+);
+insert into prefix_trailing values (1,1,'abcdef',7);
+select payload from prefix_trailing force index(uk_prefix_trailing)
+where a=1 and b in ('abcdef','ghijkl');
+➤ payload[4,32,0]  𝄀
+7
+select payload from prefix_trailing force index(uk_prefix_trailing)
+where a=1 and b='abcdef' order by payload;
+➤ payload[4,32,0]  𝄀
+7
+select payload from prefix_trailing force index(uk_prefix_trailing)
+where a=1 and b in ('abcdef') order by payload;
+➤ payload[4,32,0]  𝄀
+7
+create table prefix_leading (
+id int primary key, a varchar(20), b int, payload int,
+unique key uk_prefix_leading (a(3),b)
+);
+insert into prefix_leading values (1,'abcdef',1,7);
+select payload from prefix_leading force index(uk_prefix_leading)
+where a='abcdef' and b in (1,2);
+➤ payload[4,32,0]  𝄀
+7
+select payload from prefix_leading force index(uk_prefix_leading)
+where a='abcdef' and b=1 order by payload;
+➤ payload[4,32,0]  𝄀
+7
+select payload from prefix_leading force index(uk_prefix_leading)
+where a='abcdef' and b in (1) order by payload;
+➤ payload[4,32,0]  𝄀
+7
+create table competing_prefix_first (
+tenant_id int not null, id int not null,
+a int, b varchar(20), c int, payload int,
+primary key (tenant_id,id),
+unique key uk_prefix (a,b(3)),
+unique key uk_full (a,c)
+);
+insert into competing_prefix_first values
+(1,1,1,'abcdef',3,7),
+(1,2,2,'abcdef',4,8);
+select payload from competing_prefix_first force index(uk_prefix,uk_full)
+where a=1 and b='abcdef' and c in (3,4) order by payload;
+➤ payload[4,32,0]  𝄀
+7
+analyze table competing_prefix_first;
+➤ approx_count_distinct(tenant_id)[-5,64,0]  ¦  approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(a)[-5,64,0]  ¦  approx_count_distinct(b)[-5,64,0]  ¦  approx_count_distinct(c)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  1  ¦  2  ¦  2
+select payload from competing_prefix_first force index(uk_prefix,uk_full)
+where a=1 and b='abcdef' and c in (3,4) order by payload;
+➤ payload[4,32,0]  𝄀
+7
+create table competing_full_first (
+tenant_id int not null, id int not null,
+a int, b varchar(20), c int, payload int,
+primary key (tenant_id,id),
+unique key uk_full (a,c),
+unique key uk_prefix (a,b(3))
+);
+insert into competing_full_first values
+(1,1,1,'abcdef',3,7),
+(1,2,2,'abcdef',4,8);
+select payload from competing_full_first force index(uk_prefix,uk_full)
+where a=1 and b='abcdef' and c in (3,4) order by payload;
+➤ payload[4,32,0]  𝄀
+7
+analyze table competing_full_first;
+➤ approx_count_distinct(tenant_id)[-5,64,0]  ¦  approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(a)[-5,64,0]  ¦  approx_count_distinct(b)[-5,64,0]  ¦  approx_count_distinct(c)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  1  ¦  2  ¦  2
+select payload from competing_full_first force index(uk_prefix,uk_full)
+where a=1 and b='abcdef' and c in (3,4) order by payload;
+➤ payload[4,32,0]  𝄀
+7
+create table ranking_many_first (
+id int primary key, a int not null, b int not null, c int not null, payload int,
+unique key uk_many (a,b),
+unique key uk_one (a,c)
+);
+insert into ranking_many_first
+select a.n+b.n*10+c.n*100+d.n*1000,1,
+a.n+b.n*10+c.n*100+d.n*1000,
+a.n+b.n*10+c.n*100+d.n*1000,
+7000+a.n+b.n*10+c.n*100+d.n*1000
+from digits a cross join digits b cross join digits c cross join digits d
+where a.n+b.n*10+c.n*100+d.n*1000 < 5000;
+explain analyze select payload from ranking_many_first
+where a=1 and b in (1,2,3) and c=1;
+-- @regex("Index Table Scan on ranking_many_first[.]uk_one", true)
+-- @regex("Index Table Scan on ranking_many_first[.]uk_one[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=1\s+outputRows=1\b", true)
+-- @regex("Table Scan on composite_unique_in_index[.]ranking_many_first[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=1\s+outputRows=1\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4 bytes (min=4 bytes, max=4 bytes)  𝄀
+  ->  Join  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=12 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4 bytes (min=0 bytes, max=4 bytes)  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (ranking_many_first.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on composite_unique_in_index.ranking_many_first [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=1ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=98.33 KiB|0 bytes|78.69 KiB MemorySize=31 bytes (min=31 bytes, max=31 bytes)  𝄀
+              Filter Cond: (ranking_many_first.c = 1), ranking_many_first.b in ([1 2 3]), (ranking_many_first.a = 1)  𝄀
+              Block Filter Cond: (ranking_many_first.c = 1), ranking_many_first.b in ([1 2 3]), (ranking_many_first.a = 1)  𝄀
+              Runtime Filter Probe: ranking_many_first.id  𝄀
+        ->  Index Table Scan on ranking_many_first.uk_one [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=28 bytes OutputSize=4 bytes ReadSize=69.17 KiB|0 bytes|44.41 KiB MemorySize=33 bytes (min=33 bytes, max=33 bytes)  𝄀
+              Filter Cond: (__mo_index_idx_col = ':\x15\x01:\x15\x01')  𝄀
+              Block Filter Cond: (__mo_index_idx_col = ':\x15\x01:\x15\x01')
+select payload from ranking_many_first where a=1 and b in (1,2,3) and c=1;
+➤ payload[4,32,0]  𝄀
+7001
+create table ranking_one_first (
+id int primary key, a int not null, b int not null, c int not null, payload int,
+unique key uk_one (a,c),
+unique key uk_many (a,b)
+);
+insert into ranking_one_first
+select a.n+b.n*10+c.n*100+d.n*1000,1,
+a.n+b.n*10+c.n*100+d.n*1000,
+a.n+b.n*10+c.n*100+d.n*1000,
+7000+a.n+b.n*10+c.n*100+d.n*1000
+from digits a cross join digits b cross join digits c cross join digits d
+where a.n+b.n*10+c.n*100+d.n*1000 < 5000;
+explain analyze select payload from ranking_one_first
+where a=1 and b in (1,2,3) and c=1;
+-- @regex("Index Table Scan on ranking_one_first[.]uk_one", true)
+-- @regex("Index Table Scan on ranking_one_first[.]uk_one[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=1\s+outputRows=1\b", true)
+-- @regex("Table Scan on composite_unique_in_index[.]ranking_one_first[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputRows=1\s+outputRows=1\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4 bytes (min=4 bytes, max=4 bytes)  𝄀
+  ->  Join  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=12 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4 bytes (min=0 bytes, max=4 bytes)  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (ranking_one_first.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on composite_unique_in_index.ranking_one_first [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=98.33 KiB|0 bytes|78.69 KiB MemorySize=31 bytes (min=31 bytes, max=31 bytes)  𝄀
+              Filter Cond: (ranking_one_first.c = 1), ranking_one_first.b in ([1 2 3]), (ranking_one_first.a = 1)  𝄀
+              Block Filter Cond: (ranking_one_first.c = 1), ranking_one_first.b in ([1 2 3]), (ranking_one_first.a = 1)  𝄀
+              Runtime Filter Probe: ranking_one_first.id  𝄀
+        ->  Index Table Scan on ranking_one_first.uk_one [ForceOneCN]  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=28 bytes OutputSize=4 bytes ReadSize=69.17 KiB|0 bytes|44.41 KiB MemorySize=33 bytes (min=33 bytes, max=33 bytes)  𝄀
+              Filter Cond: (__mo_index_idx_col = ':\x15\x01:\x15\x01')  𝄀
+              Block Filter Cond: (__mo_index_idx_col = ':\x15\x01:\x15\x01')
+select payload from ranking_one_first where a=1 and b in (1,2,3) and c=1;
+➤ payload[4,32,0]  𝄀
+7001
+drop database composite_unique_in_index;
