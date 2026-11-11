@@ -77,6 +77,9 @@ type FanoutParquetDataWriter struct {
 	seq     int64
 	useSeq  uint64
 	closed  bool
+	// Sum of ApproxSize across active writers, saturated at MaxInt64. Only
+	// this fanout owner mutates its writers; pressure checks can read it in O(1).
+	activeSize int64
 }
 
 type activeDataFileWriter struct {
@@ -140,7 +143,10 @@ func (w *FanoutParquetDataWriter) WriteBatch(ctx context.Context, attrs []string
 		if err != nil {
 			return err
 		}
-		if err := active.writer.WriteRows(ctx, attrs, bat, []int{rowIdx}); err != nil {
+		before := active.writer.ApproxSize()
+		err = active.writer.WriteRows(ctx, attrs, bat, []int{rowIdx})
+		w.activeSize = saturatingWriterAdd(w.activeSize, active.writer.ApproxSize()-before)
+		if err != nil {
 			return err
 		}
 		if active.writer.ApproxSize() >= w.cfg.TargetFileSizeBytes {
@@ -197,6 +203,7 @@ func (w *FanoutParquetDataWriter) Abort(ctx context.Context) error {
 		}
 		delete(w.active, key)
 	}
+	w.activeSize = 0
 	w.closed = true
 	return firstErr
 }
@@ -268,6 +275,7 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 	active := &activeDataFileWriter{location: location, sink: sink, writer: writer}
 	w.touch(active)
 	w.active[key] = active
+	w.activeSize = saturatingWriterAdd(w.activeSize, writer.ApproxSize())
 	return active, nil
 }
 
@@ -312,16 +320,7 @@ func (w *FanoutParquetDataWriter) relieveMemoryPressure(ctx context.Context) err
 		if remaining < 0 {
 			remaining = 0
 		}
-		var size int64
-		for _, active := range w.active {
-			n := active.writer.ApproxSize()
-			if n > math.MaxInt64-size {
-				size = math.MaxInt64
-			} else {
-				size += n
-			}
-		}
-		if size < remaining/4 {
+		if w.activeSize < remaining/4 {
 			return nil
 		}
 		key, found := w.leastRecentlyUsed(true)
@@ -352,8 +351,19 @@ func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) e
 	if active == nil {
 		return nil
 	}
+	size := active.writer.ApproxSize()
 	file, writerErr := active.writer.Close(ctx)
 	delete(w.active, key)
+	if w.activeSize == math.MaxInt64 {
+		// Subtraction cannot recover a saturated sum. Recompute only on this
+		// exceptional removal path, never on the per-row pressure check.
+		w.activeSize = 0
+		for _, remaining := range w.active {
+			w.activeSize = saturatingWriterAdd(w.activeSize, remaining.writer.ApproxSize())
+		}
+	} else {
+		w.activeSize -= size
+	}
 	if writerErr != nil {
 		cleanupErr := abortDataFileSink(active.sink, active.location)
 		if _, canAbort := active.sink.(DataFileOutputAborter); !canAbort || cleanupErr != nil {
