@@ -4070,7 +4070,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.onUpdate != nil {
 					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
 				} else {
-					explicitOnUpdate, updateErr := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName))
+					explicitOnUpdate, updateErr := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
 					if updateErr != nil {
 						return updateErr
 					}

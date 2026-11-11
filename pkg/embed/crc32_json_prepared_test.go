@@ -122,8 +122,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 
 		// Exercise a real SQL DEFAULT and an ordinary ON UPDATE through writes
 		// and a reconstructed table. CRC32 itself is not valid ON UPDATE syntax.
-		exec(`create table crc32_default(id int primary key,note int,c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))),touched timestamp default '2000-01-01 00:00:00' on update current_timestamp)`)
-		exec("insert into crc32_default(id,note) values(1,0)")
+		exec(`create table crc32_default(id int primary key,j json,note int,c bigint unsigned default (crc32(j)),touched timestamp default '2000-01-01 00:00:00' on update current_timestamp)`)
+		exec(`insert into crc32_default(id,j,note) values(1,'{"t1":"a"}',0)`)
 		exec("update crc32_default set note=1 where id=1")
 		var defaultCRC uint64
 		var updated int
@@ -131,7 +131,7 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		require.Equal(t, uint64(4012824821), defaultCRC)
 		require.Equal(t, 1, updated)
 		exec("alter table crc32_default add column other int,algorithm=copy")
-		exec("insert into crc32_default(id,note) values(2,0)")
+		exec(`insert into crc32_default(id,j,note) values(2,'{"t1":"a"}',0)`)
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from crc32_default where c=4012824821").Scan(&count))
 		require.Equal(t, 2, count)
 

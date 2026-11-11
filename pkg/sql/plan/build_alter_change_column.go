@@ -247,14 +247,7 @@ func buildColumnAndConstraint(
 			if preserved != nil && preserved.onUpdate != nil {
 				newCol.OnUpdate = preserved.onUpdate
 			} else {
-				newCol.OnUpdate, err = buildOnUpdate(
-					ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
-					specNewColumn,
-					colType,
-					ctx.GetProcess(),
-					defaultScope,
-					unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType),
-				)
+				newCol.OnUpdate, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 				if err != nil {
 					return nil, err
 				}
@@ -303,7 +296,6 @@ func buildColumnAndConstraint(
 		}{
 			{"generated column", col.GetGeneratedCol().GetExpr()},
 			{"default expression", col.GetDefault().GetExpr()},
-			{"on-update expression", col.GetOnUpdate().GetExpr()},
 		} {
 			expr := owner.expr
 			if !containsLegacyCRC32(expr) {

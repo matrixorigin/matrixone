@@ -283,7 +283,7 @@ func TestDDLLiteralDefaultAdmissionKeepsAdjacentContracts(t *testing.T) {
 				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abc", "abc", false, tree.P_char)},
 			},
 		)
-		_, err := buildOnUpdate(proc.Ctx, onUpdateCol, plan.Type{Id: int32(types.T_int64)}, proc, nil)
+		_, err := buildOnUpdate(proc.Ctx, onUpdateCol, plan.Type{Id: int32(types.T_int64)}, proc)
 		require.Error(t, err)
 		require.False(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "ON UPDATE must keep the raw cast error, got %v", err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg))

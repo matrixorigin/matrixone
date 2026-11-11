@@ -234,13 +234,13 @@ func TestBuildDDLUnsignedDecimalOnUpdateStrictConstant(t *testing.T) {
 	}
 
 	t.Run("constant negative on update source is 1067", func(t *testing.T) {
-		_, err := buildOnUpdate(context.Background(), onUpdateCol(parsedExpr(t, "select -0.25")), attributed, proc, nil)
+		_, err := buildOnUpdate(context.Background(), onUpdateCol(parsedExpr(t, "select -0.25")), attributed, proc)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "got %v", err)
 	})
 
 	t.Run("constant non-negative on update source keeps the mode-resolved admission", func(t *testing.T) {
-		ou, err := buildOnUpdate(context.Background(), onUpdateCol(parsedExpr(t, "select 0.25")), attributed, proc, nil)
+		ou, err := buildOnUpdate(context.Background(), onUpdateCol(parsedExpr(t, "select 0.25")), attributed, proc)
 		require.NoError(t, err)
 		require.NotNil(t, ou)
 		text := ou.GetExpr().String()

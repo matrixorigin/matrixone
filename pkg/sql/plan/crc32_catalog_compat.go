@@ -91,8 +91,8 @@ func crc32SourceColumn(ctx context.Context, name string, sources []*planpb.ColDe
 // A bound legacy expression cannot be copied onto a different input
 // representation. Reject before COPY mutates the catalog, and also guard the
 // internal CREATE fallback when ordinary persisted-expression replay declines it.
-// The same contract covers generated columns, DEFAULT and ON UPDATE owners of a
-// legacy CRC32 call: their ColRef types describe the hashed input representation.
+// The same contract covers generated columns and DEFAULT owners of a legacy
+// CRC32 call: their ColRef types describe the hashed input representation.
 func validateLegacyCRC32ExprInputs(ctx context.Context, expr *planpb.Expr, cols []*planpb.ColDef, subject string) error {
 	if !containsLegacyCRC32(expr) {
 		return nil
@@ -127,9 +127,9 @@ func preserveCRC32Default(def *planpb.Default) bool {
 		(def.Expr.GetLit() != nil && strings.Contains(strings.ToLower(def.OriginString), "crc32")))
 }
 
-// A CHANGE/MODIFY statement repeats defaults and ON UPDATE clauses even when
-// only the column name or position changes. Preserve unchanged contracts while
-// allowing an explicitly different definition to bind normally.
+// A CHANGE/MODIFY statement repeats defaults even when only the column name or
+// position changes. Preserve an unchanged contract while allowing an explicitly
+// different definition to bind normally.
 func unchangedCRC32ColumnClauses(old *planpb.ColDef, col *tree.ColumnTableDef, typ planpb.Type) *planpb.ColDef {
 	if old.Typ.Id != typ.Id || old.Typ.Width != typ.Width || old.Typ.Scale != typ.Scale {
 		return nil
@@ -146,10 +146,6 @@ func unchangedCRC32ColumnClauses(old *planpb.ColDef, col *tree.ColumnTableDef, t
 					value.NullAbility = getColumnNullAbility(col)
 					copy.Default = &value
 				}
-			}
-		case *tree.AttributeOnUpdate:
-			if old.OnUpdate != nil && containsLegacyCRC32(old.OnUpdate.Expr) && tree.String(a.Expr, dialect.MYSQL) == old.OnUpdate.OriginString {
-				copy.OnUpdate = old.OnUpdate
 			}
 		}
 	}
