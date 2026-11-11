@@ -79,7 +79,7 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 			name:         "deadline",
 			buildErr:     context.DeadlineExceeded,
 			wantDeadline: true,
-			wantCode:     moerr.ErrQueryInterrupted,
+			wantCode:     moerr.ErrRPCTimeout,
 		},
 		{
 			name:     "query interrupted moerr",
@@ -91,13 +91,13 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 			buildErr:     errors.Join(context.Canceled, context.DeadlineExceeded),
 			wantCanceled: true,
 			wantDeadline: true,
-			wantCode:     moerr.ErrQueryInterrupted,
+			wantCode:     moerr.ErrRPCTimeout,
 		},
 		{
 			name:         "joined moerr cancellation and deadline",
 			buildErr:     errors.Join(moerr.NewQueryInterrupted(context.Background()), context.DeadlineExceeded),
 			wantDeadline: true,
-			wantCode:     moerr.ErrQueryInterrupted,
+			wantCode:     moerr.ErrRPCTimeout,
 		},
 	}
 
@@ -191,12 +191,6 @@ func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
 	})
 
 	t.Run("nil input", func(t *testing.T) {
-		contextErr, typed, pure := snapshotCancellationTree(nil)
-		require.Nil(t, contextErr)
-		require.Nil(t, typed)
-		require.False(t, pure)
-		require.Nil(t, firstSubstantiveMoErr(nil))
-
 		buildErr := NewJoinMapBuildError(nil)
 		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
 		require.ErrorContains(t, buildErr, "without an error")

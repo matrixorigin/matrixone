@@ -64,7 +64,10 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
-	if contextErr, typed, pure := snapshotCancellationTree(err); pure {
+	classification := classifyBuildError(err)
+	if classification.pureCancellation {
+		contextErr := classification.contextError()
+		typed := classification.interrupted
 		if contextErr != nil {
 			buildErr := &JoinMapBuildError{contextErr: contextErr, message: err.Error()}
 			// Preserve the stable moerr detail for compatibility even though the
@@ -81,109 +84,81 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 			return &JoinMapBuildError{err: cloneMoErr(typed)}
 		}
 	}
-	if me := firstSubstantiveMoErr(err); me != nil {
-		return &JoinMapBuildError{err: cloneMoErr(me)}
+	if classification.substantive != nil {
+		return &JoinMapBuildError{err: cloneMoErr(classification.substantive)}
 	}
 	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
 }
 
-// snapshotCancellationTree recognizes only error trees whose every leaf is
-// cancellation-shaped.  A joined substantive failure must not be downgraded to
-// cleanup fallout merely because another leaf is context.Canceled.
-//
-// contextErr is the immutable cancellation identity to expose through
-// errors.Is, typed is the first cancellation-shaped moerr leaf (kept for its
-// stable wire code and detail), and pure reports whether every leaf matched.
-func snapshotCancellationTree(err error) (contextErr error, typed *moerr.Error, pure bool) {
+type buildErrorClassification struct {
+	pureCancellation bool
+	canceled         bool
+	deadline         bool
+	interrupted      *moerr.Error
+	substantive      *moerr.Error
+}
+
+func (c buildErrorClassification) contextError() error {
+	if c.canceled && c.deadline {
+		return errors.Join(context.Canceled, context.DeadlineExceeded)
+	}
+	if c.canceled {
+		return context.Canceled
+	}
+	if c.deadline {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// classifyBuildError walks the error tree once. A cancellation is secondary
+// only if every leaf is cancellation-shaped; otherwise retain the first
+// substantive MatrixOne error, if any.
+func classifyBuildError(err error) buildErrorClassification {
 	if err == nil {
-		return nil, nil, false
+		return buildErrorClassification{}
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
 		if len(children) == 0 {
-			return nil, nil, false
+			return buildErrorClassification{}
 		}
-		var canceled, deadline bool
+		result := buildErrorClassification{pureCancellation: true}
 		for _, child := range children {
-			childContext, childTyped, ok := snapshotCancellationTree(child)
-			if !ok {
-				return nil, nil, false
+			item := classifyBuildError(child)
+			result.pureCancellation = result.pureCancellation && item.pureCancellation
+			result.canceled = result.canceled || item.canceled
+			result.deadline = result.deadline || item.deadline
+			if result.interrupted == nil {
+				result.interrupted = item.interrupted
 			}
-			// A joined child can itself be both canceled and expired.
-			if errors.Is(childContext, context.Canceled) {
-				canceled = true
-			}
-			if errors.Is(childContext, context.DeadlineExceeded) {
-				deadline = true
-			}
-			if childTyped != nil && typed == nil {
-				typed = childTyped
+			if result.substantive == nil {
+				result.substantive = item.substantive
 			}
 		}
-		switch {
-		case canceled && deadline:
-			return errors.Join(context.Canceled, context.DeadlineExceeded), typed, true
-		case canceled:
-			return context.Canceled, typed, true
-		case deadline:
-			return context.DeadlineExceeded, typed, true
-		}
-		return nil, typed, true
+		return result
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {
-			return snapshotCancellationTree(child)
+			return classifyBuildError(child)
 		}
 	}
 	var me *moerr.Error
 	if errors.As(err, &me) {
 		if contextCancellationMoErr(me) {
-			return nil, me, true
+			return buildErrorClassification{pureCancellation: true, interrupted: me}
 		}
-		return nil, nil, false
+		return buildErrorClassification{substantive: me}
 	}
-	switch {
-	case errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded):
-		return errors.Join(context.Canceled, context.DeadlineExceeded), nil, true
-	case errors.Is(err, context.Canceled):
-		return context.Canceled, nil, true
-	case errors.Is(err, context.DeadlineExceeded):
-		return context.DeadlineExceeded, nil, true
-	}
-	return nil, nil, false
+	canceled := errors.Is(err, context.Canceled)
+	deadline := errors.Is(err, context.DeadlineExceeded)
+	return buildErrorClassification{pureCancellation: canceled || deadline, canceled: canceled, deadline: deadline}
 }
 
 // contextCancellationMoErr reports whether a MatrixOne error already denotes
 // cancellation rather than a substantive execution failure.
 func contextCancellationMoErr(err *moerr.Error) bool {
 	return err != nil && err.ErrorCode() == moerr.ErrQueryInterrupted
-}
-
-// firstSubstantiveMoErr finds a MatrixOne error that is not itself a
-// cancellation result.  A cancellation-shaped moerr must not mask a generic or
-// MatrixOne execution error that appears later in the same joined tree.
-func firstSubstantiveMoErr(err error) *moerr.Error {
-	if err == nil {
-		return nil
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, child := range joined.Unwrap() {
-			if me := firstSubstantiveMoErr(child); me != nil {
-				return me
-			}
-		}
-		return nil
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return firstSubstantiveMoErr(child)
-		}
-	}
-	var me *moerr.Error
-	if errors.As(err, &me) && !contextCancellationMoErr(me) {
-		return me
-	}
-	return nil
 }
 
 func cloneMoErr(src *moerr.Error) *moerr.Error {
@@ -256,9 +231,9 @@ func (e *JoinMapBuildError) ErrorCode() uint16 {
 		return moerr.ErrInternal
 	}
 	if e.contextErr != nil {
-		// This branch does not carry a distinct timeout code, so every
-		// cancellation snapshot reports the cancellation class.  The original
-		// classification stays reachable through errors.Is on the wrapper.
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			return moerr.ErrRPCTimeout
+		}
 		return moerr.ErrQueryInterrupted
 	}
 	if e.err == nil {
@@ -280,7 +255,12 @@ func (e *JoinMapBuildError) AsMoErr() *moerr.Error {
 		return moerr.NewInternalErrorNoCtx("hash build failed")
 	}
 	if e.contextErr != nil {
-		me := moerr.NewQueryInterrupted(context.Background())
+		var me *moerr.Error
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			me = moerr.NewRPCTimeout(context.Background())
+		} else {
+			me = moerr.NewQueryInterrupted(context.Background())
+		}
 		me.SetDetail(e.Detail())
 		return me
 	}
