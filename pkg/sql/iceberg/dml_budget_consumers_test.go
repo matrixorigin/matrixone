@@ -23,6 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -338,4 +341,92 @@ func TestReplacementFanoutSinkCloseBudgetError(t *testing.T) {
 	require.Empty(t, objects.objects)
 	// The orphan's metadata reservation survives until the owning statement ends.
 	require.Equal(t, metadata, budget.usedBytes())
+}
+
+func TestReplacementFanoutSinkWriteBudgetError(t *testing.T) {
+	ctx := context.Background()
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+	schema := api.Schema{SchemaID: 9, Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}, Required: true},
+		{ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}},
+	}}
+	metadata := retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{})
+	budget := newDMLMemoryBudget(metadata, 0)
+	objects := &recordingDMLDeleteObjectWriter{}
+	files, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
+		TableLocation: "s3://secret-token/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
+		Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
+	})
+	assertConsumerBudgetError(t, err, metadata, 64<<10, metadata)
+	require.NotContains(t, err.Error(), "secret-token")
+	require.Empty(t, files)
+	require.Empty(t, objects.objects)
+	require.Zero(t, budget.usedBytes(), "successful abort releases buffer and metadata")
+}
+
+func TestReplacementFanoutUploadCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+	schema := api.Schema{Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}, Required: true},
+		{ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}},
+	}}
+	metadata := retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{})
+	budget := newDMLMemoryBudget(metadata+(1<<20), 0)
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	writer := testDeleteObjectWriterFunc(func(ctx context.Context, _ string, _ []byte) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	go func() {
+		_, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
+			TableLocation: "s3://warehouse/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
+			Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: writer,
+		})
+		done <- err
+	}()
+	<-started
+	// A concurrent snapshot must complete while object I/O is blocked.
+	_, limited := budget.availableMemory()
+	require.True(t, limited)
+	cancel()
+	require.Error(t, <-done)
+	require.Equal(t, metadata, budget.usedBytes(), "uncertain upload retains orphan metadata")
+}
+
+func TestReplacementFanoutSharedBudgetRotates(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendBytes(vec, bytes.Repeat([]byte{byte('a' + i)}, 64<<10), false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	metadata := retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{})
+	budget := newDMLMemoryBudget(1<<20, 0)
+	objects := &recordingDMLDeleteObjectWriter{}
+	files, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
+		TableLocation: "s3://warehouse/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
+		Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(files), 1)
+	require.Len(t, objects.objects, len(files))
+	var rows int64
+	for _, file := range files {
+		rows += file.RecordCount
+		_, err := parquet.OpenFile(bytes.NewReader(objects.objects[file.FilePath]), file.FileSizeInBytes)
+		require.NoError(t, err)
+	}
+	require.Equal(t, int64(8), rows)
+	require.Equal(t, metadata*int64(len(files)), budget.usedBytes())
 }

@@ -119,6 +119,10 @@ type bufferedDataFileOutputFactory struct {
 	RetainedMetadataBytes int64
 }
 
+func (f bufferedDataFileOutputFactory) AvailableMemory() (int64, bool) {
+	return f.MemoryBudget.availableMemory()
+}
+
 const retainedDMLDataFileMetadataBytes int64 = 2048
 
 func (f bufferedDataFileOutputFactory) CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error) {
