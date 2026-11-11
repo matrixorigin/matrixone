@@ -2540,7 +2540,6 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
-	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
@@ -2554,19 +2553,13 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 	if len(isBin) == 2 && isBin[0] && isBin[1] {
 		typ.Id = int32(types.T_uint64)
 	}
+	args := []*Expr{expr, {Typ: typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}}
+	typ.NotNullable = function.DeduceNotNullable(fGet.GetEncodedOverloadID(), args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
-				Args: []*Expr{
-					expr,
-					{
-						Typ: typ,
-						Expr: &plan.Expr_T{
-							T: &plan.TargetType{},
-						},
-					},
-				},
+				Args: args,
 			},
 		},
 		Typ: typ,
