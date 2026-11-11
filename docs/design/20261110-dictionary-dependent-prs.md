@@ -364,3 +364,18 @@ lease. Owned flat scalar destinations retain the existing no-copy return;
 dictionary, borrowed validity and payload COW still follow their original paths.
 This removes an observed new scalar-join cost, not an asserted complete cause of
 Q21's regression. Reuse the ownership/COW controls, then requalify all22 locally.
+
+
+## Approved direct predicate-row compaction
+
+The requester approved direct compaction after `af9d97b151` qualification.
+Reserve reusable original-row scratch once for the first nonconstant predicate;
+write survivors there directly. Subsequent predicates compact those original
+positions in place, with the write index bounded by the current read index.
+Remove the temporary match list and the separate copy/composition traversal.
+Keep ordered expression evaluation, identity/empty/NULL/constant semantics,
+dictionary Boolean physical-row mapping and unknown-executor fallback unchanged.
+This targets the line-attributed selection loop; it does not assert that all
+Q20 or whole-suite regressions share that cause. Validate focused semantic
+controls, the owning expression package, SQL and static checks, then the same
+local six-suite Q1-Q22 qualification; regressions again require requester review.

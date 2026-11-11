@@ -16,6 +16,8 @@ package colexec
 
 import (
 	"errors"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -172,12 +174,6 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 			}
 		}
 	}()
-	var matches []int64
-	defer func() {
-		if matches != nil {
-			vector.PutSels(matches)
-		}
-	}()
 	selected := false
 	for i := range executors {
 		rows := input.RowCount()
@@ -253,53 +249,71 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 			}
 			continue
 		}
-		if matches == nil {
-			matches = vector.GetSels()
-		}
-		matches = matches[:0]
-		view := vector.ResolveFixedReadView[bool](value)
-		if view.Selection == nil && !view.Nulls.Any() {
-			// Ordinary predicate results keep the existing direct flat loop.
-			for row, keep := range view.Values[:current.RowCount()] {
-				if keep {
-					matches = append(matches, int64(row))
-				}
+
+		*scratch = compactPredicateRows(value, current.RowCount(), *scratch, selected)
+		if len(*scratch) == current.RowCount() {
+			if !selected {
+				*scratch = (*scratch)[:0]
 			}
-		} else {
-			for row := 0; row < current.RowCount(); row++ {
-				if view.AllNull || view.Nulls.Contains(uint64(row)) {
-					continue
-				}
-				physical := row
-				if view.Selection != nil {
-					physical = int(view.Selection[row])
-				}
-				if view.Constant {
-					physical = 0
-				}
-				if view.Values[physical] {
-					matches = append(matches, int64(row))
-				}
-			}
-		}
-		if len(matches) == current.RowCount() {
 			continue
 		}
-		if !selected {
-			*scratch = append((*scratch)[:0], matches...)
-			selected = true
-		} else {
-			for j, row := range matches {
-				(*scratch)[j] = (*scratch)[row]
-			}
-			*scratch = (*scratch)[:len(matches)]
-		}
-		if len(matches) == 0 {
+		selected = true
+		if len(*scratch) == 0 {
 			return *scratch, false, nil
 		}
 
 	}
 	return *scratch, !selected, nil
+}
+
+// compactPredicateRows writes each surviving original position once. A selected
+// input's positions are compacted in place: the write index never exceeds the
+// current read index, including when the original row domain contains repeats.
+func compactPredicateRows(value *vector.Vector, rows int, scratch []int64, selected bool) []int64 {
+	if !selected {
+		scratch = slices.Grow(scratch[:0], rows)[:rows]
+	}
+	view := vector.ResolveFixedReadView[bool](value)
+	kept := 0
+	if view.Selection == nil && !view.Constant && !view.Nulls.Any() {
+		if selected {
+			for row, keep := range view.Values[:rows] {
+				if keep {
+					scratch[kept] = scratch[row]
+					kept++
+				}
+			}
+		} else {
+			for row, keep := range view.Values[:rows] {
+				if keep {
+					scratch[kept] = int64(row)
+					kept++
+				}
+			}
+		}
+	} else {
+		for row := 0; row < rows; row++ {
+			if view.AllNull || view.Nulls.Contains(uint64(row)) {
+				continue
+			}
+			physical := row
+			if view.Selection != nil {
+				physical = int(view.Selection[row])
+			}
+			if view.Constant {
+				physical = 0
+			}
+			if view.Values[physical] {
+				original := int64(row)
+				if selected {
+					original = scratch[row]
+				}
+				scratch[kept] = original
+				kept++
+			}
+		}
+	}
+	return scratch[:kept]
 }
 
 // Collect only the current predicate's columns. Unknown executors retain the

@@ -27,8 +27,9 @@ import (
 )
 
 func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
-	for _, skipError := range []bool{false, true} {
-		t.Run(map[bool]string{false: "original-rows", true: "skip-divide-zero"}[skipError], func(t *testing.T) {
+	for _, shape := range []string{"original-rows", "skip-divide-zero", "identity", "none"} {
+		t.Run(shape, func(t *testing.T) {
+			skipError := shape == "skip-divide-zero"
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
@@ -54,6 +55,13 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 				predicates = []*plan.Expr{bindTestFunction(t, proc, "<>", col, literal(0)), bindTestFunction(t, proc, ">", bindTestFunction(t, proc, "/", literal(10), col), literal(0))}
 				want = []int64{1}
 			}
+			if shape == "identity" {
+				predicates = []*plan.Expr{bindTestFunction(t, proc, ">", col, literal(0)), bindTestFunction(t, proc, "<", col, literal(5))}
+				want = []int64{}
+			} else if shape == "none" {
+				predicates = []*plan.Expr{bindTestFunction(t, proc, ">", col, literal(9))}
+				want = []int64{}
+			}
 			executors, err := NewExpressionExecutorsFromPlanExpressions(proc, predicates)
 			require.NoError(t, err)
 			t.Cleanup(func() {
@@ -65,8 +73,12 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			var parameter vector.FunctionParameterWrapper[bool]
 			got, all, err := SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil, nil)
 			require.NoError(t, err)
-			require.False(t, all)
-			require.Equal(t, want, got)
+			require.Equal(t, shape == "identity", all)
+			if len(want) == 0 {
+				require.Empty(t, got)
+			} else {
+				require.Equal(t, want, got)
+			}
 			require.Equal(t, len(values), input.RowCount())
 			require.Equal(t, values, vector.MustFixedColNoTypeCheck[float64](input.Vecs[0]))
 			require.False(t, warnings.Warned(), "rejected rows must not emit division diagnostics")
@@ -132,4 +144,51 @@ func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
 	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](third.Vecs[0], 0))
 	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0), "an unretired sibling view must remain immutable")
 
+}
+
+func TestCompactPredicateRowsOriginalDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	value := vector.NewVec(types.T_bool.ToType())
+	t.Cleanup(func() { value.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(value, []bool{true, false, true, true}, nil, mp))
+	require.Equal(t, []int64{0, 2, 3}, compactPredicateRows(value, 4, nil, false))
+	scratch := []int64{8, 2, 8, 5}
+	address := &scratch[0]
+	got := compactPredicateRows(value, 4, scratch, true)
+	require.Equal(t, []int64{8, 8, 5}, got)
+	require.Same(t, address, &got[0], "later predicates must compact existing positions")
+	value.GetNulls().Add(2)
+	require.Equal(t, []int64{0, 3}, compactPredicateRows(value, 4, nil, false))
+	base, err := vector.FreezeVector(value, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{3, 2, 0, 1}, 4, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dictionary, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { dictionary.Free(mp) })
+	require.Equal(t, []int64{0, 2}, compactPredicateRows(dictionary, 4, nil, false))
+	scratch = []int64{9, 7, 3, 1}
+	require.Equal(t, []int64{9, 3}, compactPredicateRows(dictionary, 4, scratch, true))
+	for _, keep := range []bool{false, true} {
+		func() {
+			constant, err := vector.NewConstFixed(types.T_bool.ToType(), keep, 4, mp)
+			require.NoError(t, err)
+			defer constant.Free(mp)
+			frozen, err := vector.FreezeVector(constant, mp, nil)
+			require.NoError(t, err)
+			defer frozen.Release()
+			selected, err := vector.NewDictionaryVector(frozen, rows, mp, nil)
+			require.NoError(t, err)
+			defer selected.Free(mp)
+			result := compactPredicateRows(selected, 4, nil, false)
+			if keep {
+				require.Equal(t, []int64{0, 1, 2, 3}, result)
+			} else {
+				require.Empty(t, result)
+			}
+		}()
+	}
 }
