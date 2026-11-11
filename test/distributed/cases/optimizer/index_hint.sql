@@ -318,4 +318,38 @@ insert into logical_cluster values(1,1,100),(1,2,200),(2,1,300);
 select payload from logical_cluster where a=1 and b=2;
 select x.payload from logical_cluster x join primary_access y on x.a=y.a and x.b=y.b where y.a=1 order by x.payload;
 
+-- Composite unique-index lookup with a bounded trailing key set. The
+-- session_id and payload predicates must remain as base-table filters.
+create table keyset_access (
+  id int primary key,
+  user_id varchar(16) not null,
+  run_id varchar(16) not null,
+  idempotency_key varchar(64),
+  session_id int not null,
+  payload int,
+  unique key uq_user_run_key(user_id,run_id,idempotency_key)
+);
+insert into keyset_access values
+(1,'u1','r1','first',1,10),
+(2,'u1','r1','second',1,20),
+(3,'u1','r1','other',1,5),
+(4,'u1','r1','third',2,15),
+(5,'u1','r2','first',1,50),
+(6,'u2','r1','first',1,60);
+-- @separator:table
+-- @regex("Index Table Scan.*uq_user_run_key",true)
+-- @regex("prefix_in[(]__mo_index_idx_col[)]",true)
+explain select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30;
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30 order by id;
+select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30 order by id;
+
 drop database mysql_compat_index_hint;

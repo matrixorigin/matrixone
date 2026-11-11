@@ -558,4 +558,53 @@ select x.payload from logical_cluster x join primary_access y on x.a=y.a and x.b
 ➤ payload[4,32,0]  𝄀
 100  𝄀
 200
+create table keyset_access (
+id int primary key,
+user_id varchar(16) not null,
+run_id varchar(16) not null,
+idempotency_key varchar(64),
+session_id int not null,
+payload int,
+unique key uq_user_run_key(user_id,run_id,idempotency_key)
+);
+insert into keyset_access values
+(1,'u1','r1','first',1,10),
+(2,'u1','r1','second',1,20),
+(3,'u1','r1','other',1,5),
+(4,'u1','r1','third',2,15),
+(5,'u1','r2','first',1,50),
+(6,'u2','r1','first',1,60);
+explain select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+and idempotency_key in ('first','second','third')
+and session_id=1 and payload<30;
+-- @regex("Index Table Scan.*uq_user_run_key", true)
+-- @regex("prefix_in[(]__mo_index_idx_col[)]", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (keyset_access.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on mysql_compat_index_hint.keyset_access [ForceOneCN]  𝄀
+              Filter Cond: (keyset_access.user_id = 'u1'), (keyset_access.run_id = 'r1'), keyset_access.idempotency_key in ([first second third]), (keyset_access.session_id = 1), (keyset_access.payload < 30)  𝄀
+              Block Filter Cond: (keyset_access.user_id = 'u1'), (keyset_access.run_id = 'r1'), (keyset_access.session_id = 1), (keyset_access.payload < 30)  𝄀
+              Runtime Filter Probe: keyset_access.id  𝄀
+        ->  Index Table Scan on keyset_access.uq_user_run_key [ForceOneCN]  𝄀
+              Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_in(__mo_index_idx_col)
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id='r1'
+and idempotency_key in ('first','second','third')
+and session_id=1 and payload<30 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+and idempotency_key in ('first','second','third')
+and session_id=1 and payload<30 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
 drop database mysql_compat_index_hint;

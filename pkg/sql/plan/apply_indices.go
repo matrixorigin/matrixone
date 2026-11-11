@@ -36,6 +36,7 @@ const (
 	NonEqualIndexCondition    = 2
 	SpatialIndexCondition     = 3
 	RangeIndexCondition       = 4
+	KeySetIndexCondition      = 5
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -1645,12 +1646,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
 	idxToChoose := -1
 	var filterIdx []int32
+	keySetSize := 0
 	if !pointBlocked {
-		idxToChoose, filterIdx = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+		idxToChoose, filterIdx, keySetSize = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
 	}
 	// A cardinality-proven unique point cannot produce the broad output that
-	// the aggregate scan estimates below are intended to guard against.
-	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
+	// the aggregate scan estimates below are intended to guard against. A key
+	// set has a different finite bound and must not use the singleton bypass.
+	singletonPoint := idxToChoose != -1 && keySetSize == 0 && indexes[idxToChoose].Unique &&
 		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
 	if !ignoreStats && !singletonPoint {
 		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
@@ -1664,9 +1667,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 	}
 
-	// Apply unique/secondary indices for point select
+	// Apply unique/secondary indices for point select or a finite key set.
 	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
+		condType := EqualIndexCondition
+		if keySetSize > 0 {
+			condType = KeySetIndexCondition
+		}
+		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
@@ -2545,6 +2552,8 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+	} else if filterType == KeySetIndexCondition {
+		idxFilter = builder.replaceKeySetCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
 	} else if filterType == SpatialIndexCondition {
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
@@ -2609,22 +2618,31 @@ func hasKnownScanCardinality(stats *plan.Stats) bool {
 		!math.IsNaN(stats.TableCnt) && !math.IsInf(stats.TableCnt, 0)
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32, int) {
 	currentSel := maxSelectivity
 	currentIdx := -1
 	knownCardinality := hasKnownScanCardinality(node.Stats)
 	selectedCompleteUnique := false
 	savedFilterIdx := make([]int32, 0)
+	savedKeySetSize := 0
 
 	col2filter := make(map[int32]int32)
+	inCol2filter := make(map[int32]int32)
+	inFilterSize := make(map[int32]int)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = int32(i)
+			continue
+		}
+		if colPos, size, ok := indexKeySetFilter(node.FilterList[i]); ok {
+			inCol2filter[colPos] = int32(i)
+			inFilterSize[colPos] = size
 		}
 	}
 
-	filterIdx := make([]int32, 0, len(col2filter))
+	filterIdx := make([]int32, 0, len(col2filter)+len(inCol2filter))
+	var keySetFilterIdx []int32
 	for i, idxDef := range indexes {
 		numParts := len(idxDef.Parts)
 		numKeyParts := numParts
@@ -2635,8 +2653,6 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			continue
 		}
 
-		usePartialIndex := false
-
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
 			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
@@ -2646,12 +2662,41 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 				break
 			}
 			filterIdx = append(filterIdx, idx)
+		}
+
+		// A bounded IN on any one user key part completes a finite composite
+		// key set when every other part is equality bound. Keep the original
+		// equality-only candidate when this general form does not apply.
+		candidateKeySetSize := 0
+		if numKeyParts > 1 && len(inCol2filter) > 0 {
+			keySetFilterIdx = keySetFilterIdx[:0]
+			inCount := 0
+			for j := 0; j < numKeyParts; j++ {
+				colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
+				if idx, ok := col2filter[colIdx]; ok {
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+				} else if idx, ok := inCol2filter[colIdx]; ok {
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+					inCount++
+					candidateKeySetSize = inFilterSize[colIdx]
+				} else {
+					break
+				}
+			}
+			if inCount == 1 && len(keySetFilterIdx) == numKeyParts {
+				filterIdx = append(filterIdx[:0], keySetFilterIdx...)
+			} else {
+				candidateKeySetSize = 0
+			}
+		}
+
+		usePartialIndex := false
+		for _, idx := range filterIdx {
 			filter := node.FilterList[idx]
 			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
 			}
 		}
-
 		if len(filterIdx) < numParts && (idxDef.Unique || !usePartialIndex) {
 			continue
 		}
@@ -2674,7 +2719,11 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 				continue
 			}
 			if completeUnique {
-				compositeFilterSel = min(compositeFilterSel, 1/node.Stats.TableCnt)
+				maxRows := 1.0
+				if candidateKeySetSize > 1 {
+					maxRows = float64(candidateKeySetSize)
+				}
+				compositeFilterSel = min(compositeFilterSel, maxRows/node.Stats.TableCnt)
 			}
 			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
 			if compositeFilterSel >= currentSel && !forceFallback {
@@ -2686,8 +2735,9 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		selectedCompleteUnique = completeUnique
 		savedFilterIdx = savedFilterIdx[:0]
 		savedFilterIdx = append(savedFilterIdx, filterIdx...)
+		savedKeySetSize = candidateKeySetSize
 	}
-	return currentIdx, savedFilterIdx
+	return currentIdx, savedFilterIdx, savedKeySetSize
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
