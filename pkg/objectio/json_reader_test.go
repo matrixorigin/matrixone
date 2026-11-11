@@ -343,6 +343,57 @@ func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 	require.ErrorIs(t, err, io.ErrClosedPipe)
 }
 
+func TestCacheJSONReaderStringTextMatchesUnquote(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	literals := []string{`""`, `"plain"`, `"\"quoted\""`, `"slash\\line\n"`, `"猫🌍"`, `"\u0000"`}
+	want := make([]string, len(literals))
+	for i, literal := range literals {
+		value, err := types.ParseStringToByteJson(literal)
+		require.NoError(t, err)
+		want[i], err = value.Unquote()
+		require.NoError(t, err)
+		doc, err := types.ParseStringToByteJson(`{"items":[` + literal + `]}`)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	}
+	data := privateJSONColumnForTest(t, source)
+	dataReleased := false
+	defer func() {
+		if !dataReleased {
+			data.Release()
+		}
+	}()
+	reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
+	require.NoError(t, err)
+	closed := false
+	defer func() {
+		if !closed {
+			reader.Close()
+		}
+	}()
+	path, err := types.ParseStringToPath("$.items[*]")
+	require.NoError(t, err)
+	owned := make([]string, len(literals))
+	for row := range literals {
+		for _, legacyFloat := range []bool{false, true} {
+			got, err := reader.QueryTextAtPath(row, path, legacyFloat)
+			require.NoError(t, err)
+			require.True(t, got.Exists)
+			require.Equal(t, byte(bytejson.TpCodeString), got.Type)
+			require.Equal(t, want[row], got.Text)
+			owned[row] = got.Text
+		}
+	}
+	reader.Close()
+	closed = true
+	data.Release()
+	dataReleased = true
+	require.Equal(t, want, owned, "selected strings remain owned after reader close")
+}
+
 func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 	for _, insufficient := range []bool{false, true} {
 		t.Run(fmt.Sprintf("insufficient=%v", insufficient), func(t *testing.T) {
