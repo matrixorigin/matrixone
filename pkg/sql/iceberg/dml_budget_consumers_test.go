@@ -181,7 +181,7 @@ func TestParquetBufferedSinkBudgetError(t *testing.T) {
 			err = writer.Close()
 			if tc.failWrite {
 				require.Error(t, err)
-				assertConsumerBudgetError(t, api.ToMOErr(context.Background(), errors.Join(err, errors.New("secret-token"))), 0, 65536, tc.limit)
+				assertConsumerBudgetError(t, api.ToMOErr(context.Background(), errors.Join(err, moerr.NewInternalError(context.Background(), "secret-token"))), 0, 65536, tc.limit)
 				require.Zero(t, budget.usedBytes())
 				require.NoError(t, sink.Abort())
 			} else {
@@ -189,10 +189,10 @@ func TestParquetBufferedSinkBudgetError(t *testing.T) {
 				size := int64(len(sink.data))
 				require.Positive(t, size)
 				err = sink.Close()
-				assertConsumerBudgetError(t, api.ToMOErr(context.Background(), errors.Join(err, errors.New("secret-token"))), 65536, size, tc.limit)
+				assertConsumerBudgetError(t, api.ToMOErr(context.Background(), errors.Join(err, moerr.NewInternalError(context.Background(), "secret-token"))), 65536, size, tc.limit)
 				require.Zero(t, budget.usedBytes())
 			}
-			require.NotContains(t, api.ToMOErr(context.Background(), errors.Join(err, errors.New("secret-token"))).Error(), "secret-token")
+			require.NotContains(t, api.ToMOErr(context.Background(), errors.Join(err, moerr.NewInternalError(context.Background(), "secret-token"))).Error(), "secret-token")
 			require.Empty(t, objects.objects)
 		})
 	}
