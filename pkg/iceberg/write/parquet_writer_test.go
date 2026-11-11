@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, file.Root().Column("id").ID())
 	require.Equal(t, 2, file.Root().Column("name").ID())
-	requireParquetColumnPlainEncoded(t, file, "name")
+	requireParquetColumnDictionaryEncoded(t, file, "name")
 	require.Equal(t, int64(2), dataFile.RecordCount)
 	require.Equal(t, int64(buf.Len()), dataFile.FileSizeInBytes)
 	require.Equal(t, int64(2), dataFile.ValueCounts[1])
@@ -695,8 +696,9 @@ func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 	require.Empty(t, writer.active)
 }
 
-func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path string) {
+func requireParquetColumnDictionaryEncoded(t *testing.T, file *parquet.File, path string) {
 	t.Helper()
+	found := 0
 	for _, rowGroup := range file.Metadata().RowGroups {
 		for _, column := range rowGroup.Columns {
 			if strings.Join(column.MetaData.PathInSchema, ".") != path {
@@ -706,12 +708,13 @@ func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path str
 			for _, encoding := range column.MetaData.Encoding {
 				encodings = append(encodings, encoding.String())
 			}
-			require.Contains(t, encodings, "PLAIN")
+			require.Contains(t, encodings, "RLE_DICTIONARY")
 			require.NotContains(t, encodings, "DELTA_LENGTH_BYTE_ARRAY")
-			return
+			require.Positive(t, column.MetaData.DictionaryPageOffset)
+			found++
 		}
 	}
-	require.Failf(t, "column not found", "column path %s was not found in parquet metadata", path)
+	require.Equal(t, len(file.Metadata().RowGroups), found, "column %s in every row group", path)
 }
 
 type memoryDataFileFactory struct {
@@ -747,4 +750,113 @@ func (s *abortTrackingDataFileSink) Abort() error {
 	s.aborted = true
 	s.Reset()
 	return nil
+}
+
+func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	values := []string{"repeat", "repeat", "", "世界"}
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(values[i%len(values)]), i == 3, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	for _, tc := range []struct {
+		name, value, codec string
+		absent             bool
+	}{
+		{"default", "", "ZSTD", true}, {"zstd", " ZsTd ", "ZSTD", false},
+		{"snappy", "snappy", "SNAPPY", false}, {"gzip", "gzip", "GZIP", false},
+		{"brotli", "brotli", "BROTLI", false}, {"lz4", "lz4", "LZ4_RAW", false},
+		{"uncompressed", "uncompressed", "UNCOMPRESSED", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			props := map[string]string{}
+			if !tc.absent {
+				props[parquetCompressionProperty] = tc.value
+			}
+			opts, err := ParseParquetOptions(props)
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "test.parquet", ParquetOptions: opts}, &buf)
+			require.NoError(t, err)
+			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			_, err = writer.Close(ctx)
+			require.NoError(t, err)
+			file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+			for _, group := range file.Metadata().RowGroups {
+				require.LessOrEqual(t, group.NumRows, int64(parquetWriteMaxRowsPerRowGroup))
+				for _, col := range group.Columns {
+					require.Equal(t, tc.codec, col.MetaData.Codec.String())
+				}
+			}
+			requireParquetColumnDictionaryEncoded(t, file, "name")
+			reader := parquet.NewGenericReader[struct {
+				Name *string `parquet:"name,optional"`
+			}](bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+			rows := make([]struct {
+				Name *string `parquet:"name,optional"`
+			}, 8193)
+			n, err := reader.Read(rows)
+			require.True(t, err == nil || err == io.EOF)
+			require.Equal(t, len(rows), n)
+			for i, row := range rows {
+				if i == 3 {
+					require.Nil(t, row.Name)
+				} else {
+					require.NotNil(t, row.Name)
+					require.Equal(t, values[i%len(values)], *row.Name)
+				}
+			}
+		})
+	}
+	for _, value := range []string{"", "  ", "lzo"} {
+		_, err := ParseParquetOptions(map[string]string{parquetCompressionProperty: value})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), parquetCompressionProperty)
+	}
+}
+
+func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(strconv.Itoa(i)), false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "unique.parquet"}, &buf)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = writer.Close(ctx)
+	require.NoError(t, err)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+	reader := parquet.NewGenericReader[struct {
+		Name *string `parquet:"name,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		Name *string `parquet:"name,optional"`
+	}, 8193)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, len(rows), n)
+	for i, row := range rows {
+		require.NotNil(t, row.Name)
+		require.Equal(t, strconv.Itoa(i), *row.Name)
+	}
 }

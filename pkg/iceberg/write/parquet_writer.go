@@ -34,10 +34,11 @@ import (
 )
 
 type DataWriterConfig struct {
-	Schema        api.Schema
-	PartitionSpec api.PartitionSpec
-	FilePath      string
-	TimeZone      *time.Location
+	ParquetOptions ParquetOptions
+	Schema         api.Schema
+	PartitionSpec  api.PartitionSpec
+	FilePath       string
+	TimeZone       *time.Location
 }
 
 const parquetWriteConversionBatchRows = 1024
@@ -92,6 +93,7 @@ func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writ
 			cw,
 			parquet.NewSchema("iceberg", group),
 			parquet.MaxRowsPerRowGroup(parquetWriteMaxRowsPerRowGroup),
+			parquet.Compression(cfg.ParquetOptions.compression()),
 		),
 		out:     cw,
 		fields:  append([]api.SchemaField(nil), cfg.Schema.Fields...),
@@ -352,7 +354,7 @@ func parquetNodeForField(ctx context.Context, field api.SchemaField) (parquet.No
 }
 
 func icebergStringNode() parquet.Node {
-	return parquet.Encoded(parquet.String(), &parquet.Plain)
+	return parquet.Encoded(parquet.String(), &parquet.RLEDictionary)
 }
 
 func vectorValue(ctx context.Context, vec *vector.Vector, row int, typ api.IcebergType, loc *time.Location) (any, bool, error) {

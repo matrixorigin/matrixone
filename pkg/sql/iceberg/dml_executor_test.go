@@ -22,6 +22,9 @@ import (
 	"strings"
 	"testing"
 
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -365,6 +368,11 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 	bat, cleanup := newReplacementExecutorBatch(t)
 	defer cleanup()
 
+	opts, err := icebergwritecore.ParseParquetOptions(map[string]string{"write.parquet.compression-codec": "snappy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.ParquetOptions = opts
 	executor = withSQLTestDMLExecutorMetadata(executor, 0, 1)
 	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
@@ -404,6 +412,18 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 		switch {
 		case strings.Contains(path, "/replacement/"):
 			replacementObjects++
+			data := deleteWriter.objects[path]
+			file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, group := range file.Metadata().RowGroups {
+				for _, col := range group.Columns {
+					if col.MetaData.Codec.String() != "SNAPPY" {
+						t.Fatalf("unexpected codec: %s", col.MetaData.Codec)
+					}
+				}
+			}
 			if !strings.Contains(path, "/mo-dml/update/") || strings.Contains(path, "stmt-update-batch") {
 				t.Fatalf("unexpected replacement object path: %s", path)
 			}

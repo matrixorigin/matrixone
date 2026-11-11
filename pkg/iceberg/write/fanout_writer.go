@@ -49,6 +49,7 @@ type DataFileOutputAborter interface {
 }
 
 type FanoutWriterConfig struct {
+	ParquetOptions      ParquetOptions
 	Schema              api.Schema
 	PartitionSpec       api.PartitionSpec
 	TableLocation       string
@@ -233,10 +234,11 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 		return nil, api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to create data file", map[string]string{"location": api.RedactPath(location)}, err)
 	}
 	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{
-		Schema:        w.cfg.Schema,
-		PartitionSpec: w.cfg.PartitionSpec,
-		FilePath:      location,
-		TimeZone:      w.cfg.TimeZone,
+		Schema:         w.cfg.Schema,
+		ParquetOptions: w.cfg.ParquetOptions,
+		PartitionSpec:  w.cfg.PartitionSpec,
+		FilePath:       location,
+		TimeZone:       w.cfg.TimeZone,
 	}, sink)
 	if err != nil {
 		cleanupErr := abortDataFileSink(sink, location)
