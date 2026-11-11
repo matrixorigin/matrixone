@@ -3283,6 +3283,8 @@ func TestHashBuildConsumesDictionaryColumn(t *testing.T) {
 	require.NoError(t, fixture.arg.Prepare(fixture.proc))
 	t.Cleanup(func() { fixture.arg.Free(fixture.proc, false, nil) })
 	require.True(t, fixture.arg.AcceptsDictionary(0))
+	require.True(t, fixture.arg.PrefersOwnedDictionaryInput(0))
+	require.False(t, fixture.arg.PrefersOwnedDictionaryInput(1))
 	result, err := vm.Exec(fixture.arg, fixture.proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, result.Status)

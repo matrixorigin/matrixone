@@ -1018,3 +1018,9 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	ctr.memoryGrowthParticipant.Release()
 	ctr.memoryGrowthParticipant = nil
 }
+
+// Admitted build ingress is copied into owned retained batches or flat spill
+// partitions. Prefer owned scan columns without disabling selected filtering.
+func (hashBuild *HashBuild) PrefersOwnedDictionaryInput(child int) bool {
+	return hashBuild.AcceptsDictionary(child)
+}

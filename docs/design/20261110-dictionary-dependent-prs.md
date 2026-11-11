@@ -524,3 +524,10 @@ and never returns it to the pool before consumption. Switching scratch owners or
 account/schema generations retires the old pool ownership before reinitializing.
 This avoids allocating a fresh full-block row map for every newly compiled scan;
 it does not add a cache tier or change selection validation.
+
+
+The admitted direct-column HashBuild path also requests owned ingress: its
+existing budgeted CopyIntoBatches/spill-partition path already copies values into
+owned storage. This completes the same real-consumer handoff on build roots,
+including non-producer roots configured individually. It does not change dedup,
+computed-key admission, retained batch format, spill, or build lifetime.
