@@ -542,3 +542,36 @@ The nil-policy behavior remains unchanged; incompatible masks conservatively
 copy owned. The real persisted-reader fixture verifies predicates still see full
 input while owned/unused cache columns do not acquire borrowed backing. Restored
 copying must remain measured against main; this is not a waived copy budget.
+
+
+## Approved synchronous pinned-cache scope
+
+The requester approved holding the existing IOVector pin through filtering and
+owned publication instead of choosing between full-column copying and escaping
+cache leases. Admit only a complete owned/unused policy, readonly Select callback,
+non-appendable blocks, no tombstones/storage selection/RowID/Top-K/extra buffers.
+Retaining/unknown consumers and unsupported storage modes keep existing paths.
+
+ObjectIO owns reusable scoped decoder headers and binds only its private validated
+immutable marker. Other entries materialize into the original owned destinations.
+The loader keeps one IOVector pinned until consume returns; scoped aliases never
+retain/release an additional cache owner or statement foreign pin. During consume,
+the reader temporarily presents scoped inputs to the readonly predicate callback,
+validates its original-row map, restores the original destination headers on all
+terminal paths, and gathers only selected required columns into owned buffers.
+Unused outputs clear their logical contents. Late payload reads keep the original
+physical-row mapping. The consumer owns no scoped header or byte/metadata alias.
+
+Scope cleanup runs before IOVector release, including decode/type errors, predicate
+errors, malformed selection and partial owned-gather allocation failure. There is
+no new goroutine, wait, lifetime handle or cached payload: retained metadata is
+bounded by prepared column width and headers contain no live aliases after With.
+Original owned destination capacity remains reusable. Standard expression/memo
+argument borrows end before scope exit; actual escaping values are native-owned.
+
+Tests prove payload address identity inside the scope, no public Bytes clone or
+additional cache Retain, callback-error retirement, stable header reuse and owned
+output survival after releasing the original cache owner. The existing persisted
+fixture proves scoped input and owned selected varlen output. Requalify all22 and
+per-query resources locally; keep uncovered native/runtime copies blocking, and
+make no push while any query/resource regression remains.

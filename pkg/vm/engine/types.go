@@ -1336,6 +1336,7 @@ type ReaderFilterRequest struct {
 	ColumnUses       []ReaderColumnUse
 	selectionScratch *ReaderSelectionScratch
 	borrowColumns    []bool
+	scopedColumns    *objectio.CachedColumnScope
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
 	// next callback. A supporting reader retains views or gathers that mapping
@@ -1366,6 +1367,15 @@ func (r *ReaderFilterRequest) ColumnUse(column, width int) ReaderColumnUse {
 		return ReaderColumnRetain
 	}
 	return use
+}
+
+// ColumnScope is metadata-only and execution-lane local. It has no live cache
+// references outside the synchronous callback, including after failed reads.
+func (r *ReaderFilterRequest) ColumnScope() *objectio.CachedColumnScope {
+	if r.scopedColumns == nil {
+		r.scopedColumns = &objectio.CachedColumnScope{}
+	}
+	return r.scopedColumns
 }
 
 // BorrowColumns lets the single pinned read honor the eventual representation.

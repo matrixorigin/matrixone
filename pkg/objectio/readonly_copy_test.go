@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -226,4 +227,48 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 	require.False(t, admitted)
 	require.Zero(t, destination.Length())
 	require.False(t, destination.IsDictionary())
+}
+
+func TestCachedColumnScopePinsOnlyForCallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	payload := bytes.Repeat([]byte{'q'}, 64)
+	require.NoError(t, vector.AppendBytes(source, payload, false, mp))
+	data, err := validateVectorCacheData(fileservice.NewBytes(marshalLegacyTestColumn(t, source)))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	probe := &retainedDictionaryCacheProbe{validatedVectorBytesProbe: &validatedVectorBytesProbe{backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()}}
+	probe.refs.Store(1)
+	output := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { output.Free(mp) })
+	scope := &CachedColumnScope{}
+	entries := []fileservice.IOEntry{{CachedData: probe}}
+	failure := moerr.NewInvalidInputNoCtx("injected scoped consumer failure")
+	err = scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.True(t, marked[0])
+		require.Equal(t, vector.LegacyAlias, inputs[0].DataBackingKind())
+		require.Equal(t, int32(1), probe.refs.Load(), "the existing pinned read owns cache lifetime")
+		position := bytes.Index(probe.backing, payload)
+		require.GreaterOrEqual(t, position, 0)
+		require.Same(t, &probe.backing[position], &inputs[0].GetBytesAt(0)[0])
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, scope.inputs[0])
+	require.Zero(t, scope.views[0].Length())
+	require.False(t, scope.marked[0])
+	header := &scope.views[0]
+	err = scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.True(t, marked[0])
+		require.Same(t, header, inputs[0])
+		return output.Union(inputs[0], []int64{0}, mp)
+	})
+	require.NoError(t, err)
+	require.Zero(t, probe.bytesCalls.Load())
+	probe.Release()
+	require.Equal(t, int32(1), probe.released.Load())
+	require.Equal(t, payload, output.GetBytesAt(0), "owned output survives the end of its cache pin")
+	require.False(t, output.HasBorrowedBacking())
 }

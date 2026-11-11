@@ -923,6 +923,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
 			require.False(t, b.Vecs[1].HasBorrowedBacking(), "owned/unused demand must avoid transient cache leases")
+			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "projected-column-use", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
@@ -931,6 +932,53 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
 		require.False(t, out.HasDictionary())
 		require.Zero(t, out.Vecs[1].Length())
+		out.CleanOnlyData()
+		request.ColumnUses[1] = engine.ReaderColumnOwned
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-owned-payload", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 3, out.RowCount())
+		require.False(t, out.HasDictionary())
+		require.False(t, out.Vecs[1].HasBorrowedBacking())
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+
+	})
+
+	t.Run("scoped gather failure restores owned headers", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(8)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(2)
+		require.NoError(t, out.SetAllocationAccount(allocation))
+		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
+		for i := range colTypes {
+			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
+			require.NoError(t, err)
+		}
+		original := out.Vecs[1]
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			t.Fatal("scope must use Select")
+			return engine.ReaderFilterResult{}, nil
+		}, Select: func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{1}, loaded)
+			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind())
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}}
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-gather-failure", out, cacheVectors, queryMP, fs, []int{1}, request)
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		require.Same(t, original, out.Vecs[1])
+		require.False(t, out.Vecs[1].HasBorrowedBacking())
+		require.Equal(t, vector.OwnedMPoolUnique, out.Vecs[1].DataBackingKind())
+		require.Zero(t, account.Snapshot().Used)
 	})
 
 	t.Run("exact selection observes tombstones and owns output", func(t *testing.T) {

@@ -1085,6 +1085,11 @@ func blockDataReadWithFilter(
 			tombstones.Release()
 			return tombstoneErr
 		}
+
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
+			defer tombstones.Release()
+			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
+		}
 		var visibilityTS *types.TS
 		if info.IsAppendable() {
 			visibilityTS = &ts

@@ -797,3 +797,29 @@ func LoadOneBlockWithIndex(
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
 	return bat, sortKey, err
 }
+
+// WithColumnsDataInto keeps one IOVector pinned through consume. Privately
+// validated columns use scoped readonly headers; other formats materialize into
+// the original owned destinations. The callback must publish only owned data
+// and consume any cache aliases before returning, including on error.
+func WithColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	if scope == nil || consume == nil || len(columns) != len(typs) || len(columns) != len(destinations) || m == nil {
+		return false, moerr.NewInvalidInputNoCtx("invalid scoped column read")
+	}
+	ioVector, hit, err := readColumnsData(ctx, columns, typs, fs, location, nil, m, policy)
+	if err != nil {
+		return false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVector)
+	err = scope.With(ioVector.Entries, destinations, func(inputs []*vector.Vector, marked []bool) error {
+		for i := range columns {
+			if !marked[i] {
+				if err := objectio.CopyCachedVectorAll(destinations[i], ioVector.Entries[i].CachedData, m); err != nil {
+					return err
+				}
+			}
+		}
+		return consume(inputs, marked)
+	})
+	return hit, err
+}
