@@ -379,3 +379,22 @@ This targets the line-attributed selection loop; it does not assert that all
 Q20 or whole-suite regressions share that cause. Validate focused semantic
 controls, the owning expression package, SQL and static checks, then the same
 local six-suite Q1-Q22 qualification; regressions again require requester review.
+
+
+## Approved shuffle admission correction — local only until accepted
+
+The requester authorized fixing the verified build-then-flatten boundary and
+explicitly prohibited further pushes until performance is fixed. Ordinary
+shuffle now propagates its downstream output admission to its child. Separate
+mechanical support from negotiated admission so representation discovery cannot
+become circular or remain stuck false. Owned complete-key routing continues to
+consume selected rows into its existing owned partitions. Keep normalization as
+a safety fallback; do not change routing, buffering, lifetime or cancellation.
+
+Reuse the existing synchronous/asynchronous hash/range routing fixture to prove
+accepting -> flat -> accepting boundary reconfiguration, source admission,
+unchanged results/accounting and fallback representation. Run owning checks,
+then a local-only clean build and the same Q1-Q22 six-suite protocol against the
+frozen matching main. No repeated full pre-push gate or remote push while this
+local performance revision is unaccepted. Any remaining regression gets a
+concrete diagnosis/proposal before further product changes.

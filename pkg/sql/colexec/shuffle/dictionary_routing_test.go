@@ -102,6 +102,7 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 				vm.Reset(arg, proc, false, nil)
 				vm.Free(arg, proc, false, nil)
 				child.ResetBatchs()
+				vm.Free(child, proc, false, nil)
 				arg.Release()
 			})
 			require.NoError(t, vm.Prepare(arg, proc))
@@ -111,7 +112,22 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 				vm.ConfigureDictionaryBoundaries(sink)
 				require.True(t, arg.DictionaryOutputState().AllowsDictionaryOutput())
 			}
-			require.True(t, arg.AcceptsDictionary(0))
+			require.Equal(t, tc.forward, arg.AcceptsDictionary(0))
+			require.Equal(t, tc.forward, child.state.AllowsDictionaryOutput())
+			possible, _ := arg.DictionaryOutput()
+			require.True(t, possible, "capability must not depend on current admission")
+			flatSink := colexec.NewMockOperator()
+			flatSink.AppendChild(arg)
+			vm.ConfigureDictionaryBoundaries(flatSink)
+			require.False(t, arg.AcceptsDictionary(0))
+			require.False(t, child.state.AllowsDictionaryOutput())
+			if tc.forward {
+				sink := &dictionaryRoutingSink{colexec.NewMockOperator()}
+				sink.AppendChild(arg)
+				vm.ConfigureDictionaryBoundaries(sink)
+				require.True(t, arg.AcceptsDictionary(0), "reconfiguration must not get stuck flat")
+				require.True(t, child.state.AllowsDictionaryOutput())
+			}
 			var values []int64
 			nulls := 0
 			for {

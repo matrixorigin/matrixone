@@ -56,9 +56,18 @@ type Shuffle struct {
 	vm.OperatorBase
 }
 
-// AcceptsDictionary admits direct-key hash/range routing and the synchronous
-// complete-key mode. Data partitions use the existing accounted flat buffers.
+// Ordinary shuffle can forward a selected batch; admit upstream views only
+// when its destination can keep that representation. Owned complete-key mode
+// consumes selected rows directly into its accounted partition buffers.
 func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
+	return shuffle.dictionaryInputSupported(child) &&
+		(shuffle.OwnedOutput || shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput())
+}
+
+// Mechanical capability is independent of negotiated output admission. Using
+// AcceptsDictionary here would make capability discovery depend on a state
+// which boundary configuration has not yet established.
+func (shuffle *Shuffle) dictionaryInputSupported(child int) bool {
 	if child == 0 && !shuffle.OwnedOutput && len(shuffle.ShuffleKeyColumns) == 0 && shuffle.ShuffleExpr == nil && shuffle.BucketNum > 0 {
 		return shuffle.ShuffleType == int32(plan.ShuffleType_Hash) || shuffle.ShuffleType == int32(plan.ShuffleType_Range)
 	}
@@ -70,7 +79,7 @@ func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
 // Marker forwarding can preserve a dictionary even though ordinary owned
 // partitions stay flat. Declare that edge so unknown destinations remain safe.
 func (shuffle *Shuffle) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
-	if !shuffle.OwnedOutput && shuffle.AcceptsDictionary(0) && len(shuffle.Children) > 0 {
+	if !shuffle.OwnedOutput && shuffle.dictionaryInputSupported(0) && len(shuffle.Children) > 0 {
 		if child, ok := shuffle.GetChildren(0).(vm.DictionaryProducer); ok {
 			return child.DictionaryOutput()
 		}
