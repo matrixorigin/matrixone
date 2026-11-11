@@ -140,6 +140,85 @@ func TestBinaryPreparedTableDescription(t *testing.T) {
 			})
 		}
 
+		// Quoted wildcard shortcuts share this cluster and wire fixture: the quoted
+		// argument is the SHOW COLUMNS LIKE pattern on the native prepare path as
+		// well, with the same seven-column metadata and binary results.
+		t.Run("quoted wildcard", func(t *testing.T) {
+			for _, object := range []string{"src", "v"} {
+				t.Run(object, func(t *testing.T) {
+					query := "desc " + database + "." + object + " 'x%'"
+					checkText := func(query, typ string) {
+						t.Helper()
+						rows, err := reader.QueryContext(ctx, query)
+						require.NoError(t, err, query)
+						checkDescriptionRows(t, rows, typ, false)
+					}
+					checkText(query, "int")
+					// SQL-string prepare parity (the pattern lives inside a string).
+					mustExec(t, ctx, reader, "prepare description_quoted from 'desc "+database+"."+object+" ''x%'''")
+					defer mustExec(t, ctx, reader, "deallocate prepare description_quoted")
+					checkText("execute description_quoted", "int")
+
+					// Native COM_STMT_PREPARE of the quoted form.
+					descriptionPackets(t, trace) // discard text controls
+					stmt, err := reader.PrepareContext(ctx, query)
+					require.NoError(t, err, query)
+					defer stmt.Close()
+					packets := descriptionPackets(t, trace)
+					require.NotEmpty(t, packets)
+					require.Len(t, packets[0], 12, "COM_STMT_PREPARE_OK")
+					require.Zero(t, packets[0][0])
+					require.EqualValues(t, 7, binary.LittleEndian.Uint16(packets[0][5:7]))
+					require.Zero(t, binary.LittleEndian.Uint16(packets[0][7:9]), "no parameters")
+					preparedMetadata := checkDescriptionWireMetadata(t, packets[1:])
+					// COM_STMT_EXECUTE twice on the same prepared statement.
+					for round := 0; round < 2; round++ {
+						descriptionPackets(t, trace)
+						rows, err := stmt.QueryContext(ctx)
+						require.NoError(t, err)
+						checkDescriptionRows(t, rows, "int", false)
+						packets := descriptionPackets(t, trace)
+						require.NotEmpty(t, packets)
+						require.Equal(t, []byte{7}, packets[0], "binary EXECUTE result header")
+						require.Equal(t, preparedMetadata, checkDescriptionWireMetadata(t, packets[1:]))
+					}
+
+					// A pattern matching no column prepares and executes to an
+					// empty binary result set with the same seven columns.
+					emptyStmt, err := reader.PrepareContext(ctx, "desc "+database+"."+object+" 'zz%'")
+					require.NoError(t, err)
+					defer emptyStmt.Close()
+					descriptionPackets(t, trace)
+					emptyRows, err := emptyStmt.QueryContext(ctx)
+					require.NoError(t, err)
+					checkEmptyDescriptionRows(t, emptyRows)
+					packets = descriptionPackets(t, trace)
+					require.NotEmpty(t, packets)
+					require.Equal(t, []byte{7}, packets[0], "binary EXECUTE result header for the empty result")
+					require.Equal(t, preparedMetadata, checkDescriptionWireMetadata(t, packets[1:]))
+				})
+			}
+
+			// A quoted pattern on a missing object keeps the 1146 contract and
+			// the connection stays usable afterwards.
+			stmt, err := reader.PrepareContext(ctx, "describe "+database+".missing 'x%'")
+			if err == nil {
+				defer stmt.Close()
+				rows, queryErr := stmt.QueryContext(ctx)
+				if rows != nil {
+					defer rows.Close()
+					require.NoError(t, rows.Err())
+				}
+				err = queryErr
+			}
+			var mysqlErr *mysqlDriver.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.EqualValues(t, 1146, mysqlErr.Number, "missing table, not a syntax error")
+			var one int
+			require.NoError(t, reader.QueryRowContext(ctx, "select 1").Scan(&one))
+			require.Equal(t, 1, one)
+		})
+
 		t.Run("missing object", func(t *testing.T) {
 			stmt, err := reader.PrepareContext(ctx, "describe "+database+".missing")
 			if err == nil {
@@ -227,6 +306,18 @@ func checkDescriptionRows(t *testing.T, rows *sql.Rows, typ string, full bool) {
 	}
 	require.NoError(t, rows.Scan(dest...))
 	require.Equal(t, want, actual)
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Err())
+}
+
+// checkEmptyDescriptionRows asserts the seven-column description metadata
+// header with zero rows for a quoted pattern that matches no column.
+func checkEmptyDescriptionRows(t *testing.T, rows *sql.Rows) {
+	t.Helper()
+	defer rows.Close()
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	require.Equal(t, []string{"Field", "Type", "Null", "Key", "Default", "Extra", "Comment"}, columns)
 	require.False(t, rows.Next())
 	require.NoError(t, rows.Err())
 }

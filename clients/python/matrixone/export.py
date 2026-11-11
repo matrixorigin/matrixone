@@ -56,19 +56,19 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     """
     # If it's already a string, return it
     if isinstance(query, str):
-        return query.rstrip(';').strip()
+        return query.strip().rstrip(';').rstrip()
 
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
         sql = substitute_parameters(sql, params)
-        return sql.rstrip(';').strip()
+        return sql.strip().rstrip(';').rstrip()
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
             compiled = compile_expression(query)
-            return str(compiled).rstrip(';').strip()
+            return str(compiled).strip().rstrip(';').rstrip()
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
 

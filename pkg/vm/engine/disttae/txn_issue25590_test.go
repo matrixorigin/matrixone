@@ -94,7 +94,11 @@ func newIssue25590TxnForTest(t *testing.T, stmts int) (*Transaction, *process.Pr
 }
 
 func newProcForTest(t *testing.T) *process.Process {
-	return testutil.NewProc(t)
+	proc := testutil.NewProc(t)
+	// Spill/compaction fixtures construct multi-block batches, exceeding the
+	// generic test Process's 1 MiB query limit. Keep real admission enabled.
+	proc.Base.Lim.Size = 64 << 20
+	return proc
 }
 
 // issue25590InsertBatch allocates a one-row INSERT batch carrying a fresh
@@ -906,6 +910,8 @@ func issue25590ArmDumpFault(t *testing.T, key, freq string) (disarm func()) {
 // DumpAndRollback does: pk column typing, TN stores, accounting maps and
 // dump thresholds far above the working set.
 func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
+	// These spill fixtures construct multi-block batches before writing them.
+	txn.proc.Base.Lim.Size = 64 << 20
 	t.Helper()
 	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 	require.NotNil(t, tbl)
@@ -5901,6 +5907,18 @@ func TestIssue25590QueueMembershipDeduplicatesAtScale(t *testing.T) {
 func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	colexec.NewServer("")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	parent, initErr := budget.OpenGeneration(1)
+	require.NoError(t, initErr)
+	require.NoError(t, txn.proc.SetExecutionResourceBudgetForTesting(parent))
+	t.Cleanup(parent.Close)
+	t.Cleanup(func() {
+		txn.closeWorkspaceAllocation()
+		if txn.workspaceAccount != nil {
+			require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+		}
+		require.Zero(t, budget.AggregateUsed())
+	})
 	issue25590InitDumpableFixture(t, txn)
 
 	ctx := context.Background()
@@ -6052,6 +6070,27 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 		"the dump's recorded objects are the only owned obligations")
 	require.Zero(t, inFlight)
 
+	// Saturate the real memory controller before clean-object republication.
+	// It must refuse its owned copy before rewriting or retiring any object.
+	account := txn.workspaceAccount
+	usedBefore := account.Snapshot().Used
+	original := txn.writes[metaIdx].bat
+	reservation, reserveErr := txn.workspaceGeneration.ReserveTransientMemory(
+		txn.workspaceGeneration.Cap() - txn.workspaceGeneration.Used())
+	require.NoError(t, reserveErr)
+	t.Cleanup(func() { reservation.Release() })
+	txn.Lock()
+	memoryErr := txn.compactDeletionOnObjsLocked(ctx)
+	txn.Unlock()
+	reservation.Release()
+	require.ErrorIs(t, memoryErr, mpool.ErrAllocationAccountCapacity)
+	require.Same(t, original, txn.writes[metaIdx].bat)
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, usedBefore, account.Snapshot().Used)
+	require.Equal(t, 1, txn.deletedBlocks.size())
+	require.Len(t, txn.deletedBlocks.offsets[tailFirstBlock], 2)
+	require.Len(t, failFS.persistedSnapshot(), objCount, "memory refusal must precede dirty replacement persistence")
+
 	// The pinned bound: every per-object reservation a replacement's
 	// spilling writer would book is refused before anything persists.
 	knobSaved := unpublishedPendingAdmissionLimit
@@ -6066,6 +6105,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	txn.Lock()
 	err = txn.compactDeletionOnObjsLocked(ctx)
 	txn.Unlock()
+	require.Equal(t, usedBefore, account.Snapshot().Used, "failed dirty rewrite must refund every staged clean copy")
 	require.ErrorContains(t, err, "workspace admission paused",
 		"a saturated bound refuses the dirty replacement's persistence and the compaction fails the admission whole")
 
@@ -6146,6 +6186,11 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	require.NotEqual(t, lastStats.ObjectName().String(), rewriteNames[0],
 		"the dirty object's replacement is a NEW storage object, not its original")
 	repubNames := make([]string, 0, objCount-1)
+	require.Positive(t, account.Snapshot().Used)
+	for _, index := range idxes {
+		require.True(t, vector.AllocationAccountSelectionsEqual(txn.workspaceSelection, txn.writes[index].bat.AllocationAccountSelection()),
+			"dirty replacement and every clean republication need the workspace account")
+	}
 	for i := 1; i < objCount; i++ {
 		repubNames = append(repubNames, issue25590StatsNamesOfMeta(t, txn, idxes[i])...)
 	}
