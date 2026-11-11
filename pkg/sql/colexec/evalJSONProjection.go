@@ -15,7 +15,7 @@
 package colexec
 
 import (
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var jsonProjectionReaderMapSize = reflect.TypeFor[map[int]vector.JSONReader]().Size()
 
 // JSONProjectionInputs owns bindings inside the expression executors supplied
 // at Prepare. Their caller owns executor cleanup; Release ends one evaluation.
@@ -260,7 +262,7 @@ func (inputs JSONProjectionInputs) Bind(proc *process.Process, input *batch.Batc
 	if err != nil {
 		return err
 	}
-	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(map[int]vector.JSONReader(nil)), len(inputs))
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(jsonProjectionReaderMapSize, len(inputs))
 	if err != nil {
 		return err
 	}

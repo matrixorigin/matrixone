@@ -16,7 +16,7 @@ package colexec
 
 import (
 	"io"
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var jsonLiteralExecutorSize = reflect.TypeFor[jsonLiteralExpressionExecutor]().Size()
 
 // A typed literal's immutable plan string is only a reconstruction seed. Every
 // query version is copied and admitted into a private builder, never a Vector
@@ -49,7 +51,7 @@ func newJSONLiteralExpressionExecutor(proc *process.Process, literal *plan.Liter
 	if err != nil {
 		return nil, err
 	}
-	release, err := vector.ReserveJSONReaderMetadata(allocation, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonLiteralExpressionExecutor{})))
+	release, err := vector.ReserveJSONReaderMetadata(allocation, admission, vector.JSONReaderMetadataCapacity(jsonLiteralExecutorSize))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,7 @@ func (source *jsonLiteralExpressionExecutor) constantJSONReader() (_ vector.JSON
 		if err != nil {
 			return nil, err
 		}
-		source.release, err = vector.ReserveJSONReaderMetadata(source.allocation, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonLiteralExpressionExecutor{})))
+		source.release, err = vector.ReserveJSONReaderMetadata(source.allocation, admission, vector.JSONReaderMetadataCapacity(jsonLiteralExecutorSize))
 		if err != nil {
 			return nil, err
 		}

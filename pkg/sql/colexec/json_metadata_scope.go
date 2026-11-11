@@ -16,13 +16,15 @@ package colexec
 
 import (
 	"io"
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var jsonMetadataScopeSize = reflect.TypeFor[JSONMetadataScope]().Size()
 
 // JSONMetadataScope accounts bounded Go control maps, slices and their tokens.
 // It belongs to one execution generation and is explicitly closed on reset.
@@ -46,7 +48,7 @@ func newJSONMetadataScopeWithAdmission(selection *vector.AllocationAccountSelect
 	if entries <= 0 || selection == nil && admission == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON metadata scope requires entries and accounting")
 	}
-	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(JSONMetadataScope{}), entries)
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(jsonMetadataScopeSize, entries)
 	if err != nil {
 		return nil, err
 	}

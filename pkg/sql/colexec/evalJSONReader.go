@@ -16,7 +16,7 @@ package colexec
 
 import (
 	"io"
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var jsonConstructorExecutorSize = reflect.TypeFor[jsonConstructorExpressionExecutor]().Size()
 
 // JSONReaderExpressionExecutor supplies an explicit immutable column version.
 // A producer binds each new version; Reset releases it, requiring a fresh Bind.
@@ -166,7 +168,7 @@ func newJSONConstructorExpressionExecutor(proc *process.Process, expr *FunctionE
 	if err != nil {
 		return nil, err
 	}
-	release, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{})))
+	release, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(jsonConstructorExecutorSize))
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +183,7 @@ func (source *jsonConstructorExpressionExecutor) ensureMetadata() error {
 	if err != nil {
 		return err
 	}
-	source.release, err = vector.ReserveJSONReaderMetadata(source.selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{})))
+	source.release, err = vector.ReserveJSONReaderMetadata(source.selection, admission, vector.JSONReaderMetadataCapacity(jsonConstructorExecutorSize))
 	return err
 }
 

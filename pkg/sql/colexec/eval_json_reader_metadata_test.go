@@ -16,8 +16,8 @@ package colexec
 
 import (
 	"io"
+	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -90,7 +90,7 @@ func TestJSONProjectionMetadataReleaseAndFailureRollback(t *testing.T) {
 
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
-	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(JSONMetadataScope{}), 4)
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(reflect.TypeFor[JSONMetadataScope]().Size(), 4)
 	require.NoError(t, err)
 	account, err := registry.Open(capacity)
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestJSONLiteralExecutorMetadataLifecycle(t *testing.T) {
 
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
-	capacity := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonLiteralExpressionExecutor{}))
+	capacity := vector.JSONReaderMetadataCapacity(reflect.TypeFor[jsonLiteralExpressionExecutor]().Size())
 	account, err := registry.Open(capacity - 1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
@@ -228,7 +228,7 @@ func TestJSONConstructorExecutorMetadataLifecycle(t *testing.T) {
 
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
-	capacity := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{}))
+	capacity := vector.JSONReaderMetadataCapacity(reflect.TypeFor[jsonConstructorExpressionExecutor]().Size())
 	account, err := registry.Open(capacity - 1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
