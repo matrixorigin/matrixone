@@ -171,6 +171,7 @@ type IndexTableConfig struct {
 	DataSize           int64    `json:"datasize"`
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`
+	PKeyEnum           string   `json:"pkenum,omitempty"`
 	KeyPartType        int32    `json:"parttype"`
 	KeyPartWidth       int32    `json:"partwidth,omitempty"`
 	KmeansTrainPercent float64  `json:"kmeans_train_percent"`

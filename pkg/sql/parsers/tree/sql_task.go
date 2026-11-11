@@ -89,6 +89,7 @@ const (
 	AlterTaskSetWhen
 	AlterTaskSetRetry
 	AlterTaskSetTimeout
+	AlterTaskResetRun
 )
 
 type AlterSQLTask struct {
@@ -100,6 +101,7 @@ type AlterSQLTask struct {
 	GateCondition string
 	RetryLimit    int64
 	Timeout       string
+	RunID         int64
 }
 
 func (node *AlterSQLTask) Format(ctx *FmtCtx) {
@@ -127,6 +129,10 @@ func (node *AlterSQLTask) Format(ctx *FmtCtx) {
 	case AlterTaskSetTimeout:
 		ctx.WriteString(" set timeout ")
 		ctx.WriteString("'" + node.Timeout + "'")
+	case AlterTaskResetRun:
+		ctx.WriteString(" reset runs ")
+		ctx.WriteString(strconv.FormatInt(node.RunID, 10))
+		ctx.WriteString(" force")
 	}
 }
 

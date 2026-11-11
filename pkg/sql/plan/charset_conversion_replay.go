@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -139,6 +140,14 @@ func charsetConversionExpressions(ctx CompilerContext, tableName, columnName str
 		result.defaultExpr.Expr, err = assignment(source.defaultExpr.Expr)
 		if err != nil {
 			return nil, err
+		}
+		// Retained defaults bypass the SQL binder, but a changed binary
+		// assignment must still reject constants that exceed its byte capacity.
+		if result.defaultExpr.Expr != nil && (target.Id == int32(types.T_binary) || target.Id == int32(types.T_varbinary)) {
+			_, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(result.defaultExpr.Expr), ctx.GetProcess(), false, true)
+			if err != nil {
+				return nil, mapDDLAssignmentCastError(ctx.GetContext(), target, columnName, err)
+			}
 		}
 	}
 	if source.onUpdate != nil {

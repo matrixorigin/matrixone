@@ -16,6 +16,9 @@ package datasync
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -29,6 +32,8 @@ import (
 const (
 	recordMaxSize = 10 * 1024 * 1024
 )
+
+var errRequiredLsnConflict = moerr.NewInternalErrorNoCtx("required LSN owner or revision changed")
 
 // LogClient is a interface defines the operation of log entries.
 type LogClient interface {
@@ -51,6 +56,8 @@ type LogClient interface {
 	// others, means that the log entries before the required
 	// lsn have been consumed.
 	setRequiredLsn(ctx context.Context, lsn uint64) error
+	claimRequiredLsn(ctx context.Context) error
+	resetRequiredLsn(ctx context.Context) error
 	// getRequiredLsn returns the required lsn of this shard.
 	getRequiredLsn(ctx context.Context) (uint64, error)
 	// writeWithRetry is same with write(), but retries to call
@@ -74,9 +81,12 @@ type LogClient interface {
 
 type logClient struct {
 	common
-	haKeeperClient logservice.ClusterHAKeeperClient
-	client         logservice.StandbyClient
-	shardID        uint64
+	haKeeperClient   logservice.ClusterHAKeeperClient
+	client           logservice.StandbyClient
+	shardID          uint64
+	requiredLsn      uint64
+	requiredRevision uint64
+	requiredOwner    uint64
 }
 
 func newLogClient(common common, shardID uint64) *logClient {
@@ -213,11 +223,92 @@ func (c *logClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientSetRequiredLsn)
-	defer cancel()
-	err := c.client.SetRequiredLsn(ctx, lsn)
+	if c.requiredOwner == 0 {
+		if err := c.claimRequiredLsn(ctx); err != nil {
+			return err
+		}
+	}
+	attemptCtx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientSetRequiredLsn)
+	err := c.client.SetRequiredLsnIfCurrent(attemptCtx, lsn, c.requiredLsn,
+		c.requiredRevision, c.requiredOwner)
+	cancel()
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		// A response can be lost after the proposal commits. Only our owner
+		// and exactly the next revision prove this write was accepted.
+		readCtx, readCancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetRequiredLsn)
+		current, revision, owner, readErr := c.client.GetRequiredLsnState(readCtx)
+		readCancel()
+		if readErr != nil {
+			return err
+		}
+		if current != lsn || owner != c.requiredOwner ||
+			revision != c.requiredRevision+1 {
+			return errRequiredLsnConflict
+		}
+	}
+	c.requiredLsn = lsn
+	c.requiredRevision++
+	return nil
+}
+
+func (c *logClient) claimRequiredLsn(ctx context.Context) error {
+	if err := c.prepare(ctx); err != nil {
+		return err
+	}
+	leaderCtx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLeaderID)
+	leaderID, leaderTerm, err := c.client.GetLeaderState(leaderCtx)
+	if err != nil {
+		err = moerr.AttachCause(leaderCtx, err)
+	}
+	cancel()
+	if err != nil {
+		return err
+	}
+	if leaderID == 0 || leaderTerm == 0 {
+		return errRequiredLsnConflict
+	}
+	if c.common.shardReplicaID != nil {
+		localID, ok := c.common.shardReplicaID.Load(c.shardID)
+		if !ok || localID.(uint64) != leaderID {
+			return errRequiredLsnConflict
+		}
+	}
+	lsn, revision, _, err := c.client.GetRequiredLsnState(ctx)
+	if err != nil {
+		return err
+	}
+	var ownerBytes [8]byte
+	if _, err := rand.Read(ownerBytes[:]); err != nil {
+		return err
+	}
+	owner := binary.LittleEndian.Uint64(ownerBytes[:])
+	if owner == 0 {
+		owner = 1
+	}
+	if err := c.client.ClaimRequiredLsn(ctx, lsn, revision, owner, leaderTerm, leaderID); err != nil {
+		current, currentRevision, currentOwner, readErr := c.client.GetRequiredLsnState(ctx)
+		if readErr != nil {
+			return err
+		}
+		if current != lsn || currentRevision != revision+1 ||
+			currentOwner != owner {
+			return errRequiredLsnConflict
+		}
+	}
+	c.requiredLsn, c.requiredRevision, c.requiredOwner = lsn, revision+1, owner
+	return nil
+}
+
+func (c *logClient) resetRequiredLsn(ctx context.Context) error {
+	if err := c.setRequiredLsn(ctx, 0); err != nil {
+		return err
+	}
+	lsn, revision, owner, err := c.client.GetRequiredLsnState(ctx)
+	if err != nil {
+		return err
+	}
+	if lsn != 0 || revision != c.requiredRevision || owner != c.requiredOwner {
+		return errRequiredLsnConflict
 	}
 	return nil
 }
@@ -262,8 +353,8 @@ func (c *logClient) getTruncatedLsnWithRetry(ctx context.Context) (uint64, error
 func (c *logClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
 	_, err := fileservice.DoWithRetryContext(ctx, "write-data", func() (uint64, error) {
 		return 0, c.setRequiredLsn(ctx, lsn)
-	}, 10, func(_ error) bool {
-		return true
+	}, 10, func(err error) bool {
+		return !errors.Is(err, errRequiredLsnConflict)
 	})
 	if err != nil {
 		return err
