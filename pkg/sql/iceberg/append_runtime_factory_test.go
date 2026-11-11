@@ -208,7 +208,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		ScopeForLocation: scopeForLocation,
 		SnapshotID:       func(time.Time, *api.TableMetadata) int64 { return 45 },
 	})
-	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
+	request := icebergwrite.AppendRequest{
 		AccountID:      42,
 		StatementID:    "stmt-append-117",
 		IdempotencyKey: "stmt-append-117",
@@ -222,7 +222,43 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 			DbId:  100,
 			TblId: 200,
 		},
-	})
+	}
+	preserved, err := metadata.ReadManifestList(baseManifestListBytes)
+	require.NoError(t, err)
+	weight := metadata.ManifestListMemoryWeight(0, preserved)
+	require.Greater(t, weight, int64(1))
+	for _, tc := range []struct {
+		name   string
+		limit  int64
+		reject bool
+	}{
+		{"below", weight + 1, false}, {"equal", weight, false},
+		{"above", weight - 1, true}, {"unlimited", 0, false},
+	} {
+		t.Run("preserved_"+tc.name, func(t *testing.T) {
+			f := NewAppendRuntimeCoordinatorFactory(factory.opts)
+			f.opts.Config.Write.DMLMaxMemory = tc.limit
+			got, err := f.NewCoordinator(ctx, request)
+			if tc.reject {
+				require.Nil(t, got)
+				assertConsumerBudgetError(t, err, 0, weight, tc.limit)
+				require.Empty(t, f.shared.entries)
+				f.opts.Config.Write.DMLMaxMemory = weight
+				got, err = f.NewCoordinator(ctx, request)
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, got.Abort(ctx, nil)) })
+			scope := got.(*appendRuntimeSharedCoordinatorScope)
+			inner := scope.shared.inner.(*AppendRuntimeCoordinator)
+			require.Equal(t, weight, inner.memoryBudget.usedBytes())
+			expectedLimit := tc.limit
+			if tc.reject {
+				expectedLimit = weight
+			}
+			require.Equal(t, expectedLimit, inner.memoryBudget.limit)
+		})
+	}
+	coord, err := factory.NewCoordinator(ctx, request)
 	require.NoError(t, err)
 	require.NoError(t, coord.Begin(ctx, icebergwrite.AppendRequest{}))
 	bat, mp := appendGoldKPIBatch(t)
