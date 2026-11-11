@@ -37,7 +37,7 @@ jobs:
     secrets: inherit
   cs-minio-smoke:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke
-    runs-on: cs-mnl2-nightly-dind-2c8g
+    runs-on: cs-mnl2-dind-2c8g
     timeout-minutes: 90
     steps:
       - name: Install build dependencies
