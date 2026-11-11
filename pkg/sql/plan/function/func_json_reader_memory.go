@@ -39,7 +39,7 @@ func JSONReaderMemoryAdmission(proc *process.Process, contexts ...context.Contex
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	generation, err := proc.GetExecutionResourceBudget()
+	reserve, err := proc.GetExecutionTransientMemoryAdmission()
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func JSONReaderMemoryAdmission(proc *process.Process, contexts ...context.Contex
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		reservation, err := generation.ReserveTransientMemory(capacity)
+		reservation, err := reserve(capacity)
 		if err != nil {
 			return nil, err
 		}

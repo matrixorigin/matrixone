@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -242,4 +243,47 @@ func TestJSONConstructorExecutorMetadataLifecycle(t *testing.T) {
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
 	require.Equal(t, before, budget.Snapshot().Used)
+}
+
+func TestBoundJSONTextEvaluationBorrowsExistingReader(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	var live uint64
+	calls := 0
+	admission := func(capacity uint64) (func(), error) {
+		calls++
+		live += capacity
+		return func() { live -= capacity }, nil
+	}
+	builder, err := vector.NewJSONReaderBuilder(proc.Mp(), nil, admission)
+	require.NoError(t, err)
+	defer builder.Close()
+	doc, err := types.ParseStringToByteJson(`{"keep":"owned text"}`)
+	require.NoError(t, err)
+	require.NoError(t, builder.AppendByteJson(doc, false))
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	source, err := NewJSONReaderExpressionExecutor(proc, reader)
+	require.NoError(t, err)
+	reader.Close()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	defer bat.Clean(proc.Mp())
+	bat.SetRowCount(1)
+	column := &plan.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	path := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "$.keep"}}}}
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "json_value", column, path))
+	require.NoError(t, err)
+	defer executor.Free()
+	fn := executor.(*FunctionExpressionExecutor)
+	fn.parameterExecutor[0].Free()
+	fn.SetParameter(0, source)
+	before := calls
+	out, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "owned text", string(out.GetBytesAt(0)))
+	require.Equal(t, before, calls, "a live binding needs no temporary window or cursor")
+	source.ResetForNextQuery()
+	require.Zero(t, live)
+	require.Equal(t, "owned text", string(out.GetBytesAt(0)))
 }

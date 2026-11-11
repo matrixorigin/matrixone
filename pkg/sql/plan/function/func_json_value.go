@@ -328,6 +328,7 @@ func jsonValueExecuteCore(
 	appendValue func(jsonValueExtracted) (conversionErr, outputErr error),
 	appendNull func() error,
 	appendDefault func(uint64, bool) error,
+	textSelection bool,
 	readers ...vector.JSONReader,
 ) error {
 	var docParam jsonValueInputParameter
@@ -350,7 +351,7 @@ func jsonValueExecuteCore(
 	}
 
 	var cursor vector.JSONCursor
-	if len(readers) != 0 {
+	if len(readers) != 0 && !textSelection {
 		var err error
 		cursor, err = readers[0].OpenCursor()
 		if err != nil {
@@ -401,7 +402,11 @@ func jsonValueExecuteCore(
 
 		var extracted jsonValueExtracted
 		if len(readers) != 0 {
-			extracted = jsonValueExtractReaderAtPath(cursor, int(row), parsedPath, pathText, false, true)
+			if textSelection {
+				extracted = jsonValueExtractReaderTextAtPath(readers[0], int(row), parsedPath, pathText)
+			} else {
+				extracted = jsonValueExtractReaderAtPath(cursor, int(row), parsedPath, pathText, false, true)
+			}
 		} else {
 			extracted = jsonValueExtractAtPath(doc, docType, false, parsedPath, pathText)
 		}
@@ -541,7 +546,7 @@ func jsonValueTextResult(
 			}
 			value, null := defaults.GetStrValue(row)
 			return rs.AppendBytes(value, null)
-		}, readers...)
+		}, true, readers...)
 }
 
 func jsonValueJSONResult(
@@ -578,7 +583,7 @@ func jsonValueJSONResult(
 				return err
 			}
 			return rs.AppendByteJson(defaultJSON, false)
-		}, readers...)
+		}, false, readers...)
 }
 
 func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
@@ -614,7 +619,7 @@ func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
 			}
 			value, null := defaults.GetValue(row)
 			return rs.Append(value, null)
-		}, readers...)
+		}, false, readers...)
 }
 
 func jsonValueText(value string, target types.Type) (string, error) {
@@ -1000,11 +1005,6 @@ func jsonValueWithAdmittedReader(reader vector.JSONReader, ivecs []*vector.Vecto
 func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	writer := vector.MustFunctionResult[types.Varlena](result)
 	pathParam := newJsonValueInputParameter(ivecs[1])
-	cursor, err := reader.OpenCursor()
-	if err != nil {
-		return err
-	}
-	defer cursor.Close()
 	legacyFloat := LegacyFloatStringFormatting(jsonValueContext(proc))
 	for row := 0; row < length; row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(uint64(row))) {
@@ -1023,7 +1023,7 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 			}
 			continue
 		}
-		selected, err := cursor.QueryText(row, path, legacyFloat)
+		selected, err := reader.QueryText(row, path, legacyFloat)
 		if err != nil {
 			if selected.InvalidPath {
 				return moerr.NewInvalidArgNoCtx("json_value", "invalid path expression")
@@ -1043,6 +1043,36 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 		}
 	}
 	return nil
+}
+
+// Text targets need only owned text and the selected type. The reader's
+// synchronous selection uses the same validated path query as a cursor while
+// avoiding a retained per-evaluation handle.
+func jsonValueExtractReaderTextAtPath(reader vector.JSONReader, row int, path bytejson.Path, pathText string) jsonValueExtracted {
+	selected, err := reader.QueryTextAtPath(row, path, false)
+	extracted := jsonValueExtracted{path: pathText}
+	if err != nil {
+		extracted.err = err
+		if selected.TextError {
+			extracted.state = jsonValueSourceParseError
+		} else {
+			extracted.state = jsonValueHardError
+		}
+		return extracted
+	}
+	switch {
+	case selected.InputNull || selected.ValueNull:
+		extracted.state = jsonValueSQLNull
+	case selected.Multiple:
+		extracted.state = jsonValueMultiple
+	case !selected.Exists:
+		extracted.state = jsonValueEmpty
+	default:
+		extracted.state = jsonValueOneValue
+		extracted.text = selected.Text
+		extracted.value.Type = bytejson.TpCode(selected.Type)
+	}
+	return extracted
 }
 
 func jsonValueExtractReaderAtPath(cursor vector.JSONCursor, row int, path bytejson.Path, pathText string, legacyFloat bool, typed bool) jsonValueExtracted {

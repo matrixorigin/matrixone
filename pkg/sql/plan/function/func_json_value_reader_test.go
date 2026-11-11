@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -174,13 +176,13 @@ func TestJSONCastReaderIsolationAndPartialFailure(t *testing.T) {
 }
 
 func TestJSONValueReaderPathNullOrdering(t *testing.T) {
-	for _, contract := range []bool{false, true} {
+	for _, mode := range []struct {
+		name     string
+		contract bool
+		text     bool
+	}{{"legacy", false, true}, {"text-contract", true, true}, {"typed-contract", true, false}} {
 		for _, scenario := range []string{"null-document", "null-path", "both-null", "invalid-path"} {
-			name := "legacy/" + scenario
-			if contract {
-				name = "contract/" + scenario
-			}
-			t.Run(name, func(t *testing.T) {
+			t.Run(mode.name+"/"+scenario, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				docNull := scenario == "null-document" || scenario == "both-null"
 				pathNull := scenario == "null-path" || scenario == "both-null"
@@ -190,14 +192,20 @@ func TestJSONValueReaderPathNullOrdering(t *testing.T) {
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$["}, []bool{pathNull}),
 				}
 				expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true})
-				if contract {
+				if mode.contract {
+					nullValue := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true})
+					if mode.text {
+						nullValue = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true})
+					}
 					inputs = append(inputs,
-						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+						nullValue,
 						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
-						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+						nullValue,
 						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
-						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}))
-					expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true})
+						nullValue)
+					if !mode.text {
+						expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true})
+					}
 				}
 				fc := NewFunctionTestCase(proc, inputs, expected, JsonValue)
 				defer fc.Free()
@@ -214,7 +222,7 @@ func TestJSONValueReaderPathNullOrdering(t *testing.T) {
 					} else {
 						err = JsonValue(fc.parameters, fc.result, proc, 1, nil)
 					}
-					wantError := !pathNull && (contract || !docNull)
+					wantError := !pathNull && (mode.contract || !docNull)
 					if wantError {
 						require.ErrorContains(t, err, "invalid path expression")
 					} else {
@@ -227,9 +235,145 @@ func TestJSONValueReaderPathNullOrdering(t *testing.T) {
 	}
 }
 
+func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
+	boundary := strings.Repeat("猫", 512)
+	long := strings.Repeat("猫", 513)
+	for _, test := range []struct {
+		name, document, path, want string
+		width                      int32
+		implicit, nullDoc          bool
+		wantNull, wantError        bool
+		jsonOutput                 bool
+	}{
+		{"value", `{"keep":"value"}`, "$.keep", "value", 512, true, false, false, false, false},
+		{"empty-default", `{"keep":1}`, "$.missing", "empty", 512, true, false, false, false, false},
+		{"multiple-default", `{"items":[1,2]}`, "$.items[*]", "fallback", 512, true, false, false, false, false},
+		{"composite-implicit", `{"obj":{"x":1}}`, "$.obj", `{"x":1}`, 512, true, false, false, false, true},
+		{"composite-explicit", `{"obj":{"x":1}}`, "$.obj", "fallback", 10, false, false, false, false, false},
+		{"json-null", `{"keep":null}`, "$.keep", "", 512, true, false, true, false, false},
+		{"sql-null", `{"keep":1}`, "$.keep", "", 512, true, true, true, false, false},
+		{"invalid-path", `{"keep":1}`, "$[", "", 512, true, false, false, true, false},
+		{"null-invalid-path", `{"keep":1}`, "$[", "", 512, true, true, false, true, false},
+		{"width-512", `{"keep":"` + boundary + `"}`, "$.keep", boundary, 512, true, false, false, false, false},
+		{"width-513", `{"keep":"` + long + `"}`, "$.keep", "fallback", 512, true, false, false, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			target := types.New(types.T_varchar, test.width, 0)
+			if test.implicit {
+				target = types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+			}
+			raw := mustJsonBinaryString(t, test.document)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{raw}, []bool{test.nullDoc}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{test.path}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueDefaultResponse}, nil),
+				NewFunctionTestConstInput(target, []string{"empty"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueDefaultResponse}, nil),
+				NewFunctionTestConstInput(target, []string{"fallback"}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, []string{""}, nil), JsonValue)
+			defer fc.Free()
+			reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+			require.NoError(t, err)
+			defer reader.Close()
+			type outcome struct {
+				text, failure string
+				null          bool
+			}
+			run := func(immutable bool) outcome {
+				t.Helper()
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+				var e error
+				if immutable {
+					e = JsonValueWithReader(reader, fc.parameters, fc.result, proc, 1, nil)
+				} else {
+					e = JsonValue(fc.parameters, fc.result, proc, 1, nil)
+				}
+				if e != nil {
+					return outcome{failure: e.Error()}
+				}
+				result := fc.result.GetResultVector()
+				if result.IsNull(0) {
+					return outcome{null: true}
+				}
+				return outcome{text: string(result.GetBytesAt(0))}
+			}
+			ordinary := run(false)
+			frozen := run(true)
+			require.Equal(t, ordinary, frozen)
+			if test.wantError {
+				require.Contains(t, frozen.failure, "invalid path expression")
+			} else if test.wantNull {
+				require.True(t, frozen.null)
+			} else if test.jsonOutput {
+				require.JSONEq(t, test.want, frozen.text)
+			} else {
+				require.Equal(t, test.want, frozen.text)
+			}
+		})
+	}
+}
+
+func TestJSONValueReaderTextOutputCapacityFailureIsTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+	payload := strings.Repeat("x", 128)
+	raw := mustJsonBinaryString(t, `{"a":"`+payload+`"}`)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), []string{raw}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, nil),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+	}
+	fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, []string{payload}, nil), JsonValue)
+	defer fc.Free()
+	reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+	require.NoError(t, err)
+	defer reader.Close()
+	const capacity = int64(1 << 20)
+	mp, err := mpool.NewMPool(t.Name(), capacity, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+	result := vector.NewFunctionResultWrapper(target, mp)
+	var filler []byte
+	defer func() { mp.Free(filler); result.Free(); require.Zero(t, mp.CurrNB()) }()
+	require.NoError(t, result.PreExtendAndReset(1))
+	filler, err = mp.Alloc(int(capacity-mp.CurrNB()), true)
+	require.NoError(t, err)
+	err = JsonValueWithReader(reader, fc.parameters, result, proc, 1, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "output allocation failure must remain terminal")
+	mp.Free(filler)
+	filler = nil
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, JsonValueWithReader(reader, fc.parameters, result, proc, 1, nil))
+	reader.Close()
+	require.Equal(t, payload, string(result.GetResultVector().GetBytesAt(0)))
+}
+
 type cancelDuringJSONQueryReader struct {
 	vector.JSONReader
 	cancel context.CancelFunc
+}
+
+func (r *cancelDuringJSONQueryReader) QueryText(row int, path []byte, legacyFloat bool) (vector.JSONTextSelection, error) {
+	selected, err := r.JSONReader.QueryText(row, path, legacyFloat)
+	if err == nil {
+		r.cancel()
+	}
+	return selected, err
+}
+
+func (r *cancelDuringJSONQueryReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bool) (vector.JSONTextSelection, error) {
+	selected, err := r.JSONReader.QueryTextAtPath(row, path, legacyFloat)
+	if err == nil {
+		r.cancel()
+	}
+	return selected, err
 }
 
 func (r *cancelDuringJSONQueryReader) OpenCursor() (vector.JSONCursor, error) {
@@ -262,12 +406,12 @@ func (c *cancelDuringJSONQueryCursor) QueryText(row int, path []byte, legacyFloa
 }
 
 func TestJSONValueCancellationDuringReaderExecution(t *testing.T) {
-	for _, contract := range []bool{false, true} {
-		name := "legacy"
-		if contract {
-			name = "contract"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		contract bool
+		text     bool
+	}{{"legacy", false, true}, {"text-contract", true, true}, {"typed-contract", true, false}} {
+		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			original := proc.Ctx
 			ctx, cancel := context.WithCancel(original)
@@ -281,14 +425,20 @@ func TestJSONValueCancellationDuringReaderExecution(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.keep"}, nil),
 			}
 			expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1", "1"}, nil)
-			if contract {
+			if test.contract {
+				nullValue := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true})
+				if test.text {
+					nullValue = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true})
+				}
 				inputs = append(inputs,
-					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+					nullValue,
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
-					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+					nullValue,
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
-					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}))
-				expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 1}, nil)
+					nullValue)
+				if !test.text {
+					expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 1}, nil)
+				}
 			}
 			fc := NewFunctionTestCase(proc, inputs, expected, JsonValue)
 			defer fc.Free()

@@ -2008,6 +2008,17 @@ func (expr *FunctionExpressionExecutor) evalWithJSONReader(proc *process.Process
 				continue
 			}
 			if i == 0 && expr.fid == function.JSON_VALUE && reader == nil {
+				// A bound column source already owns its retained version until
+				// projection release. Borrow it for this synchronous evaluation
+				// instead of allocating another window per expression.
+				if source, ok := expr.parameterExecutor[i].(*JSONReaderExpressionExecutor); ok && source.reader != nil {
+					if source.reader.Length() != rowCount {
+						return nil, moerr.NewInvalidInputNoCtx("JSON source row mapping mismatch")
+					}
+					reader = source.reader
+					expr.parameterResults[i] = nil
+					continue
+				}
 				if source, ok := expr.parameterExecutor[i].(interface {
 					jsonReaderInput(*process.Process, []*batch.Batch, []bool) (vector.JSONReader, error)
 				}); ok {
