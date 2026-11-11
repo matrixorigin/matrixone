@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -2705,5 +2707,172 @@ func TestBudgetCleanupContinuesAfterSQLVerificationFailures(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The harness must reject a false positive even when the SQL itself succeeds.
+func TestAppendBudgetRowsOracles(t *testing.T) {
+	for _, tc := range []struct {
+		name, added, wantErr string
+		lowBudget            bool
+		badRows              bool
+	}{
+		{name: "default budget control"},
+		{name: "rotated files", lowBudget: true, added: "2"},
+		{name: "single file is not rotation", lowBudget: true, added: "1", wantErr: "expected multiple committed data files"},
+		{name: "invalid file count", lowBudget: true, added: "invalid", wantErr: "invalid syntax"},
+		{name: "wrong readback", badRows: true, wantErr: "append rows mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			t.Cleanup(func() { db.Close() })
+			cfg := localE2ETestConfig()
+			if tc.lowBudget {
+				cfg.CatalogURI = newBudgetSnapshotServer(t, 100, 100, tc.added).URL + "/iceberg"
+			}
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 128))
+			count := 128
+			if tc.badRows {
+				count = 127
+			}
+			mock.ExpectQuery("SELECT count").WillReturnRows(sqlmock.NewRows([]string{"count", "distinct", "sum", "bytes", "mismatches"}).AddRow(count, 128, 8256, 4194304, 0))
+			result := (&caseRunner{cfg: cfg, db: db, lowBudget: tc.lowBudget}).appendBudgetRowsCase(context.Background())
+			assertBudgetCaseResult(t, result, tc.wantErr)
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAppendBudgetRejectionOracles(t *testing.T) {
+	budgetErr := &mysql.MySQLError{Number: 20400, Message: "ICEBERG_PLANNING_LIMIT_EXCEEDED used_bytes=4190000 requested_bytes=65536 limit_bytes=4194304 iceberg.write.dml_max_memory dml-max-memory"}
+	for _, tc := range []struct {
+		name, wantErr string
+		err           error
+		after         int64
+		rows          int
+	}{
+		{"atomic rejection", "", budgetErr, 100, 1},
+		{"unexpected success", "expected MySQL error 20400", nil, 100, 1},
+		{"unrelated SQL error", "expected MySQL error 20400", &mysql.MySQLError{Number: 1064}, 100, 1},
+		{"missing accounting", "budget error missing", &mysql.MySQLError{Number: 20400, Message: "memory exhausted"}, 100, 1},
+		{"snapshot changed", "snapshot changed", budgetErr, 101, 1},
+		{"partial data visible", "partial commit", budgetErr, 100, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			t.Cleanup(func() { db.Close() })
+			cfg := localE2ETestConfig()
+			cfg.CatalogURI = newBudgetSnapshotServer(t, 100, tc.after, "2").URL + "/iceberg"
+			mock.ExpectExec("INSERT INTO .* VALUES").WillReturnResult(sqlmock.NewResult(0, 1))
+			insert := mock.ExpectExec("INSERT INTO .* SELECT")
+			if tc.err != nil {
+				insert.WillReturnError(tc.err)
+			} else {
+				insert.WillReturnResult(sqlmock.NewResult(0, 512))
+			}
+			if tc.wantErr == "" || tc.wantErr == "partial commit" {
+				mock.ExpectQuery("SELECT count").WillReturnRows(sqlmock.NewRows([]string{"count", "ids", "amount"}).AddRow(tc.rows, 1, 1))
+			}
+			result := (&caseRunner{cfg: cfg, db: db}).appendBudgetRejectionCase(context.Background())
+			assertBudgetCaseResult(t, result, tc.wantErr)
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func assertBudgetCaseResult(t *testing.T, result caseResult, wantErr string) {
+	t.Helper()
+	if wantErr == "" {
+		if result.Status != "passed" || result.Error != "" {
+			t.Fatalf("expected passing case: %+v", result)
+		}
+	} else if result.Status != "failed" || !strings.Contains(result.Error, wantErr) {
+		t.Fatalf("expected failure %q: %+v", wantErr, result)
+	}
+}
+
+func newBudgetSnapshotServer(t *testing.T, before, after int64, added string) *httptest.Server {
+	t.Helper()
+	loads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/v1/config"):
+			_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+		case strings.Contains(r.URL.Path, "/namespaces/ci_ns/tables/"):
+			current := before
+			if loads > 0 {
+				current = after
+			}
+			loads++
+			_, _ = fmt.Fprintf(w, `{"metadata-location":"s3://warehouse/metadata.json","metadata":{"format-version":2,"table-uuid":"uuid-1","current-snapshot-id":%d,"snapshots":[{"snapshot-id":%d,"summary":{"added-data-files":%q}}]}}`, current, current, added)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestBudgetRunReportsSeedAndCleanupFailures(t *testing.T) {
+	for _, cleanupFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanupFails=%v", cleanupFails), func(t *testing.T) {
+			deleted := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/v1/config"):
+					_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/namespaces"):
+					w.WriteHeader(http.StatusCreated)
+				case r.Method == http.MethodPost: // first table cannot be created
+					w.WriteHeader(http.StatusBadRequest)
+				case r.Method == http.MethodDelete:
+					if cleanupFails {
+						w.WriteHeader(http.StatusInternalServerError)
+					} else {
+						deleted <- struct{}{}
+						w.WriteHeader(http.StatusNoContent)
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(server.Close)
+			reports := t.TempDir()
+			oldFlags, oldArgs := flag.CommandLine, os.Args
+			t.Cleanup(func() { flag.CommandLine, os.Args = oldFlags, oldArgs })
+			flag.CommandLine = flag.NewFlagSet("budget-run", flag.ContinueOnError)
+			os.Args = []string{"budget-run", "--low-budget-regression", "--namespace=ci_ns", "--mo-catalog=ci_catalog", "--mo-db=ci_db", "--catalog-uri=" + server.URL + "/iceberg", "--report-dir=" + reports}
+			err := run()
+			if err == nil || !strings.Contains(err.Error(), "create Iceberg table") {
+				t.Fatalf("seed failure lost: %v", err)
+			}
+			if cleanupFails != strings.Contains(err.Error(), "fixture cleanup") {
+				t.Fatalf("cleanup failure not preserved: %v", err)
+			}
+			if (len(deleted) == 1) == cleanupFails {
+				t.Fatalf("namespace cleanup: deleted=%v, cleanupFails=%v", len(deleted) == 1, cleanupFails)
+			}
+			data, err := os.ReadFile(filepath.Join(reports, "summary.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var summary runSummary
+			if err := json.Unmarshal(data, &summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary.EndedAt == "" || len(summary.Cases) != 2 || summary.Cases[0].ID != "ICE-CI-E2E-000" || summary.Cases[0].Status != "failed" || summary.Cases[1].ID != "ICE-CI-E2E-028" {
+				t.Fatalf("incomplete failure report: %+v", summary)
+			}
+			cleanupErr := ""
+			if cleanupFails {
+				cleanupErr = "REST cleanup returned 500"
+			}
+			assertBudgetCaseResult(t, summary.Cases[1], cleanupErr)
+		})
 	}
 }
