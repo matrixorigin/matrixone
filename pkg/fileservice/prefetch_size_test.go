@@ -85,7 +85,7 @@ func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 // A prefetch of ranges downloads each range on its own, not the prefetch ranges around it,
 // and caches no whole object; once they are cached, a prefetch of them is not queued.
 func TestS3FSPrefetchRanges(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 300<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
 	req := ObjectPrefetch{
 		FilePath: "object",
@@ -120,7 +120,7 @@ func TestS3FSPrefetchRanges(t *testing.T) {
 
 // Adjacent ranges not cached are read in one read; cached ones are not read.
 func TestS3FSPrefetchRangesJoinsAdjacent(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 300<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
 	a, b, c := PrefetchRange{Offset: 1000, Size: 100}, PrefetchRange{Offset: 1100, Size: 50}, PrefetchRange{Offset: 4000, Size: 10}
 	fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 160, Ranges: []PrefetchRange{c, b, a}})

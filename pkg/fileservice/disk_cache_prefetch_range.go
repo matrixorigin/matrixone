@@ -34,13 +34,11 @@ const (
 
 // prefetchRangeConfig sets the prefetch ranges of range reads.
 type prefetchRangeConfig struct {
-	// on enables prefetch ranges.
+	// on enables prefetch ranges; only tests turn them off.
 	on bool
 	// fixed, when positive, is the unit instead of the bandwidth-delay product of range
 	// reads.
 	fixed int64
-	// narrowOnly limits prefetch ranges to narrow reads of groups that read ranges.
-	narrowOnly bool
 }
 
 // unit returns the size of prefetch ranges, 0 when they are off.
@@ -73,9 +71,6 @@ func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 		return 0, false
 	}
 	if path, err := ParsePath(vector.FilePath); err != nil || strings.Contains(pathpkg.Clean(path.File), "/") {
-		return 0, false
-	}
-	if d.prefetchRange.narrowOnly && !(vector.Policy.Any(NarrowRead) && vector.Policy.Any(SkipFullFilePreloads)) {
 		return 0, false
 	}
 	for i := range vector.Entries {

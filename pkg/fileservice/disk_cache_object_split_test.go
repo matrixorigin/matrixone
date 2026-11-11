@@ -51,7 +51,7 @@ func (s *statCountingStorage) Stat(ctx context.Context, key string) (int64, erro
 }
 
 func newObjectSplitFS(t *testing.T, split objectSplitConfig, size int) (*S3FS, *countingStorage, []byte) {
-	fs, storage, data := newPrefetchRangeFS(t, 0, false, size)
+	fs, storage, data := newPrefetchRangeFS(t, 0, size)
 	fs.diskCache.objectSplit = split
 	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), int64(size))
 	return fs, storage, data
@@ -199,7 +199,7 @@ func TestDiskObjectSplitConfig(t *testing.T) {
 
 // A full-object read does not wait for the read that holds its merge.
 func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 0, false, 300<<10)
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	originalShortWait := shortIOWaitDuration
 	shortIOWaitDuration = 10 * time.Second
 	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })

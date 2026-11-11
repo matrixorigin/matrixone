@@ -49,14 +49,14 @@ func (c *countingStorage) Read(ctx context.Context, key string, min, max *int64)
 	return c.ObjectStorage.Read(ctx, key, min, max)
 }
 
-func newPrefetchRangeFS(t *testing.T, unit int64, narrowOnly bool, size int) (*S3FS, *countingStorage, []byte) {
+func newPrefetchRangeFS(t *testing.T, unit int64, size int) (*S3FS, *countingStorage, []byte) {
 	ctx := context.Background()
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
 		DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
 		MemoryCapacity: ptrTo[toml.ByteSize](0),
 	}, nil, false, false)
 	require.NoError(t, err)
-	fs.diskCache.prefetchRange = prefetchRangeConfig{on: unit > 0, fixed: unit, narrowOnly: narrowOnly}
+	fs.diskCache.prefetchRange = prefetchRangeConfig{on: unit > 0, fixed: unit}
 	fs.SetAsyncUpdate(false)
 	t.Cleanup(func() { fs.Close(ctx) })
 	data := make([]byte, size)
@@ -83,7 +83,7 @@ func readRangeOf(t *testing.T, fs *S3FS, policy Policy, offset, size int64) []by
 // A short range read caches the aligned prefetch range around it, which serves a later
 // read within it without object storage.
 func TestS3FSPrefetchRangeServesLaterReads(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.Equal(t, int64(4096), storage.bytes.Load())
@@ -97,7 +97,7 @@ func TestS3FSPrefetchRangeServesLaterReads(t *testing.T) {
 // A read near the end of a unit reads from its own block, and the blocks of the unit
 // before it in a range of their own.
 func TestS3FSPrefetchRangeStartsAtTheNeededBlock(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 512<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 512<<10)
 	require.Equal(t, data[200<<10:200<<10+10], readRangeOf(t, fs, 0, 200<<10, 10))
 	storage.mu.Lock()
 	starts := slices.Clone(storage.starts)
@@ -110,7 +110,7 @@ func TestS3FSPrefetchRangeStartsAtTheNeededBlock(t *testing.T) {
 
 // A read whose context is done starts no prefetch range.
 func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var opens atomic.Int64
@@ -127,7 +127,7 @@ func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
 
 // The entries inside a prefetch range are not cached again as ranges of their own.
 func TestS3FSPrefetchRangeCachesOnlyTheRange(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	readRangeOf(t, fs, 0, 5000, 2)
 	fs.diskCache.ranges.mu.Lock()
 	defer fs.diskCache.ranges.mu.Unlock()
@@ -142,7 +142,7 @@ func TestS3FSPrefetchRangeCachesOnlyTheRange(t *testing.T) {
 
 // A prefetch range past the end of the object holds the bytes up to the end.
 func TestS3FSPrefetchRangeAtObjectEnd(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 10000)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 10000)
 	require.Equal(t, data[9990:10000], readRangeOf(t, fs, 0, 9990, 10))
 	require.Equal(t, data[8200:8300], readRangeOf(t, fs, 0, 8200, 100))
 	require.Equal(t, int64(1), storage.reads.Load())
@@ -150,42 +150,28 @@ func TestS3FSPrefetchRangeAtObjectEnd(t *testing.T) {
 
 // A read crossing a unit boundary reads the units it spans as one range.
 func TestS3FSPrefetchRangeAcrossUnits(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	require.Equal(t, data[4000:4200], readRangeOf(t, fs, 0, 4000, 200))
 	require.Equal(t, int64(8192), storage.bytes.Load())
 	require.Equal(t, data[8000:8096], readRangeOf(t, fs, 0, 0, 8192)[8000:8096])
 	require.Equal(t, int64(1), storage.reads.Load())
 }
 
-// Reads wider than the prefetch window, and every read with the option off, read
-// their range alone.
+// Reads wider than the prefetch window, and every read with prefetch ranges turned off,
+// read their range alone.
 func TestS3FSPrefetchRangeOff(t *testing.T) {
-	fs, storage, _ := newPrefetchRangeFS(t, 4096, false, (prefetchWindowBlocks+2)*4096)
+	fs, storage, _ := newPrefetchRangeFS(t, 4096, (prefetchWindowBlocks+2)*4096)
 	readRangeOf(t, fs, 0, 100, prefetchWindowBlocks*4096+1)
 	require.Equal(t, int64(prefetchWindowBlocks*4096+1), storage.bytes.Load())
 
-	fs, storage, _ = newPrefetchRangeFS(t, 0, false, 64<<10)
+	fs, storage, _ = newPrefetchRangeFS(t, 0, 64<<10)
 	readRangeOf(t, fs, 0, 5000, 2)
 	require.Equal(t, int64(2), storage.bytes.Load())
-}
-
-// With narrow-only, only narrow reads of groups that read ranges prefetch.
-func TestS3FSPrefetchRangeNarrowOnly(t *testing.T) {
-	fs, storage, _ := newPrefetchRangeFS(t, 4096, true, 64<<10)
-	readRangeOf(t, fs, 0, 5000, 2)
-	require.Equal(t, int64(2), storage.bytes.Load())
-	readRangeOf(t, fs, NarrowRead, 9000, 2)
-	require.Equal(t, int64(4098), storage.bytes.Load())
 }
 
 func TestDiskPrefetchRangeConfig(t *testing.T) {
 	var c CacheConfig
 	require.Equal(t, prefetchRangeConfig{on: true}, c.diskPrefetchRange())
-	c.DiskPrefetchRangeAligned = ptrTo(false)
-	require.Equal(t, prefetchRangeConfig{}, c.diskPrefetchRange())
-	c.DiskPrefetchRangeNarrowOnly = true
-	c.DiskPrefetchRangeAligned = ptrTo(true)
-	require.Equal(t, prefetchRangeConfig{on: true, narrowOnly: true}, c.diskPrefetchRange())
 }
 
 func TestAutoPrefetchUnit(t *testing.T) {
@@ -221,7 +207,7 @@ func (b *blockingStorage) Read(ctx context.Context, key string, min, max *int64)
 // A read within a prefetch range under way waits for it instead of reading object
 // storage.
 func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	storage := &blockingStorage{ObjectStorage: fs.storage.(*countingStorage).ObjectStorage,
 		started: make(chan struct{}), release: make(chan struct{})}
 	fs.storage = storage
@@ -267,7 +253,7 @@ func deliver(fl *prefetchFlight, content []byte) {
 
 // A reader of a failed prefetch range reads its own range.
 func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	diskPath := fs.diskCache.pathForFile("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
 	storage := fs.storage.(*countingStorage)
@@ -283,7 +269,7 @@ func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
 
 // A closed cache starts no prefetch reads.
 func TestS3FSPrefetchRangeAfterClose(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	fs.diskCache.closePrefetches(context.Background())
 	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
 	require.Equal(t, int64(2), storage.bytes.Load())
@@ -292,7 +278,7 @@ func TestS3FSPrefetchRangeAfterClose(t *testing.T) {
 // A read spanning cached units reads only the units between them, and takes the rest
 // from the cache.
 func TestS3FSPrefetchRangeMergesCachedUnits(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	readRangeOf(t, fs, 0, 4100, 1)
 	readRangeOf(t, fs, 0, 12300, 1)
 	require.Equal(t, int64(8192), storage.bytes.Load())
@@ -307,7 +293,7 @@ func TestS3FSPrefetchRangeMergesCachedUnits(t *testing.T) {
 // A read spanning a unit being read and a missing unit reads only the missing one and
 // waits for the other.
 func TestS3FSPrefetchRangeNeverReadsABlockTwice(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	diskPath := fs.diskCache.pathForFile("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
 	done := make(chan []byte, 1)
@@ -346,7 +332,7 @@ func TestPrefetchFastestFlight(t *testing.T) {
 
 // A read of entries far apart fetches the units they are in, not the bytes between them.
 func TestS3FSPrefetchRangeSkipsGapsBetweenEntries(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{
 		{Offset: 100, Size: 10}, {Offset: 40000, Size: 5000},
 	}}
@@ -362,7 +348,7 @@ func TestS3FSPrefetchRangeSkipsGapsBetweenEntries(t *testing.T) {
 
 // A reader waiting on a flight takes its bytes once they arrive, before the flight ends.
 func TestS3FSPrefetchRangeServesBytesAsTheyArrive(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 8192, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 8192, 64<<10)
 	diskPath := fs.diskCache.pathForFile("object")
 	fl := addFlight(fs.diskCache, diskPath, 0, 8192, time.Now())
 	done := make(chan []byte, 1)
@@ -393,7 +379,7 @@ func TestPrefetchFlightWaitFor(t *testing.T) {
 // Objects whose paths have a separator read their ranges alone: the range index does
 // not hold their range files.
 func TestS3FSPrefetchRangeSkipsPathsWithSeparator(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	_, ok := fs.diskCache.prefetchUnit(&IOVector{FilePath: "dir/object", Policy: SkipFullFilePreloads,
 		Entries: []IOEntry{{Offset: 0, Size: 10}}})
 	require.False(t, ok)
@@ -407,7 +393,7 @@ func TestS3FSPrefetchRangeSamplesLatency(t *testing.T) {
 	latency0 := rangeReadCosts.latency
 	t.Cleanup(func() { rangeReadCosts.latency = latency0 })
 	rangeReadCosts.latency = 10
-	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	readRangeOf(t, fs, 0, 5000, 2)
 	require.Less(t, rangeReadCosts.latency, 10.0)
 }
@@ -446,7 +432,7 @@ func (t *trackedReader) Close() error {
 // A prefetch read reads each range to its end, and finishes after the read that started
 // it returns and its context ends.
 func TestPrefetchReadOutlivesItsReader(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 128<<10, false, 256<<10)
+	fs, _, data := newPrefetchRangeFS(t, 128<<10, 256<<10)
 	d := fs.diskCache
 	gate := make(chan struct{})
 	var opened, ended atomic.Int64
@@ -477,7 +463,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 // Deleting an object deletes its cached ranges: a read of another offset in a range
 // cached before the delete reads the object written after it.
 func TestDeleteRemovesCachedRanges(t *testing.T) {
-	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	ctx := context.Background()
 	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
 	require.Equal(t, int64(1), storage.reads.Load())
@@ -515,7 +501,7 @@ func (b *stuckStorage) Read(ctx context.Context, key string, min, max *int64) (i
 // Closing the disk cache cancels the prefetch range reads under way, which outlive the
 // reads that start them.
 func TestCloseCancelsPrefetchRangeReads(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	storage := &stuckStorage{ObjectStorage: fs.storage, started: make(chan struct{}, 1), end: make(chan struct{})}
 	fs.storage = storage
 	t.Cleanup(func() { close(storage.end) })

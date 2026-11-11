@@ -51,14 +51,6 @@ type CacheConfig struct {
 	// storage requests and slower reads; 0 makes the fastest reads. Default
 	// DefaultDiskDownloadMaxExtraWait.
 	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
-	// DiskPrefetchRangeAligned makes a range read fetch and cache the aligned ranges
-	// around it, of the bytes object storage delivers in the latency of a range read, a
-	// power of two from 64KiB to 8MiB, which serve later reads within them. It reads more
-	// bytes and, for scattered reads, more requests from object storage. Default true.
-	DiskPrefetchRangeAligned *bool `toml:"disk-prefetch-range-aligned"`
-	// DiskPrefetchRangeNarrowOnly limits prefetch ranges to the narrow reads of tables
-	// that read ranges instead of whole objects.
-	DiskPrefetchRangeNarrowOnly bool `toml:"disk-prefetch-range-narrow-only"`
 	// DiskPrefetchObjectSplit is how many ranges, from 1 to 4, the download of a whole
 	// object of at least DiskPrefetchObjectSplitMin bytes reads at once; 1 reads it as
 	// one range. Default DefaultDiskPrefetchObjectSplit.
@@ -244,11 +236,10 @@ func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
 	return c.DiskDownloadMaxExtraWait.Duration
 }
 
+// diskPrefetchRange returns the prefetch ranges of the disk cache: always on, so range
+// reads fetch and cache the aligned ranges around them.
 func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {
-	return prefetchRangeConfig{
-		on:         c.DiskPrefetchRangeAligned == nil || *c.DiskPrefetchRangeAligned,
-		narrowOnly: c.DiskPrefetchRangeNarrowOnly,
-	}
+	return prefetchRangeConfig{on: true}
 }
 
 const (
