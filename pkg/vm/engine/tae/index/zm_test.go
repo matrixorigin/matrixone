@@ -440,6 +440,21 @@ func testZoneMapFloatNaNPruningContract[T ~float32 | ~float64](
 	seven := types.EncodeValue(T(7), oid)
 	require.True(t, legacyPoisoned.AnyGEByValue(seven))
 	require.True(t, legacyPoisoned.AnyLEByValue(seven))
+	for _, bounds := range [][2]T{{nan, nan}, {nan, 7}, {7, nan}} {
+		zm := legacyPoisoned.Clone()
+		copy(zm.GetMinBuf(), types.EncodeValue(bounds[0], oid))
+		copy(zm.GetMaxBuf(), types.EncodeValue(bounds[1], oid))
+		require.True(t, zm.IsInited())
+		require.True(t, zm.ContainsKey(seven), "历史 NaN 摘要不能排除普通值")
+		require.True(t, zm.AnyLTByValue(seven))
+		require.True(t, zm.AnyGTByValue(seven))
+		require.True(t, zm.AnyLEByValue(seven))
+		require.True(t, zm.AnyGEByValue(seven))
+		require.True(t, zm.Between(seven, seven))
+		for hint := uint8(0); hint < 4; hint++ {
+			require.True(t, zm.InRange(seven, seven, hint), "未知边界即使开区间也不能证明不匹配")
+		}
+	}
 	keys.Free(mp)
 
 	// Current vectors use slices' total float order (NaN first). Zonemap

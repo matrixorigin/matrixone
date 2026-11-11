@@ -35,11 +35,13 @@ Project  𝄀
               Join Cond: (t.id = job.task_id), (t.id = f.task_id)  𝄀
               ->  Table Scan on associative.task  𝄀
                     Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
+                    Block Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
               ->  Join  𝄀
                     Join Type: INNER   hashOnPK  𝄀
                     Join Cond: (f.job_id = job.id)  𝄀
                     ->  Table Scan on associative.file  𝄀
                           Filter Cond: (f.table_id = 1)  𝄀
+                          Block Filter Cond: (f.table_id = 1)  𝄀
                     ->  Table Scan on associative.connector_job  𝄀
                           Filter Cond: (job.status <> 4), (job.status <> 5)
 CREATE TABLE `lineitem` (
@@ -147,7 +149,8 @@ Project  𝄀
                           ->  Table Scan on associative.lineitem  𝄀
                                 Runtime Filter Probe: lineitem.l_partkey  𝄀
                           ->  Table Scan on associative.part  𝄀
-                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')  𝄀
+                                Block Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
 select table_cnt, json_extract(ndv_map, '$.l_partkey') partk from table_stats("associative.lineitem", 'patch', '{"ndv_map": {"l_partkey": 1840290, "l_quantity": 50}}') g;
 ➤ table_cnt[8,54,0]  ¦  partk[-1,2147483647,0]  𝄀
 6.00037902E8  ¦  1840290
@@ -187,7 +190,8 @@ Project  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
                           ->  Table Scan on associative.lineitem  𝄀
                           ->  Table Scan on associative.part  𝄀
-                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')  𝄀
+                                Block Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
 drop table if exists associative.lineitem;
 drop table if exists associative.part;
 drop table if exists associative.file;

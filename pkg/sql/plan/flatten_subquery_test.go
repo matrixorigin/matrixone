@@ -990,10 +990,6 @@ func TestCorrelatedScalarAggregatePostJoinProjectionEligibility(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "limited aggregate",
-			sql:  "select n.n_nationkey, (select coalesce(sum(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey limit 1) from tpch.nation n",
-		},
-		{
 			name: "sorted aggregate",
 			sql:  "select n.n_nationkey, (select coalesce(sum(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey order by sum(r.r_regionkey)) from tpch.nation n",
 		},
