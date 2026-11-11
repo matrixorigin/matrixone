@@ -16,13 +16,15 @@ package objectio
 
 import (
 	"context"
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+var jsonReadSetSize = reflect.TypeFor[JSONReadSet]().Size()
 
 type jsonReadSetKey struct{}
 
@@ -50,7 +52,7 @@ func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAcco
 	if selection == nil && admission == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON read scope requires statement accounting")
 	}
-	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(JSONReadSet{}), len(columns))
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(jsonReadSetSize, len(columns))
 	if err != nil {
 		return nil, err
 	}

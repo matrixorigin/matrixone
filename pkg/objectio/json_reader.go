@@ -16,7 +16,7 @@ package objectio
 
 import (
 	"io"
-	"unsafe"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,6 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/internal/jsonread"
+)
+
+var (
+	cacheJSONVectorSize = reflect.TypeFor[vector.Vector]().Size()
+	cacheJSONLeaseSize  = reflect.TypeFor[vector.RefCountedBufferLease]().Size()
+	cacheJSONReaderSize = reflect.TypeFor[cacheJSONReader]().Size()
+	cacheJSONResultSize = reflect.TypeFor[cacheJSONQueryResult]().Size()
+	cacheJSONCursorSize = reflect.TypeFor[cacheJSONCursor]().Size()
 )
 
 // cacheJSONReader borrows only objectio's already validated sealed cache
@@ -51,12 +59,12 @@ func IsPrivateJSONCacheReader(reader vector.JSONReader) bool {
 }
 
 func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection, capacity int64, releasePin func(), admission vector.JSONReaderMemoryAdmission) (vector.JSONReader, error) {
-	ownerMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof(vector.RefCountedBufferLease{})))
+	ownerMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
 	if err != nil {
 		releasePin()
 		return nil, err
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		if ownerMeta != nil {
 			ownerMeta()
@@ -115,7 +123,7 @@ func (r *cacheJSONReader) Window(start, end int) (vector.JSONReader, error) {
 	if start < 0 || end < start || end > r.length {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader window")
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +145,7 @@ func (r *cacheJSONReader) Repeat(row, length int) (vector.JSONReader, error) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
 	}
 	physicalRow := r.physicalRow(row)
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +172,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 			return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader selection")
 		}
 	}
-	ownerMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof(vector.RefCountedBufferLease{})))
+	ownerMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +181,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 			ownerMeta()
 		}
 	}()
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +286,7 @@ func (r *cacheJSONReader) Query(row int, path *bytejson.Path) (vector.JSONQueryR
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONQueryResult{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +343,7 @@ func (r *cacheJSONReader) OpenCursor() (vector.JSONCursor, error) {
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONCursor{})))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONCursorSize))
 	if err != nil {
 		return nil, err
 	}
