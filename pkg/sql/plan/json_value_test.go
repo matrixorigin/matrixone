@@ -593,6 +593,54 @@ func TestJSONValueSemanticKeyHandlesLegacyAcceptNodes(t *testing.T) {
 	require.Equal(t, semanticAstKey(explicitSample), semanticAstKey(implicitSample), "SampleExpr keeps children in a private field")
 }
 
+func TestJSONValueSemanticFormattingMatchesCloneWithoutMutation(t *testing.T) {
+	for _, sql := range []string{
+		`select n_name`,
+		`select json_value(j, '$.a')`,
+		`select json_value(j, '$.a' returning char(12) character set UTF8MB4)`,
+		`select json_value(j, '$.a' returning char(12) default 'x' on empty error on error)`,
+		`select concat(json_value(j, '$.a' returning signed), json_value(j, '$.b' null on error))`,
+		`select (select json_value(j, '$.a' returning signed))`,
+		`select json_value(j, ?) + ?`,
+		`select json_value(json_array(1, 2), '$[0]')`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			original := tree.StringWithOpts(expr, dialect.MYSQL, tree.WithParamExprOffset(), tree.WithSingleQuoteString())
+
+			// This was the previous implementation of semanticNodeKey. Keep
+			// its exact identity and display results, including nested calls.
+			cloned := normalizeJSONValueSemantics(expr)
+			display := tree.String(cloned, dialect.MYSQL)
+			identity := tree.StringWithOpts(cloned, dialect.MYSQL, tree.WithParamExprOffset(), tree.WithSingleQuoteString())
+			want := display
+			if identity != display {
+				want = identity + "\x00" + display
+			}
+			require.Equal(t, want, semanticAstKey(expr))
+			require.Equal(t, original, tree.StringWithOpts(expr, dialect.MYSQL, tree.WithParamExprOffset(), tree.WithSingleQuoteString()))
+		})
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		`select json_value(j, '$.a' returning char(12) character set UTF8MB4)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+	// The parser canonicalizes charset spelling; construct the noncanonical
+	// form explicitly to exercise semantic formatting without AST mutation.
+	expr.JsonValue.Returning.Charset = "UTF8MB4"
+	require.Equal(t, tree.JsonValueImplicitResponse, expr.JsonValue.OnEmpty.Mode)
+	require.Equal(t, "UTF8MB4", expr.JsonValue.Returning.Charset)
+	_ = semanticAstKey(expr)
+	require.Equal(t, tree.JsonValueImplicitResponse, expr.JsonValue.OnEmpty.Mode)
+	require.Equal(t, tree.JsonValueImplicitResponse, expr.JsonValue.OnError.Mode)
+	require.Equal(t, "UTF8MB4", expr.JsonValue.Returning.Charset)
+}
+
 func TestJSONValueSemanticKeyInNestedSubqueryBinding(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`select json_value('{"v":7}', '$.v' returning signed) in (1, 2) group by json_value('{"v":7}', '$.v' returning signed) in (1, 2)`)

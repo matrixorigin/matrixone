@@ -70,6 +70,11 @@ type JsonValueReturning struct {
 }
 
 func formatJsonValueExpr(ctx *FmtCtx, node *FuncExpr) {
+	spec := node.JsonValue
+	if ctx.jsonValueSemantics {
+		normalized := spec.SemanticNormalized()
+		spec = &normalized
+	}
 	ctx.WriteString("json_value(")
 	if len(node.Exprs) > 0 && node.Exprs[0] != nil {
 		node.Exprs[0].Format(ctx)
@@ -80,22 +85,22 @@ func formatJsonValueExpr(ctx *FmtCtx, node *FuncExpr) {
 	}
 	// Omission is a VARCHAR(512) contract, not an explicit CHAR(512).
 	// Preserve it when SQL is persisted or reparsed by CTAS/view planning.
-	if node.JsonValue.Returning != nil && node.JsonValue.Returning.Type != nil {
+	if spec.Returning != nil && spec.Returning.Type != nil {
 		ctx.WriteString(" returning ")
-		target := node.JsonValue.Returning.Type.InternalType
+		target := spec.Returning.Type.InternalType
 		// mysql_cast_type represents CHAR without a length as VARCHAR. Keep
 		// that internal type, but emit the spelling accepted by RETURNING.
 		if strings.EqualFold(target.FamilyString, "varchar") && target.DisplayWith == -1 {
 			target.FamilyString = "char"
 		}
 		target.Format(ctx)
-		if node.JsonValue.Returning.Charset != "" {
+		if spec.Returning.Charset != "" {
 			ctx.WriteString(" character set ")
-			ctx.WriteString(node.JsonValue.Returning.Charset)
+			ctx.WriteString(spec.Returning.Charset)
 		}
 	}
-	formatJsonValueResponse(ctx, node.JsonValue.OnEmpty, "empty")
-	formatJsonValueResponse(ctx, node.JsonValue.OnError, "error")
+	formatJsonValueResponse(ctx, spec.OnEmpty, "empty")
+	formatJsonValueResponse(ctx, spec.OnError, "error")
 	ctx.WriteByte(')')
 }
 
