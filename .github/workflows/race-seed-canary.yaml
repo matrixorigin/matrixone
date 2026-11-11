@@ -37,7 +37,7 @@ jobs:
     secrets: inherit
   cs-minio-smoke:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke
-    runs-on: cs-mnl2-dind-2c8g
+    runs-on: cs-mnl2-large-7c14g
     timeout-minutes: 90
     steps:
       - name: Install build dependencies
@@ -61,14 +61,17 @@ jobs:
           setup-java: false
           go-version-file: ${{ github.workspace }}/go.mod
       - name: Install isolated MinIO executable
+        timeout-minutes: 30
+        env:
+          GOPROXY: https://goproxy.cn|https://proxy.golang.org|direct
         run: |
           set -euo pipefail
-          docker pull minio/minio:RELEASE.2025-04-22T22-12-26Z
-          container_id=$(docker create minio/minio:RELEASE.2025-04-22T22-12-26Z)
-          trap 'docker rm "$container_id" >/dev/null' EXIT
           mkdir -p "$RUNNER_TEMP/minio-bin"
-          docker cp "$container_id:/usr/bin/minio" "$RUNNER_TEMP/minio-bin/minio"
-          chmod +x "$RUNNER_TEMP/minio-bin/minio"
+          git init "$RUNNER_TEMP/minio-source"
+          git -C "$RUNNER_TEMP/minio-source" remote add origin https://github.com/minio/minio.git
+          git -C "$RUNNER_TEMP/minio-source" fetch --depth=1 origin f19c534b9f457773dcd043d977433e1a71525c3b
+          git -C "$RUNNER_TEMP/minio-source" checkout --detach FETCH_HEAD
+          (cd "$RUNNER_TEMP/minio-source" && go build -o "$RUNNER_TEMP/minio-bin/minio" .)
           echo "$RUNNER_TEMP/minio-bin" >> "$GITHUB_PATH"
       - name: Build native dependencies
         timeout-minutes: 40
