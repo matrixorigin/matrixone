@@ -236,8 +236,19 @@ func (e *HashBuildBudgetError) Is(target error) bool {
 // closure transitions.  This gives the operation a simple linearization point
 // and, importantly, makes a query rejection roll back its complete CN charge.
 type HashBuildBudget struct {
-	mu        sync.Mutex
-	refreshMu sync.Mutex
+	mu                     sync.Mutex
+	refreshMu              sync.Mutex
+	headroomMu             sync.Mutex
+	memoryHeadroomProvider func() (uint64, bool)
+	memoryHeadroomTTL      time.Duration
+	memoryHeadroomNow      func() time.Time
+	memoryHeadroomSafety   uint64
+	memoryHeadroomCached   bool
+	memoryHeadroomAt       time.Time
+	memoryHeadroomBytes    uint64
+	memoryHeadroomMeasured bool
+	memoryHeadroomBacking  mpool.AllocationBackingSnapshot
+	backingRegistry        atomic.Pointer[mpool.AllocationAccountRegistry]
 
 	aggregateCap  uint64
 	aggregateUsed uint64
@@ -1100,6 +1111,9 @@ func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
 				hashBuildAllocationGenerationSlots,
 				allocationSlots,
 			)
+		if b.allocationRegistryErr == nil {
+			b.backingRegistry.Store(b.allocationRegistry)
+		}
 	})
 	return b.allocationRegistry, b.allocationRegistryErr
 }
@@ -1178,6 +1192,11 @@ func (g *HashBuildBudgetGeneration) acquireMemory(size uint64) error {
 		return err
 	}
 
+	if b.memoryHeadroomRefreshNeededLocked() {
+		b.mu.Unlock()
+		b.sampleMemoryHeadroom()
+		b.mu.Lock()
+	}
 	// The common cached-cap path decides whether a refresh is needed and updates
 	// the ledger under one b.mu acquisition. Only an expired cache drops the
 	// lock and enters the refresh single-flight gate.
@@ -1274,6 +1293,11 @@ func (g *HashBuildBudgetGeneration) acquireMemoryLocked(
 			observeHashBuildBudget("memory", "reject", "cn", size)
 		}
 		return newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
+	}
+	if headroom, measured := b.physicalGrowthHeadroomLocked(); measured && size > headroom {
+		g.rejectCount++
+		observeHashBuildBudget("memory", "reject", "cn", size)
+		return newAdmissionError(size, 0, headroom), false
 	}
 	b.aggregateUsed += size
 	if g.used > g.cap || size > g.cap-g.used {
@@ -1667,6 +1691,10 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 			// Attach the source snapshot before publishing the candidate so
 			// another process never observes an aggregate without its stable
 			// provider.
+			b.memoryHeadroomProvider = system.MemoryAvailableIncludingCache
+			b.memoryHeadroomTTL = hashBuildBudgetCapRefreshTTL
+			b.memoryHeadroomNow = time.Now
+			b.memoryHeadroomSafety = min(ceiling.Reserve, max(ceiling.EffectiveCN/20, uint64(1<<30)))
 			b.installCNCapProvider(initialInputs)
 			return b
 		}()
@@ -1705,4 +1733,108 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	}
 	proc.Base.hashBuildBudget = generation
 	return generation, nil
+}
+
+func (b *HashBuildBudget) sampleMemoryHeadroom() (uint64, bool) {
+	if b == nil || b.memoryHeadroomProvider == nil {
+		return 0, false
+	}
+	b.headroomMu.Lock()
+	defer b.headroomMu.Unlock()
+	now := b.memoryHeadroomNow
+	if now == nil {
+		now = func() time.Time { return time.Now() }
+	}
+	current := now()
+	if b.memoryHeadroomCached && b.memoryHeadroomTTL > 0 &&
+		current.Sub(b.memoryHeadroomAt) < b.memoryHeadroomTTL {
+		b.mu.Lock()
+		bytes, measured := b.memoryHeadroomBytes, b.memoryHeadroomMeasured
+		b.mu.Unlock()
+		return bytes, measured
+	}
+	b.mu.Lock()
+	// Observe committed backing BEFORE reading the OS. An allocator may finish
+	// while the sample is read; counting it twice for this sample is safe, but
+	// reading backing after the OS could omit it from both observations. The
+	// budget lock prevents new admitted growth until the checkpoint is stored.
+	var backing mpool.AllocationBackingSnapshot
+	if registry := b.backingRegistry.Load(); registry != nil {
+		backing = registry.SnapshotBacking()
+	}
+	// Keep the physical sample and the aggregate-ledger checkpoint in one
+	// admission critical section. Otherwise an allocation between those two
+	// observations would be absent from both the sampled usage and the cached
+	// growth delta, allowing the same bytes twice.
+	bytes, measured := b.memoryHeadroomProvider()
+	b.memoryHeadroomBytes = bytes
+	b.memoryHeadroomMeasured = measured
+	b.memoryHeadroomBacking = backing
+	b.memoryHeadroomAt = current
+	b.memoryHeadroomCached = true
+	b.mu.Unlock()
+	return bytes, measured
+}
+
+// memoryHeadroomRefreshNeededLocked keeps the allocation hot path on the
+// budget mutex it already owns. Only one expired sample takes headroomMu and
+// performs filesystem reads; cached admissions add no second global lock.
+func (b *HashBuildBudget) memoryHeadroomRefreshNeededLocked() bool {
+	if b == nil || b.memoryHeadroomProvider == nil {
+		return false
+	}
+	if !b.memoryHeadroomCached || b.memoryHeadroomTTL <= 0 {
+		return true
+	}
+	now := b.memoryHeadroomNow
+	if now == nil {
+		now = time.Now
+	}
+	return now().Sub(b.memoryHeadroomAt) >= b.memoryHeadroomTTL
+}
+
+// physicalGrowthHeadroomLocked returns the bytes which may still increase the
+// process working set while preserving the runtime safety margin. It adjusts a
+// cached OS sample by all charged bytes not backed before that sample. Freed
+// backing loses its credit even if a new allocation replaces it. b.mu must be held.
+func (b *HashBuildBudget) physicalGrowthHeadroomLocked() (uint64, bool) {
+	if b == nil || !b.memoryHeadroomMeasured {
+		return 0, false
+	}
+	remaining := b.memoryHeadroomBytes
+	committed := b.memoryHeadroomBacking.RetainedCapacity()
+	if b.aggregateUsed > committed {
+		growth := b.aggregateUsed - committed
+		if growth >= remaining {
+			return 0, true
+		}
+		remaining -= growth
+	}
+	if remaining <= b.memoryHeadroomSafety {
+		return 0, true
+	}
+	return remaining - b.memoryHeadroomSafety, true
+}
+
+// OpenIndependentGeneration shares CN admission without sharing terminal state.
+func (g *HashBuildBudgetGeneration) OpenIndependentGeneration() (*HashBuildBudgetGeneration, error) {
+	if g == nil || g.budget == nil || g.Closed() {
+		return nil, ErrHashBuildBudgetClosed
+	}
+	return g.budget.openProcessGeneration(hashBuildGenerationSequence.Add(1), g.Cap(), g.SpillDiskCap())
+}
+
+// SetHashBuildBudgetForTesting installs a private ledger before work begins.
+// The fixture must free its operators before closing the supplied generation.
+func (proc *Process) SetHashBuildBudgetForTesting(generation *HashBuildBudgetGeneration) error {
+	if proc == nil || proc.Base == nil || generation == nil || generation.Closed() {
+		return ErrHashBuildBudgetInvalid
+	}
+	proc.Base.hashBuildBudgetMu.Lock()
+	defer proc.Base.hashBuildBudgetMu.Unlock()
+	if proc.Base.hashBuildBudget != nil {
+		return ErrHashBuildBudgetInvalid
+	}
+	proc.Base.hashBuildBudget = generation
+	return nil
 }

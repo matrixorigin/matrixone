@@ -1151,6 +1151,7 @@ func (mp *MPool) allocAccounted(
 		}
 		if physicalHeld {
 			simpleCAllocator().Deallocate(bs, uint64(sz))
+			request.account.registry.releaseCommittedCapacity(uint64(sz))
 		}
 		if poolHeld {
 			mp.stats.RecordFree(mp.tag, sz)
@@ -1209,6 +1210,7 @@ func (mp *MPool) allocAccounted(
 		return nil, moerr.NewMPoolCapacityNoCtxf(
 			"physical allocator rejected %d bytes: %v", sz, err)
 	}
+	request.account.registry.addCommittedCapacity(uint64(sz))
 	physicalHeld = true
 
 	ptr := unsafe.Pointer(&bs[0])
