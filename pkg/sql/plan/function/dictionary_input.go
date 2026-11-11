@@ -39,6 +39,7 @@ func dictionaryComparisonInputs(parameters []*vector.Vector) bool {
 	if parameters[0].GetType().Oid != parameters[1].GetType().Oid {
 		return false
 	}
+	// typeswitch:partial low-precision float kernels retain their physical input boundary.
 	switch parameters[0].GetType().Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -76,6 +77,7 @@ func dictionaryArithmeticInputs(parameters []*vector.Vector) bool {
 		return false
 	}
 	oid := parameters[0].GetType().Oid
+	// typeswitch:partial low-precision float arithmetic retains explicit normalization.
 	return oid.IsSignedInt() || oid.IsUnsignedInt() || oid == types.T_float32 || oid == types.T_float64
 }
 

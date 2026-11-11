@@ -634,3 +634,31 @@ actual call/frame overhead and measure all queries before claiming any gain.
 
 The local all-query/resource gates above remain unchanged, as do the separate
 C/D designs. No push is authorized before acceptance.
+
+
+### Approved Boolean result validity correction — 2026-11-12
+
+The requester approved boolean-validity-repair-design.md from the local evidence
+wave after e910c58f15. Separate the current result's NULL proof from physical
+input capability. Admit full, unmasked, accounted Boolean results for audited
+AND/OR/XOR/NOT, homogeneous native numeric comparisons (including decimal), and
+the existing capability-proven comparisons/BETWEEN/fixed-list membership. Check
+actual logical argument NULLs every evaluation; grouping/prepared JSON, masks,
+unknown overloads and unproved domains retain normal result admission. Do not
+expand dictionary input declarations or change kernels, NULL synthesis, errors,
+casts, planner types, cache tiers, allocation owners or designs C/D. Reuse the
+existing FunctionResult[bool].PreExtendAndResetNonNull API.
+
+Allocation diagnostics must distinguish MPool off-heap and Go-backed traffic.
+GlobalStats covers off-heap only; report the two disjoint MPool domains and their
+sum, never add that traffic to runtime Go Mallocs. The prior Q6 +160 native
+requests exactly replaced 160 Go-backed literal requests; both complete-domain
+counts were 926 and both byte counts 17,767,032. No new literal pool or accounting
+bypass is warranted. Remaining Boolean bitmap growth in Q17/Q19 is real.
+
+The six-suite, one-process-per-arm local protocol and all-query/resource gates
+remain unchanged. Identical-executable control r30 itself flagged Q22 +5.4% and
+measured Q7 +12.4%; it proves the diagnostic screen can misattribute timing
+changes. It does not waive candidate slowdowns or authorize a gate/tolerance
+change. Preserve all records, resolve timing comparability and missing copy
+coverage before acceptance, and keep all changes unpushed meanwhile.

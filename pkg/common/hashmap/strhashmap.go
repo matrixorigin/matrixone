@@ -1444,6 +1444,7 @@ func (m *StrHashMap) FillGroupHashes(dst []uint64) []uint64 {
 func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, count int) {
 	typ := *vec.GetType()
 	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	// typeswitch:partial only float32/64 require key canonicalization; low-precision float storage is already canonical.
 	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() && !vec.HasGrouping() {
 		fixed := vector.ResolveFixedBytesReadView(vec)
 		if !fixed.Constant {

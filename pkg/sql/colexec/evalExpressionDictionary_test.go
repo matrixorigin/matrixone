@@ -349,10 +349,12 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					result, err = executor.Eval(proc, []*batch.Batch{input}, mask)
 					require.NoError(t, err)
 					require.True(t, result.IsNull(0))
-					root.dictionaryInput = nil // Unproved kernel shape retains normal admission.
+					root.dictionaryInput = nil // Physical capability and result validity are independent.
 					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 					require.NoError(t, err)
-					require.EqualValues(t, input.RowCount(), result.GetNulls().GetBitmap().Len())
+					require.False(t, result.HasNull())
+					require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+					require.Equal(t, op != "between", root.booleanProducesNoNulls())
 				})
 			}
 		})

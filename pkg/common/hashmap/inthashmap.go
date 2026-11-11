@@ -692,6 +692,7 @@ func (m *IntHashMap) FillGroupHashes(dst []uint64) []uint64 {
 // scratch, preserving the ordinary typed equality codec and NULL domain.
 func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, count int) {
 	typ := *vec.GetType()
+	// typeswitch:partial only float32/64 require key canonicalization; low-precision float storage is already canonical.
 	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() {
 		fixed := vector.ResolveFixedBytesReadView(vec)
 		if !fixed.Constant {

@@ -100,19 +100,30 @@ func (expr *FunctionExpressionExecutor) freeDictionaryParameters() {
 	expr.dictionaryParameters = nil
 }
 
-// comparisonProducesNoNulls admits audited comparisons and fixed-list membership whose
-// existing dictionary capability also closes prepared/mixed/grouping shapes.
-// It is checked for every evaluation, including flat inputs; schema nullability
-// and the representation alone do not prove the current logical argument domain.
-func (expr *FunctionExpressionExecutor) comparisonProducesNoNulls() bool {
-	// Eval calls this only for accounted Boolean results: unaccounted
-	// results already have lazy validity storage.
-	if expr.dictionaryInput == nil {
-		return false
-	}
+// booleanProducesNoNulls proves result validity for this evaluation, independently
+// of whether the kernel can read dictionary payload. Eval uses this only for a
+// full, unmasked, accounted Boolean result; other results retain normal admission.
+func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
+	logical, comparison := false, false
 	switch expr.fid {
+	case function.NOT:
+		if len(expr.parameterResults) != 1 || int32(expr.overloadID) != 0 {
+			return false
+		}
+		logical = true
+	case function.AND, function.OR, function.XOR:
+		if len(expr.parameterResults) < 2 || int32(expr.overloadID) != 0 ||
+			expr.fid == function.XOR && len(expr.parameterResults) != 2 {
+			return false
+		}
+		logical = true
 	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
-		function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN:
+		function.LESS_THAN, function.LESS_EQUAL:
+		if len(expr.parameterResults) != 2 || int32(expr.overloadID) < 0 || int32(expr.overloadID) > 1 {
+			return false
+		}
+		comparison = true
+	case function.BETWEEN:
 	case function.IN, function.NOT_IN:
 		// The kernel caches list membership, including its NULL bit. A
 		// per-batch or unproven list cannot establish a non-NULL cache result.
@@ -123,15 +134,40 @@ func (expr *FunctionExpressionExecutor) comparisonProducesNoNulls() bool {
 	default:
 		return false
 	}
-	if !expr.dictionaryInput(expr.parameterResults) {
-		return false
-	}
 	for _, argument := range expr.parameterResults {
-		if argument.HasNull() {
+		if argument == nil || argument.HasNull() || argument.HasGrouping() || argument.IsPreparedJSONComparisonParam() {
+			return false
+		}
+		if logical && argument.GetType().Oid != types.T_bool {
 			return false
 		}
 	}
-	return true
+	if logical {
+		return true
+	}
+	if comparison && numericComparisonDomain(expr.parameterResults) {
+		return true
+	}
+	// Strings, temporal comparisons, BETWEEN and fixed-list membership keep
+	// their existing metadata/shape proof. A physical-only numeric kernel above
+	// still receives ordinary normalization; it needs no result NULL bitmap.
+	return expr.dictionaryInput != nil && expr.dictionaryInput(expr.parameterResults)
+}
+
+func numericComparisonDomain(parameters []*vector.Vector) bool {
+	oid := parameters[0].GetType().Oid
+	if oid != parameters[1].GetType().Oid {
+		return false
+	}
+	// typeswitch:partial only native float32/64 comparison kernels are audited here.
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return true
+	default:
+		return false
+	}
 }
 
 // fixedMembershipList identifies the execution-owned literal/runtime-filter
