@@ -662,3 +662,17 @@ measured Q7 +12.4%; it proves the diagnostic screen can misattribute timing
 changes. It does not waive candidate slowdowns or authorize a gate/tolerance
 change. Preserve all records, resolve timing comparability and missing copy
 coverage before acceptance, and keep all changes unpushed meanwhile.
+
+
+### Allocation profile attribution correction — 2026-11-12
+
+The Boolean repair was implemented and locally validated as8565ccdaeb. r32
+removed Q19's excess MPool requests. Q17's remaining64 validity allocations are
+Decimal128 results, not Boolean results: the custom profiler merged generic
+locations by erased function name/file/line and reused the first instantiation's
+PC. A diagnostic-only key that includes frame.PC, resolved against its exact
+executable in r35, establishes the Decimal128 carrier. Earlier Boolean-type
+attribution for Q17 is invalidated. The proposed non-Boolean extension is in
+local decimal128-validity-extension-design.md and still requires requester
+approval. No new production behavior was added for it. Normal r32 and GC-off
+r34 retain unresolved query latency/resource signals; neither is acceptance.
