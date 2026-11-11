@@ -910,6 +910,19 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
+	logStatementStringStatusWithLog(ctx, ses, stmtStr, status, err, true)
+}
+
+// logStatementStringStatusWithLog always performs statement accounting, even
+// when a caller has suppressed a repetitive statement failure log.
+func logStatementStringStatusWithLog(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+	writeLog bool,
+) {
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -929,7 +942,7 @@ func logStatementStringStatus(
 			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		}
 		err = nil // make sure: it is nil for EndStatement
-	} else {
+	} else if writeLog {
 		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
