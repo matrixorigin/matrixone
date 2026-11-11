@@ -34,6 +34,8 @@ func TestSameLegacyCRC32Expression(t *testing.T) {
 	}{
 		{"format_and_case", "crc32(j)", "CRC32( `J` )", true, true},
 		{"nested_and_literal", "crc32(json_extract(j, '$.A'))", "CRC32(JSON_EXTRACT(`J`, '$.A'))", true, true},
+		{"different_identifier", "crc32(j)", "crc32(`k`)", false, true},
+		{"quoted_keyword_uncertain", "crc32(true)", "crc32(`true`)", false, false},
 		{"literal_case", "crc32(json_extract(j, '$.A'))", "crc32(json_extract(j, '$.a'))", false, true},
 		{"literal_spelling_uncertain", "crc32(json_extract(j, '$.A'))", `crc32(json_extract(j, "$.A"))`, false, false},
 		{"changed_operator", "crc32(j)", "crc32(j) + 1", false, true},

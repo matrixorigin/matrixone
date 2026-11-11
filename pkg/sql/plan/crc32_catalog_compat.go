@@ -85,8 +85,17 @@ func sameLegacyCRC32Expression(left, right string) (bool, bool) {
 			return false, false
 		}
 		if at != bt {
-			same = false
-			continue
+			identifierPair := (at == mysql.ID && bt == mysql.QUOTE_ID) || (at == mysql.QUOTE_ID && bt == mysql.ID)
+			if !identifierPair {
+				// A quoted keyword can denote a column while the unquoted
+				// spelling can be a literal or an operator. Do not infer
+				// equivalence or a deliberate semantic change from the spelling.
+				if (at == mysql.QUOTE_ID || bt == mysql.QUOTE_ID) && strings.EqualFold(av, bv) {
+					return false, false
+				}
+				same = false
+				continue
+			}
 		}
 		if at == 0 {
 			return same, true
