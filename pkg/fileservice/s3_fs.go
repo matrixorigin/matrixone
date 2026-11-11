@@ -882,9 +882,11 @@ read_disk_cache:
 		if vector.allDone() {
 			return nil
 		}
-		// The object is downloaded whole into the index-file cache, not the disk cache.
-		s.pinObjects(vector.FilePath)
-		vector.Policy |= SkipFullFilePreloads
+		// An object being pinned is downloaded whole into the index-file cache, not the
+		// disk cache.
+		if s.pinRoute(vector.FilePath, 0) {
+			vector.Policy |= SkipFullFilePreloads
+		}
 	}
 
 	if s.diskCache != nil {

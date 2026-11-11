@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -138,11 +139,102 @@ func TestPinnedObjectNeedsFreeRoom(t *testing.T) {
 	}, 10*time.Second, 5*time.Millisecond)
 	require.False(t, pinnedObject(fs, "object"))
 	require.Zero(t, storage.downloads.Load())
-	fs.pinObjects("object")
+	require.False(t, fs.pinRoute("object", 0), "an object not pinned is not queued again within the retry time")
 	fs.pinned.mu.Lock()
 	_, queued := fs.pinned.pending["object"]
 	fs.pinned.mu.Unlock()
-	require.False(t, queued, "an object not pinned is not queued again within the retry time")
+	require.False(t, queued)
+
+	// It keeps the disk cache's whole-object read and prefetch.
+	require.Equal(t, data[2000:2010], readPinTestRange(t, fs, IndexFileObject, 2000, 10))
+	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")),
+		"an object not pinned is read whole into the disk cache")
+	require.False(t, FullFilePreloadSkipped(context.Background(), fs, IndexFileObject, "object"))
+}
+
+// An object the cache has no room for, by its known size, is prefetched into the disk
+// cache and not queued for a pin.
+func TestPrefetchOfUnpinnableObjectUsesDiskCache(t *testing.T) {
+	fs, storage, _ := newPinFS(t, 200<<10, true, 300<<10)
+	ctx := WithFileServicePolicy(context.Background(), IndexFileObject)
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 300 << 10}))
+	require.True(t, fs.prefetcher.isQueued("object"))
+	fs.pinned.mu.Lock()
+	_, queued := fs.pinned.pending["object"]
+	fs.pinned.mu.Unlock()
+	require.False(t, queued)
+	require.Zero(t, storage.downloads.Load())
+}
+
+// The preload gate of both prefetch paths skips the disk cache's whole-object preload of
+// an object it queues for a pin.
+func TestFullFilePreloadSkippedQueuesPin(t *testing.T) {
+	fs, storage, _ := newPinFS(t, 64<<20, true, 300<<10)
+	require.False(t, FullFilePreloadSkipped(context.Background(), fs, 0, "object"))
+	require.True(t, FullFilePreloadSkipped(context.Background(), fs, IndexFileObject, "object"))
+	waitPinned(t, fs)
+	require.Equal(t, int64(1), storage.downloads.Load())
+}
+
+// A pinned object read stays past the idle time; one not read is collected.
+func TestReadKeepsPinnedObject(t *testing.T) {
+	for _, read := range []bool{false, true} {
+		fs, _, data := newPinFS(t, 64<<20, true, 300<<10)
+		readPinTestRange(t, fs, IndexFileObject, 1000, 10)
+		waitPinned(t, fs)
+		c := fs.indexFileCache
+		diskPath, err := c.disk.pathForDir(pinnedObjectEntry("object"))
+		require.NoError(t, err)
+		old := time.Now().Add(-2 * time.Hour)
+		require.NoError(t, os.Chtimes(diskPath, old, old))
+		fs.pinned.mu.Lock()
+		clear(fs.pinned.touched)
+		fs.pinned.mu.Unlock()
+		if read {
+			require.Equal(t, data[5000:5010], readPinTestRange(t, fs, IndexFileObject, 5000, 10))
+		}
+		c.idleTTL = time.Hour
+		_, err = c.collectIdle(context.Background(), time.Now())
+		require.NoError(t, err)
+		require.Equal(t, read, pinnedObject(fs, "object"), "read %v", read)
+	}
+}
+
+// A pin takes connections of the disk cache's download budget: with none left it does not
+// download.
+func TestPinNeedsDownloadConnections(t *testing.T) {
+	fs, storage, _ := newPinFS(t, 64<<20, true, 300<<10)
+	d := fs.diskCache
+	d.downloadConns.Store(d.downloadConnLimit())
+	require.False(t, fs.pinObject(context.Background(), "object"))
+	require.Zero(t, storage.downloads.Load())
+	d.downloadConns.Store(0)
+	require.True(t, fs.pinObject(context.Background(), "object"))
+	require.Zero(t, d.downloadConns.Load(), "the connections are released")
+}
+
+// A delete drops a pin queued and not started without waiting for it, and close releases
+// the pins left queued.
+func TestUnpinDropsQueuedPin(t *testing.T) {
+	fs, _, _ := newPinFS(t, 64<<20, true, 300<<10)
+	o := &fs.pinned
+	o.start.Do(func() {
+		o.ctx, o.cancel = context.WithCancel(context.Background())
+		o.pending = make(map[string]*pinJob)
+		o.retry = make(map[string]time.Time)
+		o.queue = make(chan string, 1)
+	})
+	queued := &pinJob{done: make(chan struct{})}
+	left := &pinJob{done: make(chan struct{})}
+	o.pending["object"], o.pending["other"] = queued, left
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, fs.Delete(ctx, "object"))
+	require.NotContains(t, o.pending, "object")
+	<-queued.done
+	o.close()
+	<-left.done
 }
 
 // Concurrent reads of an object download it once.
