@@ -1111,3 +1111,38 @@ func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
 	require.NoError(t, writer.Abort(ctx))
 	require.Len(t, writer.OrphanPaths(), 1)
 }
+
+func TestFanoutMemoryPressureThresholdBoundary(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		delta   int64
+		rotates bool
+	}{
+		{"before", 4, false}, {"equal", 0, true}, {"after", -4, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := batch.New([]string{"id"})
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(mp)
+			require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 1, false, mp))
+			bat.SetRowCount(1)
+			factory := &pressureDataFileFactory{memoryDataFileFactory: memoryDataFileFactory{objects: make(map[string]*bytes.Buffer)}}
+			writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{Schema: api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}}}}, TableLocation: "s3://warehouse/table"}, factory)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, writer.Abort(ctx)) })
+			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			active := writer.active[""]
+			require.NotNil(t, active)
+			size := active.writer.ApproxSize()
+			require.Positive(t, size)
+			factory.limited, factory.remaining = true, 4*size+tc.delta
+			require.NoError(t, writer.relieveMemoryPressure(ctx))
+			require.Equal(t, tc.rotates, len(writer.files) == 1)
+			files, err := writer.Close(ctx)
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+		})
+	}
+}

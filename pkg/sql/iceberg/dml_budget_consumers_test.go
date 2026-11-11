@@ -17,8 +17,10 @@ package iceberg
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -429,4 +431,117 @@ func TestReplacementFanoutSharedBudgetRotates(t *testing.T) {
 	}
 	require.Equal(t, int64(8), rows)
 	require.Equal(t, metadata*int64(len(files)), budget.usedBytes())
+}
+
+func TestFanoutSharedBudgetPartitionedOutput(t *testing.T) {
+	ctx := context.Background()
+	schema := api.Schema{Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}},
+		{ID: 3, Name: "payload", Type: api.IcebergType{Kind: api.TypeString}},
+	}}
+	spec := api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{SourceID: 2, FieldID: 1000, Name: "region", Transform: "identity"}}}
+	for _, partitions := range []int{1, 2, 8, 9} {
+		t.Run(fmt.Sprintf("partitions_%d", partitions), func(t *testing.T) {
+			const limit = int64(4 << 20)
+			metadataBytes := retainedDMLDataFileMetadataBytesForSchema(schema, spec)
+			budget := newDMLMemoryBudget(limit, 0)
+			objects := &recordingDMLDeleteObjectWriter{}
+			writer, err := icebergwritepkg.NewFanoutParquetDataWriter(ctx, icebergwritepkg.FanoutWriterConfig{
+				Schema: schema, PartitionSpec: spec, TableLocation: "s3://warehouse/table",
+			}, bufferedDataFileOutputFactory{Writer: objects, MemoryBudget: budget, RetainedMetadataBytes: metadataBytes})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, writer.Abort(ctx)) })
+			want := make(map[int64]string)
+			for round := 0; round < 3; round++ {
+				for part := 0; part < partitions; part++ {
+					id := int64(round*partitions + part)
+					region := fmt.Sprintf("p%d", part)
+					if part == 0 {
+						region = ""
+					}
+					want[id] = region
+					func() {
+						mp := mpool.MustNewZero()
+						bat := batch.New([]string{"id", "region", "payload"})
+						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+						bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+						bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+						defer bat.Clean(mp)
+						require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], id, false, mp))
+						require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(region), part == 0, mp))
+						require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte{byte('a' + id)}, 64<<10), false, mp))
+						bat.SetRowCount(1)
+						require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+						require.LessOrEqual(t, budget.usedBytes(), limit)
+						require.GreaterOrEqual(t, budget.usedBytes(), metadataBytes*int64(len(objects.objects)))
+					}()
+				}
+			}
+			if partitions >= 8 {
+				require.NotEmpty(t, objects.objects, "pressure must close a file before final Close")
+			}
+			files, err := writer.Close(ctx)
+			require.NoError(t, err)
+			require.Len(t, objects.objects, len(files))
+			require.Equal(t, metadataBytes*int64(len(files)), budget.usedBytes())
+			seen := make(map[int64]string)
+			fileCounts := make(map[string]int)
+			for _, file := range files {
+				func() {
+					reader := parquet.NewReader(bytes.NewReader(objects.objects[file.FilePath]))
+					defer reader.Close()
+					rows := make([]parquet.Row, file.RecordCount)
+					n, err := reader.ReadRows(rows)
+					require.True(t, err == nil || errors.Is(err, io.EOF), "%v", err)
+					require.Equal(t, int(file.RecordCount), n)
+					columns := reader.Schema().Columns()
+					indexes := make(map[string]int)
+					for i, path := range columns {
+						indexes[path[0]] = i
+					}
+					var nulls int64
+					var minID, maxID int64
+					for i, row := range rows {
+						id := row[indexes["id"]].Int64()
+						if i == 0 || id < minID {
+							minID = id
+						}
+						if i == 0 || id > maxID {
+							maxID = id
+						}
+						region := ""
+						if row[indexes["region"]].IsNull() {
+							nulls++
+						} else {
+							region = string(row[indexes["region"]].ByteArray())
+						}
+						require.NotContains(t, seen, id)
+						seen[id] = region
+						require.True(t, bytes.Equal(bytes.Repeat([]byte{byte('a' + id)}, 64<<10), row[indexes["payload"]].ByteArray()), "payload mismatch for id %d", id)
+						if region == "" {
+							require.Nil(t, file.Partition["region"])
+						} else {
+							require.Equal(t, region, file.Partition["region"])
+						}
+					}
+					fileCounts[seen[rows[0][indexes["id"]].Int64()]]++
+					require.Equal(t, minID, int64(binary.LittleEndian.Uint64(file.LowerBounds[1])))
+					require.Equal(t, maxID, int64(binary.LittleEndian.Uint64(file.UpperBounds[1])))
+					require.Equal(t, file.RecordCount, file.ValueCounts[1])
+					require.Equal(t, file.RecordCount, file.ValueCounts[2])
+					require.Equal(t, nulls, file.NullValueCounts[2])
+					require.Equal(t, int64(0), file.NullValueCounts[1])
+				}()
+			}
+			require.Equal(t, want, seen)
+			if partitions >= 8 {
+				reopened := false
+				for _, n := range fileCounts {
+					reopened = reopened || n > 1
+				}
+				require.True(t, reopened, "an evicted partition must reopen")
+			}
+		})
+	}
 }
