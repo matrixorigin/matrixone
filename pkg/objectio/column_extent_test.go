@@ -43,13 +43,13 @@ func TestObjectColumnExtentIsItsBlocksInOrder(t *testing.T) {
 	writer, err := NewObjectWriter(name, fs, 0, []uint16{0, 1, 2}, nil)
 	require.NoError(t, err)
 	rowsPerBlock := []int{100, 3000, 7}
-	var cats [][]string
+	cats := make([][]string, 0, len(rowsPerBlock))
 	for blk, rows := range rowsPerBlock {
 		bat := batch.NewWithSize(3)
 		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
-		var blkCats []string
+		blkCats := make([]string, 0, rows)
 		for row := range rows {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(blk*10000+row), false, mp))
 			// Short values are stored inline, long ones in the vector's area.
