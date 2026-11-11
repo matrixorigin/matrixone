@@ -11,6 +11,10 @@ on:
         description: Run isolated coverage with local MinIO; real COS/OSS coverage is excluded
         type: boolean
         default: false
+      coverage_contract_smoke:
+        description: Run isolated Linux coverage workflow contract tests
+        type: boolean
+        default: false
       matrixone_sha:
         description: Full MatrixOne main SHA; use the same SHA for every arm
         required: true
@@ -32,7 +36,7 @@ permissions:
 
 jobs:
   cs-coverage-canary:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
     with:
       canary_pr_32523: true
@@ -41,7 +45,7 @@ jobs:
       canary_package_parallelism: 8
     secrets: inherit
   cs-minio-smoke:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke && !inputs.coverage_contract_smoke
     runs-on: cs-mnl2-large-7c14g
     timeout-minutes: 90
     steps:
@@ -94,6 +98,19 @@ jobs:
           export CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo -I${GITHUB_WORKSPACE}/thirdparties/install/include"
           export CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo -Wl,-rpath,${GITHUB_WORKSPACE}/cgo -L${GITHUB_WORKSPACE}/thirdparties/install/lib -lusearch_c -Wl,-rpath,${GITHUB_WORKSPACE}/thirdparties/install/lib -lm"
           go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^TestMinioSDK$' -v -count=1 -timeout=20m
+  coverage-contract-smoke:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke
+    runs-on: cs-mnl2-large-7c14g
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pinned CI workflow source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: b05be37d7d102fbf040ae45b72ff2c27ee48b720
+          token: ${{ secrets.TOKEN_ACTION }}
+      - name: Run Linux coverage contract tests
+        run: python3 -m unittest scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
