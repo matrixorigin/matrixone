@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -176,16 +177,27 @@ func verifyFunctionalIndexOverload(expr *Expr, name string, id, overload int32, 
 // functionalJSONComparisonOperand unwraps the value-preserving casts the
 // equality binder inserts around an operand, so the structurally compared
 // candidate can still match its persisted expression; the original base-row
-// predicate always remains as a residual. Two wrappers exist on this seam:
+// predicate always remains as a residual. Three wrappers exist on this seam:
 //   - comparing a CHAR-typed operand widens it to VARCHAR (a comparison
 //     overload-2 CAST);
 //   - comparing a narrower integer key widens it to the comparison common
-//     type through a flag-clear overload-0 CAST (probe-verified:
+//     integer type through a flag-clear overload-0 CAST (probe-verified:
 //     `cast(json_extract(doc,'$.a') as int) = 1` compares on BIGINT while
 //     the hidden key is INT). Every source value injects into the wider
 //     type exactly — same-signedness widening, or unsigned into a wider
-//     signed type — so stripping preserves the equality. A user-written
-//     explicit widening cast keeps its syntax flag and never matches.
+//     signed type — so stripping preserves the equality.
+//   - comparing an integer key whose literal peer carries a DECIMAL common
+//     type promotes it through the same flag-clear overload-0 CAST
+//     (probe-verified: `crc32(name)=123` and
+//     `cast(json_extract(doc,'$.a') as unsigned)=4294967296` wrap in
+//     CAST(... AS DECIMAL128(38,0)), `... as int)=1.5` in DECIMAL128(11,1)).
+//     The promotion is stripped only when every source value injects
+//     exactly: the decimal's integer-digit capacity (width minus scale)
+//     must cover the source type's widest value. An insufficient-capacity
+//     adapter — for example DECIMAL(18,0) for a uint64 key — is lossy,
+//     stays unstripped, and never matches.
+//     A user-written explicit cast keeps its syntax flag, stays unstripped,
+//     and never matches any arm.
 func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef, tag int32) *Expr {
 	if functionalJSONFunction(expr, "cast", function.CAST, 2) && len(expr.GetF().Args) == 2 {
 		inner := expr.GetF().Args[0]
@@ -204,7 +216,8 @@ func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef, tag int32) *Exp
 		}
 		return inner
 	}
-	// The narrower-integer widening of the second bullet above.
+	// The narrower-integer widening and the integer-key DECIMAL promotion of
+	// the bullets above.
 	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
 		fn.Func.Obj == int64(function.CAST)<<32 && !fn.SyntaxExplicitCast && len(fn.Args) == 2 &&
 		fn.Args[1].GetT() != nil && sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
@@ -218,6 +231,48 @@ func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef, tag int32) *Exp
 				return inner
 			}
 		}
+		if from.IsInteger() && to.IsDecimal() && decimalPromotionCoversSource(expr.Typ, from) {
+			normalized := DeepCopyExpr(inner)
+			if normalizeFunctionalExpression(normalized, tag) {
+				return inner
+			}
+		}
 	}
 	return expr
+}
+
+// decimalPromotionCoversSource reports whether the flag-clear comparison cast
+// from the integer family type `from` into the decimal plan type `decimal` is
+// value-exact: the decimal's integer-digit capacity (width minus scale) must
+// be able to hold the widest value of the source type. Every
+// integer-to-decimal cast with sufficient capacity injects exactly - scale
+// only places the decimal point - so equality over the stripped comparison is
+// preserved, and any row the base predicate admits still satisfies the added
+// hidden equality rewrapped into the same promotion. Insufficient capacity is
+// lossy and must stay unstripped.
+func decimalPromotionCoversSource(decimal Type, from types.T) bool {
+	capacity := decimal.Width - decimal.Scale
+	return capacity >= int32(integerDigitRequirement(from))
+}
+
+// integerDigitRequirement returns the decimal integer-digit count that can
+// hold every value of the integer family type. It is computed from the wire
+// width and signedness of the family member rather than a per-member switch,
+// staying correct for future family members.
+func integerDigitRequirement(from types.T) int {
+	bits := uint(from.TypeLen()) * 8
+	if bits < 8 {
+		// Unknown family member: fail closed with an unreachable capacity.
+		return 1 << 30
+	}
+	var widest uint64
+	if bits >= 64 {
+		widest = ^uint64(0)
+	} else {
+		widest = (uint64(1) << bits) - 1
+	}
+	if from.IsSignedInt() {
+		widest >>= 1
+	}
+	return len(strconv.FormatUint(widest, 10))
 }

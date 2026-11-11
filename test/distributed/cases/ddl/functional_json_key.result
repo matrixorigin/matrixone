@@ -193,6 +193,23 @@ select id from nu64 where cast(json_extract(doc,'$.a') as unsigned) is null orde
 id
 4
 5
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+id
+1
+select id from nj32 ignore index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+id
+1
+select id from nj32 where cast(json_extract(doc,'$.a') as int)=123.0 order by id;
+id
+2
+select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+id
+1
+select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+id
+1
+select id from nu64 where cast(json_extract(doc,'$.a') as unsigned)=42.5 order by id;
+id
 create index bad_ny_med on nj32 ((cast(json_extract(doc,'$.a') as mediumint)));
 CAST to MEDIUMINT is not supported is not yet implemented
 create index bad_ny_int3 on nj32 ((cast(json_extract(doc,'$.a') as int3)));

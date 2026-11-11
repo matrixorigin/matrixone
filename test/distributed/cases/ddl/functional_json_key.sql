@@ -92,6 +92,15 @@ select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as
 select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=4294967296 order by id;
 select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=4294967296 order by id;
 select id from nu64 where cast(json_extract(doc,'$.a') as unsigned) is null order by id;
+-- #32437 review repair: ordinary decimal literals bind the numeric keys through
+-- the value-exact integer-to-decimal promotion; non-integer literals match no
+-- integer-valued key, and force and ignore agree.
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+select id from nj32 ignore index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+select id from nj32 where cast(json_extract(doc,'$.a') as int)=123.0 order by id;
+select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+select id from nu64 where cast(json_extract(doc,'$.a') as unsigned)=42.5 order by id;
 -- #32437 challenge repair: the retained NYI integer cast targets keep their native
 -- bind errors through the functional-index authoring path and add no hidden columns.
 create index bad_ny_med on nj32 ((cast(json_extract(doc,'$.a') as mediumint)));

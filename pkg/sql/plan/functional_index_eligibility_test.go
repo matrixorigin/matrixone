@@ -117,6 +117,13 @@ func TestFunctionalIndexScalarAdmission(t *testing.T) {
 		{"length(name)", types.T_int64, 0},
 		{"concat(name)", types.T_varchar, 40},
 		{"concat(name,'x')", types.T_varchar, 41},
+		// Authored signed position/count literals bind persisted SQL through
+		// unary_minus over the constant; the derived key width follows the
+		// same constant-derivation as the positive spellings, while a
+		// negated count falls back to the source envelope because the
+		// persisted bind keeps the negation as a function node.
+		{"substring(name,-2,2)", types.T_varchar, 2},
+		{"left(name,-1)", types.T_varchar, 40},
 		// SQL text 'a\\b' unescapes to the three-character value containing
 		// the backslash: a varchar(40) subject plus three characters is 43.
 		{"concat(name,'a\\\\b')", types.T_varchar, 43},
@@ -150,6 +157,12 @@ func TestFunctionalIndexScalarNegativeControls(t *testing.T) {
 		// covers the unsigned-to-signed wrapper the binder inserts.
 		{"substring(name,upos,2)", "functional index expression is not supported"},
 		{"left(name,upos)", "functional index expression is not supported"},
+		// Negated columns and non-integer negations keep failing closed:
+		// only the signed-integer-literal constant form of unary_minus is
+		// admitted, so the unsigned-column boundary above stays intact.
+		{"substring(name,-pos,2)", "functional index expression is not supported"},
+		{"substring(name,-upos,2)", "functional index expression is not supported"},
+		{"substring(name,-2.5,1)", "functional index expression is not supported"},
 		// An explicit CHAR-to-VARCHAR cast can truncate and stays excluded,
 		// both as a standalone head and inside an admitted function.
 		{"cast(cc as varchar(2))", "functional index expression is not supported"},
@@ -392,6 +405,109 @@ func issue32437ScanShapes(t *testing.T, qp *Plan, table *TableDef, physical bool
 	require.Equal(t, physical, indexScan, "physical hidden equality follows the byte-stability rule")
 }
 
+// issue32437HiddenKeyEquality reports whether any retained predicate of the
+// base-table scan references the index's hidden owner column, i.e. whether
+// addFunctionalIndexFilters rewrote the ordinary lookup into a physical
+// hidden-key equality in addition to the residual. Whether the cost model
+// afterwards selects an index join is a separate decision this helper
+// deliberately does not assert.
+func issue32437HiddenKeyEquality(t *testing.T, qp *Plan, table *TableDef) bool {
+	t.Helper()
+	owner := functionalIndexColumn(table, table.Indexes[0])
+	require.NotNil(t, owner)
+	var hiddenPos int32 = -1
+	for i, c := range table.Cols {
+		if c.Name == owner.Name {
+			hiddenPos = int32(i)
+		}
+	}
+	var references func(*Expr) bool
+	references = func(expr *Expr) bool {
+		switch e := expr.Expr.(type) {
+		case *pb.Expr_Col:
+			return e.Col.ColPos == hiddenPos
+		case *pb.Expr_F:
+			for _, arg := range e.F.Args {
+				if references(arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, n := range qp.GetQuery().Nodes {
+		if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil && n.TableDef.Name == "fi" {
+			for _, f := range n.FilterList {
+				if references(f) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// TestFunctionalIndexOrdinaryLookupRewrites pins the mo-bot-review match
+// contract for ordinary literal-equality lookups: admitted substring/left and
+// integer/uint64 keys keep gaining the physical hidden-key equality.
+//
+//   - the query-only prepared-numeric string-domain witness is planner
+//     provenance and no longer breaks the structural match (substring and
+//     left ordinary lookups);
+//   - the persisted unary_minus signed-literal spelling folds into the
+//     query-side folded literal, so suffix-position indexes match their own
+//     lookups, while the negated-count spelling keeps the source-envelope
+//     width on the persisted side and stays residual-only;
+//   - a flag-clear integer-to-DECIMAL comparison promotion is stripped when
+//     every source value injects exactly into the decimal target, so
+//     uint64-keyed and integer-keyed indexes match ordinary numeric-literal
+//     comparisons; a user-explicit decimal cast keeps its syntax flag and
+//     never matches.
+//
+// The original base-row predicate always remains as the residual.
+func TestFunctionalIndexOrdinaryLookupRewrites(t *testing.T) {
+	ctx := issue32437Context(t)
+	for _, tc := range []struct {
+		expression, query string
+		hiddenEQ          bool
+	}{
+		{"substring(name,1,8)", "select * from fi where substring(name,1,8)='smith123'", true},
+		{"left(name,4)", "select * from fi where left(name,4)='smit'", true},
+		{"substring(name,-2,2)", "select * from fi where substring(name,-2,2)='ef'", true},
+		{"left(name,-1)", "select * from fi where left(name,-1)='g'", false},
+		{"crc32(name)", "select * from fi where crc32(name)=123", true},
+		{"cast(json_extract(doc,'$.a') as unsigned)", "select * from fi where cast(json_extract(doc,'$.a') as unsigned)=4294967296", true},
+		{"cast(json_extract(doc,'$.a') as int)", "select * from fi where cast(json_extract(doc,'$.a') as int)=1.5", true},
+		{"crc32(name)", "select * from fi where crc32(name)=18446744073709551616", true},
+		{"crc32(name)", "select * from fi where cast(crc32(name) as decimal(38,0))=123", false},
+	} {
+		t.Run(tc.expression+" | "+tc.query, func(t *testing.T) {
+			p, err := issue32437Build(t, ctx, issue32437Schema+",index ix (("+tc.expression+")))")
+			require.NoError(t, err)
+			table := p.GetDdl().GetCreateTable().TableDef
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
+			ctx.tables["fi"] = table
+			ctx.objects["fi"] = &ObjectRef{ObjName: "fi", SchemaName: "tpch"}
+			for _, indexTable := range p.GetDdl().GetCreateTable().IndexTables {
+				ctx.tables[indexTable.Name] = indexTable
+				ctx.objects[indexTable.Name] = &ObjectRef{ObjName: indexTable.Name, SchemaName: "tpch"}
+			}
+			qp, err := issue32437Build(t, ctx, tc.query)
+			require.NoError(t, err)
+			residual := false
+			for _, n := range qp.GetQuery().Nodes {
+				if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil && n.TableDef.Name == "fi" &&
+					len(n.FilterList) > 0 {
+					residual = true
+				}
+			}
+			require.True(t, residual, "the ordinary lookup always keeps its base-row predicate")
+			require.Equal(t, tc.hiddenEQ, issue32437HiddenKeyEquality(t, qp, table),
+				"the hidden-key equality follows the structural match")
+		})
+	}
+}
+
 func TestFunctionalIndexByteStabilityMatchRules(t *testing.T) {
 	ctx := issue32437Context(t)
 	for _, tc := range []struct {
@@ -431,6 +547,29 @@ func TestFunctionalIndexByteStabilityMatchRules(t *testing.T) {
 			issue32437ScanShapes(t, qp, table, tc.physical)
 		})
 	}
+}
+
+func TestFunctionalIndexDecimalPromotionCapacity(t *testing.T) {
+	decimal := func(width, scale int32) Type {
+		return Type{Id: int32(types.T_decimal128), Width: width, Scale: scale}
+	}
+	// uint64 (widest value 18446744073709551615, 20 digits) is covered by
+	// DECIMAL128(38,0) and by the minimal 20-digit envelope, never by
+	// decimal64's 18-digit ceiling nor by a 19-digit envelope.
+	require.True(t, decimalPromotionCoversSource(decimal(38, 0), types.T_uint64))
+	require.True(t, decimalPromotionCoversSource(decimal(20, 0), types.T_uint64))
+	require.False(t, decimalPromotionCoversSource(decimal(19, 0), types.T_uint64))
+	require.False(t, decimalPromotionCoversSource(Type{Id: int32(types.T_decimal64), Width: 18, Scale: 0}, types.T_uint64))
+	// int32 (10 signed digits) covers the probe-verified DECIMAL128(11,1);
+	// scale consumes integer-digit capacity, so (10,1) is lossy.
+	require.True(t, decimalPromotionCoversSource(decimal(11, 1), types.T_int32))
+	require.False(t, decimalPromotionCoversSource(decimal(10, 1), types.T_int32))
+	// int8 (3 signed digits) is the smallest admitted boundary.
+	require.True(t, decimalPromotionCoversSource(decimal(4, 0), types.T_int8))
+	require.False(t, decimalPromotionCoversSource(decimal(2, 0), types.T_int8))
+	// int64 (19 signed digits) sits between the unsigned extremes.
+	require.True(t, decimalPromotionCoversSource(decimal(19, 0), types.T_int64))
+	require.False(t, decimalPromotionCoversSource(decimal(18, 0), types.T_int64))
 }
 
 func TestFunctionalIndexIdentifierRewritePersistence(t *testing.T) {

@@ -1408,10 +1408,68 @@ requested): extend to more `provenPureValueFunctions` entries or mixed
      volatility messages never carried expression text and are
      untouched.
 
+  6. mo-bot implementation-review repairs (PR #32510 review at merge
+     head 3e8c72bb; each correction is probe-verified against the
+     merged binder before implementation and completes a contract the
+     reviewed document already states):
+
+     a. Signed-literal position/count admission. The admission table
+        requires `substring`/`left` integer-literal position/count
+        arguments, but the persisted bind renders an authored negative
+        constant as `unary_minus(<literal>)` (query-side constant
+        folding does not apply to persisted SQL), so
+        `substring(v,-2,2)` and `left(v,-1)` failed the recursive
+        walk while equivalent signed-column positions admitted. The
+        walk now admits exactly that constant shape — one non-null
+        signed-integer literal argument under the identical
+        signed-integer result type — and the structural comparison
+        copy folds the same spelling into the query-side folded
+        literal so suffix-position indexes match their own lookups.
+        Boundary retained: negated columns (signed or unsigned),
+        non-integer negations and every other unary-minus form keep
+        failing closed, so the unsigned-position-column boundary and
+        the persistence round-trip assertions are unchanged.
+
+     b. Query-only prepared-numeric provenance. The early-runtime-filter-
+        domain machinery merged into this base annotates query-bound
+        `substring`/`left` results with
+        `PreparedNumericMetadata.StringDomainSource`; the DDL-side
+        bind never carries the witness and no executor evaluates it,
+        yet the structural `proto.Equal` compared the pointer, so
+        ordinary literal-equality lookups lost the physical plan for
+        admitted `substring(name,1,8)`/`left(name,4)` indexes.
+        `normalizeFunctionalExpression` now clears the provenance
+        pointer on both comparison copies exactly as it already zeroes
+        AuxId/Ndv/Selectivity; value-bearing tree shape and type
+        metadata stay pinned by the eligibility walk and the pending
+        equality, and the base-row residual is untouched.
+
+     c. Integer-key DECIMAL comparison promotions. Equality against a
+        decimal-literal common type wraps an integer key in the same
+        flag-clear overload-0 CAST the integer-widening rule sees
+        (probe: `crc32(name)=123` and
+        `cast(json_extract(doc,'$.a') as unsigned)=4294967296` wrap
+        in `CAST(... AS DECIMAL128(38,0))`, and `... as int)=1.5`
+        in `DECIMAL128(11,1)`), so uint64-keyed indexes stayed
+        unmatched for ordinary numeric-literal lookups. The comparison
+        operand unwrap strips this promotion only when every source
+        value injects exactly — the decimal's integer-digit capacity
+        (width minus scale) covers the source type's widest value —
+        mirroring the value-exactness rule of erratum 4. An
+        insufficient-capacity adapter stays unstripped, a user-explicit
+        cast keeps its syntax flag and never matches, and the added
+        hidden-key equality re-binds into the same promotion, so the
+        base-row residual still owns correctness.
+
 These errata do not change any admission rule, inode gate,
 persistence producer or error surface beyond the reviewed contract;
 the third and fourth correct verifier wording so the reviewed
-admission set binds and matches as required, and the fifth aligns
+admission set binds and matches as required, the fifth aligns
 category-3 diagnostic rendering with the authored-spelling clause
 of the same reviewed error model without touching persistence
-rendering.
+rendering, and the sixth keeps the reviewed admission and matching
+set executable on the merged base: it admits the already-required
+literal spellings, restores the stated purely-structural match
+against planner-only provenance, and extends the match-seam
+value-exact wrapper strip of erratum 4 to the integer-to-DECIMAL
+promotion with the same fail-closed guards.

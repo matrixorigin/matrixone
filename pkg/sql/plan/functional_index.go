@@ -155,6 +155,26 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 					return false
 				}
 			}
+		case "unary_minus":
+			// The persisted bind keeps an authored negative integer constant
+			// in its unary_minus spelling while query binding folds it, so a
+			// suffix-position key like substring(v,-2,2) re-binds through
+			// every replay in exactly this form. Admit precisely that
+			// constant shape - one non-null signed-integer literal argument
+			// under the identical signed-integer result type - and nothing
+			// else. Negated columns (with or without their widening or
+			// signedness adapters) and unsigned or non-integer negations
+			// keep failing closed, so the unsigned-column boundary stays
+			// observable.
+			if len(e.F.Args) != 1 {
+				return false
+			}
+			lit := e.F.Args[0].GetLit()
+			if lit == nil || lit.Isnull ||
+				!types.T(e.F.Args[0].Typ.Id).IsSignedInt() || !types.T(expr.Typ.Id).IsSignedInt() ||
+				e.F.Args[0].Typ.Id != expr.Typ.Id {
+				return false
+			}
 		case "cast":
 			if len(e.F.Args) == 2 {
 				from, to := types.T(e.F.Args[0].Typ.Id), types.T(expr.Typ.Id)
@@ -845,6 +865,17 @@ func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
 		return false
 	}
 	expr.AuxId, expr.Ndv, expr.Selectivity = 0, 0, 0
+	// The prepared_numeric pointer is sparse planner provenance -
+	// prepared-statement envelopes, runtime string-domain witnesses - and no
+	// executor evaluates it (remote_expr strips the witnesses before
+	// dispatch). Query binding annotates admitted substring/left keys with a
+	// string-domain source the DDL-side bind never carries, so clearing the
+	// provenance pointer on both comparison copies keeps the structural
+	// equality meaningful; a value-bearing difference can only come from the
+	// validated tree, which the eligibility walk and the pending proto.Equal
+	// still pin exactly. Value-bearing type metadata (width, scale, charset,
+	// padding) stays exact.
+	expr.PreparedNumeric = nil
 	// Provenance and inferred nullability do not change expression values.
 	// Keep value-bearing type metadata (width, scale, charset, padding) exact.
 	expr.Typ.Table = ""
@@ -859,13 +890,57 @@ func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
 		col.RelPos = 0
 		col.Name = ""
 	}
+	if lit := expr.GetLit(); lit != nil && types.T(expr.Typ.Id).IsInteger() {
+		// string_source and literal_form are binder-syntax provenance
+		// encodings: the query-side numeric binder records value ownership
+		// explicitly on a folded negated constant while the DDL-side bind
+		// keeps the legacy zero, and the spelling class mirrors how the
+		// constant was authored. An integer literal's entire value is the
+		// constant under the pinned type, so clearing the encodings on the
+		// comparison copies cannot manufacture an equality the visibly
+		// pinned trees do not already have. The executed plans are never
+		// the normalized copies.
+		lit.StringSource, lit.LiteralForm = 0, 0
+	}
 	if f := expr.GetF(); f != nil {
+		if foldFunctionalIndexSignedConstant(expr) {
+			return true
+		}
 		for _, arg := range f.Args {
 			if !normalizeFunctionalExpression(arg, tag) {
 				return false
 			}
 		}
 	}
+	return true
+}
+
+// foldFunctionalIndexSignedConstant rewrites, in the comparison copy only, the
+// persisted binder's negative-integer-constant spelling `unary_minus(<lit>)`
+// into the folded literal the query-side bind produces, so the structural
+// comparison sees one spelling of the same constant. It admits exactly the
+// DDL-admitted shape: one non-null i64 literal argument under the identical
+// signed-integer result type. Every other unary-minus form is returned
+// unchanged and keeps failing the pending equality instead of being coerced.
+func foldFunctionalIndexSignedConstant(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "unary_minus" || len(fn.Args) != 1 {
+		return false
+	}
+	arg, lit := fn.Args[0], fn.Args[0].GetLit()
+	if lit == nil || lit.Isnull ||
+		!types.T(arg.Typ.Id).IsSignedInt() || !types.T(expr.Typ.Id).IsSignedInt() ||
+		arg.Typ.Id != expr.Typ.Id {
+		return false
+	}
+	i64, ok := lit.GetValue().(*pb.Literal_I64Val)
+	if !ok {
+		return false
+	}
+	expr.Expr = &pb.Expr_Lit{Lit: &pb.Literal{
+		Isnull: false,
+		Value:  &pb.Literal_I64Val{I64Val: -i64.I64Val},
+	}}
 	return true
 }
 

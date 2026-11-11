@@ -172,4 +172,22 @@ create index ok_dom_recover on rejects_arity ((upper(v)));
 select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='rejects_arity' and attr_has_generated=1;
 show create table rejects_arity;
 drop table rejects_arity;
+-- #32437 review repair: signed literal arguments admit the persisted unary-minus
+-- spelling; negated columns stay rejected; ordinary numeric literals reach the
+-- crc32 key through the value-exact integer-to-decimal promotion.
+create index is_sneg on fi_scalar ((substring(name,-2,2)));
+create index is_lneg on fi_scalar ((left(name,-1)));
+create index bad_neg_col on fi_scalar ((substring(name,-pos,2)));
+create index bad_neg_upos on fi_scalar ((substring(name,-posu,2)));
+create index bad_neg_real on fi_scalar ((substring(name,-2.5,1)));
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='fi_scalar' and attr_has_generated=1;
+select id from fi_scalar force index(is_sneg) where substring(name,-2,2)='ef' order by id;
+select id from fi_scalar ignore index(is_sneg) where substring(name,-2,2)='ef' order by id;
+select id from fi_scalar force index(is_sneg) where substring(name,-2,2)='fg' order by id;
+select id from fi_scalar force index(is_lneg) where left(name,-1)='' order by id;
+select id from fi_scalar ignore index(is_lneg) where left(name,-1)='' order by id;
+select id from fi_scalar where substring(name,-2,2) is null order by id;
+select id from fi_scalar force index(is_crc) where crc32(name)=824863398 order by id;
+select id from fi_scalar ignore index(is_crc) where crc32(name)=824863398 order by id;
+select id from fi_scalar where crc32(name)=1267612143 order by id;
 drop database functional_index_bvt;

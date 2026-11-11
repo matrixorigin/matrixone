@@ -322,4 +322,44 @@ show create table rejects_arity;
 Table	Create Table
 rejects_arity	CREATE TABLE `rejects_arity` (\n  `id` int NOT NULL,\n  `v` varchar(40) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `ok_arity` ((md5(`v`))),\n  KEY `ok_dom_recover` ((upper(`v`)))\n)
 drop table rejects_arity;
+create index is_sneg on fi_scalar ((substring(name,-2,2)));
+create index is_lneg on fi_scalar ((left(name,-1)));
+create index bad_neg_col on fi_scalar ((substring(name,-pos,2)));
+not supported: functional index expression is not supported: substring(name,-pos,2)
+create index bad_neg_upos on fi_scalar ((substring(name,-posu,2)));
+not supported: functional index expression is not supported: substring(name,-posu,2)
+create index bad_neg_real on fi_scalar ((substring(name,-2.5,1)));
+not supported: functional index expression is not supported: substring(name,-2.5,1)
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='fi_scalar' and attr_has_generated=1;
+hidden_generated
+13
+select id from fi_scalar force index(is_sneg) where substring(name,-2,2)='ef' order by id;
+id
+1
+select id from fi_scalar ignore index(is_sneg) where substring(name,-2,2)='ef' order by id;
+id
+1
+select id from fi_scalar force index(is_sneg) where substring(name,-2,2)='fg' order by id;
+id
+2
+select id from fi_scalar force index(is_lneg) where left(name,-1)='' order by id;
+id
+1
+2
+select id from fi_scalar ignore index(is_lneg) where left(name,-1)='' order by id;
+id
+1
+2
+select id from fi_scalar where substring(name,-2,2) is null order by id;
+id
+3
+select id from fi_scalar force index(is_crc) where crc32(name)=824863398 order by id;
+id
+2
+select id from fi_scalar ignore index(is_crc) where crc32(name)=824863398 order by id;
+id
+2
+select id from fi_scalar where crc32(name)=1267612143 order by id;
+id
+1
 drop database functional_index_bvt;
