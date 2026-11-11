@@ -3,6 +3,10 @@ name: Race seed canary
 on:
   workflow_dispatch:
     inputs:
+      object_storage_smoke:
+        description: Run isolated local MinIO test instead of the coverage comparison
+        type: boolean
+        default: false
       matrixone_sha:
         description: Full MatrixOne main SHA; use the same SHA for every arm
         required: true
@@ -24,13 +28,60 @@ permissions:
 
 jobs:
   cs-coverage-canary:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@a5d69c4f293f4e6faed3a8caf37e774c25f990bd
     with:
       canary_pr_32523: true
       runner_label: cs-mnl2-large-7c14g
       canary_package_parallelism: 8
     secrets: inherit
+  cs-minio-smoke:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke
+    runs-on: cs-mnl2-nightly-dind-2c8g
+    timeout-minutes: 90
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3 python-is-python3
+      - name: Checkout pinned MatrixOne PR source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          token: ${{ secrets.TOKEN_ACTION }}
+          repository: iamlinjunhong/matrixone
+          ref: b0641dbf3cb1ed67f90f9e4226f0585ba451abc0
+      - name: Set up Go
+        uses: matrixorigin/CI/actions/setup-env@main
+        with:
+          setup-java: false
+          go-version-file: ${{ github.workspace }}/go.mod
+      - name: Install isolated MinIO executable
+        run: |
+          set -euo pipefail
+          docker pull minio/minio:RELEASE.2025-04-22T22-12-26Z
+          container_id=$(docker create minio/minio:RELEASE.2025-04-22T22-12-26Z)
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          mkdir -p "$RUNNER_TEMP/minio-bin"
+          docker cp "$container_id:/usr/bin/minio" "$RUNNER_TEMP/minio-bin/minio"
+          chmod +x "$RUNNER_TEMP/minio-bin/minio"
+          echo "$RUNNER_TEMP/minio-bin" >> "$GITHUB_PATH"
+      - name: Build native dependencies
+        timeout-minutes: 40
+        run: |
+          set -euo pipefail
+          make config
+          make cgo
+      - name: Run local MinIO object and file service tests
+        timeout-minutes: 30
+        env:
+          GOPROXY: https://goproxy.cn|https://proxy.golang.org|direct
+        run: |
+          set -euo pipefail
+          command -v minio
+          export CGO_CFLAGS="-I${GITHUB_WORKSPACE}/cgo -I${GITHUB_WORKSPACE}/thirdparties/install/include"
+          export CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo -Wl,-rpath,${GITHUB_WORKSPACE}/cgo -L${GITHUB_WORKSPACE}/thirdparties/install/lib -lusearch_c -Wl,-rpath,${GITHUB_WORKSPACE}/thirdparties/install/lib -lm"
+          go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^TestMinioSDK$' -v -count=1 -timeout=20m
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
