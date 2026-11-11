@@ -23,6 +23,31 @@ permissions:
   contents: read
 
 jobs:
+  cs-ut-smoke:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/weilu-runner-test'
+    runs-on: cs-mty-large-7c14g
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 4df268ea5f21882599fdfd6f415b67f849b99675
+          persist-credentials: false
+      - name: Check architecture and resources
+        run: |
+          set -euo pipefail
+          uname -sm
+          test "$(uname -m)" = x86_64
+          df -h .
+          free -h
+      - uses: matrixorigin/CI/actions/setup-env@main
+        with:
+          setup-java: true
+          go-version-file: "${{ github.workspace }}/go.mod"
+      - name: Configure and run a small race-enabled UT package
+        run: |
+          set -euo pipefail
+          make config
+          go test -race -short -timeout 15m ./pkg/container/types
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
