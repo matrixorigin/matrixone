@@ -79,10 +79,12 @@ func TestJSONReaderMetadataFollowsIndependentLifetimes(t *testing.T) {
 	text, err := cursor.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "1", text.Text)
+	text.Close()
 	cursor.Close()
 	value, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", value)
+	require.Equal(t, "1", value.Text)
+	value.Close()
 	result.Close()
 	require.Zero(t, state.account.Snapshot().Used)
 }

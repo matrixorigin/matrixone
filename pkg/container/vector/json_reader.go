@@ -17,12 +17,14 @@ package vector
 import (
 	"io"
 	"math"
+	"sync"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/internal/jsonread"
 )
 
 // JSONReader is an immutable column version. Implementations keep their
@@ -55,15 +57,62 @@ type JSONQueryResult interface {
 	Int64() (int64, bool)
 	Uint64() (uint64, bool)
 	SelectSingle() int
-	Text() (string, error)
-	TextWithLegacyFloat() (string, error)
+	Text() (JSONOwnedText, error)
+	TextWithLegacyFloat() (JSONOwnedText, error)
 	AppendJSON(*Vector, *mpool.MPool) error
 	AppendResult(FunctionResultWrapper) error
 	Close()
 }
 
-// JSONTextSelection contains only owned text and scalar selection metadata.
-// It never exposes document bytes or extends a cursor's result lifetime.
+type jsonOwnedTextLease struct {
+	once    sync.Once
+	release func()
+}
+
+// JSONOwnedText is independent of the source reader. Its owner must Close it
+// after use; copies share the same release, and their text must not be used
+// after any copy is closed.
+type JSONOwnedText struct {
+	Text  string
+	lease *jsonOwnedTextLease
+}
+
+// NewJSONOwnedText attaches a pre-existing allocation reservation to copied
+// text. It does not validate input or confer JSON reader authority.
+func NewJSONOwnedText(text string, release func()) JSONOwnedText {
+	if release == nil {
+		return JSONOwnedText{Text: text}
+	}
+	return JSONOwnedText{Text: text, lease: &jsonOwnedTextLease{release: release}}
+}
+
+func (text *JSONOwnedText) Close() {
+	if text == nil {
+		return
+	}
+	if text.lease != nil {
+		text.lease.once.Do(text.lease.release)
+		text.lease = nil
+	}
+	text.Text = ""
+}
+
+// IsJSONTextConversionError excludes allocation/admission failures from a
+// consumer's value-conversion response policy.
+func IsJSONTextConversionError(err error) bool { return jsonread.IsConversionError(err) }
+
+func copyJSONOwnedText(value bytejson.ByteJson, legacyFloat bool, selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission) (JSONOwnedText, error) {
+	text, release, err := jsonread.CopyText(value, legacyFloat, func(size uint64) (func(), error) {
+		return ReserveJSONReaderBacking(selection, admission, size)
+	})
+	if err != nil {
+		return JSONOwnedText{}, err
+	}
+	return NewJSONOwnedText(text, release), nil
+}
+
+// JSONTextSelection owns copied text and scalar selection metadata. The
+// caller must Close the selection; it never exposes document bytes.
 type JSONTextSelection struct {
 	Text        string
 	Type        byte
@@ -73,6 +122,23 @@ type JSONTextSelection struct {
 	Multiple    bool
 	InvalidPath bool
 	TextError   bool
+	lease       *jsonOwnedTextLease
+}
+
+// NewJSONTextSelection transfers the copied text's reservation to a selection.
+func NewJSONTextSelection(text JSONOwnedText, typ byte) JSONTextSelection {
+	return JSONTextSelection{Text: text.Text, Type: typ, Exists: true, lease: text.lease}
+}
+
+func (selection *JSONTextSelection) Close() {
+	if selection == nil {
+		return
+	}
+	if selection.lease != nil {
+		selection.lease.once.Do(selection.lease.release)
+		selection.lease = nil
+	}
+	selection.Text = ""
 }
 
 // JSONCursor retains one immutable version and reuses its result storage for
@@ -464,7 +530,7 @@ func (r *jsonReader) Query(row int, path *bytejson.Path) (JSONQueryResult, error
 		releaseJSONReaderMetadata(releaseMeta)
 		return nil, io.ErrClosedPipe
 	}
-	result := &jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta}
+	result := &jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.column.allocationAccount, admission: r.admission}
 	if err := r.fillQuery(row, path, result); err != nil {
 		result.Close()
 		return nil, err
@@ -473,8 +539,7 @@ func (r *jsonReader) Query(row int, path *bytejson.Path) (JSONQueryResult, error
 }
 
 func (r *jsonReader) loadQueryRow(row int, result *jsonQueryResult) (bytejson.ByteJson, error) {
-	result.value = bytejson.ByteJson{}
-	result.exists, result.sqlNull = false, false
+	result.clearValue()
 	if r == nil || result.lease == nil {
 		return bytejson.ByteJson{}, io.ErrClosedPipe
 	}
@@ -502,8 +567,10 @@ func (r *jsonReader) fillQuery(row int, path *bytejson.Path, result *jsonQueryRe
 	if result.sqlNull {
 		return nil
 	}
-	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{path})
-	return nil
+	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(path, func(size uint64) (func(), error) {
+		return ReserveJSONReaderBacking(r.column.allocationAccount, r.admission, size)
+	})
+	return err
 }
 
 func (r *jsonReader) OpenCursor() (JSONCursor, error) {
@@ -519,8 +586,8 @@ func (r *jsonReader) OpenCursor() (JSONCursor, error) {
 		return nil, io.ErrClosedPipe
 	}
 	return &jsonCursor{
-		reader:          jsonReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow},
-		jsonQueryResult: jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta},
+		reader:          jsonReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow, admission: r.admission},
+		jsonQueryResult: jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.column.allocationAccount, admission: r.admission},
 	}, nil
 }
 
@@ -547,23 +614,35 @@ func (cursor *jsonCursor) Close() {
 // methods return owned text or copy into an explicitly supplied destination.
 // Separate query results may be consumed concurrently; Close is sequential.
 type jsonQueryResult struct {
-	value       bytejson.ByteJson
-	exists      bool
-	sqlNull     bool
-	lease       *RefCountedBufferLease
-	releaseMeta func()
+	value        bytejson.ByteJson
+	exists       bool
+	sqlNull      bool
+	lease        *RefCountedBufferLease
+	releaseMeta  func()
+	releaseValue func()
+	selection    *AllocationAccountSelection
+	admission    JSONReaderMemoryAdmission
+}
+
+func (r *jsonQueryResult) clearValue() {
+	if r.releaseValue != nil {
+		r.releaseValue()
+		r.releaseValue = nil
+	}
+	r.value = bytejson.ByteJson{}
+	r.exists, r.sqlNull = false, false
 }
 
 func (r *jsonQueryResult) Exists() bool  { return r != nil && r.lease != nil && r.exists }
 func (r *jsonQueryResult) SQLNull() bool { return r != nil && r.lease != nil && r.sqlNull }
-func (r *jsonQueryResult) Text() (string, error) {
+func (r *jsonQueryResult) Text() (JSONOwnedText, error) {
 	if r == nil || r.lease == nil {
-		return "", io.ErrClosedPipe
+		return JSONOwnedText{}, io.ErrClosedPipe
 	}
 	if r.sqlNull || !r.exists {
-		return "", moerr.NewInvalidInputNoCtx("JSON query has no value")
+		return JSONOwnedText{}, moerr.NewInvalidInputNoCtx("JSON query has no value")
 	}
-	return r.value.Unquote()
+	return copyJSONOwnedText(r.value, false, r.selection, r.admission)
 }
 func (r *jsonQueryResult) AppendJSON(destination *Vector, mp *mpool.MPool) error {
 	if r == nil || r.lease == nil {
@@ -581,9 +660,11 @@ func (r *jsonQueryResult) Close() {
 	if r != nil && r.lease != nil {
 		lease := r.lease
 		releaseMeta := r.releaseMeta
+		r.clearValue()
 		r.lease = nil
 		r.releaseMeta = nil
-		r.value = bytejson.ByteJson{}
+		r.selection = nil
+		r.admission = nil
 		lease.Release()
 		releaseJSONReaderMetadata(releaseMeta)
 	}
@@ -635,14 +716,14 @@ func (r *jsonQueryResult) SelectSingle() int {
 	return count
 }
 
-func (r *jsonQueryResult) TextWithLegacyFloat() (string, error) {
+func (r *jsonQueryResult) TextWithLegacyFloat() (JSONOwnedText, error) {
 	if r == nil || r.lease == nil {
-		return "", io.ErrClosedPipe
+		return JSONOwnedText{}, io.ErrClosedPipe
 	}
 	if r.sqlNull || !r.exists {
-		return "", moerr.NewInvalidInputNoCtx("JSON query has no value")
+		return JSONOwnedText{}, moerr.NewInvalidInputNoCtx("JSON query has no value")
 	}
-	return r.value.UnquoteWithLegacyFloat()
+	return copyJSONOwnedText(r.value, true, r.selection, r.admission)
 }
 
 // AppendResult copies through the ordinary function-result writer so its
@@ -694,24 +775,14 @@ func (r *jsonQueryResult) selectText(simple, legacyFloat bool) (JSONTextSelectio
 		}
 		value = value.GetArrayElem(0)
 	}
-	// String unquoting is the stored UTF-8 payload; convert to owned text.
-	if value.Type == bytejson.TpCodeString {
-		return JSONTextSelection{Exists: true, Text: string(value.GetString()), Type: byte(value.Type)}, nil
-	}
 	if value.IsNull() {
 		return JSONTextSelection{Exists: true, ValueNull: true}, nil
 	}
-	var text string
-	var err error
-	if legacyFloat {
-		text, err = value.UnquoteWithLegacyFloat()
-	} else {
-		text, err = value.Unquote()
-	}
+	text, err := copyJSONOwnedText(value, legacyFloat, r.selection, r.admission)
 	if err != nil {
-		return JSONTextSelection{TextError: true}, err
+		return JSONTextSelection{TextError: IsJSONTextConversionError(err)}, err
 	}
-	return JSONTextSelection{Exists: true, Text: text, Type: byte(value.Type)}, nil
+	return NewJSONTextSelection(text, byte(value.Type)), nil
 }
 
 // QueryText borrows the live reader only for this call and returns owned text.
@@ -720,7 +791,8 @@ func (r *jsonReader) QueryText(row int, pathBytes []byte, legacyFloat bool) (JSO
 	if r == nil || r.lease == nil {
 		return JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := jsonQueryResult{lease: r.lease}
+	result := jsonQueryResult{lease: r.lease, selection: r.column.allocationAccount, admission: r.admission}
+	defer result.clearValue()
 	value, err := r.loadQueryRow(row, &result)
 	if err != nil {
 		return JSONTextSelection{}, err
@@ -741,7 +813,8 @@ func (r *jsonReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bo
 	if r == nil || r.lease == nil {
 		return JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := jsonQueryResult{lease: r.lease}
+	result := jsonQueryResult{lease: r.lease, selection: r.column.allocationAccount, admission: r.admission}
+	defer result.clearValue()
 	if err := r.fillQuery(row, &path, &result); err != nil {
 		return JSONTextSelection{}, err
 	}
@@ -749,7 +822,13 @@ func (r *jsonReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bo
 }
 
 func queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *jsonQueryResult, legacyFloat bool) (JSONTextSelection, error) {
-	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{&path})
+	var err error
+	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(&path, func(size uint64) (func(), error) {
+		return ReserveJSONReaderBacking(result.selection, result.admission, size)
+	})
+	if err != nil {
+		return JSONTextSelection{}, err
+	}
 	return result.selectText(path.IsSimple(), legacyFloat)
 }
 

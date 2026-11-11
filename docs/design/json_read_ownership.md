@@ -87,6 +87,21 @@ results can outlive a reader, so closing a reader alone is not a zero-memory
 assertion; after the last consumer closes, this feature's live references and
 charges must be zero. There is no global cache, cleanup worker or new disk use.
 
+Query-result backing is separate from the source pin. The existing ByteJson
+path traversal reserves each growing match table and any merged-array backing
+before allocation; temporary match charges end after traversal, and a merged
+result charge belongs to its result or cursor until Close or ResetQuery.
+Insufficient budget is a hard execution error. The ordinary ByteJson query API
+is unchanged; the budget-aware variant neither validates bytes nor grants a
+reader capability and is used by the already-admitted private readers.
+
+Text returned from a reader or query result has its own explicit, independently
+charged handle. It survives closing the source reader, and its consumer closes
+the handle after copying into the caller-owned destination. Handle copies share
+one release; none may be used after any copy is closed. Formatting reserves
+temporary storage before conversion, then retains a separate output charge.
+Allocation/admission errors are terminal, not JSON_VALUE conversion errors.
+
 Memory-only admission obtains memory authority for the existing execution
 generation, not spill authority. Promotion initializes spill capacity on that
 same generation before any spill-capable handle is returned. It must preserve
@@ -145,14 +160,14 @@ independent reviewer reruns.
 | --- | ---: | --- |
 | Worst actual SQL, deep/16/1 path | 1.0979x | Within 1.10x; limited margin, not proof of production throughput. |
 | Worst warm lookup | 1.0084x | Within 1.20x. |
-| Legacy 64 rows, wide/16/8 paths | 1.2034x | Above 1.20x; acceptance OPEN. |
-| Contract 64 rows, integer/4096/1 path | 1.2103x | Above 1.20x; acceptance OPEN. |
-| Contract 64 rows, string/16/1 path | 1.2007x | Above 1.20x; acceptance OPEN. |
+| Legacy 64 rows, wide/16/8 paths | 1.2034x | Above 1.20x; requester accepted this measured cost; independent review OPEN. |
+| Contract 64 rows, integer/4096/1 path | 1.2103x | Above 1.20x; requester accepted this measured cost; independent review OPEN. |
+| Contract 64 rows, string/16/1 path | 1.2007x | Above 1.20x; requester accepted this measured cost; independent review OPEN. |
 | Mutable input, 4096 elements | 9.7723x | Disclosed defensive fallback; not an immutable-query PASS or an accepted blanket workload cost. |
 
-The requester accepted publishing these measured costs for review, as recorded
-in #32546's initial body. That decision authorizes disclosure, not design or
-numerical acceptance. No quantitative waiver is recorded here. The PR body
+The requester explicitly accepted these measured costs for publication. The
+three numerical targets above were still exceeded; the requester's acceptance
+does not itself approve the design or establish reviewer/QA acceptance. The PR body
 retains per-arm ns/op, B/op, allocs/op and all three above-target ratio series.
 Twenty expression windows had no observed major faults or global swap; two
 global swap-in pages occurred in one SQL baseline window. These observations

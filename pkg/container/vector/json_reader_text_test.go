@@ -24,6 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func jsonTextSelectionFields(value JSONTextSelection) []any {
+	return []any{value.Text, value.Type, value.Exists, value.InputNull, value.ValueNull, value.Multiple, value.InvalidPath, value.TextError}
+}
+
 func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
@@ -51,10 +55,13 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 		require.NoError(t, err)
 		got, err := reader.QueryText(0, []byte(pathText), false)
 		require.NoError(t, err)
-		require.Equal(t, want, got)
+		require.Equal(t, jsonTextSelectionFields(want), jsonTextSelectionFields(got))
+		got.Close()
 		got, err = reader.QueryTextAtPath(0, path, false)
 		require.NoError(t, err)
-		require.Equal(t, want, got)
+		require.Equal(t, jsonTextSelectionFields(want), jsonTextSelectionFields(got))
+		got.Close()
+		want.Close()
 	}
 	owned, err := reader.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
@@ -71,11 +78,13 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 	require.True(t, bad.InvalidPath)
 	_, err = reader.QueryTextAtPath(2, *jsonReaderPath(t, "$.keep"), false)
 	require.Error(t, err)
-	require.Equal(t, before, calls, "synchronous reads do not create retained metadata")
+	require.Greater(t, calls, before, "owned text and query backing require admission")
 	cursor.Close()
 	reader.Close()
 	clear(raw)
 	require.Equal(t, "owned text", owned.Text)
+	require.Positive(t, live, "the independent text retains its charge")
+	owned.Close()
 	require.Zero(t, live)
 	_, err = reader.QueryText(0, []byte("$.keep"), false)
 	require.ErrorIs(t, err, io.ErrClosedPipe)
@@ -105,7 +114,7 @@ func TestJSONReaderStringTextMatchesUnquote(t *testing.T) {
 		}
 	}()
 	path := *jsonReaderPath(t, "$.items[*]")
-	owned := make([]string, len(literals))
+	owned := make([]JSONTextSelection, len(literals))
 	for row := range literals {
 		for _, legacyFloat := range []bool{false, true} {
 			got, err := reader.QueryTextAtPath(row, path, legacyFloat)
@@ -113,10 +122,17 @@ func TestJSONReaderStringTextMatchesUnquote(t *testing.T) {
 			require.True(t, got.Exists)
 			require.Equal(t, byte(bytejson.TpCodeString), got.Type)
 			require.Equal(t, want[row], got.Text)
-			owned[row] = got.Text
+			if legacyFloat {
+				got.Close()
+			} else {
+				owned[row] = got
+			}
 		}
 	}
 	reader.Close()
 	closed = true
-	require.Equal(t, want, owned, "selected strings remain owned after reader close")
+	for row := range owned {
+		require.Equal(t, want[row], owned[row].Text, "selected strings remain owned after reader close")
+		owned[row].Close()
+	}
 }

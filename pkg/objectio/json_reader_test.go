@@ -72,6 +72,10 @@ func testJSONCachePinAdmission(t *testing.T) JSONCachePinAdmission {
 	}
 }
 
+func cacheJSONTextFields(value vector.JSONTextSelection) []any {
+	return []any{value.Text, value.Type, value.Exists, value.InputNull, value.ValueNull, value.Multiple, value.InvalidPath, value.TextError}
+}
+
 // A cache validator can receive bytes from an arbitrary caller. Admission must
 // not grant immutable-reader authority over that caller's writable storage.
 func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
@@ -99,6 +103,7 @@ func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
 	result, err := cursor.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "ORIGINAL", result.Text)
+	result.Close()
 	fresh, err := OpenJSONReader(sealed, mp, nil)
 	require.NoError(t, err)
 	defer fresh.Close()
@@ -108,6 +113,7 @@ func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
 	updated, err := freshCursor.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "MUTATED!", updated.Text)
+	updated.Close()
 	raw[pos] = 0xff
 	invalid, err := OpenJSONReader(sealed, mp, nil)
 	require.Error(t, err)
@@ -115,6 +121,7 @@ func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
 	again, err := cursor.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "ORIGINAL", again.Text)
+	again.Close()
 }
 
 func TestJSONCacheReaderRejectsMalformedColumnHeader(t *testing.T) {
@@ -185,6 +192,7 @@ func TestJSONCacheRehomeDoesNotExposeAdmittedBacking(t *testing.T) {
 		cursor.Close()
 		require.NoError(t, err)
 		require.Equal(t, "ORIGINAL", result.Text)
+		result.Close()
 	}
 }
 
@@ -235,6 +243,7 @@ func TestJSONCachePrivateConstructorRejectsAliasingAllocator(t *testing.T) {
 	value, err := cursor.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "ORIGINAL", value.Text)
+	value.Close()
 }
 
 func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
@@ -267,6 +276,7 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 				if err == nil && value.Text != "ORIGINAL" {
 					err = io.ErrUnexpectedEOF
 				}
+				value.Close()
 				cursor.Close()
 			}
 			if err == nil {
@@ -275,6 +285,7 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 				if err == nil && value.Text != "ORIGINAL" {
 					err = io.ErrUnexpectedEOF
 				}
+				value.Close()
 			}
 			results <- err
 		}()
@@ -316,10 +327,13 @@ func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 		require.NoError(t, e)
 		got, e := reader.QueryText(0, []byte(pathText), false)
 		require.NoError(t, e)
-		require.Equal(t, want, got)
+		require.Equal(t, cacheJSONTextFields(want), cacheJSONTextFields(got))
+		got.Close()
 		got, e = reader.QueryTextAtPath(0, path, false)
 		require.NoError(t, e)
-		require.Equal(t, want, got)
+		require.Equal(t, cacheJSONTextFields(want), cacheJSONTextFields(got))
+		got.Close()
+		want.Close()
 	}
 	owned, err := reader.QueryText(0, []byte("$.keep"), false)
 	require.NoError(t, err)
@@ -334,11 +348,12 @@ func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 	bad, err := reader.QueryText(0, []byte("invalid path"), false)
 	require.Error(t, err)
 	require.True(t, bad.InvalidPath)
-	require.Equal(t, before, calls)
+	require.Greater(t, calls, before)
 	cursor.Close()
 	reader.Close()
 	clear(doc.Data)
 	require.Equal(t, "owned text", owned.Text)
+	owned.Close()
 	_, err = reader.QueryText(0, []byte("$.keep"), false)
 	require.ErrorIs(t, err, io.ErrClosedPipe)
 }
@@ -376,7 +391,7 @@ func TestCacheJSONReaderStringTextMatchesUnquote(t *testing.T) {
 	}()
 	path, err := types.ParseStringToPath("$.items[*]")
 	require.NoError(t, err)
-	owned := make([]string, len(literals))
+	owned := make([]vector.JSONTextSelection, len(literals))
 	for row := range literals {
 		for _, legacyFloat := range []bool{false, true} {
 			got, err := reader.QueryTextAtPath(row, path, legacyFloat)
@@ -384,14 +399,21 @@ func TestCacheJSONReaderStringTextMatchesUnquote(t *testing.T) {
 			require.True(t, got.Exists)
 			require.Equal(t, byte(bytejson.TpCodeString), got.Type)
 			require.Equal(t, want[row], got.Text)
-			owned[row] = got.Text
+			if legacyFloat {
+				got.Close()
+			} else {
+				owned[row] = got
+			}
 		}
 	}
 	reader.Close()
 	closed = true
 	data.Release()
 	dataReleased = true
-	require.Equal(t, want, owned, "selected strings remain owned after reader close")
+	for row := range owned {
+		require.Equal(t, want[row], owned[row].Text, "selected strings remain owned after reader close")
+		owned[row].Close()
+	}
 }
 
 func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
@@ -467,6 +489,7 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 			selected, err := cursor.QueryText(0, []byte("$.keep"), false)
 			require.NoError(t, err)
 			require.Equal(t, "ORIGINAL", selected.Text)
+			selected.Close()
 			cursor.Close()
 			require.Zero(t, account.Snapshot().Used)
 		})
@@ -561,7 +584,8 @@ func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 			defer result.Close()
 			text, err := result.Text()
 			require.NoError(t, err)
-			require.Equal(t, "1", text)
+			require.Equal(t, "1", text.Text)
+			text.Close()
 		}()
 	}
 }
@@ -600,7 +624,9 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 				bt, be := b.Text()
 				require.NoError(t, ae)
 				require.NoError(t, be)
-				require.Equal(t, at, bt, text)
+				require.Equal(t, at.Text, bt.Text, text)
+				at.Close()
+				bt.Close()
 				av, aok := a.Int64()
 				bv, bok := b.Int64()
 				require.Equal(t, av, bv)
@@ -618,10 +644,10 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 				require.NoError(t, err)
 				right, err := bc.QueryText(row, []byte(text), legacyFloat)
 				require.NoError(t, err)
-				require.Equal(t, left, right, text)
+				require.Equal(t, cacheJSONTextFields(left), cacheJSONTextFields(right), text)
 				again, err := bc.QueryText(row, []byte(text), legacyFloat)
 				require.NoError(t, err)
-				require.Equal(t, right, again, "selection must leave the query result unchanged")
+				require.Equal(t, cacheJSONTextFields(right), cacheJSONTextFields(again), "selection must leave the query result unchanged")
 				switch {
 				case row == 1:
 					require.True(t, right.InputNull)
@@ -637,6 +663,9 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 					require.True(t, right.Exists)
 					require.False(t, right.Multiple)
 				}
+				left.Close()
+				right.Close()
+				again.Close()
 			}
 			ac.Close()
 			bc.Close()
@@ -653,7 +682,8 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	require.NoError(t, cursor.ResetQuery(0, cursorPath))
 	cursorText, err := cursor.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", cursorText)
+	require.Equal(t, "1", cursorText.Text)
+	cursorText.Close()
 	require.NoError(t, cursor.ResetQuery(1, cursorPath))
 	require.True(t, cursor.SQLNull())
 	require.False(t, cursor.Exists())
@@ -677,7 +707,8 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	text, err := result.Text()
 	result.Close()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 }
 
 type wrappedCacheJSONReader struct{ vector.JSONReader }
@@ -741,6 +772,7 @@ func TestCacheJSONReaderRepeatView(t *testing.T) {
 	result, err := cursor.QueryText(2, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "2", result.Text)
+	result.Close()
 	cursor.Close()
 	_, err = again.Repeat(0, 1)
 	require.ErrorIs(t, err, io.ErrClosedPipe)

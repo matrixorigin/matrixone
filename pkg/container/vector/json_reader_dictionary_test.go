@@ -53,12 +53,14 @@ func TestJSONReaderSnapshotDictionary(t *testing.T) {
 			require.True(t, selected.Exists)
 			require.Equal(t, want, selected.Text)
 		}
+		selected.Close()
 	}
 	dict.Free(mp)
 	source.Free(mp)
 	selected, err := reader.QueryTextAtPath(0, path, false)
 	require.NoError(t, err)
 	require.Equal(t, "third", selected.Text)
+	selected.Close()
 }
 
 func TestJSONReaderSnapshotDictionaryRejectsCorruption(t *testing.T) {

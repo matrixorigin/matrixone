@@ -61,7 +61,8 @@ func TestJSONReaderSnapshotIsolation(t *testing.T) {
 			reader.Close()
 			text, err := result.Text()
 			require.NoError(t, err)
-			require.Equal(t, "1", text)
+			require.Equal(t, "1", text.Text)
+			text.Close()
 			result.Close()
 			require.ErrorIs(t, func() error { _, err := result.Text(); return err }(), io.ErrClosedPipe)
 			fresh, err := NewJSONReaderSnapshot(source, mp)
@@ -72,7 +73,8 @@ func TestJSONReaderSnapshotIsolation(t *testing.T) {
 			defer second.Close()
 			text, err = second.Text()
 			require.NoError(t, err)
-			require.Equal(t, "2", text)
+			require.Equal(t, "2", text.Text)
+			text.Close()
 		})
 	}
 }
@@ -116,7 +118,8 @@ func TestJSONReaderBuilderTypedAppend(t *testing.T) {
 	defer result.Close()
 	text, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 	wasNull, err := reader.IsNull(1)
 	require.NoError(t, err)
 	require.True(t, wasNull)
@@ -153,7 +156,8 @@ func TestJSONReaderBuilderViewsAndOwnedOutput(t *testing.T) {
 	destination.GetBytesAt(0)[1] = 0xff
 	text, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "retained payload longer than inline", text)
+	require.Equal(t, "retained payload longer than inline", text.Text)
+	text.Close()
 	null, err := view.Query(1, path)
 	require.NoError(t, err)
 	require.True(t, null.SQLNull())
@@ -194,11 +198,12 @@ func TestJSONReaderIndependentConcurrentReaders(t *testing.T) {
 			<-start
 			result, err := view.Query(0, path)
 			if err == nil {
-				var text string
+				var text JSONOwnedText
 				text, err = result.Text()
-				if err == nil && text != "1" {
+				if err == nil && text.Text != "1" {
 					err = io.ErrUnexpectedEOF
 				}
+				text.Close()
 				result.Close()
 			}
 			if err == nil {
@@ -207,6 +212,7 @@ func TestJSONReaderIndependentConcurrentReaders(t *testing.T) {
 				if err == nil && selected.Text != "1" {
 					err = io.ErrUnexpectedEOF
 				}
+				selected.Close()
 			}
 			results <- err
 		}()
@@ -256,7 +262,8 @@ func TestJSONReaderSelectionAndConst(t *testing.T) {
 		text, err := result.Text()
 		result.Close()
 		require.NoError(t, err)
-		require.Equal(t, want, text)
+		require.Equal(t, want, text.Text)
+		text.Close()
 	}
 	constant := NewConstNull(types.T_json.ToType(), 3, mp)
 	defer constant.Free(mp)
@@ -334,7 +341,8 @@ func TestJSONReaderCursorRetainsAndReuses(t *testing.T) {
 	require.NoError(t, cursor.ResetQuery(0, *path))
 	text, err := cursor.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 	require.NoError(t, cursor.ResetQuery(1, *path))
 	require.True(t, cursor.SQLNull())
 	require.False(t, cursor.Exists())
@@ -381,10 +389,12 @@ func TestJSONReaderCursorsRetainClosedParent(t *testing.T) {
 					results <- err
 					return
 				}
-				if text != "1" {
+				if text.Text != "1" {
+					text.Close()
 					results <- io.ErrUnexpectedEOF
 					return
 				}
+				text.Close()
 			}
 			results <- nil
 		}()
@@ -419,7 +429,8 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 		text, err := result.Text()
 		result.Close()
 		require.NoError(t, err)
-		require.Equal(t, "1", text)
+		require.Equal(t, "1", text.Text)
+		text.Close()
 	}
 	window, err := reader.Window(32, 34)
 	require.NoError(t, err)
@@ -432,7 +443,8 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 	defer result.Close()
 	text, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 	flat := NewVec(types.T_json.ToType())
 	defer flat.Free(mp)
 	require.NoError(t, AppendBytes(flat, raw, false, mp))
@@ -523,6 +535,7 @@ func TestJSONReaderRepeatView(t *testing.T) {
 	result, err := cursor.QueryText(2, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "2", result.Text)
+	result.Close()
 	cursor.Close()
 	_, err = again.Repeat(0, 1)
 	require.ErrorIs(t, err, io.ErrClosedPipe)

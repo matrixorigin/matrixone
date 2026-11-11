@@ -72,5 +72,6 @@ func TestMemoryReaderPublishesJSONVersion(t *testing.T) {
 	defer result.Close()
 	text, err := result.Text()
 	require.NoError(t, err)
-	require.Equal(t, "1", text)
+	require.Equal(t, "1", text.Text)
+	text.Close()
 }

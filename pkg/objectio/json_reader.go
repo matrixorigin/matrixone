@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/internal/jsonread"
 )
 
 // cacheJSONReader borrows only objectio's already validated sealed cache
@@ -287,7 +288,7 @@ func (r *cacheJSONReader) Query(row int, path *bytejson.Path) (vector.JSONQueryR
 		}
 		return nil, io.ErrClosedPipe
 	}
-	result := &cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta}
+	result := &cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.selection, admission: r.admission}
 	if err := r.fillQuery(row, path, result); err != nil {
 		result.Close()
 		return nil, err
@@ -296,8 +297,7 @@ func (r *cacheJSONReader) Query(row int, path *bytejson.Path) (vector.JSONQueryR
 }
 
 func (r *cacheJSONReader) loadQueryRow(row int, result *cacheJSONQueryResult) (bytejson.ByteJson, error) {
-	result.value = bytejson.ByteJson{}
-	result.exists, result.sqlNull = false, false
+	result.clearValue()
 	if r == nil || result.lease == nil {
 		return bytejson.ByteJson{}, io.ErrClosedPipe
 	}
@@ -325,8 +325,10 @@ func (r *cacheJSONReader) fillQuery(row int, path *bytejson.Path, result *cacheJ
 	if result.sqlNull {
 		return nil
 	}
-	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{path})
-	return nil
+	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(path, func(size uint64) (func(), error) {
+		return vector.ReserveJSONReaderBacking(r.selection, r.admission, size)
+	})
+	return err
 }
 
 func (r *cacheJSONReader) OpenCursor() (vector.JSONCursor, error) {
@@ -344,8 +346,8 @@ func (r *cacheJSONReader) OpenCursor() (vector.JSONCursor, error) {
 		return nil, io.ErrClosedPipe
 	}
 	return &cacheJSONCursor{
-		reader:               cacheJSONReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow},
-		cacheJSONQueryResult: cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta},
+		reader:               cacheJSONReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow, selection: r.selection, admission: r.admission},
+		cacheJSONQueryResult: cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.selection, admission: r.admission},
 	}, nil
 }
 
@@ -372,23 +374,35 @@ func (cursor *cacheJSONCursor) Close() {
 // methods return owned text or copy into an explicitly supplied destination.
 // Separate query results may be consumed concurrently; Close is sequential.
 type cacheJSONQueryResult struct {
-	value       bytejson.ByteJson
-	exists      bool
-	sqlNull     bool
-	lease       *vector.RefCountedBufferLease
-	releaseMeta func()
+	value        bytejson.ByteJson
+	exists       bool
+	sqlNull      bool
+	lease        *vector.RefCountedBufferLease
+	releaseMeta  func()
+	releaseValue func()
+	selection    *vector.AllocationAccountSelection
+	admission    vector.JSONReaderMemoryAdmission
+}
+
+func (r *cacheJSONQueryResult) clearValue() {
+	if r.releaseValue != nil {
+		r.releaseValue()
+		r.releaseValue = nil
+	}
+	r.value = bytejson.ByteJson{}
+	r.exists, r.sqlNull = false, false
 }
 
 func (r *cacheJSONQueryResult) Exists() bool  { return r != nil && r.lease != nil && r.exists }
 func (r *cacheJSONQueryResult) SQLNull() bool { return r != nil && r.lease != nil && r.sqlNull }
-func (r *cacheJSONQueryResult) Text() (string, error) {
+func (r *cacheJSONQueryResult) Text() (vector.JSONOwnedText, error) {
 	if r == nil || r.lease == nil {
-		return "", io.ErrClosedPipe
+		return vector.JSONOwnedText{}, io.ErrClosedPipe
 	}
 	if r.sqlNull || !r.exists {
-		return "", moerr.NewInvalidInputNoCtx("JSON query has no value")
+		return vector.JSONOwnedText{}, moerr.NewInvalidInputNoCtx("JSON query has no value")
 	}
-	return r.value.Unquote()
+	return r.copyText(r.value, false)
 }
 func (r *cacheJSONQueryResult) AppendJSON(destination *vector.Vector, mp *mpool.MPool) error {
 	if r == nil || r.lease == nil {
@@ -406,9 +420,11 @@ func (r *cacheJSONQueryResult) Close() {
 	if r != nil && r.lease != nil {
 		lease := r.lease
 		releaseMeta := r.releaseMeta
+		r.clearValue()
 		r.lease = nil
 		r.releaseMeta = nil
-		r.value = bytejson.ByteJson{}
+		r.selection = nil
+		r.admission = nil
 		lease.Release()
 		if releaseMeta != nil {
 			releaseMeta()
@@ -462,14 +478,24 @@ func (r *cacheJSONQueryResult) SelectSingle() int {
 	return count
 }
 
-func (r *cacheJSONQueryResult) TextWithLegacyFloat() (string, error) {
+func (r *cacheJSONQueryResult) TextWithLegacyFloat() (vector.JSONOwnedText, error) {
 	if r == nil || r.lease == nil {
-		return "", io.ErrClosedPipe
+		return vector.JSONOwnedText{}, io.ErrClosedPipe
 	}
 	if r.sqlNull || !r.exists {
-		return "", moerr.NewInvalidInputNoCtx("JSON query has no value")
+		return vector.JSONOwnedText{}, moerr.NewInvalidInputNoCtx("JSON query has no value")
 	}
-	return r.value.UnquoteWithLegacyFloat()
+	return r.copyText(r.value, true)
+}
+
+func (r *cacheJSONQueryResult) copyText(value bytejson.ByteJson, legacyFloat bool) (vector.JSONOwnedText, error) {
+	text, release, err := jsonread.CopyText(value, legacyFloat, func(size uint64) (func(), error) {
+		return vector.ReserveJSONReaderBacking(r.selection, r.admission, size)
+	})
+	if err != nil {
+		return vector.JSONOwnedText{}, err
+	}
+	return vector.NewJSONOwnedText(text, release), nil
 }
 
 // AppendResult copies through the ordinary function-result writer so its
@@ -521,24 +547,14 @@ func (r *cacheJSONQueryResult) selectText(simple, legacyFloat bool) (vector.JSON
 		}
 		value = value.GetArrayElem(0)
 	}
-	// String unquoting is the stored UTF-8 payload; convert to owned text.
-	if value.Type == bytejson.TpCodeString {
-		return vector.JSONTextSelection{Exists: true, Text: string(value.GetString()), Type: byte(value.Type)}, nil
-	}
 	if value.IsNull() {
 		return vector.JSONTextSelection{Exists: true, ValueNull: true}, nil
 	}
-	var text string
-	var err error
-	if legacyFloat {
-		text, err = value.UnquoteWithLegacyFloat()
-	} else {
-		text, err = value.Unquote()
-	}
+	text, err := r.copyText(value, legacyFloat)
 	if err != nil {
-		return vector.JSONTextSelection{TextError: true}, err
+		return vector.JSONTextSelection{TextError: vector.IsJSONTextConversionError(err)}, err
 	}
-	return vector.JSONTextSelection{Exists: true, Text: text, Type: byte(value.Type)}, nil
+	return vector.NewJSONTextSelection(text, byte(value.Type)), nil
 }
 
 // QueryText borrows the live reader only for this call and returns owned text.
@@ -547,7 +563,8 @@ func (r *cacheJSONReader) QueryText(row int, pathBytes []byte, legacyFloat bool)
 	if r == nil || r.lease == nil {
 		return vector.JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := cacheJSONQueryResult{lease: r.lease}
+	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
+	defer result.clearValue()
 	value, err := r.loadQueryRow(row, &result)
 	if err != nil {
 		return vector.JSONTextSelection{}, err
@@ -568,7 +585,8 @@ func (r *cacheJSONReader) QueryTextAtPath(row int, path bytejson.Path, legacyFlo
 	if r == nil || r.lease == nil {
 		return vector.JSONTextSelection{}, io.ErrClosedPipe
 	}
-	result := cacheJSONQueryResult{lease: r.lease}
+	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
+	defer result.clearValue()
 	if err := r.fillQuery(row, &path, &result); err != nil {
 		return vector.JSONTextSelection{}, err
 	}
@@ -576,7 +594,13 @@ func (r *cacheJSONReader) QueryTextAtPath(row int, path bytejson.Path, legacyFlo
 }
 
 func queryCacheTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *cacheJSONQueryResult, legacyFloat bool) (vector.JSONTextSelection, error) {
-	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{&path})
+	var err error
+	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(&path, func(size uint64) (func(), error) {
+		return vector.ReserveJSONReaderBacking(result.selection, result.admission, size)
+	})
+	if err != nil {
+		return vector.JSONTextSelection{}, err
+	}
 	return result.selectText(path.IsSimple(), legacyFloat)
 }
 
