@@ -7,6 +7,10 @@ on:
         description: Run isolated local MinIO test instead of the coverage comparison
         type: boolean
         default: false
+      local_minio_coverage:
+        description: Run isolated coverage with local MinIO; real COS/OSS coverage is excluded
+        type: boolean
+        default: false
       matrixone_sha:
         description: Full MatrixOne main SHA; use the same SHA for every arm
         required: true
@@ -29,9 +33,10 @@ permissions:
 jobs:
   cs-coverage-canary:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@a5d69c4f293f4e6faed3a8caf37e774c25f990bd
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@72b5af2c25a84b0563a610c062a3749bde1a1210
     with:
       canary_pr_32523: true
+      canary_local_minio: ${{ inputs.local_minio_coverage }}
       runner_label: cs-mnl2-large-7c14g
       canary_package_parallelism: 8
     secrets: inherit
