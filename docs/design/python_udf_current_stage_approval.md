@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r43-2026-11-10`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r44-2026-11-11`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -913,3 +913,24 @@ development scope. Earlier unmerged Query tag 23 is superseded, not a supported
 persisted input. Independent Architecture and SQL/Planner approval of r43 remains
 pending; rebase and validation do not supply that approval. Historical decisions
 and descriptions above remain unchanged.
+
+
+## r44: retain official SQL task ownership migrations (2026-11-11)
+
+The governing proposal is `python-udf-current-stage-r44-2026-11-11`.
+Official main `4df268ea5f21882599fdfd6f415b67f849b99675` adds three
+cluster entries to the same pending 4.0.7 target: the SQL task run claim,
+schedule generation and running-task index. Preserve their owners, order,
+defaults and checks together with the nine routine tenant entries. The
+combined target has 36 tenant and 17 cluster entries, hence offset 53.
+The registered metadata computes that offset from both entry lists; the
+existing consolidated-catalog test asserts the combined counts. No new
+catalog successor or route from an earlier unreleased layout is introduced.
+
+This allocation maintenance preserves r43's routine semantics, Query fields
+23/24, MORPC 134, external Python/Arrow ABI, artifact budgets and opt-in
+unisolated development scope. The merged SQL task grammar is retained alongside
+routine DDL and regenerated as one parser. Independent Architecture and
+SQL/Planner approval of r44 remains pending; rebase, tests and prior
+implementation approvals do not supply those decisions. Historical facts and
+revision descriptions above remain unchanged.

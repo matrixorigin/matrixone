@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r43-2026-11-10` |
+| Design revision | `python-udf-current-stage-r44-2026-11-11` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `2f6fcc772175d0c0e80ad97aac6d44360c513347` (official SELECT-lock, execution-dependent access and local runtime-filter domains preserved; existing MORPC gates through 134 and pending consolidated 4.0.7 unchanged) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r43 contract preserves r42's scope and follows official main 2f6fcc772175d0c0e80ad97aac6d44360c513347: retain local runtime-filter domains at Query field 23 and move the unmerged routine envelope to field 24. The same nine routine migrations extend the pending 4.0.7 target, with no separate development-history successor or Python MORPC gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `4df268ea5f21882599fdfd6f415b67f849b99675` (official SQL task ownership migrations and grammar preserved; Query routine tag 24 and MORPC 134 unchanged; pending consolidated 4.0.7 offset 53) |
+| Approval | Feature owner approved the r1 current-stage scope on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r44 contract preserves r43's routine semantics and follows official main 4df268ea5f21882599fdfd6f415b67f849b99675: retain its three SQL task cluster migrations alongside all nine routine tenant migrations, yielding pending 4.0.7/53 (36 tenant, 17 cluster entries). Query fields 23/24 and MORPC 134 are unchanged; no separate development-history successor or Python MORPC gate is added. Independent Architecture and SQL/Planner approval remains pending; no production or security scope is added. Historical approval facts remain in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -124,11 +124,13 @@ demo's old execution behavior is not a compatibility promise.
 
 Catalog compatibility follows the official [release-boundary contract](20261028-catalog-upgrade-407.md), revised by [main consolidation](https://github.com/matrixorigin/matrixone/commit/3f484ec428b2fdaeda333c82b8d562fdb5dbe71a).
 The current `4.0.7` is the pending target for released 4.1/4.2 deployments,
-not a released immutable migration. Its existing 27 tenant and 14 cluster
+not a released immutable migration. Its existing 27 tenant and 17 cluster
 entries retain their owners and ordering. The nine idempotent shared-routine
 entries append to that tenant list after the existing SQL UDF argument-type
-repair, yielding 36 tenant entries and offset 50. The predecessor signature-index check recognizes a validated descriptor index
-as its completed successor, so restart does not recreate/drop the retired index.
+repair, yielding 36 tenant entries and offset 53. The three official SQL task
+cluster additions retain their ownership, defaults and ordering alongside the
+routine tenant entries. The predecessor signature-index check recognizes a
+validated descriptor index as its completed successor, so restart does not recreate/drop the retired index.
 Both checks use the existing definition and physical-index validator. Each entry
 uses the bounded tenant walker and caller-owned transaction rules. No 4.0.18/19/20
 successor is registered and no migration from an unreleased main layout is
