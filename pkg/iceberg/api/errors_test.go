@@ -138,3 +138,33 @@ func TestErrorCategory(t *testing.T) {
 		})
 	}
 }
+
+func TestMemoryLimitAcrossWrappers(t *testing.T) {
+	budget := NewDMLMemoryLimitError(12, 9, 20, MemoryReservation)
+	secret := moerr.NewInternalError(context.Background(), "secret-url-token")
+	wrapped := WrapError(ErrObjectIO, "secret-url-token", nil, errors.Join(categoryTestWrapper{budget}, secret, moerr.NewInternalError(context.Background(), "secret-url-token")))
+	for _, err := range []error{budget, wrapped, categoryTestWrapper{wrapped}} {
+		if got := ErrorCategory(err); got != string(ErrPlanningLimitExceeded) {
+			t.Fatalf("category %s", got)
+		}
+		converted := ToMOErr(context.Background(), err)
+		if !moerr.IsMoErrCode(converted, moerr.ErrInvalidState) {
+			t.Fatalf("expected concrete invalid state, got %T: %v", converted, converted)
+		}
+		for _, part := range []string{"used_bytes=12", "requested_bytes=9", "limit_bytes=20", "iceberg.write.dml_max_memory", "dml-max-memory"} {
+			if !strings.Contains(converted.Error(), part) {
+				t.Fatalf("missing %q: %v", part, converted)
+			}
+		}
+		if strings.Contains(converted.Error(), "secret-url-token") {
+			t.Fatalf("secret leaked: %v", converted)
+		}
+	}
+	ordinary := moerr.NewInternalError(context.Background(), "ordinary")
+	if ToMOErr(context.Background(), ordinary) != ordinary {
+		t.Fatal("ordinary moerr identity changed")
+	}
+	if IsMemoryLimit(moerr.NewInternalError(context.Background(), "iceberg.write.dml_max_memory limit")) {
+		t.Fatal("text must not be classified as budget error")
+	}
+}
