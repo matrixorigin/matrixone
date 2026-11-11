@@ -189,7 +189,8 @@ type caseRunner struct {
 }
 
 func (r *caseRunner) setup(ctx context.Context) error {
-	statements := []string{
+	statements := make([]string, 0, 12)
+	statements = append(statements,
 		fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database)),
 		fmt.Sprintf("DROP ICEBERG CATALOG IF EXISTS %s", ident(r.cfg.Catalog)),
 		fmt.Sprintf("CREATE DATABASE %s", ident(r.cfg.Database)),
@@ -224,7 +225,7 @@ func (r *caseRunner) setup(ctx context.Context) error {
   region TEXT
 ) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='mor_accounts','ref'='main','read_mode'='merge_on_read','write_mode'='merge_on_read')`,
 			ident(r.cfg.Database), ident("mor_accounts"), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace)),
-	}
+	)
 	for _, name := range []string{"codec_default", "codec_zstd", "codec_uncompressed"} {
 		statements = append(statements, fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
   order_id BIGINT, bucket INT, amount BIGINT, region TEXT
