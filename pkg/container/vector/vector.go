@@ -8832,10 +8832,14 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return unionDictionaryRows(v, w, sels, mp)
+	}
+
 	if len(sels) == 0 {
 		return nil
 	}
-	if v == w && w.IsDictionary() || v.dataAliases(w) {
+	if v.dataAliases(w) {
 		// Keep source row indices unchanged, including reordered selections.
 		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
 			return unionT(v, source, sels, mp)
@@ -8884,17 +8888,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + len(sels))
-	if w.IsDictionary() {
-		appendSelectedGrouping(v, w, oldLen, sels)
-		if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
-			return err
-		}
-		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
-			return err
-		}
-		return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
-	}
-
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -9128,6 +9121,10 @@ func (v *Vector) unionBatch(
 	preflightRowCount int,
 	preflighted bool,
 ) error {
+	if w.IsDictionary() {
+		return v.admitDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+	}
+
 	areaWasDisjoint := v.areaDisjoint
 	if selectedAreaBytes < 0 {
 		return mpool.ErrAllocationAccountInvalid
@@ -9201,10 +9198,6 @@ func (v *Vector) unionBatch(
 	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
-	}
-
-	if w.IsDictionary() {
-		return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)
 	}
 
 	if w.IsConst() {

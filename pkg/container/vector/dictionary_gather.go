@@ -364,3 +364,165 @@ func (v *Vector) unionDictionaryOne(w *Vector, row int64, mp *mpool.MPool) error
 	}
 	return v.UnionBatch(w, row, 1, nil, mp)
 }
+
+// unionDictionaryRows preserves selected admission outside the flat union frame.
+func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+	if len(sels) == 0 {
+		return nil
+	}
+	if v == w {
+		copy, err := NewOffHeapVecWithTypeAndAllocation(v.typ, v.allocationAccount)
+		if err != nil {
+			return err
+		}
+		defer copy.Free(mp)
+		if err := unionDictionaryRows(copy, w, sels, mp); err != nil {
+			return err
+		}
+		return v.UnionBatch(copy, 0, copy.Length(), nil, mp)
+	}
+
+	preserveDisjointArea := v.typ.IsVarlen() &&
+		v.AreaBackingKind() == OwnedMPoolUnique &&
+		v.VarlenaAreaIsDisjoint()
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
+	if err := v.preflightPrepareParamKindAppend(
+		v.length+len(sels),
+		summarizePrepareParamKindSelection(w, sels),
+		mp,
+	); err != nil {
+		return err
+	}
+	if err := v.preflightBinaryStringAppend(
+		v.length+len(sels),
+		summarizeBinaryStringSelection(w, sels),
+		mp,
+	); err != nil {
+		return err
+	}
+	if err := preflightStringSourceSelectionAppend(
+		v, v.length+len(sels), w, sels, mp,
+	); err != nil {
+		return err
+	}
+	v.RetainStringSourcePreflight()
+	defer v.FinalizeStringSourcePreflight()
+
+	if err := extendWithBitmaps(
+		v,
+		len(sels),
+		mp,
+		w.IsConstNull() || !w.nsp.EmptyByFlag(),
+		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+	); err != nil {
+		return err
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
+
+	oldLen := v.length
+	v.setLengthAfterExtend(v.length + len(sels))
+	appendSelectedGrouping(v, w, oldLen, sels)
+	if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
+		return err
+	}
+	if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
+		return err
+	}
+	return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
+}
+
+// admitDictionaryBatch is the selected counterpart of the existing bulk
+// admission sequence. It shares the payload gather, not the flat compiler frame.
+func (v *Vector) admitDictionaryBatch(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	stringSourceOverrides []types.StringSource,
+	mp *mpool.MPool,
+	selectedAreaBytes int,
+	preflightRowCount int,
+	preflighted bool,
+) error {
+	areaWasDisjoint := v.areaDisjoint
+	if selectedAreaBytes < 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
+	var addCnt int
+	if preflighted {
+		if preflightRowCount < v.length {
+			return allocationAccountInvalid(
+				"preflighted vector row count is invalid")
+		}
+		addCnt = preflightRowCount - v.length
+	} else if flags != nil {
+		addCnt = 0
+		for i := range flags {
+			addCnt += int(flags[i])
+		}
+	} else {
+		addCnt = cnt
+	}
+
+	if addCnt == 0 {
+		return nil
+	}
+	// UnionBatch permits the source to be the destination itself or a borrowed
+	// Window into it. Preserve that source before any destination growth: mpool
+	// growth may replace and release both the varlena headers and area backing,
+	// leaving an aliased source slice pointing at returned storage.
+	if v == w {
+		snapshot, err := NewOffHeapVecWithTypeAndAllocation(v.typ, v.allocationAccount)
+		if err != nil {
+			return err
+		}
+		defer snapshot.Free(mp)
+		if err := snapshot.UnionBatch(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
+		return v.UnionBatch(snapshot, 0, snapshot.Length(), nil, mp)
+	}
+
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
+	if !preflighted {
+		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
+		defer v.FinalizeStringSourcePreflight()
+		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
+	}
+
+	if preflighted {
+		if preflightRowCount != v.length+addCnt ||
+			preflightRowCount*v.typ.TypeSize() > cap(v.data) {
+			return allocationAccountInvalid(
+				"preflighted vector row capacity is insufficient")
+		}
+	} else {
+		if err := extendWithBitmaps(
+			v,
+			addCnt,
+			mp,
+			w.IsConstNull() || !w.nsp.EmptyByFlag(),
+			w.IsGrouping() || !w.gsp.EmptyByFlag(),
+		); err != nil {
+			return err
+		}
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
+
+	return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)
+}

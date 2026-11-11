@@ -70,6 +70,28 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	require.Equal(t, int64(10), GetFixedAtNoTypeCheck[int64](self, 4))
 	require.True(t, self.IsNull(3))
 	require.True(t, self.GetGrouping().Contains(0))
+	for _, operation := range []string{"selection", "batch"} {
+		func() {
+			target, err := NewDictionaryVector(base, rows, mp, state.selection)
+			require.NoError(t, err)
+			defer target.Free(mp)
+			if operation == "selection" {
+				require.NoError(t, target.Union(target, []int64{3, 0}, mp))
+			} else {
+				require.NoError(t, target.UnionBatch(target, 2, 2, nil, mp))
+			}
+			require.Equal(t, 6, target.Length())
+			if operation == "selection" {
+				require.True(t, target.IsNull(4))
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 5))
+				require.True(t, target.GetGrouping().Contains(5))
+			} else {
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 4))
+				require.True(t, target.GetGrouping().Contains(4))
+				require.True(t, target.IsNull(5))
+			}
+		}()
+	}
 	require.Panics(t, func() { _ = MustFixedColNoTypeCheck[int64](dict) })
 	require.Panics(t, func() { _ = dict.GetData() })
 	require.Panics(t, func() { dict.SetNulls(nil) }, "clearing validity requires writable payload")
