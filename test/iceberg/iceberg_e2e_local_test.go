@@ -2607,3 +2607,29 @@ func TestBudgetDatabaseOwnership(t *testing.T) {
 		})
 	}
 }
+func TestQACleanupContinuesAfterDeleteError(t *testing.T) {
+	deletedSecond := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/v1/config"):
+			_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/tables/first"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/tables/second"):
+			deletedSecond = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	cfg := localE2ETestConfig()
+	cfg.CatalogURI = server.URL + "/iceberg"
+	result := (&caseRunner{cfg: cfg}).cleanupBudgetCase(context.Background(), &budgetRESTResources{namespace: true, tables: []string{"first", "second"}})
+	if result.Status != "failed" {
+		t.Fatalf("expected failure: %+v", result)
+	}
+	if !deletedSecond {
+		t.Fatal("cleanup abandoned second owned table after first delete failed")
+	}
+}
