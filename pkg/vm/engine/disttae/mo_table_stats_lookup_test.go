@@ -90,6 +90,29 @@ func TestBuildTablePairsFromCachePreservesOrderAndMetadata(t *testing.T) {
 	require.Empty(t, buildTablePairsFromCache(eng, []uint64{1, 1}, []uint64{10, 10}, []uint64{102, 999}, snapshot, false))
 }
 
+func TestBuildTablePairsFromCacheHonorsAccountReadiness(t *testing.T) {
+	eng := newStatsLookupEngine(t)
+	eng.pClient.lazyCatalog = newLazyCatalogCNState()
+	eng.pClient.lazyCatalog.enable()
+	eng.GetLatestCatalogCache().UpdateDuration(types.BuildTS(1, 0), types.MaxTs())
+	eng.pClient.lazyCatalog.setAccountReady(1, timestamp.Timestamp{PhysicalTime: 5})
+	snapshot := types.BuildTS(10, 0)
+	accs := []uint64{2, 1, 1}
+	dbs := []uint64{10, 10, 20}
+	ids := []uint64{301, 101, 201}
+
+	pairs := buildTablePairsFromCache(eng, accs, dbs, ids, snapshot, false)
+	require.Len(t, pairs, 2)
+	require.Equal(t, int64(101), pairs[0].tbl)
+	require.Equal(t, int64(201), pairs[1].tbl)
+
+	eng.pClient.lazyCatalog.setAccountReady(2, timestamp.Timestamp{PhysicalTime: 20})
+	require.Len(t, buildTablePairsFromCache(eng, accs, dbs, ids, snapshot, false), 2)
+	require.Len(t, buildTablePairsFromCache(eng, accs, dbs, ids, types.BuildTS(20, 0), false), 3)
+	eng.GetLatestCatalogCache().UpdateStart(types.BuildTS(30, 0))
+	require.Empty(t, buildTablePairsFromCache(eng, accs, dbs, ids, snapshot, false))
+}
+
 func TestGetChangedTableListBatchLookupConsumer(t *testing.T) {
 	eng := newStatsLookupEngine(t)
 	waiter := client.NewTimestampWaiter(runtime.DefaultRuntime().Logger())

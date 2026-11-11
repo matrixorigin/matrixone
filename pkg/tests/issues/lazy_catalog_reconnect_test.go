@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -182,11 +183,11 @@ func TestLazyCatalogReconnectPreservesCheckpointAndInMemoryCatalogMix(t *testing
 		"insert into t_flush values (21), (22), (23)",
 	)
 
-	testutils.ExecSQLWithAccount(t, accountIDA, dbA, op,
-		fmt.Sprintf("select mo_ctl('dn','flush','%s.t_flush')", dbA),
+	testutils.ExecSQL(t, "mo_catalog", op,
+		fmt.Sprintf("select mo_ctl('dn','flush','%s.t_flush.%d')", dbA, accountIDA),
 	)
-	testutils.ExecSQLWithAccount(t, accountIDB, dbB, op,
-		fmt.Sprintf("select mo_ctl('dn','flush','%s.t_flush')", dbB),
+	testutils.ExecSQL(t, "mo_catalog", op,
+		fmt.Sprintf("select mo_ctl('dn','flush','%s.t_flush.%d')", dbB, accountIDB),
 	)
 	testutils.ExecSQL(t, "mo_catalog", op, "select mo_ctl('dn','checkpoint','')")
 
@@ -228,7 +229,11 @@ func waitReconnectReady(t *testing.T, cn cnservice.Service, reconnectC <-chan st
 	case <-time.After(time.Second * 30):
 		t.Fatal("timed out waiting for reconnect signal")
 	}
-	waitLogtailResume(cn)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	op, err := cn.GetTxnClient().New(ctx, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(ctx))
 }
 
 func databaseExistsWithAccount(

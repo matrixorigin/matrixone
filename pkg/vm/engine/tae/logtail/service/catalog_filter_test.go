@@ -239,7 +239,7 @@ func TestFilterLazyCatalogPublishRowsInTailUsesEntryAccountSummary(t *testing.T)
 
 func newCatalogTestSession(t *testing.T) *Session {
 	t.Helper()
-	return NewSession(
+	session := NewSession(
 		context.Background(),
 		mockMOLogger(),
 		NewLogtailResponsePool(),
@@ -248,7 +248,10 @@ func newCatalogTestSession(t *testing.T) *Session {
 		time.Second,
 		time.Second,
 		time.Second,
+		time.Second,
 	)
+	t.Cleanup(session.PostClean)
+	return session
 }
 
 func mustCatalogColumnInsertEntry(t *testing.T, accountIDs []uint32) api.Entry {
