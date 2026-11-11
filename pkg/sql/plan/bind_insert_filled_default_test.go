@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -112,8 +113,8 @@ func TestImplicitFilledChildDefaultExprMirrorsRuntimeFill(t *testing.T) {
 	require.EqualValues(t, 2, binExpr.Typ.Width, "the BINARY mirror keeps the declared width")
 	binCast := binExpr.GetF()
 	require.NotNil(t, binCast, "BINARY(n) mirrors its fill as an assignment cast")
-	require.Equal(t, "cast", binCast.Func.ObjName,
-		"the BINARY mirror is the plain assignment cast - its zero-fill rule applies in every cast mode")
+	require.Equal(t, "cast_strict", binCast.Func.ObjName,
+		"the BINARY mirror retains the width-constrained assignment boundary")
 	require.Len(t, binCast.Args, 2)
 	require.Equal(t, "", binCast.Args[0].GetLit().GetSval(),
 		"the cast source is the empty payload")
@@ -123,6 +124,18 @@ func TestImplicitFilledChildDefaultExprMirrorsRuntimeFill(t *testing.T) {
 	dstTyp := binCast.Args[1].GetTyp()
 	require.Equal(t, int32(types.T_binary), dstTyp.GetId(),
 		"the cast lands on the column type")
+
+	// Exercise the conversion, not only the selected function name: a
+	// width-constrained assignment must still mirror the runtime zero fill.
+	proc := newPlanTestProcess(t)
+	foldedBinary, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(binExpr), proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedBinary.GetLit())
+	require.Equal(t, "\x00\x00", foldedBinary.GetLit().GetSval(), "BINARY(2) fills with exactly two zero bytes")
+	foldedVarbinary, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(varbinExpr), proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedVarbinary.GetLit())
+	require.Equal(t, "", foldedVarbinary.GetLit().GetSval(), "VARBINARY remains empty without fixed-width padding")
 
 	// The write side stores a filled value for these families (zero uuid,
 	// json null payload) but the plan has no constant for it: the caller must
