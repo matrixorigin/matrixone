@@ -1,6 +1,10 @@
 name: Race seed canary
 
 on:
+  pull_request:
+    branches: [weilu-runner-test]
+    paths:
+      - '.github/workflows/race-seed-canary.yaml'
   workflow_dispatch:
     inputs:
       matrixone_sha:
@@ -24,7 +28,10 @@ permissions:
 
 jobs:
   cs-ut-smoke:
-    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/weilu-runner-test'
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.number == 32524) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test'))
     runs-on: cs-mty-large-7c14g
     timeout-minutes: 40
     steps:
