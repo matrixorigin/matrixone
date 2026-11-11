@@ -2926,10 +2926,7 @@ func doPrepareStmtInSession(
 		prepareStmt.ParamTypes = paramTypes
 	}
 
-	if err = checkDirectPublication(execCtx, prepareStmt); err == nil {
-		err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	}
-	if err != nil {
+	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
 		return nil, err
 	}
@@ -3056,10 +3053,7 @@ func doPrepareStringWithParamTypes(owner *Session, executionSes FeSession, execC
 		prepareStmt.ParamTypes = paramTypes
 	}
 
-	if err = checkDirectPublication(execCtx, prepareStmt); err == nil {
-		err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	}
-	if err != nil {
+	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
 		return nil, err
 	}
@@ -3171,27 +3165,12 @@ func createPrepareStmtInSession(
 	}
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
-	var migrationCompiler *directTableMigrationCompiler
-	var planningContext plan2.CompilerContext = executionSes.GetTxnCompileCtx()
-	if execCtx.directTableMigration != nil {
-		check, err := directPublicationGuard(execCtx.reqCtx, owner, execCtx, executionSes.GetTxnCompileCtx())
-		if err != nil {
-			return nil, err
-		}
-		execCtx.directPublicationCheck = check
-		migrationCompiler = &directTableMigrationCompiler{CompilerContext: planningContext, proof: execCtx.directTableMigration}
-		planningContext = migrationCompiler
-	}
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
-		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, planningContext, stmt, nil)
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})
 	if err != nil {
 		return nil, err
-	}
-	if migrationCompiler != nil && (!migrationCompiler.resolved ||
-		!directPlanMatches(execCtx.reqCtx, preparePlan, execCtx.directTableMigration)) {
-		return nil, directMigrationRefusal()
 	}
 	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
 	groupConcatValue, err := owner.GetSessionSysVar("group_concat_max_len")
@@ -3210,11 +3189,7 @@ func createPrepareStmtInSession(
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
-	// Certified replay already owns the frontend PREPARE statement boundary
-	// sampled by its publication guard. The optional cached Compile would call
-	// NewCompile and advance that boundary again. Keep the immutable bound plan;
-	// ordinary EXECUTE can construct its Compile under its own statement owner.
-	if execCtx.directTableMigration == nil && !executionSes.IsBackgroundSession() &&
+	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
 		planReuse(false, prepareControl.Plan, preparedPhysicalCompile).reusable &&
 		(!prepareSchedulingIntent.Explicit ||
@@ -3256,7 +3231,6 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		directTableMigration:     execCtx.directTableMigration,
 		groupConcatMaxLenFloor:   groupConcatFloor,
 		Name:                     preparePlan.GetDcl().GetPrepare().GetName(),
 		Sql:                      originSQL,

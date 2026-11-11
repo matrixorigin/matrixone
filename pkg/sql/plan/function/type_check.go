@@ -845,15 +845,12 @@ func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkRe
 
 // crc32TypeMatch retains CRC32's historical acceptance of every varlen type
 // while extending the function to scalar values through the normal formatted
-// string cast. The executor serializes JSON values before hashing and hashes
-// other varlen values as-is, so changing the matcher must not make JSON/vector
-// inputs (which are also varlen internally) stop binding.
+// string cast. New JSON bindings get an explicit text cast in the planner;
+// the executor hashes the supplied varlen bytes as-is. JSON and vector inputs
+// must continue to bind so historical persisted expressions retain their behavior.
 func crc32TypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 {
-		if inputs[0].Oid == types.T_json || inputs[0].Oid == types.T_any {
-			return newCheckResultWithSuccess(CRC32JSONTextOverload)
-		}
-		if inputs[0].IsVarlen() {
+		if inputs[0].Oid == types.T_any || inputs[0].IsVarlen() {
 			return newCheckResultWithSuccess(CRC32LegacyOverload)
 		}
 	}

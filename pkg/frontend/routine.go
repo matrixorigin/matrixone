@@ -746,7 +746,7 @@ func (rt *Routine) cleanup() {
 	})
 }
 
-func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) (err error) {
+func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
 	if !ok {
 		if ctx != nil {
@@ -756,13 +756,16 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		}
 		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 	}
-	replayStarted := false
+	replayStarted, replaySucceeded := false, false
 	defer func() {
-		dispose := replayStarted && req.CloseTargetOnReplayFailure && err != nil
+		// Once replay starts, an error or panic can leave partially installed
+		// target session state. Dispose that target after releasing its operation
+		// admission so close cannot wait on its own caller. A preflight refusal
+		// leaves an untouched target reusable.
+		dispose := replayStarted && !replaySucceeded
 		if dispose {
 			rt.mc.startClose()
 		}
-		// cleanup/Closed waits for this operation: release before closing I/O.
 		rt.mc.endOperation()
 		if dispose {
 			rt.killConnection(false)
@@ -773,24 +776,14 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	if err := preflightDirectTableMigrationV1(operationCtx, rt.getSession(), req); err != nil {
-		return err
-	}
 
 	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
 		ses.UpdateDebugString()
 		replayStarted = true
-		if req.CloseTargetOnReplayFailure {
-			// Only disposable replay adopts panic conversion. Use the approved
-			// recovery boundary; ordinary migration keeps its outer panic owner.
-			rt.mc.migrateErr, _ = ExecuteFuncWithRecover(func() error {
-				return migrateSession(operationCtx, ses, req)
-			})
-		} else {
-			rt.mc.migrateErr = migrateSession(operationCtx, ses, req)
-		}
+		rt.mc.migrateErr = Migrate(operationCtx, ses, req)
 	})
+	replaySucceeded = rt.mc.migrateErr == nil
 	return rt.mc.migrateErr
 }
 
@@ -904,26 +897,9 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastInsertID = ses.GetLastInsertID()
 	resp.LastInsertIDExported = true
 	requiredVersions := make([]int64, len(prepareStmts))
-	directProofs := make([]*query.PreparedDirectTableSelectV1, len(prepareStmts))
 	for i, st := range prepareStmts {
 		if st == nil || st.rewritePolicyInvalidated.Load() {
 			continue
-		}
-		// The migration payload carries SQL, not the original CRC32 overload.
-		// Pin statements whose CRC identity cannot be proved replay-invariant,
-		// including identities hidden by folding or catalog dependencies.
-		if !crc32PreparedMigrationSafe(operationCtx, ses, st) {
-			if err := context.Cause(operationCtx); err != nil {
-				return err
-			}
-			if len(prepareStmts) > directMigrationItemLimit || len(tempTables) != 0 {
-				return directMigrationRefusal()
-			}
-			proof, err := sourceDirectTableSelectV1(operationCtx, ses, st)
-			if err != nil {
-				return err
-			}
-			directProofs[i] = proof
 		}
 		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
 		if err != nil {
@@ -933,7 +909,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			if len(preparedStatementProtocolSupported) > 0 && !preparedStatementProtocolSupported[0] {
 				return moerr.GetOkExpectedNotSafeToStartTransfer()
 			}
-			requiredVersions[i] = max(requiredVersions[i], defines.MORPCVersion119)
+			requiredVersions[i] = defines.MORPCVersion119
 		}
 		// The migration payload cannot preserve execution-resolved FIELD
 		// return types. Reject under the request owner before exporting handles.
@@ -1004,27 +980,6 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.SystemVariables = systemVars
 		resp.SystemVariablesExported = systemVarsExported
 	}
-	totalProofBytes := 0
-	for i, proof := range directProofs {
-		if proof == nil {
-			continue
-		}
-		if !resp.UserDefinedVarsExported || !resp.SystemVariablesExported ||
-			resp.UserDefinedVarsSnapshotTooLarge || resp.SystemVariablesSnapshotTooLarge {
-			return directMigrationRefusal()
-		}
-		mode, _, err := directTypedMode(operationCtx, resp.SystemVariables)
-		if err != nil {
-			return err
-		}
-		if mode != prepareStmts[i].schedulingSQLMode {
-			return directMigrationRefusal()
-		}
-		totalProofBytes += proof.ProtoSize()
-		if totalProofBytes > directMigrationBatchLimit {
-			return directMigrationRefusal()
-		}
-	}
 	for i, st := range prepareStmts {
 		// A rewrite-policy-invalidated handle cannot be replayed on the target
 		// session: its retained SQL/AST may contain the old row predicate. The
@@ -1033,7 +988,6 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			continue
 		}
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			DirectTableSelect:       directProofs[i],
 			Name:                    st.Name,
 			SQL:                     st.Sql,
 			ParamTypes:              st.ParamTypes,

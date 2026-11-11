@@ -232,7 +232,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	got, err := buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
 	require.True(t, containsLegacyCRC32(got.Expr))
-	got.Expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
+	got.Expr.GetF().Args[0].Typ.Id = int32(types.T_varchar)
 	require.True(t, containsLegacyCRC32(source.GeneratedCol.Expr), "copy must not mutate source catalog")
 	for _, inputType := range []types.T{types.T_int64, types.T_varchar} {
 		t.Run(inputType.String(), func(t *testing.T) {
@@ -352,12 +352,14 @@ func TestCRC32PersistedDDLUsesExistingAdmission(t *testing.T) {
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	saved, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
+	// CRC32(JSON) now uses the ordinary JSON-to-text conversion. Its existing
+	// v129 admission applies equally to an explicit CAST, as checked below.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion129))
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, saved)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion129))
 		}
 	})
 	for _, sql := range []string{
@@ -367,6 +369,56 @@ func TestCRC32PersistedDDLUsesExistingAdmission(t *testing.T) {
 	} {
 		_, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err, sql)
+	}
+}
+
+func TestCRC32JSONMatchesExplicitTextCastAdmission(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := mock.ctxt.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	keys := []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolAuthoringFloor}
+	type savedValue struct {
+		value   any
+		present bool
+	}
+	saved := make(map[string]savedValue, len(keys))
+	for _, key := range keys {
+		value, present := rt.GetGlobalVariables(key)
+		saved[key] = savedValue{value, present}
+	}
+	t.Cleanup(func() {
+		for _, key := range keys {
+			if saved[key].present {
+				rt.SetGlobalVariables(key, saved[key].value)
+			} else if value, present := rt.GetGlobalVariables(key); present {
+				rt.CompareAndDeleteGlobalVariables(key, value)
+			}
+		}
+	})
+	for _, tc := range []struct {
+		name    string
+		version int64
+		allowed bool
+	}{
+		{name: "before existing text contract", version: int64(defines.MORPCVersion106)},
+		{name: "at existing text contract", version: int64(defines.MORPCVersion129), allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range keys {
+				rt.SetGlobalVariables(key, tc.version)
+			}
+			for _, sql := range []string{
+				`create table crc32_direct(j json,c bigint unsigned generated always as (crc32(j)) stored)`,
+				`create table crc32_explicit(j json,c bigint unsigned generated always as (crc32(cast(j as char))) stored)`,
+			} {
+				_, err := runOneStmt(mock, t, sql)
+				if tc.allowed {
+					require.NoError(t, err, sql)
+				} else {
+					require.ErrorContains(t, err, "local catalog admission protocol version 129", sql)
+				}
+			}
+		})
 	}
 }
 
@@ -473,7 +525,7 @@ func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {
 	require.Nil(t, unchangedCRC32ColumnClauses(source, col, typ).Default)
 }
 
-func TestCRC32FoldedDefaultRetainsIdentity(t *testing.T) {
+func TestCRC32DefaultRetainsUnfoldedIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))))`, 1)
@@ -482,8 +534,9 @@ func TestCRC32FoldedDefaultRetainsIdentity(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	got, err := buildDefaultExprWithColumns(proc.Ctx, col, planpb.Type{Id: int32(types.T_uint64)}, proc, nil)
 	require.NoError(t, err)
-	require.NotNil(t, got.Expr.GetLit())
-	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
+	// The existing JSON-to-text contract preserves its source rather than
+	// folding it away; runtime DEFAULT evaluation has a separate SQL test.
+	require.Nil(t, got.Expr.GetLit())
 	required, err := planpb.ContainsCRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)

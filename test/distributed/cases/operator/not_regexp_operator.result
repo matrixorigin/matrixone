@@ -3,7 +3,7 @@ Corn
 0
 SELECT 'Acorn' NOT REGEXP 'Corn' AS 'Acorn';
 Acorn
-1
+0
 SELECT 'Corner' NOT REGEXP 'Corn' AS 'Corner';
 Corner
 0

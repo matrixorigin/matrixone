@@ -4525,7 +4525,7 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 // vector column's SQL input check ("vector element cannot be NaN or Inf").
 func parquetVectorElemFinite(ctx context.Context, f float64) error {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return moerr.NewInternalErrorf(ctx, "vector element cannot be NaN or Inf: %v", f)
+		return moerr.NewInvalidInputf(ctx, "vector element cannot be NaN or Inf: %v", f)
 	}
 	return nil
 }

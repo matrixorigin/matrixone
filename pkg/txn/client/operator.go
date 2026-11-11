@@ -1587,7 +1587,7 @@ func (tc *txnOperator) doWrite(
 	resp, err = tc.trimResponses(tc.handleError(ctx, result, err, commit))
 	if err != nil && commit {
 		tc.reset.commitErr = err
-		if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+		if moerr.FindTxnUnknown(err) != nil {
 			tc.reset.commitNeedsResolution = true
 			tc.reset.commitDeadline = commitDeadline
 			tc.reset.commitSequence = commitSequence

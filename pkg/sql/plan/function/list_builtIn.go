@@ -1296,7 +1296,11 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: FINDINSET,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// Keep every MySQL string operand in its original domain instead of
+		// casting it through VARCHAR: the executor routes byte-wise when
+		// either operand is a binary string (issue #31175 review), and a
+		// conversion cast would erase that domain for non-constant operands.
+		checkFn: stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9148,7 +9152,7 @@ var supportedMathBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// Format non-string scalars as SQL strings, but preserve every
 		// historical varlen input (including JSON and vectors) and its domain.
-		// New JSON bindings select a separate text-hashing execution identity.
+		// New JSON bindings are explicitly converted to text by the planner.
 		checkFn: crc32TypeMatch,
 
 		Overloads: []overload{
@@ -9161,12 +9165,6 @@ var supportedMathBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return newCrc32ExecContext().builtInCrc32
 				},
-			},
-			{
-				overloadId: CRC32JSONTextOverload,
-				args:       []types.T{types.T_json},
-				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
-				newOp:      func() executeLogicOfOverload { return newCrc32JSONTextExecContext().builtInCrc32 },
 			},
 		},
 	},

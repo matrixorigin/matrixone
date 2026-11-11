@@ -1229,31 +1229,39 @@ func TestPersistedCRC32JSONRetainsExistingAdmission(t *testing.T) {
 			}
 		})
 	}
-	for _, overload := range []int32{function.CRC32LegacyOverload, function.CRC32JSONTextOverload} {
-		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, overload), ObjName: "crc32"},
-			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
-		}}}
-		required, err := RequiredPersistedExpressionProtocolVersion(expr)
-		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion80), required, "the existing UINT64 result gate remains")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion80)
-		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
-		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion79)
-		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 80")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion79)
-		require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 80")
+	current := mustBindPersistedFollowupExpr(t, proc.Ctx, "crc32", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+	})
+	for _, tc := range []struct {
+		name    string
+		expr    *planpb.Expr
+		version int64
+	}{
+		{"legacy binary JSON", legacyCRC32Expr(), int64(defines.MORPCVersion80)},
+		{"current visible JSON", current, int64(defines.MORPCVersion129)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			required, err := RequiredPersistedExpressionProtocolVersion(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.version, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion134))
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.version)
+			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr))
+			require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr))
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.version-1)
+			require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.version))
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, tc.version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.version-1)
+			require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.expr), fmt.Sprintf("protocol version %d", tc.version))
+		})
 	}
 }
 
 func TestPersistedCRC32MixedOwnerKeepsExistingHighestFloor(t *testing.T) {
-	crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
-		Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload),
-	}}}}
+	crc := mustBindPersistedFollowupExpr(t, context.Background(), "crc32", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+	})
 	concat := mustBindPersistedFollowupExpr(t, context.Background(), "concat", []*planpb.Expr{
 		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
 		MakePlan2StringConstExprWithType("suffix"),

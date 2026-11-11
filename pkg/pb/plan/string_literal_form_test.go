@@ -1024,9 +1024,16 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 }
 
 func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
-	for _, overload := range []int32{CRC32LegacyOverload, CRC32JSONTextOverload} {
-		for _, typ := range []int32{planJSONTypeID, planAnyTypeID, 61} {
-			expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID)<<32 | int64(overload), ObjName: "crc32"}, Args: []*Expr{{Typ: Type{Id: typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}}}}}
+	for _, typ := range []int32{planJSONTypeID, planAnyTypeID, 61} {
+		for _, textCast := range []bool{false, true} {
+			input := &Expr{Typ: Type{Id: typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+			if textCast {
+				input = &Expr{Typ: Type{Id: planTextTypeID}, Expr: &Expr_F{F: &Function{
+					Func: &ObjectRef{Obj: int64(21)<<32 | 1, ObjName: "cast"},
+					Args: []*Expr{input, {Typ: Type{Id: planTextTypeID}, Expr: &Expr_T{T: &TargetType{}}}},
+				}}}
+			}
+			expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID)<<32 | CRC32LegacyOverload, ObjName: "crc32"}, Args: []*Expr{input}}}}
 			owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
 			data, err := owner.Marshal()
 			require.NoError(t, err)
@@ -1034,11 +1041,11 @@ func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(data))
 			found, err := ContainsCRC32JSONTextBytes(decoded)
 			require.NoError(t, err)
-			require.Equal(t, overload == CRC32JSONTextOverload, found)
+			require.Equal(t, textCast && typ == planJSONTypeID, found)
 			folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
 			found, err = ContainsCRC32JSONTextBytes(folded)
 			require.NoError(t, err)
-			require.Equal(t, overload == CRC32JSONTextOverload, found)
+			require.Equal(t, textCast && typ == planJSONTypeID, found)
 		}
 	}
 }

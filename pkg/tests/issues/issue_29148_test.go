@@ -153,6 +153,30 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				assertRows("execute owner_handle", []int{1, 2})
 
 				if tc.migrate {
+					for _, serviceID := range []string{sourceCN.ServiceID(), targetCN.ServiceID()} {
+						rt := moruntime.ServiceRuntime(serviceID)
+						for _, name := range []string{"runtime_filter_limit_in", "runtime_filter_limit_bloom_filter"} {
+							old, present := rt.GetGlobalVariables(name)
+							t.Cleanup(func() {
+								if present {
+									rt.SetGlobalVariables(name, old)
+								} else if current, ok := rt.GetGlobalVariables(name); ok {
+									rt.CompareAndDeleteGlobalVariables(name, current)
+								}
+							})
+						}
+					}
+					if tc.name == "sql_migration" {
+						// Give the source session a non-default runtime side effect,
+						// while keeping the target CN's original shared value distinct.
+						// A failed replay must not alter another connection's runtime.
+						_, err = conn.ExecContext(ctx, "set session runtime_filter_limit_in=23456")
+						require.NoError(t, err)
+						sourceValue, sourcePresent := moruntime.ServiceRuntime(sourceCN.ServiceID()).GetGlobalVariables("runtime_filter_limit_in")
+						targetValue, _ := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables("runtime_filter_limit_in")
+						require.True(t, sourcePresent)
+						require.NotEqual(t, sourceValue, targetValue, "the two CN runtime values must start distinct")
+					}
 					denied := openUser(targetCN, deniedUser, true)
 					target := migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, denied, func() *sql.Conn {
 						return openUser(targetCN, userName, false)
@@ -251,17 +275,6 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	require.True(t, snapshot.SystemVariablesExported)
 	require.False(t, snapshot.UserDefinedVarsSnapshotTooLarge)
 	require.False(t, snapshot.SystemVariablesSnapshotTooLarge)
-	proof := snapshot.PrepareStmts[0].DirectTableSelect
-	require.NotNil(t, proof)
-	require.Equal(t, uint32(1), proof.Version)
-	require.NotZero(t, proof.DatabaseID)
-	require.NotZero(t, proof.TableID)
-	require.Equal(t, snapshot.DB, proof.DatabaseName)
-	require.Equal(t, "t", proof.TableName)
-	require.Len(t, proof.Columns, 2)
-	for _, c := range proof.Columns {
-		require.Equal(t, int32(22), c.TypeID)
-	}
 	require.Zero(t, snapshot.PrepareStmts[0].RequiredProtocolVersion)
 	type runtimeState struct {
 		value   any
@@ -279,11 +292,10 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 			require.Equal(t, want, runtimeState{v, present}, name)
 		}
 	}
-	newTargetRequest := func(id uint32, disposable bool) *query.Request {
+	newTargetRequest := func(id uint32) *query.Request {
 		req := client.NewRequest(query.CmdMethod_MigrateConnTo)
 		req.MigrateConnToRequest = &query.MigrateConnToRequest{
-			CloseTargetOnReplayFailure: disposable,
-			ConnID:                     id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+			ConnID: id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
 			LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
 			LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
 			UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
@@ -293,10 +305,8 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 		}
 		return req
 	}
-	// Catalog/type/account preflight is independent of this target's SELECT
-	// privilege. This exact authorization error is emitted by actual replay,
-	// not the conservative preflight refusal. No fake error or phase timer.
-	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID, true))
+	// Target replay must authorize its prepared SQL for the target user.
+	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID))
 	if failed != nil {
 		client.Release(failed)
 	}
@@ -318,34 +328,7 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	var targetID uint32
 	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
 	require.NotEqual(t, deniedID, targetID)
-	request = newTargetRequest(targetID, false)
-	// Missing disposal consent refuses before state replay and does not consume
-	// migrateOnce: correcting just that cause can reuse this untouched target.
-	_, err = target.ExecContext(ctx, "set @migration_keep = 71")
-	require.NoError(t, err)
-	var lastID uint64
-	// Only the zero-argument reader is supported. Seed a nonzero real session
-	// value through INSERT, as the existing embed migration fixture does.
-	_, err = target.ExecContext(ctx, "insert into "+snapshot.DB+".migration_seed(marker) values(1)")
-	require.NoError(t, err)
-	require.NoError(t, target.QueryRowContext(ctx, "select last_insert_id()").Scan(&lastID))
-	require.NotZero(t, lastID)
-	require.NotEqual(t, snapshot.LastInsertID, lastID)
-	rejected, rejectedErr := client.SendMessage(ctx, targetAddress, request)
-	if rejected != nil {
-		client.Release(rejected)
-	}
-	require.True(t, moerr.IsMoErrCode(rejectedErr, moerr.OkExpectedNotSafeToStartTransfer))
-	var keep int
-	var stillID uint64
-	var stillDB string
-	require.NoError(t, target.QueryRowContext(ctx, "select @migration_keep, last_insert_id(), database()").Scan(&keep, &stillID, &stillDB))
-	require.Equal(t, 71, keep)
-	require.Equal(t, lastID, stillID)
-	require.Equal(t, snapshot.DB, stillDB)
-	assertGlobalsUnchanged()
-	// Requests are released by SendMessage; allocate a fresh envelope for retry.
-	request = newTargetRequest(targetID, true)
+	request = newTargetRequest(targetID)
 	response, err = client.SendMessage(ctx, targetAddress, request)
 	// An unconfirmed replay is fatal here: require invokes this subtest's
 	// existing dedicated target cleanup immediately, with no same-ConnID retry.
@@ -353,7 +336,24 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	require.NotNil(t, response.MigrateConnToResponse)
 	require.True(t, response.MigrateConnToResponse.Success)
-	assertGlobalsUnchanged()
+	for _, name := range []string{"runtime_filter_limit_in", "runtime_filter_limit_bloom_filter"} {
+		value, present := moruntime.ServiceRuntime(sourceCN.ServiceID()).GetGlobalVariables(name)
+		if !present {
+			var sessionValue int64
+			require.NoError(t, source.QueryRowContext(ctx, "select @@session."+name).Scan(&sessionValue))
+			value = sessionValue
+		}
+		got, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
+		require.True(t, present)
+		require.Equal(t, value, got, "successful replay keeps the existing runtime side-effect contract for %s", name)
+	}
+	for name, want := range globals {
+		if name == "runtime_filter_limit_in" || name == "runtime_filter_limit_bloom_filter" {
+			continue
+		}
+		v, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
+		require.Equal(t, want, runtimeState{v, present}, name)
+	}
 	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
 	return target
 }

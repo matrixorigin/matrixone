@@ -23,7 +23,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -79,8 +78,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		// Exercise the added function BVT's generated value and index contract
 		// through the same live SQL frontend, including every mutation form.
 		// The embedded cluster becomes query-ready before the durable catalog
-		// barrier finishes. Observe the existing UINT64 result admission; do not
-		// set a runtime version or floor to manufacture authoring permission.
+		// barrier finishes. Observe the existing JSON-to-text conversion
+		// admission; do not manufacture a runtime version or floor.
 		require.Eventually(t, func() bool {
 			rt := moruntime.ServiceRuntime(cn.ServiceID())
 			if rt == nil {
@@ -88,8 +87,13 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			}
 			value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 			floor, valid := value.(int64)
-			return ok && valid && floor >= defines.MORPCVersion80
-		}, 90*time.Second, 100*time.Millisecond, "existing result-type authoring admission did not complete")
+			return ok && valid && floor >= defines.MORPCVersion129
+		}, 90*time.Second, 100*time.Millisecond, "existing JSON-to-text authoring admission did not complete")
+		exec(`create table crc32_default(id int primary key,c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))))`)
+		exec("insert into crc32_default(id) values(1)")
+		var defaultCRC uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select c from crc32_default where id=1").Scan(&defaultCRC))
+		require.Equal(t, uint64(4012824821), defaultCRC)
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)
 		exec("insert into generated_crc(id,j) select 2,j from generated_crc where id=1")
@@ -143,16 +147,23 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			request := queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 			request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 				ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+				PreparedStatementProtocolSupported: true,
 			}
 			return queryClient.SendMessage(ctx, queryAddress, request)
 		}
-		_, err = export() // the live COM_STMT prepared crc32(j)
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "binary CRC32 migration rejection: %v", err)
-		check(1, 4012824821) // rejection must leave the original handle executable
+		binarySnapshot, err := export() // the live COM_STMT prepared crc32(j)
+		require.NoError(t, err)
+		require.NotNil(t, binarySnapshot.MigrateConnFromResponse)
+		require.Len(t, binarySnapshot.MigrateConnFromResponse.PrepareStmts, 1)
+		queryClient.Release(binarySnapshot)
+		check(1, 4012824821) // exporting must leave the original handle executable
 		require.NoError(t, stmt.Close())
 		exec(`prepare crc32_migration from 'select crc32(cast(''{"t1":"a"}'' as json))'`)
-		_, err = export()
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "SQL CRC32 migration rejection: %v", err)
+		sqlSnapshot, err := export()
+		require.NoError(t, err)
+		require.NotNil(t, sqlSnapshot.MigrateConnFromResponse)
+		require.Len(t, sqlSnapshot.MigrateConnFromResponse.PrepareStmts, 1)
+		queryClient.Release(sqlSnapshot)
 		var checksum uint64
 		require.NoError(t, conn.QueryRowContext(ctx, "execute crc32_migration").Scan(&checksum))
 		require.Equal(t, uint64(4012824821), checksum)
@@ -179,9 +190,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		}()
 		require.NoError(t, plain.Close())
 
-		// An identity-less old-source payload is sent to an actual target routine.
-		// It must reject the later unsafe statement before even the earlier USE
-		// or safe PREPARE. No old binary or protocol value is manufactured here.
+		// Replay ordinary and CRC32 prepared statements through an actual target
+		// routine using the current binary and existing migration protocol.
 		exec("create table migration_identity(id bigint unsigned auto_increment primary key, marker int)")
 		targetDB, err := sql.Open("mysql", cfg.FormatDSN())
 		require.NoError(t, err)
@@ -211,17 +221,23 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 				{Name: "safe_first", SQL: "select 1"}, {Name: "unsafe_later", SQL: "select crc32(cast(? as json))"},
 			},
 		}
-		_, err = queryClient.SendMessage(ctx, queryAddress, request)
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "receiver CRC32 migration rejection: %v", err)
+		replayed, err := queryClient.SendMessage(ctx, queryAddress, request)
+		require.NoError(t, err)
+		require.NotNil(t, replayed.MigrateConnToResponse)
+		require.True(t, replayed.MigrateConnToResponse.Success)
+		queryClient.Release(replayed)
 		var database sql.NullString
 		var keep int64
 		require.NoError(t, target.QueryRowContext(ctx, "select database(),@keep,last_insert_id()").Scan(&database, &keep, &checksum))
-		require.Equal(t, initialDatabase, database, "rejection must precede USE")
+		require.Equal(t, "crc32_prepared_contract", database.String)
 		require.Equal(t, int64(42), keep)
-		require.Equal(t, initialLastInsertID, checksum, "rejection must precede counter restoration")
-		_, err = target.ExecContext(ctx, "deallocate prepare safe_first")
-		var sqlErr *mysql.MySQLError
-		require.ErrorAs(t, err, &sqlErr)
-		require.Equal(t, uint16(1243), sqlErr.Number, "the earlier safe handle must not have been installed")
+		require.Equal(t, uint64(91), checksum)
+		var one int
+		require.NoError(t, target.QueryRowContext(ctx, "execute safe_first").Scan(&one))
+		require.Equal(t, 1, one)
+		_, err = target.ExecContext(ctx, `set @migration_json='{"t1":"a"}'`)
+		require.NoError(t, err)
+		require.NoError(t, target.QueryRowContext(ctx, "execute unsafe_later using @migration_json").Scan(&checksum))
+		require.Equal(t, uint64(4012824821), checksum)
 	})
 }

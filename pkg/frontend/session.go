@@ -4431,11 +4431,10 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 }
 
 type prepareStmtMigration struct {
-	directTableMigration *query.PreparedDirectTableSelectV1
-	name                 string
-	sql                  string
-	paramTypes           []byte
-	commitFn             func(*Session, error) error
+	name       string
+	sql        string
+	paramTypes []byte
+	commitFn   func(*Session, error) error
 }
 
 func quotePrepareStmtName(name string) string {
@@ -4470,11 +4469,10 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	tempExecCtx := &ExecCtx{
-		reqCtx:               ctx,
-		inMigration:          true,
-		ses:                  ses,
-		executeParamTypes:    p.paramTypes,
-		directTableMigration: p.directTableMigration,
+		reqCtx:            ctx,
+		inMigration:       true,
+		ses:               ses,
+		executeParamTypes: p.paramTypes,
 	}
 	var migrationEpoch *authorizationEpoch
 	tempExecCtx.reqCtx, migrationEpoch = beginAuthorizationEpoch(ctx, ses, tempExecCtx)
@@ -4483,10 +4481,6 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	policy, err := captureRewritePolicy(tempExecCtx.reqCtx, ses)
 	if err != nil {
 		return err
-	}
-	if p.directTableMigration != nil && (!policy.captured || policy.enabled ||
-		len(policy.roleRules) != 0 || len(policy.sessionRules) != 0 || len(policy.sessionRemapDb) != 0) {
-		return directMigrationRefusal()
 	}
 	return doComQuery(ses, tempExecCtx, &UserInput{
 		sql:           p.sql,
@@ -4594,17 +4588,6 @@ func migrateTempTables(
 }
 
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
-	if ctx == nil {
-		ctx = ses.GetTxnHandler().GetTxnCtx()
-	}
-	if err := preflightDirectTableMigrationV1(ctx, ses, req); err != nil {
-		return err
-	}
-	return migrateSession(ctx, ses, req)
-}
-
-// The routine owns failure disposal and has already completed pure preflight.
-func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
 
@@ -4619,12 +4602,6 @@ func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToR
 		// authoritative value. Do not turn that absence into a zero on the
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
-	}
-	// Old sources cannot export their bound CRC32 identity. Check the entire
-	// SQL payload before USE, variable installation, temporary-table cloning,
-	// or PREPARE (and before the deferred counter restoration is installed).
-	if err := checkCRC32PrepareMigration(ctx, ses, req); err != nil {
-		return err
 	}
 	for _, prepared := range req.PrepareStmts {
 		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
@@ -4705,6 +4682,11 @@ func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToR
 		}
 	}
 	var systemVars []migratedSystemVariable
+	type pendingRuntimeEffect struct {
+		name  string
+		value any
+	}
+	var pendingRuntimeEffects []pendingRuntimeEffect
 	if req.SystemVariablesExported {
 		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
 			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
@@ -4793,13 +4775,16 @@ func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToR
 					return moerr.AttachCause(migrationCtx, err)
 				}
 			}
-			if hasDirectTableMigration(req.PrepareStmts) && hasMigrationRuntimeSideEffect(variable.name) {
-				// Certified replay must never write CN-global state, even if a
-				// later authorization/prepare/cancellation step fails.
-			} else if variable.runtimeValuePresent {
-				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			effectValue := variable.value
+			if variable.runtimeValuePresent {
+				effectValue = variable.runtimeValue
+			}
+			if hasMigrationRuntimeSideEffect(variable.name) {
+				// These settings modify CN-wide runtime state. Do not publish
+				// them until all replay operations that can fail have succeeded.
+				pendingRuntimeEffects = append(pendingRuntimeEffects, pendingRuntimeEffect{variable.name, effectValue})
 			} else {
-				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+				ses.applySessionSysVarSideEffects(variable.name, effectValue)
 			}
 			// The typed snapshot carries only the final value. Invalidate for
 			// both cache-control variables so a source toggle (0->1 or 1->0)
@@ -4825,7 +4810,6 @@ func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToR
 			continue
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
-		pm.directTableMigration = p.DirectTableSelect
 		if err := pm.Migrate(migrationCtx, ses); err != nil {
 			return moerr.AttachCause(migrationCtx, err)
 		}
@@ -4837,17 +4821,11 @@ func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToR
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
 	}
-	if hasDirectTableMigration(req.PrepareStmts) {
-		_, vars, err := directTypedMode(migrationCtx, req.SystemVariables)
-		if err != nil {
-			return err
-		}
-		if !directRuntimeMatches(ses, vars) {
-			return directMigrationRefusal()
-		}
-	}
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause
+	}
+	for _, effect := range pendingRuntimeEffects {
+		ses.applySessionSysVarSideEffects(effect.name, effect.value)
 	}
 	return nil
 }

@@ -144,8 +144,8 @@ func TestCRC32LegacyGeneratedFallbackIncludesVirtual(t *testing.T) {
 	scalar.GetF().Args[0].Typ.Id = int32(types.T_varchar)
 	table := &planpb.TableDef{Cols: []*planpb.ColDef{{GeneratedCol: &planpb.GeneratedCol{Expr: scalar}}}}
 	require.NoError(t, rejectLegacyCRC32GeneratedFallback(context.Background(), table))
-	textJSON := legacyCRC32Expr()
-	textJSON.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
+	textJSON, err := BindFuncExprImplByPlanExpr(context.Background(), "crc32", []*planpb.Expr{legacyCRC32Expr().GetF().Args[0]})
+	require.NoError(t, err)
 	table.Cols[0].GeneratedCol.Expr = textJSON
 	require.NoError(t, rejectLegacyCRC32GeneratedFallback(context.Background(), table))
 }

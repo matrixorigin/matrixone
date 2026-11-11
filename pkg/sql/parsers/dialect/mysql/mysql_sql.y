@@ -784,7 +784,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> merge_search_condition_opt
 %type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
-%type <statement> explain_stmt explain_plan_stmt explainable_stmt
+%type <statement> explain_stmt explain_plan_stmt explainable_stmt describe_table_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
@@ -3714,6 +3714,7 @@ unlock_table_stmt:
 prepareable_stmt:
     create_stmt
 |   alter_stmt
+|   describe_table_stmt
 |   explain_plan_stmt
 |   insert_stmt
 |   replace_stmt
@@ -3786,7 +3787,7 @@ explainable_stmt:
         $$ = $1
     }
 
-explain_stmt:
+describe_table_stmt:
     explain_sym unresolved_object_name
     {
         $$ = &tree.ShowColumns{Table: $2}
@@ -3795,6 +3796,18 @@ explain_stmt:
     {
         $$ = &tree.ShowColumns{Table: $2, ColName: $3}
     }
+|   explain_sym unresolved_object_name STRING
+    {
+        // The quoted argument is the SHOW COLUMNS LIKE wildcard pattern:
+        // the scanner-decoded literal, never an identifier impersonation.
+        $$ = &tree.ShowColumns{
+            Table: $2,
+            Like:  tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal($3, $3, false, tree.P_char)),
+        }
+    }
+
+explain_stmt:
+    describe_table_stmt
 |   explain_sym FOR CONNECTION INTEGRAL
     {
         $$ = tree.NewExplainFor("", integralToUint64($4))
@@ -4474,6 +4487,20 @@ alter_sql_task_stmt:
             Name: tree.Identifier($3.Compare()),
             Action: tree.AlterTaskSetTimeout,
             Timeout: $6,
+        }
+    }
+|   ALTER TASK ident RESET RUNS INTEGRAL FORCE
+    {
+        runID, ok := signedIntegral(yylex, $6)
+        if !ok { goto ret1 }
+        if runID <= 0 {
+            yylex.Error("SQL task run ID must be positive")
+            goto ret1
+        }
+        $$ = &tree.AlterSQLTask{
+            Name: tree.Identifier($3.Compare()),
+            Action: tree.AlterTaskResetRun,
+            RunID: runID,
         }
     }
 
@@ -8463,6 +8490,10 @@ optype_opt:
 	  '(' optype ')'
     {
 	$$ = $2
+    }
+|	'(' optype ',' STRING ',' STRING ')'
+    {
+	$$ = tree.CentroidxOption{OpType: $2, Params: $4, Config: $6}.String()
     }
 
 straight_join:

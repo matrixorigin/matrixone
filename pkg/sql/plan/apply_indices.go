@@ -39,11 +39,12 @@ import (
 )
 
 const (
-	UnsupportedIndexCondition = 0
-	EqualIndexCondition       = 1
-	NonEqualIndexCondition    = 2
-	SpatialIndexCondition     = 3
-	RangeIndexCondition       = 4
+	UnsupportedIndexCondition    = 0
+	EqualIndexCondition          = 1
+	NonEqualIndexCondition       = 2
+	SpatialIndexCondition        = 3
+	RangeIndexCondition          = 4
+	CompositeRangeIndexCondition = 5
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -1560,6 +1561,27 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 	// the physical probe path is being kept separate from generic SERIAL.
 	if node != nil && indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, false, nil
+	}
+	// Group/order hint processing runs before ordinary index selection. Reuse
+	// its serialized range access here instead of reducing the range to a
+	// decoded residual over the whole covering index. A different driving
+	// predicate must not expose errors on rows the decoded filters would skip.
+	if usableRegularHintIndex(idxDef) && node != nil && node.Stats != nil && node.TableDef != nil &&
+		hintedIndexContainsQualifyingRows(idxDef, node) && regularIndexFiltersHaveStableEvaluation(node) {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		if match, _ := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); match != nil && match.filterType != EqualIndexCondition {
+			scanSnapshot := node.ScanSnapshot
+			if scanSnapshot == nil {
+				scanSnapshot = &Snapshot{}
+			}
+			idxNodeID, err := builder.applyRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+			if err != nil {
+				return -1, -1, false, err
+			}
+			if idxNodeID != -1 {
+				return idxNodeID, idxNodeID, true, nil
+			}
+		}
 	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
 	if err != nil {
@@ -3322,7 +3344,7 @@ func indexOnlyLookupWillUsePrefixComparison(idxDef *IndexDef, filterList []*plan
 	if idxDef == nil || len(idxDef.Parts) <= 1 || len(leadingPos) == 0 {
 		return false
 	}
-	if filterType == RangeIndexCondition {
+	if filterType == RangeIndexCondition || filterType == CompositeRangeIndexCondition {
 		return true
 	}
 	if leadingEqual {
@@ -4811,6 +4833,52 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(idxDef *IndexDef, node *p
 	return builder.matchRegularIndexOnlyScanWithLeadingFilter(idxDef, node, costCtx, costCtx.firstFilters[col])
 }
 
+func (builder *QueryBuilder) matchRegularIndexSuffixRange(
+	idxDef *IndexDef,
+	node *plan.Node,
+	costCtx *encodedRegularIndexCostContext,
+	partPos int,
+) []int32 {
+	numKeyParts := len(idxDef.Parts)
+	if !idxDef.Unique {
+		numKeyParts--
+	}
+	if partPos < 1 || partPos >= numKeyParts {
+		return nil
+	}
+	colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
+	if !ok || colPos < 0 || int(colPos) >= len(costCtx.rangeFilters) {
+		return nil
+	}
+
+	lowerPos, upperPos := costCtx.lowerFilters[colPos], costCtx.upperFilters[colPos]
+	if lowerPos >= 0 && upperPos >= 0 {
+		if builder.regularIndexRangeFunctionsUsableAtPart(
+			idxDef, node.TableDef, partPos,
+			node.FilterList[lowerPos].GetF(), node.FilterList[upperPos].GetF(), true,
+		) {
+			return []int32{lowerPos, upperPos}
+		}
+		return nil
+	}
+	for _, filterPos := range costCtx.rangeFilters[colPos] {
+		fn := node.FilterList[filterPos].GetF()
+		if fn == nil {
+			continue
+		}
+		switch fn.Func.ObjName {
+		case ">", ">=", "<", "<=", "between", "in_range":
+		default:
+			continue
+		}
+		if !builder.regularIndexRangeFunctionsUsableAtPart(idxDef, node.TableDef, partPos, fn, nil, true) {
+			continue
+		}
+		return []int32{filterPos}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	idxDef *IndexDef,
 	node *plan.Node,
@@ -4861,6 +4929,12 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 			}
 			leadingPos = append(leadingPos, filterPos)
 		}
+		if regularIndexFiltersHaveStableEvaluation(node) {
+			if suffix := builder.matchRegularIndexSuffixRange(idxDef, node, costCtx, len(leadingPos)); len(suffix) > 0 {
+				leadingPos = append(leadingPos, suffix...)
+				filterType = CompositeRangeIndexCondition
+			}
+		}
 	} else {
 		lowerPos := costCtx.lowerFilters[leadingColPos]
 		upperPos := costCtx.upperFilters[leadingColPos]
@@ -4880,7 +4954,11 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 
 	numParts := len(idxDef.Parts)
 	if idxDef.Unique {
-		if leadingEqual && len(leadingPos) < numParts {
+		if filterType == CompositeRangeIndexCondition {
+			if !hintedIndexContainsQualifyingRows(idxDef, node) {
+				return nil, false
+			}
+		} else if leadingEqual && len(leadingPos) < numParts {
 			return nil, false
 		}
 		if !leadingEqual && numParts > 1 {
@@ -4911,6 +4989,17 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 		idxDef, node.TableDef, node.FilterList, leadingPos,
 		indexOnlyLookupWillUsePrefixComparison(idxDef, node.FilterList, leadingPos, filterType, leadingEqual),
 	)
+	if filterType == CompositeRangeIndexCondition {
+		// Keep the SQL suffix predicate as an exact row-side oracle. The encoded
+		// lookup owns candidate pruning; the residual owns SQL comparison semantics.
+		for _, pos := range leadingPos {
+			needsExactRecheck := costCtx.filterTypes[pos] == NonEqualIndexCondition ||
+				indexFilterUsesPrefixAmbiguousStringColumn(node.TableDef, node.FilterList[pos])
+			if needsExactRecheck && !slices.Contains(residualLeadingPos, pos) {
+				residualLeadingPos = append(residualLeadingPos, pos)
+			}
+		}
+	}
 	return &regularIndexOnlyMatch{
 		filterIdx: leadingPos, filterType: filterType, leadingEqual: leadingEqual,
 		residualLeadingPos: residualLeadingPos,
@@ -5082,6 +5171,8 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	if !necessary {
 		if match.filterType == RangeIndexCondition {
 			leading, err = builder.replaceRangePairCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
+		} else if match.filterType == CompositeRangeIndexCondition {
+			leading, err = builder.replaceCompositeRangeCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
 		} else {
 			leading, err = builder.replaceLeadingFilter(idxDef, node.FilterList, match.filterIdx, match.leadingEqual, idxTag, idxTableDef)
 		}
@@ -5347,7 +5438,18 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 	second *plan.Function,
 	allowUnsafeRange bool,
 ) bool {
-	if idxDef == nil || tableDef == nil || len(idxDef.Parts) == 0 || first == nil {
+	return builder.regularIndexRangeFunctionsUsableAtPart(idxDef, tableDef, 0, first, second, allowUnsafeRange)
+}
+
+func (builder *QueryBuilder) regularIndexRangeFunctionsUsableAtPart(
+	idxDef *IndexDef,
+	tableDef *plan.TableDef,
+	partPos int,
+	first *plan.Function,
+	second *plan.Function,
+	allowUnsafeRange bool,
+) bool {
+	if idxDef == nil || tableDef == nil || partPos < 0 || partPos >= len(idxDef.Parts) || first == nil {
 		return false
 	}
 	if first.Func.ObjName == "prefix_eq" {
@@ -5355,19 +5457,19 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 			return false
 		}
 		lowered, ok := stringPrefixRange(builder.GetContext(), first)
-		return ok && second == nil && builder.regularIndexRangeFunctionsUsable(idxDef, tableDef, lowered.GetF(), nil, false)
+		return ok && second == nil && builder.regularIndexRangeFunctionsUsableAtPart(idxDef, tableDef, partPos, lowered.GetF(), nil, false)
 	}
 
 	if !indexTableStoresSerializedKey(idxDef) {
 		// A pair would be rebound as BETWEEN/IN_RANGE, whose mixed temporal
 		// precision contract need not equal the two original scalar comparisons.
-		return second == nil || !mixedTemporalIndexComparison(first) && !mixedTemporalIndexComparison(second)
+		return partPos == 0 && (second == nil || !mixedTemporalIndexComparison(first) && !mixedTemporalIndexComparison(second))
 	}
-	leadingColPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-	if !ok || leadingColPos < 0 || int(leadingColPos) >= len(tableDef.Cols) {
+	indexedColPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
+	if !ok || indexedColPos < 0 || int(indexedColPos) >= len(tableDef.Cols) {
 		return false
 	}
-	indexedPartType := tableDef.Cols[leadingColPos].Typ
+	indexedPartType := tableDef.Cols[indexedColPos].Typ
 	if !serializedIndexComparisonUsable(builder.GetContext(), first, indexedPartType) ||
 		(second != nil && !serializedIndexComparisonUsable(builder.GetContext(), second, indexedPartType)) {
 		return false
@@ -5550,6 +5652,202 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	}
 	expr.Selectivity = compositeFilterSel
 	return expr, nil
+}
+
+// replaceCompositeRangeCondition bounds an equality prefix by a range on the
+// next key part. The prefix endpoint keeps the lookup inside that equality
+// group while the full endpoint supplies the suffix bound.
+func (builder *QueryBuilder) replaceCompositeRangeCondition(
+	idxDef *IndexDef,
+	filterList []*plan.Expr,
+	filterIdx []int32,
+	idxTag int32,
+	idxTableDef *plan.TableDef,
+) (*plan.Expr, error) {
+	if idxDef == nil || idxTableDef == nil || len(idxTableDef.Cols) == 0 || len(filterIdx) < 2 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range")
+	}
+
+	suffixStart := len(filterIdx) - 1
+	if len(filterIdx) >= 3 {
+		firstPos, secondPos := filterIdx[len(filterIdx)-2], filterIdx[len(filterIdx)-1]
+		if firstPos >= 0 && secondPos >= 0 && int(firstPos) < len(filterList) && int(secondPos) < len(filterList) {
+			firstCol, firstLower := classifyRangeBound(filterList[firstPos].GetF())
+			secondCol, secondLower := classifyRangeBound(filterList[secondPos].GetF())
+			if firstCol != nil && secondCol != nil && firstLower != secondLower &&
+				firstCol.RelPos == secondCol.RelPos && firstCol.ColPos == secondCol.ColPos {
+				suffixStart = len(filterIdx) - 2
+			}
+		}
+	}
+	if suffixStart < 1 || suffixStart >= len(idxDef.Parts) {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range prefix")
+	}
+
+	lookupFilters := make([]*plan.Expr, len(filterIdx))
+	prefixArgs := make([]*plan.Expr, suffixStart)
+	selectivity := 1.0
+	for i, pos := range filterIdx {
+		if pos < 0 || int(pos) >= len(filterList) {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range filter")
+		}
+		filter := filterList[pos]
+		column := indexComparisonColumn(filter.GetF())
+		if column == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range column")
+		}
+		normalized, err := normalizeSerializedIndexComparison(builder.GetContext(), filter, column.Typ)
+		if err != nil {
+			return nil, err
+		}
+		lookupFilters[i] = normalized
+		selectivity *= filter.Selectivity
+		if i < suffixStart {
+			if normalized.GetF() == nil || normalized.GetF().Func.ObjName != "=" {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index equality prefix")
+			}
+			value := rangeFilterConstValue(normalized.GetF())
+			if value == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index equality bound")
+			}
+			prefixArgs[i], err = builder.makeIndexLookupPartExpr(idxDef, i, value)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	ctx := builder.GetContext()
+	serialFunc := indexTableComparisonSerialFunc()
+	prefix, err := BindFuncExprImplByPlanExpr(ctx, serialFunc, DeepCopyExprList(prefixArgs))
+	if err != nil {
+		return nil, err
+	}
+	bindBound := func(value *plan.Expr) (*plan.Expr, error) {
+		args := append(DeepCopyExprList(prefixArgs), DeepCopyExpr(value))
+		return BindFuncExprImplByPlanExpr(ctx, serialFunc, args)
+	}
+	physical := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	physical.GetCol().Name = idxTableDef.Cols[0].Name
+	fullKey := suffixStart == len(idxDef.Parts)-1
+
+	var result *plan.Expr
+	suffixFilters := lookupFilters[suffixStart:]
+	if len(suffixFilters) == 1 {
+		fn := suffixFilters[0].GetF()
+		switch fn.Func.ObjName {
+		case "between", "in_range":
+			left, err := bindBound(fn.Args[1])
+			if err != nil {
+				return nil, err
+			}
+			right, err := bindBound(fn.Args[2])
+			if err != nil {
+				return nil, err
+			}
+			if fn.Func.ObjName == "between" {
+				name := "prefix_between"
+				if fullKey {
+					name = "between"
+				}
+				result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right})
+			} else {
+				name := "prefix_in_range"
+				flag := DeepCopyExpr(fn.Args[3])
+				if fullKey {
+					name = "in_range"
+				} else if indexFunctionComparesByteStringColumn(fn) {
+					flag = closePrefixRangeLowerBound(flag)
+				}
+				result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right, flag})
+			}
+			if err != nil {
+				return nil, err
+			}
+		default:
+			op := canonicalRangeOp(fn)
+			value := rangeFilterConstValue(fn)
+			if value == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range bound")
+			}
+			bound, err := bindBound(value)
+			if err != nil {
+				return nil, err
+			}
+			var left, right *plan.Expr
+			var flag uint8
+			switch op {
+			case "<":
+				left, right, flag = prefix, bound, 2
+			case "<=":
+				left, right = prefix, bound
+			case ">":
+				left, right, flag = bound, prefix, 1
+			case ">=":
+				left, right = bound, prefix
+			default:
+				return nil, moerr.NewInternalError(builder.GetContext(), "unsupported composite index range operator")
+			}
+			if indexFunctionComparesByteStringColumn(fn) {
+				flag &^= 1
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, "prefix_in_range", []*plan.Expr{
+				physical, left, right, MakePlan2Uint8ConstExprWithType(flag),
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if len(suffixFilters) == 2 {
+		lowerFn, upperFn := suffixFilters[0].GetF(), suffixFilters[1].GetF()
+		if _, lower := classifyRangeBound(lowerFn); !lower {
+			lowerFn, upperFn = upperFn, lowerFn
+		}
+		lowerValue := rangeFilterConstValue(lowerFn)
+		upperValue := rangeFilterConstValue(upperFn)
+		if lowerValue == nil || upperValue == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range pair")
+		}
+		left, err := bindBound(lowerValue)
+		if err != nil {
+			return nil, err
+		}
+		right, err := bindBound(upperValue)
+		if err != nil {
+			return nil, err
+		}
+		lowerOp, upperOp := canonicalRangeOp(lowerFn), canonicalRangeOp(upperFn)
+		if lowerOp == ">=" && upperOp == "<=" {
+			name := "prefix_between"
+			if fullKey {
+				name = "between"
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right})
+		} else {
+			var flag uint8
+			if lowerOp == ">" {
+				flag |= 1
+			}
+			if upperOp == "<" {
+				flag |= 2
+			}
+			name := "prefix_in_range"
+			flagExpr := MakePlan2Uint8ConstExprWithType(flag)
+			if fullKey {
+				name = "in_range"
+			} else if indexFunctionComparesByteStringColumn(lowerFn) {
+				flagExpr = closePrefixRangeLowerBound(flagExpr)
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right, flagExpr})
+		}
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index suffix range")
+	}
+	result.Selectivity = selectivity
+	return result, nil
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
