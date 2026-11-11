@@ -211,4 +211,50 @@ execute global_window_stmt;
 execute global_window_stmt;
 deallocate prepare global_window_stmt;
 
+-- 量化子查询的 Child 引用分组输出，包括合成 NULL 和复合左值。
+select g,g in (select id from pk_src) in_rhs,g not in (select id from pk_src) not_in_rhs,
+g>any(select id from pk_src) any_rhs,g<=all(select id from pk_src) all_rhs
+from src group by g with rollup order by g;
+create table quantified_group as select g,g in (select id from pk_src) in_rhs,
+g not in (select id from pk_src) not_in_rhs from src group by g with rollup;
+select * from quantified_group order by g;
+select g from quantified_group where in_rhs is null;
+select g,g in (select id from pk_src where id<0) in_empty,
+g not in (select id from pk_src where id<0) not_in_empty
+from src group by g with rollup order by g;
+select g,h,(g,h) in (select id,id+9 from pk_src) tuple_rhs
+from src group by g,h with rollup order by g,h;
+
+-- DISTINCT 的键投影必须先展开子查询，再去重；窗口仍只看完整的分组结果。
+select distinct (select 7) k from src group by g with rollup;
+create table distinct_scalar_group as select distinct (select 7) k from src group by g with rollup;
+select * from distinct_scalar_group;
+select distinct (select id from pk_src where id=1) k from src group by g with rollup;
+select distinct (select id from pk_src where id<0) k from src group by g with rollup;
+select distinct coalesce((select 7),9) k from src group by grouping sets ((g),(g));
+select distinct g in (select id from pk_src) flag from src group by g with rollup order by flag;
+select distinct count(*) over() n,(select 7) k from src group by g with rollup;
+create table distinct_window_subquery as
+select distinct count(*) over() n,(select 7) k from src group by g with rollup;
+select * from distinct_window_subquery;
+
+-- 100 percent 或超过输入行数的预算使采样结果确定；保留重复集合的完整采样后投影。
+select g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+create table grouped_sample as select g,sample(v,100 percent) chosen
+from src group by grouping sets ((g),(g));
+select * from grouped_sample order by g,chosen;
+select g,h,sample(v,100 percent) chosen from src group by grouping sets ((),()) order by g,h,chosen;
+select g,sample(h,v,100 percent) from src group by grouping sets ((g),(g)) order by g,h,v;
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+select g,sample(v,10 rows) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+select sample(v,100 percent) chosen from src group by grouping sets ((),()) order by chosen;
+create table empty_sets_sample as select sample(v,100 percent) chosen
+from src group by grouping sets ((),());
+select * from empty_sets_sample order by chosen;
+create table sample_null_union as
+select null z,sample(v,100 percent) chosen from src group by grouping sets ((),()) union all select 42,99;
+select * from sample_null_union order by z,chosen;
+select sample(v,100 percent) chosen from empty_src group by grouping sets ((),());
+select g,sample(v,0 percent) chosen from src group by grouping sets ((g),(g));
+
 drop database grouping_ctas_test;

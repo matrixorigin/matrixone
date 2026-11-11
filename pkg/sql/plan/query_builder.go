@@ -3312,7 +3312,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		return
 	}
 
-	if hasGroupBy && len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
+	if hasGroupBy && !ctx.sampleFunc.hasSampleFunc && len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
 		// An explicit empty set is a global group even for SELECT constants.
 		// Keep one hidden aggregate so empty input still emits its single row
 		// and remapping/execution retain a non-empty aggregate output.

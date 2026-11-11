@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// Grouping sets duplicate only the grouping stage. Windows, the user projection,
-// DISTINCT, ORDER BY and LIMIT consume the combined grouped rows exactly once.
-// This state belongs to one binding invocation and never escapes into the AST.
+// Grouping sets merge branch-owned grouped or sampled values before global
+// consumers such as windows and DISTINCT. SAMPLE retains its post-sample
+// projection. This binding-local state never escapes into the source AST.
 type groupingStage struct {
 	orderBy      tree.OrderBy
 	projects     []*plan.Expr
@@ -34,6 +34,10 @@ type groupingStage struct {
 	having       []*plan.Expr
 	resultLen    int
 	notCacheable bool
+
+	// SAMPLE also carries arbitrary input columns through its output. Its
+	// complete post-sample projection is transported, rather than a key list.
+	projectionInputTag int32
 }
 
 func (builder *QueryBuilder) appendGroupingStage(
@@ -48,18 +52,33 @@ func (builder *QueryBuilder) appendGroupingStage(
 	stage.resultLen, stage.orderBys, stage.having = resultLen, orders, having
 	stage.notCacheable = notCacheable
 
-	ctx.projects = make([]*plan.Expr, 0, len(ctx.groups)+len(ctx.aggregates))
-	ctx.headings = make([]string, 0, cap(ctx.projects))
-	for _, input := range []struct {
-		tag   int32
-		exprs []*plan.Expr
-	}{{ctx.groupTag, ctx.groups}, {ctx.aggregateTag, ctx.aggregates}} {
-		for i, expr := range input.exprs {
-			ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", len(ctx.projects)))
-			ctx.projects = append(ctx.projects, &plan.Expr{
-				Typ:  expr.Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: input.tag, ColPos: int32(i)}},
-			})
+	if ctx.sampleFunc.hasSampleFunc {
+		stage.projectionInputTag = builder.genNewBindTag()
+		stage.projects = make([]*plan.Expr, len(ctx.projects))
+		ctx.headings = make([]string, len(ctx.projects))
+		for i, expr := range ctx.projects {
+			ctx.headings[i] = fmt.Sprintf("__grouping_%d", i)
+			stage.projects[i] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: stage.projectionInputTag, ColPos: int32(i),
+				}},
+			}
+		}
+	} else {
+		ctx.projects = make([]*plan.Expr, 0, len(ctx.groups)+len(ctx.aggregates))
+		ctx.headings = make([]string, 0, cap(ctx.projects))
+		for _, input := range []struct {
+			tag   int32
+			exprs []*plan.Expr
+		}{{ctx.groupTag, ctx.groups}, {ctx.aggregateTag, ctx.aggregates}} {
+			for i, expr := range input.exprs {
+				ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", len(ctx.projects)))
+				ctx.projects = append(ctx.projects, &plan.Expr{
+					Typ:  expr.Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: input.tag, ColPos: int32(i)}},
+				})
+			}
 		}
 	}
 	nodeID, err := builder.appendProjectionNode(ctx, nodeID, notCacheable)
@@ -71,6 +90,11 @@ func (builder *QueryBuilder) appendGroupingStage(
 // rebound against branch-local input after grouping sets have been combined.
 func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *plan.Node) {
 	if col := expr.GetCol(); col != nil {
+		if tag := branch.groupingStage.projectionInputTag; tag != 0 && col.RelPos == tag {
+			col.RelPos = union.BindingTags[0]
+			expr.Typ = union.ProjectList[col.ColPos].Typ
+			return
+		}
 		switch col.RelPos {
 		case branch.groupTag:
 			col.RelPos = union.BindingTags[0]
@@ -102,6 +126,10 @@ func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *pla
 		for _, item := range list.List {
 			rebindGroupingExpr(item, branch, output, union)
 		}
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Child != nil {
+		// IN/ANY/ALL keep their outer operand here, not in function Args.
+		rebindGroupingExpr(sub.Child, branch, output, union)
 	}
 }
 
@@ -158,6 +186,14 @@ func (builder *QueryBuilder) finishGroupingStage(
 	}
 
 	if distinct {
+		// This projection is an expression consumer just like the ordinary
+		// final projection: flatten subqueries before it becomes DISTINCT keys.
+		for i, project := range ctx.projects {
+			nodeID, ctx.projects[i], err = builder.flattenSubqueries(nodeID, project, ctx)
+			if err != nil {
+				return 0, err
+			}
+		}
 		selected := ctx.projects[:stage.resultLen]
 		distinctTag := builder.genNewBindTag()
 		nodeID = builder.appendNode(&plan.Node{
