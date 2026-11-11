@@ -127,34 +127,8 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			prefix = 1
 		}
 		if vec.IsDictionary() {
-			var strings vector.VarlenaReadView
-			if vec.GetType().IsVarlen() {
-				strings = vector.ResolveVarlenaReadView(vec)
-			}
-			for i := 0; i < count; i++ {
-				row := start + i
-				size := 0
-				if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
-					size = 1
-				} else if vec.IsNull(uint64(row)) {
-					if itr.mp.hasNull {
-						size = 1
-					}
-				} else {
-					if vec.GetType().IsFixedLen() {
-						size = prefix + vec.GetType().TypeSize()
-					} else {
-						physical := int(strings.Selection[row])
-						if strings.Constant {
-							physical = 0
-						}
-						value := strings.Values[physical].GetByteSlice(strings.Area)
-						size = prefix + 4 + keycodec.CanonicalValueSize(*vec.GetType(), value)
-					}
-				}
-				if err := add(i, size); err != nil {
-					return err
-				}
+			if err := itr.prepareDictionaryKeySizes(vec, start, count, prefix, withDomain); err != nil {
+				return err
 			}
 			continue
 		}
@@ -1561,4 +1535,41 @@ func fillSelectedStrKeys[T any](itr *strHashmapIterator, view vector.FixedBytesR
 			itr.keys[i] = append(key, types.EncodeSlice(values[row:row+1])...)
 		}
 	}
+}
+
+// prepareDictionaryKeySizes uses the existing iterator sizing frame. It does
+// not capture the flat add closure or allocate another row-size vector.
+func (itr *strHashmapIterator) prepareDictionaryKeySizes(vec *vector.Vector, start, count, prefix int, withDomain bool) error {
+	const maxInt = int(^uint(0) >> 1)
+	var strings vector.VarlenaReadView
+	if vec.GetType().IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		size := 0
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			size = 1
+		} else if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				size = 1
+			}
+		} else {
+			if vec.GetType().IsFixedLen() {
+				size = prefix + vec.GetType().TypeSize()
+			} else {
+				physical := int(strings.Selection[row])
+				if strings.Constant {
+					physical = 0
+				}
+				value := strings.Values[physical].GetByteSlice(strings.Area)
+				size = prefix + 4 + keycodec.CanonicalValueSize(*vec.GetType(), value)
+			}
+		}
+		if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		itr.zValues[i] += int64(size)
+	}
+	return nil
 }

@@ -394,26 +394,6 @@ func fillFloat64Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) 
 func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, size uint32, start int, n int) {
 	keys := itr.keys
 	keyOffs := itr.keyOffs
-	// Selected callers admit only fixed, nonconstant, logical NULL-free input.
-	// Keep the same native-width stores and batched offsets as the flat codec.
-	if vec.IsDictionary() {
-		view := vector.ResolveFixedBytesReadView(vec)
-		values := types.DecodeSlice[T](view.Values[:len(view.Values)/int(size)*int(size)])
-		selected := view.Selection[start : start+n]
-		if !itr.mp.hasNull {
-			for i, row := range selected {
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = values[row]
-			}
-			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
-		} else {
-			for i, row := range selected {
-				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = values[row]
-			}
-			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -717,16 +697,16 @@ func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, coun
 		if !fixed.Constant {
 			switch fixed.Width {
 			case 1:
-				fillKeys[uint8](itr, vec, 1, start, count)
+				fillSelectedFixedKeys[uint8](itr, fixed, 1, start, count)
 				return
 			case 2:
-				fillKeys[uint16](itr, vec, 2, start, count)
+				fillSelectedFixedKeys[uint16](itr, fixed, 2, start, count)
 				return
 			case 4:
-				fillKeys[uint32](itr, vec, 4, start, count)
+				fillSelectedFixedKeys[uint32](itr, fixed, 4, start, count)
 				return
 			case 8:
-				fillKeys[uint64](itr, vec, 8, start, count)
+				fillSelectedFixedKeys[uint64](itr, fixed, 8, start, count)
 				return
 			}
 		}
@@ -771,5 +751,25 @@ func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, coun
 			encoded := keycodec.AppendCanonicalValue(key[:offset], typ, dictionaryFixedBytes(fixed, row))
 			itr.keyOffs[i] = uint32(len(encoded))
 		}
+	}
+}
+
+// fillSelectedFixedKeys is reached only from selected key dispatch. Keep its
+// mapping/view locals outside the original flat fillKeys frame.
+func fillSelectedFixedKeys[T types.FixedSizeT](itr *intHashMapIterator, view vector.FixedBytesReadView, size uint32, start, n int) {
+	keys, keyOffs := itr.keys, itr.keyOffs
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/int(size)*int(size)])
+	selected := view.Selection[start : start+n]
+	if !itr.mp.hasNull {
+		for i, row := range selected {
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = values[row]
+		}
+		uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+	} else {
+		for i, row := range selected {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = values[row]
+		}
+		uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 	}
 }
