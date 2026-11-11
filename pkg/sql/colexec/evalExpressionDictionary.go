@@ -170,6 +170,52 @@ func numericComparisonDomain(parameters []*vector.Vector) bool {
 	}
 }
 
+// decimal128ProducesNoNulls admits only the ordinary decimal multiply and
+// lossless implicit D64->D128 cast paths. Their non-NULL branches write values
+// or return the existing error; they do not synthesize NULLs. Physical input
+// normalization and nullable/masked result admission remain separate contracts.
+func (expr *FunctionExpressionExecutor) decimal128ProducesNoNulls() bool {
+	if len(expr.parameterResults) != 2 || int32(expr.overloadID) != 0 {
+		return false
+	}
+	switch expr.fid {
+	case function.MULTI:
+		left, right := expr.parameterResults[0], expr.parameterResults[1]
+		if !decimalValueIsNonNull(left) || !decimalValueIsNonNull(right) {
+			return false
+		}
+		oid := left.GetType().Oid
+		return oid == right.GetType().Oid && (oid == types.T_decimal64 || oid == types.T_decimal128)
+	case function.CAST:
+		if expr.rowScopedDecimalCast || expr.rowScopedDiagnostics || !decimalValueIsNonNull(expr.parameterResults[0]) {
+			return false
+		}
+		source := *expr.parameterResults[0].GetType()
+		target := expr.resultType
+		// The second operand is a typed NULL target placeholder, not a value
+		// consumed by CAST. Still verify that its declared target agrees.
+		placeholder := expr.parameterResults[1]
+		if placeholder == nil || placeholder.GetType().Oid != target.Oid || placeholder.GetType().Width != target.Width || placeholder.GetType().Scale != target.Scale ||
+			source.Oid != types.T_decimal64 || source.Width <= 0 || source.Width > 18 || source.Scale < 0 || source.Scale > source.Width ||
+			target.Width <= 0 || target.Width > 38 || target.Scale < source.Scale || target.Scale > target.Width {
+			return false
+		}
+		// Precision-18 D64 may carry the complete signed-int64 domain.
+		// Reserve 19 coefficient digits before increasing the scale.
+		width := source.Width
+		if width == 18 {
+			width = 19
+		}
+		return target.Width-target.Scale >= width-source.Scale
+	default:
+		return false
+	}
+}
+
+func decimalValueIsNonNull(value *vector.Vector) bool {
+	return value != nil && !value.HasNull() && !value.HasGrouping() && !value.IsPreparedJSONComparisonParam()
+}
+
 // fixedMembershipList identifies the execution-owned literal/runtime-filter
 // list, whose row domain and contents stay independent of input batches. These
 // executors do not resize the list in Eval. As for the existing membership

@@ -676,3 +676,23 @@ attribution for Q17 is invalidated. The proposed non-Boolean extension is in
 local decimal128-validity-extension-design.md and still requires requester
 approval. No new production behavior was added for it. Normal r32 and GC-off
 r34 retain unresolved query latency/resource signals; neither is acceptance.
+
+
+### Approved Decimal128 result validity extension — 2026-11-12
+
+The requester approved local decimal128-validity-extension-design.md. The
+current Q17 plan confirms cast(l_quantity AS DECIMAL128(38,2)) below a comparison
+with 0.2 * avg(l_quantity). Extend only full, unmasked, accounted result admission
+using the existing concrete FunctionResult[Decimal128] non-NULL preparation.
+Admit the registered ordinary native decimal multiply overload with homogeneous
+D64/D128 inputs, and implicit lossless D64->D128 casts with proven precision/
+scale bounds, including the precision18 signed-carrier edge. The cast target is
+a typed NULL metadata placeholder and is not a nullable value operand.
+
+Check current logical value NULLs, grouping and prepared metadata each time;
+unknown/narrowing/explicit/rounding casts, masks, nullable values and unproved
+kernels keep ordinary admission. Preserve data capacity/account errors, overflow,
+warnings, scalar broadcast, representation normalization and NULL reuse. Add no
+public interface, planner/type change, arithmetic kernel, cache, literal pool or
+new ownership mechanism. C/D designs and all local all-query/resource acceptance
+requirements remain intact; the current PR stays unpushed until accepted.
