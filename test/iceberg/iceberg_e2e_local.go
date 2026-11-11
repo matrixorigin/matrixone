@@ -305,29 +305,29 @@ type budgetRESTResources struct {
 // cleanupBudgetCase removes and verifies the test-owned SQL and REST resources.
 func (r *caseRunner) cleanupBudgetCase(ctx context.Context, owned *budgetRESTResources) caseResult {
 	const id, name = "ICE-CI-E2E-028", "append-budget-cleanup"
-	var sqlErr error
+	var cleanupErr error
 	fail := func(err error) caseResult {
-		return failedCase(id, name, nil, nil, nil, errors.Join(sqlErr, err).Error())
+		return failedCase(id, name, nil, nil, nil, err.Error())
 	}
 	if r.db != nil && r.ownedDatabase {
 		if _, err := r.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database))); err != nil {
-			sqlErr = err
+			cleanupErr = err
 		} else {
 			for _, stmt := range []string{fmt.Sprintf("SHOW DATABASES LIKE %s", sqlString(r.cfg.Database)), fmt.Sprintf("SELECT table_name FROM mo_catalog.mo_iceberg_tables WHERE namespace = %s", sqlString(r.cfg.Namespace))} {
 				rows, err := queryLines(ctx, r.db, stmt)
 				if err != nil {
-					sqlErr = errors.Join(sqlErr, err)
+					cleanupErr = errors.Join(cleanupErr, err)
 					continue
 				}
 				if len(rows) != 0 {
-					sqlErr = errors.Join(sqlErr, fmt.Errorf("cleanup query %s returned %v", stmt, rows))
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup query %s returned %v", stmt, rows))
 				}
 			}
 		}
 	}
 	if owned == nil || !owned.namespace {
-		if sqlErr != nil {
-			return fail(sqlErr)
+		if cleanupErr != nil {
+			return fail(cleanupErr)
 		}
 		return passedCase(id, name, nil, nil, nil, nil)
 	}
@@ -335,11 +335,11 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context, owned *budgetRESTRes
 	req := api.CatalogRequest{Catalog: model.Catalog{Name: r.cfg.Catalog, Type: "rest", URI: r.cfg.CatalogURI, Warehouse: r.cfg.Warehouse, AuthMode: "none"}, ExternalPrincipal: "ci-local"}
 	req, err := catalogRequestWithPrefix(ctx, client, req, r.cfg.Warehouse)
 	if err != nil {
-		return fail(err)
+		return fail(errors.Join(cleanupErr, err))
 	}
 	base, err := createNamespaceURL(r.cfg.CatalogURI, req.Prefix)
 	if err != nil {
-		return fail(err)
+		return fail(errors.Join(cleanupErr, err))
 	}
 	ns := base + "/" + url.PathEscape(r.cfg.Namespace)
 	targets := make([]string, 0, len(owned.tables)+1)
@@ -348,35 +348,43 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context, owned *budgetRESTRes
 	}
 	targets = append(targets, ns)
 	for _, target := range targets {
-		request, err := http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
-		if err != nil {
-			return fail(err)
-		}
-		resp, err := http.DefaultClient.Do(request)
-		if err != nil {
-			return fail(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
-			return fail(fmt.Errorf("REST cleanup returned %d for %s", resp.StatusCode, target))
-		}
-		request, err = http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-		if err != nil {
-			return fail(err)
-		}
-		resp, err = http.DefaultClient.Do(request)
-		if err != nil {
-			return fail(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			return fail(fmt.Errorf("REST cleanup verification returned %d for %s", resp.StatusCode, target))
+		if err := cleanupBudgetRESTTarget(ctx, target); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
 		}
 	}
-	if sqlErr != nil {
-		return fail(sqlErr)
+	if cleanupErr != nil {
+		return fail(cleanupErr)
 	}
 	return passedCase(id, name, nil, nil, nil, nil)
+}
+
+// cleanupBudgetRESTTarget deletes one owned resource and verifies its absence.
+func cleanupBudgetRESTTarget(ctx context.Context, target string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		return fmt.Errorf("REST cleanup returned %d for %s", resp.StatusCode, target)
+	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err = http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("REST cleanup verification returned %d for %s", resp.StatusCode, target)
+	}
+	return nil
 }
 
 func (r *caseRunner) catalogAndMappingCase(ctx context.Context) caseResult {

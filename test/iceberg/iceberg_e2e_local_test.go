@@ -2633,3 +2633,42 @@ func TestQACleanupContinuesAfterDeleteError(t *testing.T) {
 		t.Fatal("cleanup abandoned second owned table after first delete failed")
 	}
 }
+
+func TestBudgetCleanupPreservesErrorsAndContinues(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("DROP DATABASE IF EXISTS").WillReturnError(errors.New("sql drop failed"))
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/v1/config"):
+			_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path)
+			if strings.HasSuffix(r.URL.Path, "/tables/first") {
+				w.WriteHeader(http.StatusInternalServerError)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case strings.HasSuffix(r.URL.Path, "/tables/second"):
+			w.WriteHeader(http.StatusOK) // deletion could not be verified
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	cfg := localE2ETestConfig()
+	cfg.CatalogURI = server.URL + "/iceberg"
+	result := (&caseRunner{cfg: cfg, db: db, ownedDatabase: true}).cleanupBudgetCase(context.Background(), &budgetRESTResources{namespace: true, tables: []string{"first", "second"}})
+	for _, want := range []string{"sql drop failed", "REST cleanup returned 500", "REST cleanup verification returned 200"} {
+		if result.Status != "failed" || !strings.Contains(result.Error, want) {
+			t.Fatalf("missing cleanup error %q: %+v", want, result)
+		}
+	}
+	if len(deleted) != 3 || !strings.HasSuffix(deleted[2], "/namespaces/"+cfg.Namespace) {
+		t.Fatalf("cleanup did not attempt every owned resource: %v", deleted)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
