@@ -724,3 +724,27 @@ Review decision: this is a SQL-result dispatch optimization, not a new path
 cache or JSON decoder. Compare it against ordinary mutable execution for
 empty/error/default modes, composites, NULL ordering, warnings, output-memory
 failure and 512/513 characters before re-running the fixed performance gates.
+
+### Normalize semantic keys during formatting (candidate revision 40)
+
+Five alternating cold SQL pairs at revision `b153a3505a` still exceeded 1.10x
+in five of 30 cases, particularly small documents with eight paths. Temporary
+stage probes localized approximately 40 microseconds of the eight-path
+difference to plan optimization. The semantic-key helper cloned and reflected
+over every expression solely to normalize JSON_VALUE clauses, including bare
+two-argument calls for which normalization changes nothing.
+
+The semantic-key formatter should apply the existing JSON_VALUE normalization
+to a local copy of the clause while rendering, using an explicitly selected
+formatting option. Normal SQL formatting, persisted definitions and the source
+AST retain their original spelling. Nested JSON_VALUE expressions, including
+those inside subqueries and sample expressions, inherit the same option.
+Grouping-set identifier normalization continues to use an independent clone,
+because that separate operation mutates identifiers.
+
+Review decision: compare the new keys with the previous clone-and-walk behavior
+for legacy calls, explicit and implicit response modes, character sets,
+defaults, parameters and nested expressions; prove the AST remains unchanged.
+Re-run planning/SQL regressions and the same paired performance gates. This
+changes neither JSON admission nor path evaluation and introduces no path
+cache or production profiling counters.
