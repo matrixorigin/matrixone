@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -66,6 +67,24 @@ func TestCRC32LegacyGeneratedExplicitChangeRebuildsIndex(t *testing.T) {
 	generated := FindColumn(base.Cols, "g")
 	generated.Typ, err = getTypeFromAst(context.Background(), shape.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
 	require.NoError(t, err)
+	// The shared fixture initially indexes the integer input and gives the
+	// generated index the old integer type. Keep this fixture representative
+	// of a real JSON input with a UINT64 generated-column index.
+	indexes := base.Indexes[:0]
+	for _, idx := range base.Indexes {
+		if idx.IndexName == "idx_val" {
+			continue
+		}
+		indexes = append(indexes, idx)
+		if idx.IndexName == "idx_generated_g" {
+			hidden := mock.ctxt.tables[idx.IndexTableName]
+			require.NotNil(t, hidden)
+			key := FindColumn(hidden.Cols, catalog.IndexTableIndexColName)
+			require.NotNil(t, key)
+			key.Typ = generated.Typ
+		}
+	}
+	base.Indexes = indexes
 	legacy := legacyCRC32Expr()
 	legacy.GetF().Args[0].GetCol().ColPos = inputPos
 	legacy.GetF().Args[0].GetCol().Name = "val"
