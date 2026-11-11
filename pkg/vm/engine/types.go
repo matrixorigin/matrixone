@@ -1311,6 +1311,8 @@ const (
 // ReaderSelectionScratch contains non-owning call operands, never payload owners.
 // Its vectors are cleared by the reader on every terminal path.
 type ReaderSelectionScratch struct {
+	Seqnums   []uint16
+	Types     []types.Type
 	Columns   []int
 	Sources   []*vector.Vector
 	Vectors   []*vector.Vector
@@ -1323,6 +1325,8 @@ func (s *ReaderSelectionScratch) Clear() {
 	clear(s.Vectors)
 	clear(s.Headers)
 	clear(s.Snapshots)
+	s.Seqnums = s.Seqnums[:0]
+	s.Types = s.Types[:0]
 	s.Columns = s.Columns[:0]
 	s.Sources = s.Sources[:0]
 	s.Vectors = s.Vectors[:0]

@@ -926,12 +926,19 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
+		scratch := request.SelectionScratch(2)
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "projected-column-use", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
 		require.NoError(t, err)
 		require.Equal(t, 3, out.RowCount())
 		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
 		require.False(t, out.HasDictionary())
 		require.Zero(t, out.Vecs[1].Length())
+		require.Empty(t, scratch.Sources)
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source)
+		}
+		seqStorage := &scratch.Seqnums[:cap(scratch.Seqnums)][0]
+		typeStorage := &scratch.Types[:cap(scratch.Types)][0]
 		out.CleanOnlyData()
 		request.ColumnUses[1] = engine.ReaderColumnOwned
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-owned-payload", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
@@ -943,6 +950,25 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
 		}
 
+		require.Same(t, seqStorage, &scratch.Seqnums[:cap(scratch.Seqnums)][0])
+		require.Same(t, typeStorage, &scratch.Types[:cap(scratch.Types)][0])
+		out.CleanOnlyData()
+		request.Select = func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{0}, loaded)
+			require.Equal(t, 8, b.Vecs[0].Length())
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-reused-late-payload", out, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Equal(t, []int32{1, 3, 5}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+		require.Same(t, seqStorage, &scratch.Seqnums[:cap(scratch.Seqnums)][0])
+		require.Same(t, typeStorage, &scratch.Types[:cap(scratch.Types)][0])
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source, "completed reads release all borrowed scratch references")
+		}
 	})
 
 	t.Run("scoped gather failure restores owned headers", func(t *testing.T) {
@@ -973,8 +999,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind())
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
+		scratch := request.SelectionScratch(2)
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-gather-failure", out, cacheVectors, queryMP, fs, []int{1}, request)
 		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
+			require.Nil(t, source, "failed reads release all borrowed scratch references")
+		}
 		require.Same(t, original, out.Vecs[1])
 		require.False(t, out.Vecs[1].HasBorrowedBacking())
 		require.Equal(t, vector.OwnedMPoolUnique, out.Vecs[1].DataBackingKind())

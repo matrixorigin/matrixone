@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"slices"
 )
 
 func scopedOwnedColumns(request *engine.ReaderFilterRequest, width int) bool {
@@ -43,16 +44,18 @@ func scopedOwnedColumns(request *engine.ReaderFilterRequest, width int) bool {
 // storage-selection/TopK work. Every escaping value is owned; scoped cache bytes
 // stay protected by the loader's IOVector until filtering and gathering finish.
 func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, columns []uint16, typs []types.Type, early []int, policy fileservice.Policy, output *batch.Batch, mp *mpool.MPool, fs fileservice.FileService, request *engine.ReaderFilterRequest, preFilterRows *int) error {
-	idxes := make([]uint16, len(early))
-	earlyTypes := make([]types.Type, len(early))
-	destinations := make([]*vector.Vector, len(early))
-	for i, pos := range early {
-		idxes[i] = columns[pos]
-		earlyTypes[i] = typs[pos]
-		destinations[i] = output.Vecs[pos]
+	scratch := request.SelectionScratch(len(columns))
+	defer scratch.Clear()
+	scratch.Seqnums = slices.Grow(scratch.Seqnums, len(columns))
+	scratch.Types = slices.Grow(scratch.Types, len(columns))
+	for _, pos := range early {
+		scratch.Seqnums = append(scratch.Seqnums, columns[pos])
+		scratch.Types = append(scratch.Types, typs[pos])
+		scratch.Sources = append(scratch.Sources, output.Vecs[pos])
 	}
+	destinations := scratch.Sources
 	var selected engine.ReaderFilterResult
-	_, err := ioutil.WithColumnsDataInto(ctx, idxes, earlyTypes, fs, info.MetaLocation(), destinations, request.ColumnScope(), mp, policy, func(inputs []*vector.Vector, marked []bool) error {
+	_, err := ioutil.WithColumnsDataInto(ctx, scratch.Seqnums, scratch.Types, fs, info.MetaLocation(), destinations, request.ColumnScope(), mp, policy, func(inputs []*vector.Vector, marked []bool) error {
 		// Restore original destination headers before any error crosses the scope.
 		for i, pos := range early {
 			output.Vecs[pos] = inputs[i]
@@ -129,13 +132,33 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 	if !selected.All {
 		physicalRows = selected.Sels
 	}
-	late := columnPositionsComplement(early, len(columns))
-	ignored, err := materializeBlockColumnsAtPositions(ctx, info, columns, typs, -1, late, physicalRows, nil, policy, output, mp, fs)
+	// The pinned early read has ended; reuse its non-owning operands for the
+	// same late materialization helper, retaining only schema-sized storage.
+	clear(scratch.Sources)
+	scratch.Sources = scratch.Sources[:0]
+	scratch.Seqnums = scratch.Seqnums[:0]
+	scratch.Types = scratch.Types[:0]
+	earlyIndex := 0
+	for pos := range columns {
+		if earlyIndex < len(early) && early[earlyIndex] == pos {
+			earlyIndex++
+			continue
+		}
+		scratch.Columns = append(scratch.Columns, pos)
+		scratch.Seqnums = append(scratch.Seqnums, columns[pos])
+		scratch.Types = append(scratch.Types, typs[pos])
+		scratch.Sources = append(scratch.Sources, output.Vecs[pos])
+	}
+	if len(scratch.Columns) == 0 {
+		return nil
+	}
+	lateOutput := batch.Batch{Vecs: scratch.Sources}
+	ignored, err := materializeBlockData(ctx, info, scratch.Seqnums, scratch.Types, -1, physicalRows, nil, policy, &lateOutput, mp, fs)
 	ignored.Release()
 	if err != nil {
 		return err
 	}
-	for _, pos := range late {
+	for _, pos := range scratch.Columns {
 		if output.Vecs[pos].Length() != output.RowCount() {
 			return moerr.NewInvalidInputNoCtx("scoped late column row mismatch")
 		}
