@@ -274,6 +274,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	// 2. split alter_option list
+	// A binary conversion must validate the source identity before MODIFY or
+	// CONVERT can erase unsupported persisted collation metadata.
+	for _, option := range stmt.Options {
+		if charset, ok := option.(*tree.TableOptionCharset); ok && charset.Convert && strings.EqualFold(charset.Charset, "binary") {
+			if err := plan.RequireLegacyCollations(tableDef); err != nil {
+				return nil, err
+			}
+		}
+	}
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
 		return nil, err

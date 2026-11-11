@@ -205,6 +205,11 @@ select id, char_length(if(id = 2, bin, coalesce(txt, bin))),
        hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1)),
        hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))
 from domains order by id;
+-- Fixed-length slices stay bounded after IF/CASE promotes their value to BLOB.
+select id,
+       hex(right(if(id = 2, bin, coalesce(txt, bin)), 1)),
+       hex(substring(case when id = 2 then bin else coalesce(txt, bin) end, 1, 1))
+from domains order by id;
 -- Comparison/search consumes declarations; slicing still uses the selected row.
 select id, locate('a', coalesce(txt, bin)), instr(coalesce(txt, bin), 'a'),
        coalesce(txt, bin) like '__', coalesce(txt, bin) like '____',
