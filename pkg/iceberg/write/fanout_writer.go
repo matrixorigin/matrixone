@@ -364,11 +364,7 @@ func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) e
 	closeErr := active.sink.Close()
 	if closeErr != nil {
 		w.orphans = append(w.orphans, active.location)
-		var wrappedCloseErr error
-		if closeErr != nil {
-			wrappedCloseErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
-		}
-		return errors.Join(writerErr, wrappedCloseErr)
+		return api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
 	}
 	if file.RecordCount > 0 {
 		w.files = append(w.files, file)

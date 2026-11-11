@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"math"
 	"strconv"
@@ -29,6 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1094,7 +1094,7 @@ func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
-	writeErr, abortErr := errors.New("write failure"), errors.New("abort failure")
+	writeErr, abortErr := moerr.NewInternalError(ctx, "write failure"), moerr.NewInternalError(ctx, "abort failure")
 	sink := &failingAbortSink{writeErr: writeErr, abortErr: abortErr}
 	writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
 		Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}}}},
