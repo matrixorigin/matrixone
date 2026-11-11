@@ -258,6 +258,38 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 			require.Equal(t, expectedLimit, inner.memoryBudget.limit)
 		})
 	}
+	t.Run("append_budget_failure_then_new_statement", func(t *testing.T) {
+		f := NewAppendRuntimeCoordinatorFactory(factory.opts)
+		f.opts.Config.Write.DMLMaxMemory = weight
+		failed, err := f.NewCoordinator(ctx, request)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, failed.Abort(ctx, nil)) })
+		require.NoError(t, failed.Begin(ctx, request))
+		inner := failed.(*appendRuntimeSharedCoordinatorScope).shared.inner.(*AppendRuntimeCoordinator)
+		bat, mp := appendGoldKPIBatch(t)
+		defer bat.Clean(mp)
+		err = failed.Append(ctx, bat)
+		metaBytes := retainedDMLDataFileMetadataBytesForSchema(api.Schema{Fields: make([]api.SchemaField, 3)}, api.PartitionSpec{})
+		assertConsumerBudgetError(t, err, weight, metaBytes, weight)
+		require.Equal(t, weight, inner.memoryBudget.usedBytes())
+		require.NoError(t, failed.Abort(ctx, err))
+		require.Equal(t, weight, inner.memoryBudget.usedBytes())
+		require.Empty(t, store.orphanFiles)
+		require.Empty(t, commitReq.Updates)
+
+		f.opts.Config.Write.DMLMaxMemory = cfg.Write.DMLMaxMemory
+		nextReq := request
+		nextReq.StatementID = "stmt-after-budget-failure"
+		nextReq.IdempotencyKey = nextReq.StatementID
+		next, err := f.NewCoordinator(ctx, nextReq)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, next.Abort(ctx, nil)) })
+		require.NoError(t, next.Begin(ctx, nextReq))
+		require.NoError(t, next.Append(ctx, bat))
+		require.NoError(t, next.Commit(ctx))
+		require.Equal(t, nextReq.IdempotencyKey, commitReq.IdempotencyKey)
+	})
+	commitReq = api.CommitRequest{}
 	coord, err := factory.NewCoordinator(ctx, request)
 	require.NoError(t, err)
 	require.NoError(t, coord.Begin(ctx, icebergwrite.AppendRequest{}))
@@ -825,6 +857,7 @@ type fakeAppendRuntimeStore struct {
 	mapping           model.TableMapping
 	principalMaps     []model.PrincipalMap
 	residencyPolicies []model.ResidencyPolicy
+	orphanFiles       []model.OrphanFile
 }
 
 func (s *fakeAppendRuntimeStore) GetCatalogByName(ctx context.Context, accountID uint32, name string) (model.Catalog, error) {
@@ -882,6 +915,7 @@ func (s *fakeAppendRuntimeStore) InsertPublishJob(ctx context.Context, job model
 }
 
 func (s *fakeAppendRuntimeStore) InsertOrphanFile(ctx context.Context, file model.OrphanFile) error {
+	s.orphanFiles = append(s.orphanFiles, file)
 	return nil
 }
 
