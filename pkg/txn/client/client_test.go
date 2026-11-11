@@ -48,6 +48,33 @@ type legacyBlockingTimestampWaiter struct {
 
 type immediateTimestampWaiter struct{}
 
+func TestSyncLatestCommitTSContext(t *testing.T) {
+	t.Run("cancellation preserves watermark", func(t *testing.T) {
+		waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+		client := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter)).(*txnClient)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		ts := newTestTimestamp(42)
+		go func() { done <- client.SyncLatestCommitTSContext(ctx, ts) }()
+		<-waiter.entered
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+		require.Equal(t, ts, client.GetLatestCommitTS())
+		require.Zero(t, client.GetSyncLatestCommitTSTimes())
+	})
+
+	t.Run("success is monotonic", func(t *testing.T) {
+		client := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(immediateTimestampWaiter{})).(*txnClient)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		high, low := newTestTimestamp(42), newTestTimestamp(7)
+		require.NoError(t, client.SyncLatestCommitTSContext(context.Background(), high))
+		require.NoError(t, client.SyncLatestCommitTSContext(context.Background(), low))
+		require.Equal(t, high, client.GetLatestCommitTS())
+		require.EqualValues(t, 2, client.GetSyncLatestCommitTSTimes())
+	})
+}
+
 type observedWaitContext struct {
 	context.Context
 	waiting chan struct{}
