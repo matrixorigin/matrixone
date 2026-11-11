@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -63,6 +64,132 @@ func rejectLegacyCRC32GeneratedFallback(ctx context.Context, table *planpb.Table
 		}
 	}
 	return nil
+}
+
+// A recursive FK update already carries the old row into its insert branch.
+// It can retain a stored legacy value if neither that column nor any of its
+// generated dependencies can change, and the insert projection really uses
+// the original column position. Other legacy fallback writes remain rejected.
+func rejectLegacyCRC32GeneratedUpdateFallback(ctx context.Context, update *dmlPlanCtx) error {
+	if update == nil || update.tableDef == nil {
+		return nil
+	}
+	if rejectLegacyCRC32GeneratedFallback(ctx, update.tableDef) == nil {
+		return nil
+	}
+	if unchangedLegacyCRC32GeneratedForFK(update) {
+		return nil
+	}
+	return rejectLegacyCRC32GeneratedFallback(ctx, update.tableDef)
+}
+
+func unchangedLegacyCRC32GeneratedForFK(update *dmlPlanCtx) bool {
+	if !update.isFkRecursionCall || len(update.updateColPosMap) == 0 {
+		return false
+	}
+	cols := update.tableDef.Cols
+	positions := make(map[string]int, len(cols))
+	changed := make([]bool, len(cols))
+	for i, col := range cols {
+		if col == nil || col.Name == "" {
+			return false
+		}
+		name := strings.ToLower(col.Name)
+		if _, duplicate := positions[name]; duplicate {
+			return false
+		}
+		positions[name] = i
+		changed[i] = col.Hidden || col.OnUpdate != nil || col.Typ.AutoIncr
+	}
+	for name := range update.updateColPosMap {
+		pos, ok := positions[strings.ToLower(catalog.ResolveAlias(name))]
+		if !ok {
+			return false
+		}
+		changed[pos] = true
+	}
+
+	// A generated input can itself depend on another generated column. Walk
+	// the catalog-bound expressions and fail closed on invalid or unsupported
+	// references, cycles, and functions that can change without a column update.
+	state := make([]uint8, len(cols))
+	var unchanged func(int) bool
+	unchanged = func(pos int) bool {
+		if changed[pos] || state[pos] == 1 {
+			return false
+		}
+		if state[pos] == 2 || cols[pos].GeneratedCol == nil {
+			return true
+		}
+		expr := cols[pos].GeneratedCol.Expr
+		if expr == nil {
+			return false
+		}
+		state[pos] = 1
+		valid := true
+		var refs []int
+		_ = planpb.VisitExprTree(expr, func(current *planpb.Expr) error {
+			switch e := current.Expr.(type) {
+			case *planpb.Expr_Col:
+				if e.Col == nil || e.Col.RelPos != 0 || e.Col.ColPos < 0 || int(e.Col.ColPos) >= len(cols) || current.Typ.Id != cols[e.Col.ColPos].Typ.Id {
+					valid = false
+				} else {
+					refs = append(refs, int(e.Col.ColPos))
+				}
+			case *planpb.Expr_F:
+				if e.F == nil || e.F.Func == nil {
+					valid = false
+					break
+				}
+				impl, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+				if !ok || impl.IsVolatile() || impl.IsRealTimeRelated() {
+					valid = false
+				}
+				for _, arg := range e.F.Args {
+					valid = valid && arg != nil
+				}
+			case *planpb.Expr_Lit:
+				valid = valid && e.Lit != nil
+			case *planpb.Expr_T:
+				valid = valid && e.T != nil
+			case *planpb.Expr_List:
+				if e.List == nil {
+					valid = false
+					break
+				}
+				for _, item := range e.List.List {
+					valid = valid && item != nil
+				}
+			default:
+				valid = false
+			}
+			return nil
+		})
+		if !valid {
+			return false
+		}
+		for _, ref := range refs {
+			if !unchanged(ref) {
+				return false
+			}
+		}
+		state[pos] = 2
+		return true
+	}
+
+	visible := 0
+	for pos, col := range cols {
+		excluded := col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !isFunctionalColumn(col)
+		if col.GeneratedCol != nil && containsLegacyCRC32(col.GeneratedCol.Expr) {
+			if excluded || !col.GeneratedCol.IsStored || !unchanged(pos) || visible >= len(update.insertColPos) || update.insertColPos[visible] != pos {
+				return false
+			}
+		}
+		if !excluded {
+			visible++
+		}
+	}
+	return true
 }
 
 // Formatting, identifier quoting and identifier/function case do not make a

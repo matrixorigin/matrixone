@@ -139,6 +139,66 @@ func TestCRC32LegacyGeneratedFallbackForeignKeySetNull(t *testing.T) {
 	require.True(t, recursiveInsert, "SET NULL must preserve the legacy update insert path")
 }
 
+func TestCRC32LegacyGeneratedForeignKeyCarrySafety(t *testing.T) {
+	fixture := func() *dmlPlanCtx {
+		jsonType := planpb.Type{Id: int32(types.T_json)}
+		legacy := legacyCRC32Expr()
+		legacy.GetF().Args[0].GetCol().ColPos = 3
+		legacy.GetF().Args[0].GetCol().Name = "mirror"
+		cols := []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "parent_id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "j", Typ: jsonType},
+			{Name: "mirror", Typ: jsonType, GeneratedCol: &planpb.GeneratedCol{Expr: generatedColumnRefExpr(jsonType, 2, "j"), IsStored: true}},
+			{Name: "c", Typ: planpb.Type{Id: int32(types.T_uint64)}, GeneratedCol: &planpb.GeneratedCol{Expr: legacy, IsStored: true}},
+			{Name: "row_id", Typ: planpb.Type{Id: int32(types.T_Rowid)}, Hidden: true},
+		}
+		return &dmlPlanCtx{
+			tableDef:          &planpb.TableDef{Cols: cols},
+			isFkRecursionCall: true,
+			updateColPosMap:   map[string]int{"parent_id": 6},
+			insertColPos:      []int{0, 6, 2, 3, 4},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		edit  func(*dmlPlanCtx)
+		allow bool
+	}{
+		{"unrelated_fk_column", func(*dmlPlanCtx) {}, true},
+		{"unrelated_on_update", func(p *dmlPlanCtx) { p.tableDef.Cols[0].OnUpdate = &planpb.OnUpdate{} }, true},
+		{"input_changed", func(p *dmlPlanCtx) { p.updateColPosMap["j"] = 6 }, false},
+		{"generated_input_changed", func(p *dmlPlanCtx) { p.updateColPosMap["mirror"] = 6 }, false},
+		{"input_on_update", func(p *dmlPlanCtx) { p.tableDef.Cols[2].OnUpdate = &planpb.OnUpdate{} }, false},
+		{"generated_column_changed", func(p *dmlPlanCtx) { p.updateColPosMap["c"] = 6 }, false},
+		{"old_value_not_carried", func(p *dmlPlanCtx) { p.insertColPos[4] = 6 }, false},
+		{"virtual_legacy_column", func(p *dmlPlanCtx) { p.tableDef.Cols[4].GeneratedCol.IsStored = false }, false},
+		{"non_fk_fallback", func(p *dmlPlanCtx) { p.isFkRecursionCall = false }, false},
+		{"unknown_update_column", func(p *dmlPlanCtx) { p.updateColPosMap["missing"] = 6 }, false},
+		{"invalid_reference", func(p *dmlPlanCtx) { p.tableDef.Cols[3].GeneratedCol.Expr.GetCol().ColPos = 99 }, false},
+		{"nonlocal_reference", func(p *dmlPlanCtx) { p.tableDef.Cols[3].GeneratedCol.Expr.GetCol().RelPos = 1 }, false},
+		{"cyclic_dependency", func(p *dmlPlanCtx) { p.tableDef.Cols[3].GeneratedCol.Expr.GetCol().ColPos = 3 }, false},
+		{"unknown_function", func(p *dmlPlanCtx) {
+			crc := p.tableDef.Cols[4].GeneratedCol.Expr.GetF()
+			arg := crc.Args[0]
+			crc.Args[0] = &planpb.Expr{Typ: arg.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: -1}, Args: []*planpb.Expr{arg},
+			}}}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			update := fixture()
+			tc.edit(update)
+			err := rejectLegacyCRC32GeneratedUpdateFallback(context.Background(), update)
+			if tc.allow {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "legacy DML planner cannot write a legacy CRC32 JSON generated column")
+			}
+		})
+	}
+}
+
 func TestCRC32LegacyGeneratedFallbackIncludesVirtual(t *testing.T) {
 	for _, stored := range []bool{false, true} {
 		table := &planpb.TableDef{Cols: []*planpb.ColDef{{GeneratedCol: &planpb.GeneratedCol{

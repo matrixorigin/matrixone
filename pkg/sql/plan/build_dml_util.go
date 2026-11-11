@@ -289,7 +289,7 @@ func buildInsertPlans(
 
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
-	if err := rejectLegacyCRC32GeneratedFallback(ctx.GetContext(), updatePlanCtx.tableDef); err != nil {
+	if err := rejectLegacyCRC32GeneratedUpdateFallback(ctx.GetContext(), updatePlanCtx); err != nil {
 		return err
 	}
 	var err error
