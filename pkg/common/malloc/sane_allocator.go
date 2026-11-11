@@ -21,6 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -100,7 +101,17 @@ func (sca *SimpleCAllocator) Malloc(size uint64) ([]byte, error) {
 
 // Allocate clears the memory, calloc(size, 1)
 func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
-	ptr := C.calloc(C.ulong(size), C.ulong(1))
+	// Test-domain injection models calloc returning NULL after upstream
+	// admission. Size filtering keeps unrelated allocations unaffected.
+	failSize, failure, injected := fault.TriggerFaultInDomain(fault.DomainTest, "simple_c_allocator_calloc")
+	var ptr unsafe.Pointer
+	if injected && uint64(failSize) == size {
+		if failure != "oom" {
+			return nil, moerr.NewInternalErrorNoCtx(failure)
+		}
+	} else {
+		ptr = C.calloc(C.ulong(size), C.ulong(1))
+	}
 	if ptr == nil {
 		return nil, moerr.NewOOMNoCtx()
 	}

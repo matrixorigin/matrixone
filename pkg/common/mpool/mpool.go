@@ -543,6 +543,7 @@ func GlobalCap() int64 {
 
 var CapLimit = math.MaxInt32 // 2GB - 1
 
+// Alloc returns zero-initialized storage, including native storage when offHeap is true.
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
@@ -587,7 +588,11 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 		}
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
-			panic(err)
+			// Admission precedes the physical allocation. A failed allocator
+			// creates no owned buffer and must release both reservations.
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
+			return nil, err
 		}
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
@@ -778,6 +783,7 @@ func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, o
 	return ret[:n:cap], nil
 }
 
+// MakeSlice inherits Alloc's zero-initialization guarantee.
 func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
 	detailk := mp.getDetailK()
 	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)

@@ -62,6 +62,31 @@ func TestMPool(t *testing.T) {
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
 
+func TestMakeSliceOffHeapZeroedAfterFree(t *testing.T) {
+	mp := MustNewZero()
+	t.Cleanup(func() { DeleteMPool(mp) })
+	t.Cleanup(func() {
+		require.Zero(t, mp.AllocatedBytes())
+		require.Zero(t, mp.CurrNB())
+	})
+	for _, n := range []int{2, 32, 512} {
+		for round := range 4 {
+			func() {
+				slots, err := MakeSlice[uint64](n, mp, true)
+				require.NoError(t, err)
+				defer FreeSlice(mp, slots)
+				require.Len(t, slots, n)
+				for i, slot := range slots {
+					require.Zero(t, slot, "n=%d round=%d slot=%d", n, round, i)
+					slots[i] = ^uint64(0)
+				}
+			}()
+			require.Zero(t, mp.AllocatedBytes())
+			require.Zero(t, mp.CurrNB())
+		}
+	}
+}
+
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
 	m, err := NewMPool("testjson", 0, NoFixed)
