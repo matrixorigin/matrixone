@@ -55,6 +55,39 @@ func TestCopyTextPreservesFormattingAndReservation(t *testing.T) {
 	}
 }
 
+func TestDirectTextMatchesUnquote(t *testing.T) {
+	for _, input := range []string{`""`, `"a\\n猫"`, `-123`, `18446744073709551615`, `1.25`, `1e-20`, `true`, `false`} {
+		t.Run(input, func(t *testing.T) {
+			value, err := bytejson.ParseFromString(input)
+			require.NoError(t, err)
+			for _, legacy := range []bool{false, true} {
+				var scratch [128]byte
+				got, ok, err := DirectText(value, legacy, 512, scratch[:0])
+				require.NoError(t, err)
+				require.True(t, ok)
+				var want string
+				if legacy {
+					want, err = value.UnquoteWithLegacyFloat()
+				} else {
+					want, err = value.Unquote()
+				}
+				require.NoError(t, err)
+				require.Equal(t, want, string(got))
+			}
+		})
+	}
+	value, err := bytejson.ParseFromString(`"12345"`)
+	require.NoError(t, err)
+	_, ok, err := DirectText(value, false, 4, nil)
+	require.NoError(t, err)
+	require.False(t, ok, "values beyond the byte bound require the normal width check")
+	value, err = bytejson.ParseFromString(`[1,2]`)
+	require.NoError(t, err)
+	_, ok, err = DirectText(value, false, -1, nil)
+	require.NoError(t, err)
+	require.False(t, ok, "composite formatting must retain its admitted backing")
+}
+
 func TestCopyTextReleasesPartialAdmission(t *testing.T) {
 	value, err := bytejson.ParseFromString(`[1,2]`)
 	require.NoError(t, err)

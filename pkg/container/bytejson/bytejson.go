@@ -51,6 +51,18 @@ func (bj ByteJson) UnquoteWithLegacyFloat() (string, error) {
 	return bj.unquote(true)
 }
 
+// AppendUnquotedScalar appends a bounded numeric or literal representation
+// using the same formatter as Unquote. Other types are left to Unquote.
+func (bj ByteJson) AppendUnquotedScalar(dst []byte, legacyFloat bool) ([]byte, bool, error) {
+	switch bj.Type {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeLiteral:
+		out, err := bj.toWithFloatFormat(dst, legacyFloat)
+		return out, true, err
+	default:
+		return dst, false, nil
+	}
+}
+
 func (bj ByteJson) unquote(legacyFloat bool) (string, error) {
 	if bj.Type == TpCodeBlob {
 		if _, encoded, ok := mysqlOpaqueValue(bj.GetString()); ok {

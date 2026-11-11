@@ -27,6 +27,71 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestJSONCacheReaderDirectTextCopiesToAccountedResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	long := strings.Repeat("x", 8192)
+	doc, err := types.ParseStringToByteJson(`{"keep":"text","number":123,"long":"` + long + `","arr":[1,2]}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	data := privateJSONColumnForTest(t, source)
+	defer data.Release()
+	want := errors.New("reader memory denied")
+	var live uint64
+	deny := false
+	admission := func(n uint64) (func(), error) {
+		if deny {
+			return nil, want
+		}
+		live += n
+		return func() { live -= n }, nil
+	}
+	reader, err := OpenJSONReader(data, mp, nil, admission)
+	require.NoError(t, err)
+	defer reader.Close()
+	direct, ok := reader.(vector.JSONDirectTextReader)
+	require.True(t, ok)
+	output := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer output.Free()
+	writer := vector.MustFunctionResult[types.Varlena](output)
+	baseline := live
+	deny = true
+	for _, test := range []struct{ path, text string }{{"$.keep", "text"}, {"$.number", "123"}, {"$.long", long}} {
+		require.NoError(t, output.PreExtendAndReset(1))
+		selected, appended, err := direct.QueryTextTo(0, []byte(test.path), false, -1, writer)
+		selected.Close()
+		require.NoError(t, err)
+		require.True(t, appended)
+		require.Equal(t, test.text, string(output.GetResultVector().GetBytesAt(0)))
+		require.Equal(t, baseline, live)
+	}
+	parse := func(path string) bytejson.Path {
+		t.Helper()
+		parsed, err := bytejson.ParseJsonPath(path)
+		require.NoError(t, err)
+		return parsed
+	}
+	require.NoError(t, output.PreExtendAndReset(1))
+	selected, appended, err := direct.QueryTextAtPathTo(0, parse("$.keep"), false, 3, writer)
+	selected.Close()
+	require.False(t, appended)
+	require.ErrorIs(t, err, want)
+	selected, appended, err = direct.QueryTextAtPathTo(0, parse("$.arr[*]"), false, 512, writer)
+	selected.Close()
+	require.False(t, appended)
+	require.ErrorIs(t, err, want)
+	require.NoError(t, output.PreExtendAndReset(1))
+	selected, appended, err = direct.QueryTextAtPathTo(0, parse("$.long"), false, -1, writer)
+	selected.Close()
+	require.NoError(t, err)
+	require.True(t, appended)
+	reader.Close()
+	require.Zero(t, live)
+	require.Equal(t, long, string(output.GetResultVector().GetBytesAt(0)))
+}
+
 func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()

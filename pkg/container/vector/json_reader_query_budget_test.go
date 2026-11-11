@@ -22,8 +22,65 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJSONReaderDirectTextCopiesToAccountedResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	want := errors.New("reader memory denied")
+	var live uint64
+	deny := false
+	admission := func(n uint64) (func(), error) {
+		if deny {
+			return nil, want
+		}
+		live += n
+		return func() { live -= n }, nil
+	}
+	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	require.NoError(t, err)
+	defer builder.Close()
+	long := strings.Repeat("x", 8192)
+	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":"text","number":123,"long":"`+long+`","arr":[1,2]}`), false))
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	defer reader.Close()
+	direct, ok := reader.(JSONDirectTextReader)
+	require.True(t, ok)
+	output := NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer output.Free()
+	writer := MustFunctionResult[types.Varlena](output)
+	baseline := live
+	deny = true
+	for _, test := range []struct{ path, text string }{{"$.keep", "text"}, {"$.number", "123"}, {"$.long", long}} {
+		require.NoError(t, output.PreExtendAndReset(1))
+		selected, appended, err := direct.QueryTextTo(0, []byte(test.path), false, -1, writer)
+		selected.Close()
+		require.NoError(t, err)
+		require.True(t, appended)
+		require.Equal(t, test.text, string(output.GetResultVector().GetBytesAt(0)))
+		require.Equal(t, baseline, live)
+	}
+	require.NoError(t, output.PreExtendAndReset(1))
+	selected, appended, err := direct.QueryTextAtPathTo(0, *jsonReaderPath(t, "$.keep"), false, 3, writer)
+	selected.Close()
+	require.False(t, appended)
+	require.ErrorIs(t, err, want, "over-width text must use the admitted owned path")
+	selected, appended, err = direct.QueryTextAtPathTo(0, *jsonReaderPath(t, "$.arr[*]"), false, 512, writer)
+	selected.Close()
+	require.False(t, appended)
+	require.ErrorIs(t, err, want, "wildcard result backing must remain budgeted")
+	require.NoError(t, output.PreExtendAndReset(1))
+	selected, appended, err = direct.QueryTextAtPathTo(0, *jsonReaderPath(t, "$.long"), false, -1, writer)
+	selected.Close()
+	require.NoError(t, err)
+	require.True(t, appended)
+	reader.Close()
+	require.Zero(t, live)
+	require.Equal(t, long, string(output.GetResultVector().GetBytesAt(0)), "result must outlive its source reader")
+}
 
 // TestJSONReaderQueryRespectsBudget keeps the source and a cursor admitted,
 // then leaves room for only the fixed result metadata, not the selected data.
