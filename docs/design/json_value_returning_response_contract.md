@@ -708,3 +708,19 @@ promote that generation and initialize spill limits before obtaining a
 spill-capable handle. There is no new cache, timer, byte trust flag or alternate
 JSON decoder. Re-run semantic, lifecycle, race, SQL and all paired performance
 gates, retaining the earlier failed measurements.
+
+### Direct text-result success handling (candidate revision 39)
+
+The accounted two-pair diagnostic after scoped reads reduced the warm legacy
+cost, while some 64-row text-contract cases remained near or above 1.20x.
+For a successfully selected immutable text result, the common execution loop
+may perform the existing scalar, UTF-8, width and output-copy operations
+directly instead of constructing an intermediate extraction and invoking a
+per-row callback. Missing, NULL, multiple, source-error and conversion-error
+cases retain the same response and warning helpers. Mutable input, typed
+outputs and JSON outputs continue to use their existing paths.
+
+Review decision: this is a SQL-result dispatch optimization, not a new path
+cache or JSON decoder. Compare it against ordinary mutable execution for
+empty/error/default modes, composites, NULL ordering, warnings, output-memory
+failure and 512/513 characters before re-running the fixed performance gates.
