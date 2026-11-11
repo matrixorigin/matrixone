@@ -527,5 +527,12 @@ select hex(a),b from vs force index(idx_ab) where a='a' and b>=90 order by b;
 ➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
 61  ¦  90  𝄀
 61  ¦  91
+create table filter_errors (k int primary key, a int, b varchar(32) collate utf8mb4_bin, key ix(a,b));
+insert into filter_errors values (1,8,'x'),(2,9,'y');
+select a,b from filter_errors where a=99 and b>regexp_replace('x','[','y');
+➤ a[4,32,0]  ¦  b[12,32,0]
+select a,b from filter_errors where a=9 and b>'w' order by k;
+➤ a[4,32,0]  ¦  b[12,32,0]  𝄀
+9  ¦  y
 set max_dop=@saved_max_dop;
 drop database composite_index_range;

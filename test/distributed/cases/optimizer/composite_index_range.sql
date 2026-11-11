@@ -154,5 +154,12 @@ select hex(a),b from vs where a='a' and b>=90 order by b;
 select hex(a),b from vs_ctl where a='a' and b>=90 order by b;
 select hex(a),b from vs force index(idx_ab) where a='a' and b>=90 order by b;
 
+-- An unstable suffix retains equality-prefix evaluation when the prefix is empty.
+create table filter_errors (k int primary key, a int, b varchar(32) collate utf8mb4_bin, key ix(a,b));
+insert into filter_errors values (1,8,'x'),(2,9,'y');
+select a,b from filter_errors where a=99 and b>regexp_replace('x','[','y');
+-- A stable literal suffix retains the serialized range and ordinary SQL results.
+select a,b from filter_errors where a=9 and b>'w' order by k;
+
 set max_dop=@saved_max_dop;
 drop database composite_index_range;

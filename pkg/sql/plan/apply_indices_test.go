@@ -9452,7 +9452,7 @@ func TestRegularIndexRangeAccessControls(t *testing.T) {
 func TestRegularIndexCompositeSuffixRangeDefaultSelection(t *testing.T) {
 	leading := makeStringEqFilterExpr(0, 2, "category")
 	leading.Selectivity = 0.01
-	suffix := makeRangeFilterExpr(0, 0, ">=", 100)
+	suffix := makeTypedInt64RangeFilterExpr(0, 0, ">=", 100, planpb.Type{Id: int32(types.T_int32)})
 	suffix.Selectivity = 0.01
 	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
 		t,
@@ -9463,8 +9463,17 @@ func TestRegularIndexCompositeSuffixRangeDefaultSelection(t *testing.T) {
 	)
 	node := builder.qry.Nodes[scanID]
 	for _, filter := range node.FilterList {
-		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		fn := filter.GetF()
+		fn.Args[0].GetCol().RelPos = node.BindingTags[0]
+		argTypes := make([]types.Type, len(fn.Args))
+		for i, arg := range fn.Args {
+			argTypes[i] = makeTypeByPlan2Expr(arg)
+		}
+		overload, err := function.GetFunctionByName(builder.GetContext(), fn.Func.ObjName, argTypes)
+		require.NoError(t, err)
+		fn.Func.Obj = overload.GetEncodedOverloadID()
 	}
+	require.True(t, regularIndexFiltersHaveStableEvaluation(node))
 
 	indexRoot := planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 	require.True(t, isCoveringIndexScan(indexRoot))
@@ -9474,6 +9483,35 @@ func TestRegularIndexCompositeSuffixRangeDefaultSelection(t *testing.T) {
 	require.Equal(t, "=", indexRoot.FilterList[1].GetF().Func.ObjName)
 	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, indexRoot.FilterList[1].GetF().Args[0]))
 	require.Equal(t, ">=", indexRoot.FilterList[2].GetF().Func.ObjName)
+}
+
+func TestRegularIndexCompositeSuffixRangePreservesFilterEvaluationDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		bound      string
+		wantLookup string
+	}{
+		{name: "throwing suffix retains equality prefix", bound: "regexp_replace('x','[','y')", wantLookup: "prefix_eq"},
+		{name: "literal suffix retains serialized range", bound: "'x'", wantLookup: "prefix_in_range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			table.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+			table.Indexes = table.Indexes[:2]
+
+			queryPlan, err := runOneStmt(mock, t,
+				"select a,b from index_hint_t where a=99 and b>"+tc.bound)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.NotEmpty(t, indexScan.FilterList)
+			require.Equal(t, tc.wantLookup, indexScan.FilterList[0].GetF().Func.ObjName)
+			requireFuncNames(t, indexScan.FilterList, ">")
+		})
+	}
 }
 
 func TestRegularIndexCompositeSuffixRange(t *testing.T) {

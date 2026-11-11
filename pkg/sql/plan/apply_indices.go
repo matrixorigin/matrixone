@@ -4929,9 +4929,11 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 			}
 			leadingPos = append(leadingPos, filterPos)
 		}
-		if suffix := builder.matchRegularIndexSuffixRange(idxDef, node, costCtx, len(leadingPos)); len(suffix) > 0 {
-			leadingPos = append(leadingPos, suffix...)
-			filterType = CompositeRangeIndexCondition
+		if regularIndexFiltersHaveStableEvaluation(node) {
+			if suffix := builder.matchRegularIndexSuffixRange(idxDef, node, costCtx, len(leadingPos)); len(suffix) > 0 {
+				leadingPos = append(leadingPos, suffix...)
+				filterType = CompositeRangeIndexCondition
+			}
 		}
 	} else {
 		lowerPos := costCtx.lowerFilters[leadingColPos]
