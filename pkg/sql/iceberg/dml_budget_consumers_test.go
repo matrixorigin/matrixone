@@ -231,3 +231,111 @@ func TestDeleteEncodersPreserveBudgetError(t *testing.T) {
 		require.Zero(t, output.Len())
 	})
 }
+
+func TestDMLCoordinatorPartialAdmissionBudgetErrors(t *testing.T) {
+	ctx := context.Background()
+	proc := process.NewTopProcess(ctx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	attrs := []string{"id", "name", api.DMLDataFilePathColumnName, api.DMLRowOrdinalColumnName}
+	matched, cleanMatched := newMatchedScanBatch(t)
+	defer cleanMatched()
+	t.Run("update replacement", func(t *testing.T) {
+		collector := retainedDMLCollectorBatchBytes(matched, 0)
+		requested := retainedDMLBatchBytes(matched)
+		committer := &recordingDMLUpdateCommitter{}
+		c := NewDMLUpdateCoordinator(DMLUpdateCoordinatorSpec{Committer: committer, ObjectWriter: &recordingDMLDeleteObjectWriter{}, DataFiles: dmlDeleteCoordinatorDataFiles(), MemoryLimitBytes: collector})
+		require.NoError(t, c.Begin(ctx, icebergwrite.AppendRequest{Operation: icebergwrite.OperationUpdate, Attrs: attrs, DataFilePathColumnIndex: 2, RowOrdinalColumnIndex: 3}))
+		budget := c.budget
+		err := c.AppendWithProcess(proc, matched)
+		assertConsumerBudgetError(t, err, collector, requested, collector)
+		require.Equal(t, collector, budget.usedBytes())
+		require.NotEmpty(t, c.collector.Targets())
+		require.Empty(t, c.replacementBats)
+		require.Empty(t, committer.requests)
+		require.NoError(t, c.Abort(ctx, err))
+		require.Zero(t, budget.usedBytes())
+	})
+
+	merged, cleanMerged := newMergeActionScanBatch(t)
+	defer cleanMerged()
+	mergeAttrs := append(append([]string(nil), attrs...), api.DMLMergeActionColumnName)
+	newCoordinator := func(limit int64, committer *recordingDMLMergeCommitter) *DMLMergeCoordinator {
+		c := NewDMLMergeCoordinator(DMLMergeCoordinatorSpec{Committer: committer, ObjectWriter: &recordingDMLDeleteObjectWriter{}, DataFiles: dmlDeleteCoordinatorDataFiles(), MemoryLimitBytes: limit})
+		require.NoError(t, c.Begin(ctx, icebergwrite.AppendRequest{Operation: icebergwrite.OperationMerge, Attrs: mergeAttrs, DataFilePathColumnIndex: 2, RowOrdinalColumnIndex: 3, MergeActionColumnIndex: 4}))
+		return c
+	}
+	probe := newCoordinator(0, &recordingDMLMergeCommitter{})
+	del, upd, ins, err := probe.splitMergeActionBatch(ctx, merged, proc.Mp())
+	require.NoError(t, err)
+	defer cleanMergeSplitBatch(del, proc.Mp())
+	defer cleanMergeSplitBatch(upd, proc.Mp())
+	defer cleanMergeSplitBatch(ins, proc.Mp())
+	transient := retainedDMLBatchBytes(merged)
+	delKey := int64(len(api.LengthPrefixedKey("s3://warehouse/gold/orders/data/b.parquet", "40")) + 32)
+	updKey := int64(len(api.LengthPrefixedKey("s3://warehouse/gold/orders/data/a.parquet", "10")) + 32)
+	delCollector := retainedDMLCollectorBatchBytes(del, 0)
+	updCollector := retainedDMLCollectorBatchBytes(upd, 0)
+	updBatch, insBatch := retainedDMLBatchBytes(upd), retainedDMLBatchBytes(ins)
+	for _, tc := range []struct {
+		name                                  string
+		used, requested, retained             int64
+		keys, deletes, updates, updateBatches int
+	}{
+		{"matched key", transient, delKey, 0, 0, 0, 0, 0},
+		{"delete collector", transient + delKey, delCollector, delKey, 1, 0, 0, 0},
+		{"update collector", transient + delKey + delCollector + updKey, updCollector, delKey + delCollector + updKey, 2, 1, 0, 0},
+		{"update replacement", transient + delKey + delCollector + updKey + updCollector, updBatch, delKey + delCollector + updKey + updCollector, 2, 1, 1, 0},
+		{"insert replacement", transient + delKey + delCollector + updKey + updCollector + updBatch, insBatch, delKey + delCollector + updKey + updCollector + updBatch, 2, 1, 1, 1},
+	} {
+		t.Run("merge "+tc.name, func(t *testing.T) {
+			committer := &recordingDMLMergeCommitter{}
+			c := newCoordinator(tc.used, committer)
+			budget := c.budget
+			err := c.AppendWithProcess(proc, merged)
+			assertConsumerBudgetError(t, err, tc.used, tc.requested, tc.used)
+			require.Equal(t, tc.retained, budget.usedBytes())
+			require.Len(t, c.matchedRows, tc.keys)
+			require.Len(t, c.deleteCollector.Targets(), tc.deletes)
+			require.Len(t, c.updateCollector.Targets(), tc.updates)
+			require.Len(t, c.updateBats, tc.updateBatches)
+			require.Empty(t, c.insertBats)
+			require.Empty(t, committer.requests)
+			require.NoError(t, c.Abort(ctx, err))
+			require.Zero(t, budget.usedBytes())
+		})
+	}
+}
+
+func TestReplacementFanoutSinkCloseBudgetError(t *testing.T) {
+	ctx := context.Background()
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+	schema := api.Schema{SchemaID: 9, Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}, Required: true},
+		{ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}},
+	}}
+	metadata := retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{})
+	req := DMLReplacementDataFilesRequest{
+		TableLocation: "s3://secret-token/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
+		Schema: schema, Attrs: bat.Attrs, Batch: bat,
+	}
+	baseline := &recordingDMLDeleteObjectWriter{}
+	req.ObjectWriter = baseline
+	_, err := WriteDMLReplacementDataFiles(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, baseline.objects, 1)
+	var size int64
+	for _, payload := range baseline.objects {
+		size = int64(len(payload))
+	}
+	require.Positive(t, size)
+	budget := newDMLMemoryBudget(metadata+(64<<10), 0)
+	objects := &recordingDMLDeleteObjectWriter{}
+	req.MemoryBudget, req.ObjectWriter = budget, objects
+	files, err := WriteDMLReplacementDataFiles(ctx, req)
+	assertConsumerBudgetError(t, err, metadata+(64<<10), size, metadata+(64<<10))
+	require.NotContains(t, err.Error(), "secret-token")
+	require.Empty(t, files)
+	require.Empty(t, objects.objects)
+	// The orphan's metadata reservation survives until the owning statement ends.
+	require.Equal(t, metadata, budget.usedBytes())
+}
