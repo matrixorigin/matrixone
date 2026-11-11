@@ -1,0 +1,26 @@
+name: CS storage network probe
+on:
+  pull_request:
+    branches: [weilu-runner-test]
+    paths: ['.github/workflows/cs-storage-network-probe.yaml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: github.repository == 'matrixorigin/matrixone' && github.event.pull_request.number == 32557
+    runs-on: cs-mty-large-7c14g
+    timeout-minutes: 5
+    steps:
+      - name: Probe public object-storage endpoints (no credentials)
+        shell: bash
+        run: |
+          set -u
+          for host in cos.ap-guangzhou.myqcloud.com mo-ci-1308875761.cos.ap-guangzhou.myqcloud.com oss-cn-guangzhou.aliyuncs.com mo-ci.oss-cn-guangzhou.aliyuncs.com; do
+            echo "=== ${host} ==="
+            getent ahostsv4 "$host" | head -3 || true
+            for i in 1 2 3 4 5; do
+              curl --noproxy '*' -sS -I -o /dev/null --connect-timeout 8 --max-time 15 \
+                -w 'attempt=%{http_code} dns=%{time_namelookup} tcp=%{time_connect} tls=%{time_appconnect} first=%{time_starttransfer} total=%{time_total}\n' \
+                "https://${host}/" || true
+            done
+          done
