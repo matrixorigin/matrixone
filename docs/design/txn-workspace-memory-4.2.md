@@ -75,3 +75,17 @@ Mandatory implementation checks: headroomMu -> budget.mu refresh ordering; no
 worker reacquisition of txn lock during compaction join; balance WaitGroup on
 Submit failure; no delete/blocking Submit under queue locks; preserve staged
 claims and object owners on every failure. Approval covers design only, not code.
+
+## Implementation closure review
+
+The independent implementation review closed three concrete lifecycle issues:
+unknown cgroup hierarchy measurements cannot become optimistic leaf/host samples;
+persistence and handoff producers share the Engine close admission fence; both
+INSERT and DELETE table resolution precede any dump staging. A rollback barrier
+proves that unlocked metadata lookup cannot revive stale staged sources.
+
+Normal disttae UT (420 top-level tests, 872 nodes), focused workspace race,
+normal Sinker/colexec/DML consumer UT, incremental vet/lint and diff checks passed.
+The first SQL harness attempt failed before case execution due to passing a file
+where the tester requires a directory; this is not a BVT pass. Linux QA and 5%
+performance remain separate unfulfilled gates until recorded runtime evidence.

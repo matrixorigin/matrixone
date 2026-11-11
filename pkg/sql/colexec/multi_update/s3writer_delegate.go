@@ -81,6 +81,7 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 }
 
 type s3WriterDelegate struct {
+	unrecordedSinkNames []string
 	// persistent per-table insert sinkers, created lazily on first append.
 	insertSinkers []*colexec.CNS3Writer
 	// per-table delete column accumulators (rowid + pk only).
@@ -206,6 +207,11 @@ func newS3Writer(
 // on first call. Requires proc for Mp() and fileservice.
 func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error {
 	if writer.insertSinkers[0] != nil {
+		for _, w := range writer.insertSinkers {
+			if w != nil {
+				w.RebindWorkspaceSinkerCapacity(proc)
+			}
+		}
 		return nil
 	}
 	fs, err := colexec.GetSharedFSFromProc(proc)
@@ -221,6 +227,9 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
+		}
+		if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+			opts = append(opts, opt)
 		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
 			proc.Mp(), fs, updateCtx.TableDef, -1, false,
@@ -576,6 +585,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opts = append(opts, opt)
+	}
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(
@@ -585,7 +597,10 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
 	}
 
-	defer s3Writer.Close()
+	defer func() {
+		writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, s3Writer.AbandonAndRetainableNames()...)
+		s3Writer.Close()
+	}()
 
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
@@ -787,6 +802,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 }
 
 func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
+	writer.retainUnrecordedSinkObjects(proc)
 
 	writer.cleanDeleteBatches(proc.Mp())
 
@@ -797,6 +813,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
 	for _, s3w := range writer.insertSinkers {
 		if s3w != nil {
+			s3w.ClearWorkspaceSinkerCapacity()
 			s3w.Reset()
 		}
 	}
@@ -833,6 +850,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 }
 
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
+	writer.retainUnrecordedSinkObjects(proc)
 
 	writer.cleanDeleteBatches(proc.Mp())
 	mp := proc.Mp()
@@ -983,4 +1001,29 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 		vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 	}
 	return nil
+}
+
+func (writer *s3WriterDelegate) retainUnrecordedSinkObjects(proc *process.Process) {
+	for _, w := range writer.insertSinkers {
+		if w != nil {
+			w.CancelPending()
+		}
+	}
+	names := writer.unrecordedSinkNames
+	for _, w := range writer.insertSinkers {
+		if w != nil {
+			names = append(names, w.AbandonAndRetainableNames()...)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	op := proc.GetTxnOperator()
+	if op == nil {
+		return
+	}
+	if retainer, ok := op.GetWorkspace().(ioutil.UnrecordedSinkerObjectsRetainer); ok {
+		retainer.RetainUnrecordedS3Objects(names, "multi update writer cleanup")
+		writer.unrecordedSinkNames = nil
+	}
 }

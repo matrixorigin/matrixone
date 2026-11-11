@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -115,6 +116,7 @@ type InsertCtx struct {
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	insert.retainUnrecordedSinkObjects(proc)
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
@@ -144,6 +146,7 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	insert.retainUnrecordedSinkObjects(proc)
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil
@@ -202,4 +205,37 @@ func (insert *Insert) GetAffectedRows() uint64 {
 
 func (insert *Insert) initBufForS3() {
 	insert.ctr.buf = colexec.AllocCNS3ResultBat(false)
+}
+
+func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
+	insert.ctr.s3Writer.CancelPending()
+	for _, writer := range insert.ctr.partitionS3Writers {
+		writer.CancelPending()
+	}
+	var names []string
+	if writer := insert.ctr.s3Writer; writer != nil {
+		names = append(names, writer.AbandonAndRetainableNames()...)
+	}
+	for _, writer := range insert.ctr.partitionS3Writers {
+		if writer != nil {
+			names = append(names, writer.AbandonAndRetainableNames()...)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return
+	}
+	retainer, ok := ws.(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return
+	}
+	retainer.RetainUnrecordedS3Objects(
+		names, "s3 insert writer unwound before its metadata record: the pipeline failed or the record was refused between persistence and mergeBlock (issue #25590 round-19 review)")
 }

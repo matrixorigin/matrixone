@@ -15,6 +15,7 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -65,6 +66,7 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
+	unrecordedSinkNames                  []string
 	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
 	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
 	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
@@ -140,6 +142,7 @@ type DeleteCtx struct {
 }
 
 func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	deletion.retainUnrecordedSinkObjects(proc)
 	ctr := &deletion.ctr
 	ctr.state = vm.Build
 	if deletion.RemoteDelete {
@@ -184,6 +187,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err error) {
+	deletion.retainUnrecordedSinkObjects(proc)
 	ctr := &deletion.ctr
 	if deletion.RemoteDelete {
 		deletion.SegmentMap = nil
@@ -250,6 +254,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		defer func() {
 			if s3writer != nil {
+				ctr.unrecordedSinkNames = append(ctr.unrecordedSinkNames, s3writer.AbandonAndRetainableNames()...)
 				s3writer.Close()
 			}
 		}()
@@ -262,7 +267,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1, colexec.WorkspaceSinkerCapacityOption(proc))
 			}
 
 			if err = s3writer.Write(proc.Ctx, bat); err != nil {
@@ -455,4 +460,26 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		// return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))
 	}
+}
+
+func (deletion *Deletion) retainUnrecordedSinkObjects(proc *process.Process) {
+	names := deletion.ctr.unrecordedSinkNames
+	if len(names) == 0 {
+		return
+	}
+	deletion.ctr.unrecordedSinkNames = nil
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return
+	}
+	retainer, ok := ws.(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return
+	}
+	retainer.RetainUnrecordedS3Objects(
+		names, "s3 delete-flush tombstone writer unwound before its metadata record: the pipeline failed or the merge-delete record was refused between persistence and the consumer (issue #25590 round-21 review)")
 }

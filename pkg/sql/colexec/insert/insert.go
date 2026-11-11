@@ -168,6 +168,9 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		// If the target is not partition table, you only need to operate the main table
 		var sinkerOpts []ioutil.SinkerOption
+		if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+			sinkerOpts = append(sinkerOpts, opt)
+		}
 		pipelineFlush := false
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			pipelineFlush = true

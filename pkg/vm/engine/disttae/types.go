@@ -52,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -254,6 +253,13 @@ func WithMoServerStateChecker(checker func() bool) EngineOptions {
 }
 
 type Engine struct {
+	unpublishedPending unpublishedPendingQueue
+	gcMu               sync.Mutex
+	gcProducers        int64
+	workspaceGCClosed  atomic.Bool
+	workspaceCloseOnce sync.Once
+	workspaceCloseErr  error
+
 	sync.RWMutex
 	service  string
 	mp       *mpool.MPool
@@ -337,11 +343,19 @@ func (e *Engine) SetService(svr string) {
 }
 
 func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
-	e.gcPool.Release()
+	e.gcMu.Lock()
+	if e.workspaceGCClosed.Load() {
+		e.gcMu.Unlock()
+		return
+	}
+	old := e.gcPool
 	e.gcPool = pool
+	e.gcMu.Unlock()
+	if old != nil {
+		old.Release()
+	}
 }
 
-// GetCCPRTxnCache returns the CCPR transaction cache
 func (e *Engine) GetCCPRTxnCache() *CCPRTxnCache {
 	return e.ccprTxnCache
 }
@@ -357,6 +371,18 @@ type statementTransferState struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	unpublishedDumpReservationsMu sync.Mutex
+	unpublishedDumpReservations   map[string]struct{}
+	recordedUnpublishedObjects    *txnRecordedUnpublished
+	pendingObjectCleanup          []pendingObjectCleanupItem
+	statementLifecycle            atomic.Int64
+
+	workspaceAllocationMu     sync.Mutex
+	workspaceGeneration       *process.HashBuildBudgetGeneration
+	workspaceAccount          *mpool.AllocationAccount
+	workspaceSelection        *vector.AllocationAccountSelection
+	workspaceAllocationClosed bool
+
 	sync.Mutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
@@ -799,6 +825,7 @@ func (txn *Transaction) PPString() string {
 }
 
 func (txn *Transaction) StartStatement() {
+	txn.statementLifecycle.Add(1)
 	if txn.startStatementCalled {
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
@@ -830,6 +857,9 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
+		return err
+	}
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
@@ -838,6 +868,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
+	txn.compactNilWorkspaceSlotsLocked()
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
 	txn.statementID++
@@ -1024,81 +1055,6 @@ const (
 	cloneGCTxnRollback
 )
 
-func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
-	if txn.isCloneTxn {
-		names = readutil.RemoveIf(names, func(name string) bool {
-			txnID := txn.op.Txn().ID
-			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
-				return true
-			}
-			return scope == cloneGCIntermediate &&
-				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
-		})
-	}
-
-	if len(names) == 0 {
-		return nil
-	}
-
-	//getCaller := func(depth int) (str []string) {
-	//	pc := make([]uintptr, depth)
-	//	n := runtime.Callers(2, pc)
-	//	frames := runtime.CallersFrames(pc[:n])
-	//
-	//	i := 0
-	//	for {
-	//		frame, more := frames.Next()
-	//		funcName := filepath.Base(frame.Function)
-	//		str = append(str, funcName)
-	//		i++
-	//		if !more || i >= depth {
-	//			break
-	//		}
-	//	}
-	//	return
-	//}
-
-	logutil.Info("GC-WORKSPACE-FILES",
-		zap.Strings("names", names),
-		zap.String("txn-info", txn.op.Txn().DebugString()),
-		//zap.String("stack", strings.Join(getCaller(5), "<-")),
-	)
-
-	//gc the objects asynchronously.
-	//TODO:: to handle the failure when CN is down.
-	step := GCBatchOfFileCount
-	if len(names) > 0 && len(names) < step {
-		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
-			}
-		}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	for i := 0; i < len(names); i += step {
-		if i+step > len(names) {
-			step = len(names) - i
-		}
-		start := i
-		end := i + step
-		if err := txn.engine.gcPool.Submit(func() {
-			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
-			}
-		}); err != nil {
-			return err
-		}
-	}
-
-	return nil
-
-}
-
 func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
 	names := make([]string, 0, len(sl))
 
@@ -1202,7 +1158,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		end := txn.offsets[txn.statementID]
 		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 		if !txn.isCCPRTxn {
-			if err := txn.GCObjsByIdxRange(end, len(txn.writes)-1); err != nil {
+			if err := txn.gcObjsByIdxRangeToOwner(end, len(txn.writes)-1, cloneGCIntermediate); err != nil {
 				panic("to gc objects generated by CN failed")
 			}
 		}
@@ -1243,6 +1199,10 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
+	txn.drainUnpublishedDumpReservationsLocked("statement rollback")
+	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
+		return err
+	}
 	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
 	return loadCleanupErr
 }

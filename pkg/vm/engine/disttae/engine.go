@@ -209,15 +209,22 @@ func New(
 }
 
 func (e *Engine) Close() error {
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
-
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
-
-	return nil
+	e.workspaceCloseOnce.Do(func() {
+		deadline := time.Now().Add(unpublishedPendingCloseDrainTimeout)
+		e.workspaceCloseErr = e.closeWorkspaceGC(deadline)
+		if e.gcPool != nil {
+			if err := e.gcPool.ReleaseTimeout(max(time.Millisecond, time.Until(deadline))); e.workspaceCloseErr == nil {
+				e.workspaceCloseErr = err
+			}
+		}
+		e.dynamicCtx.Close()
+		// Keep dependencies reachable for a detached cleanup attempt on timeout.
+		if e.workspaceCloseErr == nil {
+			e.cloneTxnCache = nil
+			e.ccprTxnCache = nil
+		}
+	})
+	return e.workspaceCloseErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -1315,6 +1322,8 @@ func (e *Engine) RunGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)
+	unpublishedTicker := time.NewTicker(gcUnpublishedPendingObjectTicker)
+	defer unpublishedTicker.Stop()
 
 	defer unusedTableTicker.Stop()
 	defer partitionStateTicker.Stop()
@@ -1326,6 +1335,8 @@ func (e *Engine) RunGCScheduler(ctx context.Context) {
 			logutil.Info("engine.gc.scheduler.stopped")
 			return
 
+		case <-unpublishedTicker.C:
+			e.scheduleUnpublishedPendingDrain()
 		case <-unusedTableTicker.C:
 			// GC unused tables in PushClient
 			e.pClient.TryGC(ctx)
