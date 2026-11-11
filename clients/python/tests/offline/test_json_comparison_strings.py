@@ -41,6 +41,7 @@ def test_json_comparison_preserves_explicit_json(compare, value):
     compiled = select(predicate).compile()
     assert compiled.params[compiled.bind_names[predicate.right]] == value
 
+
 @pytest.mark.parametrize('compare', [operator.eq, operator.ne], ids=['eq', 'ne'])
 @pytest.mark.parametrize('value', ['true', 'false', 'null'])
 def test_python_json_string_comparison_is_not_a_raw_json_scalar(compare, value):
