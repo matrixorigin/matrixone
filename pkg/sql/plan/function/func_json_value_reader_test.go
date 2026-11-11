@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -254,6 +255,8 @@ func TestJSONValueReaderPathNullOrdering(t *testing.T) {
 func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 	boundary := strings.Repeat("猫", 512)
 	long := strings.Repeat("猫", 513)
+	asciiBoundary := strings.Repeat("a", 512)
+	asciiLong := strings.Repeat("a", 513)
 	for _, test := range []struct {
 		name, document, path, want string
 		width                      int32
@@ -262,6 +265,7 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 		jsonOutput                 bool
 	}{
 		{"value", `{"keep":"value"}`, "$.keep", "value", 512, true, false, false, false, false},
+		{"short-unicode", `{"keep":"猫🌍"}`, "$.keep", "猫🌍", 512, true, false, false, false, false},
 		{"empty-default", `{"keep":1}`, "$.missing", "empty", 512, true, false, false, false, false},
 		{"multiple-default", `{"items":[1,2]}`, "$.items[*]", "fallback", 512, true, false, false, false, false},
 		{"composite-implicit", `{"obj":{"x":1}}`, "$.obj", `{"x":1}`, 512, true, false, false, false, true},
@@ -270,6 +274,8 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 		{"sql-null", `{"keep":1}`, "$.keep", "", 512, true, true, true, false, false},
 		{"invalid-path", `{"keep":1}`, "$[", "", 512, true, false, false, true, false},
 		{"null-invalid-path", `{"keep":1}`, "$[", "", 512, true, true, false, true, false},
+		{"ascii-width-512", `{"keep":"` + asciiBoundary + `"}`, "$.keep", asciiBoundary, 512, true, false, false, false, false},
+		{"ascii-width-513", `{"keep":"` + asciiLong + `"}`, "$.keep", "fallback", 512, true, false, false, false, false},
 		{"width-512", `{"keep":"` + boundary + `"}`, "$.keep", boundary, 512, true, false, false, false, false},
 		{"width-513", `{"keep":"` + long + `"}`, "$.keep", "fallback", 512, true, false, false, false, false},
 	} {
@@ -323,7 +329,7 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 			ordinary := run(false)
 			frozen := run(true)
 			require.Equal(t, ordinary, frozen)
-			if test.name == "width-513" || test.name == "composite-explicit" {
+			if strings.HasSuffix(test.name, "513") || test.name == "composite-explicit" {
 				require.Len(t, frozen.warnings, 1)
 				require.Equal(t, uint16(moerr.WARN_DATA_TRUNCATED), frozen.warnings[0].code)
 			}
@@ -335,6 +341,59 @@ func TestJSONValueReaderTextContractMatchesMutableInput(t *testing.T) {
 				require.JSONEq(t, test.want, frozen.text)
 			} else {
 				require.Equal(t, test.want, frozen.text)
+			}
+		})
+	}
+}
+
+func TestJSONValueReaderBinaryTextStillChecksUTF8(t *testing.T) {
+	// Binary payloads can be valid stored JSON without being valid UTF-8.
+	// They must not inherit the admitted JSON-string fast path.
+	blob := bytejson.ByteJson{Type: bytejson.TpCodeBlob, Data: []byte{1, 0xff}}
+	require.NoError(t, bytejson.ValidateStoredJSONDocument(blob))
+	require.Error(t, bytejson.ValidateStoredJSONDocument(bytejson.ByteJson{Type: bytejson.TpCodeString, Data: blob.Data}))
+	raw, err := blob.Marshal()
+	require.NoError(t, err)
+	for _, mode := range []int64{jsonValueNullResponse, jsonValueDefaultResponse, jsonValueErrorResponse} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &jsonValueWarningRecorder{}
+			proc.Session = warnings
+			target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{string(raw)}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$"}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{mode}, nil),
+				NewFunctionTestConstInput(target, []string{"fallback"}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, []string{""}, nil), JsonValue)
+			defer fc.Free()
+			reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+			require.NoError(t, err)
+			defer reader.Close()
+			for _, immutable := range []bool{false, true} {
+				warnings.warnings = nil
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+				if immutable {
+					err = JsonValueWithReader(reader, fc.parameters, fc.result, proc, 1, nil)
+				} else {
+					err = JsonValue(fc.parameters, fc.result, proc, 1, nil)
+				}
+				if mode == jsonValueErrorResponse {
+					require.ErrorContains(t, err, "invalid UTF-8 JSON_VALUE result")
+					require.Empty(t, warnings.warnings)
+					continue
+				}
+				require.NoError(t, err)
+				require.Len(t, warnings.warnings, 1)
+				if mode == jsonValueNullResponse {
+					require.True(t, fc.result.GetResultVector().IsNull(0))
+				} else {
+					require.Equal(t, "fallback", string(fc.result.GetResultVector().GetBytesAt(0)))
+				}
 			}
 		})
 	}

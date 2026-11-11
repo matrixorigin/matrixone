@@ -412,7 +412,9 @@ func jsonValueExecuteCore(
 						conversionErr = jsonValueRequireScalarType(bytejson.TpCode(selected.Type))
 					}
 					value := selected.Text
-					if conversionErr == nil {
+					// A closed reader admitted every stored JSON string as valid UTF-8.
+					// Its byte length bounds the character count for the implicit target.
+					if conversionErr == nil && !(textImplicit && selected.Type == byte(bytejson.TpCodeString) && len(value) <= int(textTarget.Width)) {
 						value, conversionErr = jsonValueText(value, textTarget)
 					}
 					if conversionErr == nil {

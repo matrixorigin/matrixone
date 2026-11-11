@@ -748,3 +748,29 @@ defaults, parameters and nested expressions; prove the AST remains unchanged.
 Re-run planning/SQL regressions and the same paired performance gates. This
 changes neither JSON admission nor path evaluation and introduces no path
 cache or production profiling counters.
+
+### Reuse admitted string validation (candidate revision 41)
+
+The immutable reader has already admitted every stored JSON string with a
+canonical length and valid UTF-8. For a selected `TpCodeString`, its existing
+unquote operation returns the payload as a newly owned string regardless of
+the legacy float-formatting option. The two private reader implementations may
+perform that same owned conversion directly; the returned text must never
+alias the retained document, including after a reader or view is closed.
+
+For the implicit `VARCHAR(512)` result only, a selected admitted JSON string
+whose byte length is at most 512 already satisfies both UTF-8 validity and the
+character-width bound. Reuse that admission result instead of scanning the
+same text again. Longer strings and all other JSON types continue through the
+existing conversion checks; in particular, binary/blob payloads do not acquire
+the JSON-string UTF-8 guarantee. Mutable vectors and unknown inputs retain
+complete validation. Output allocation failures, response routing, path and
+NULL order remain unchanged.
+
+The Ubuntu prototype used separate test-only overlays and retained the
+unmodified benchmark binaries. It showed a potential improvement in the
+string and mixed cases, but is not an original-baseline acceptance result.
+Review must independently cover owned output, escaped and multibyte strings,
+512/513 character boundaries, binary payload errors and both reader owners;
+then repeat all fixed five-pair performance gates with preparation and copies
+included where required. No path cache or alternate decoder is introduced.
