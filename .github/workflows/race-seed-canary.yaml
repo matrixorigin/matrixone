@@ -43,8 +43,12 @@ jobs:
       - name: Install build dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config python3 python-is-python3
+          if command -v gcc && command -v g++ && command -v make && command -v pkg-config && command -v python3; then
+            echo 'Build tools already available; no package download needed.'
+          else
+            sudo apt-get -o Acquire::ForceIPv4=true update
+            sudo apt-get -o Acquire::ForceIPv4=true install -y build-essential pkg-config python3 python-is-python3
+          fi
       - name: Checkout pinned MatrixOne PR source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
