@@ -3796,6 +3796,15 @@ describe_table_stmt:
     {
         $$ = &tree.ShowColumns{Table: $2, ColName: $3}
     }
+|   explain_sym unresolved_object_name STRING
+    {
+        // The quoted argument is the SHOW COLUMNS LIKE wildcard pattern:
+        // the scanner-decoded literal, never an identifier impersonation.
+        $$ = &tree.ShowColumns{
+            Table: $2,
+            Like:  tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal($3, $3, false, tree.P_char)),
+        }
+    }
 
 explain_stmt:
     describe_table_stmt
