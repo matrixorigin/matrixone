@@ -58,6 +58,12 @@ insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key
 select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
+select * from v1;
+-- 缺失路径可以从非空 JSON 产生 NULL，视图必须如实描述其可空性。
+create view json_extract_missing_view as select json_extract('{"a":1}','$.missing') as v;
+desc json_extract_missing_view;
+select * from json_extract_missing_view;
+drop view json_extract_missing_view;
 
 select json_extract('{"a":1}',null);
 select json_extract(null,'$');
