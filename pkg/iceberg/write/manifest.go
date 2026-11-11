@@ -17,7 +17,6 @@ package write
 import (
 	"context"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -223,13 +222,14 @@ func (b *appendManifestBudget) encodeManifest(entries []api.ManifestEntry, opts 
 	if b == nil || b.limit <= 0 {
 		return metadata.EncodeManifest(entries, opts)
 	}
-	remaining, err := b.remainingAfterScratch(metadata.ManifestEntriesMemoryWeight(0, entries))
+	scratch := metadata.ManifestEntriesMemoryWeight(0, entries)
+	remaining, err := b.remainingAfterScratch(scratch)
 	if err != nil {
 		return nil, err
 	}
 	payload, err := metadata.EncodeManifestBounded(entries, opts, remaining)
 	if err != nil {
-		return nil, err
+		return nil, api.DMLMemoryEncoderError(err, b.used, scratch, b.limit)
 	}
 	if err := b.reserve(int64(cap(payload))); err != nil {
 		return nil, err
@@ -241,13 +241,14 @@ func (b *appendManifestBudget) encodeManifestList(manifests []api.ManifestFile, 
 	if b == nil || b.limit <= 0 {
 		return metadata.EncodeManifestList(manifests, opts)
 	}
-	remaining, err := b.remainingAfterScratch(metadata.ManifestListMemoryWeight(0, manifests))
+	scratch := metadata.ManifestListMemoryWeight(0, manifests)
+	remaining, err := b.remainingAfterScratch(scratch)
 	if err != nil {
 		return nil, err
 	}
 	payload, err := metadata.EncodeManifestListBounded(manifests, opts, remaining)
 	if err != nil {
-		return nil, err
+		return nil, api.DMLMemoryEncoderError(err, b.used, scratch, b.limit)
 	}
 	if err := b.reserve(int64(cap(payload))); err != nil {
 		return nil, err
@@ -263,9 +264,9 @@ func (b *appendManifestBudget) remainingAfterScratch(scratch int64) (int64, erro
 }
 
 func appendManifestMemoryExceeded(used, requested, limit int64) error {
-	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg append manifest materialization memory limit exceeded", map[string]string{
-		"used_bytes":      strconv.FormatInt(used, 10),
-		"requested_bytes": strconv.FormatInt(requested, 10),
-		"limit_bytes":     strconv.FormatInt(limit, 10),
-	})
+	phase := api.MemoryReservation
+	if requested == 0 {
+		phase = api.MemoryInitialAdmission
+	}
+	return api.NewDMLMemoryLimitError(used, requested, limit, phase)
 }

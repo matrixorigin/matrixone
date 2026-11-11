@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
@@ -72,6 +73,21 @@ func TestDMLMatchedCollectorRejectsBeforeRetainingOverLimitBatch(t *testing.T) {
 	err := collector.AddBatch(context.Background(), bat)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.Contains(t, err.Error(), "iceberg.write.dml_max_memory")
 	require.Empty(t, collector.Targets())
 	require.Zero(t, budget.used)
+}
+
+func TestDMLMemoryReserveCompatibility(t *testing.T) {
+	b := newDMLMemoryBudget(10, 8)
+	err := b.Reserve(context.Background(), 3)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.Contains(t, err.Error(), "used_bytes=8")
+	require.Contains(t, err.Error(), "requested_bytes=3")
+	require.Contains(t, err.Error(), "limit_bytes=10")
+	require.EqualValues(t, 8, b.usedBytes())
+	raw := b.reserveRaw(3)
+	require.True(t, api.IsMemoryLimit(raw))
+	require.EqualValues(t, 8, b.usedBytes())
 }

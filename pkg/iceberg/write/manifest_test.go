@@ -256,3 +256,44 @@ func manifestFilePaths(manifests []api.ManifestFile) []string {
 	}
 	return out
 }
+
+func TestAppendMemoryErrorCategory(t *testing.T) {
+	budget := api.NewDMLMemoryLimitError(8, 3, 10, api.MemoryReservation)
+	wrapped := api.WrapError(api.ErrObjectIO, "outer", nil, budget)
+	require.Equal(t, string(api.ErrPlanningLimitExceeded), appendErrorCategory(wrapped))
+	require.Empty(t, appendErrorCategory(api.NewError("", "empty", nil)))
+	require.Equal(t, string(api.ErrObjectIO), appendErrorCategory(api.NewError(api.ErrObjectIO, "other", nil)))
+}
+
+func TestManifestEncoderBudgetContext(t *testing.T) {
+	entries := []api.ManifestEntry{}
+	manifests := []api.ManifestFile{}
+	for _, tc := range []struct {
+		name    string
+		scratch int64
+		encode  func(*appendManifestBudget) error
+	}{
+		{"manifest", metadata.ManifestEntriesMemoryWeight(0, entries), func(b *appendManifestBudget) error {
+			_, err := b.encodeManifest(entries, metadata.ManifestWriteOptions{FormatVersion: 2, Schema: api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}}, Content: api.ManifestContentData})
+			return err
+		}},
+		{"list", metadata.ManifestListMemoryWeight(0, manifests), func(b *appendManifestBudget) error {
+			_, err := b.encodeManifestList(manifests, metadata.ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 1})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &appendManifestBudget{used: 10, limit: 10 + tc.scratch + 1}
+			err := tc.encode(b)
+			var e *api.MemoryLimitError
+			require.ErrorAs(t, err, &e)
+			require.True(t, e.DML)
+			require.Equal(t, b.limit, e.Limit)
+			require.NotNil(t, e.Encoder)
+			require.EqualValues(t, 1, e.Encoder.Limit)
+			require.Equal(t, int64(10)+tc.scratch+e.Encoder.Used, e.Used)
+			require.Equal(t, e.Encoder.Requested, e.Requested)
+			require.Positive(t, e.Requested)
+		})
+	}
+}

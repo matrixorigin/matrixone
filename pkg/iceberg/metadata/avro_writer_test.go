@@ -16,6 +16,7 @@ package metadata
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"math/big"
 	"strings"
@@ -573,4 +574,39 @@ func TestManifestRecordEncodingHelpers(t *testing.T) {
 	deleteManifest := manifestFileRecord(api.ManifestFile{Content: api.ManifestContentDeletes})
 	require.Equal(t, int32(0), dataManifest["content"])
 	require.Equal(t, int32(1), deleteManifest["content"])
+}
+
+func TestBoundedAvroOutputPreservesFirstRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		limit           int64
+		first, second   int
+		phase           api.MemoryPhase
+		used, requested int64
+	}{
+		{"output", 5, 6, 1, api.MemoryEncoderOutput, 0, 6},
+		{"growth", 700, 500, 100, api.MemoryEncoderGrowth, 512, 700},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := boundedAvroOutput{maxBytes: tc.limit}
+			if tc.name == "growth" {
+				if _, err := b.Write(make([]byte, tc.first)); err != nil {
+					t.Fatal(err)
+				}
+				tc.first = tc.second
+			}
+			_, err := b.Write(make([]byte, tc.first))
+			var failure *api.MemoryLimitError
+			if !errors.As(err, &failure) {
+				t.Fatalf("missing memory error: %v", err)
+			}
+			if failure.Phase != tc.phase || failure.Used != tc.used || failure.Requested != tc.requested || failure.Limit != tc.limit {
+				t.Fatalf("wrong accounting: %+v", failure)
+			}
+			_, _ = b.Write(make([]byte, 1000))
+			if b.failure != failure {
+				t.Fatal("first rejection replaced")
+			}
+		})
+	}
 }

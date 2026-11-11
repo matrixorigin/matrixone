@@ -132,7 +132,7 @@ func (f bufferedDataFileOutputFactory) CreateDataFile(ctx context.Context, locat
 	if metadataBytes <= 0 {
 		metadataBytes = retainedDMLDataFileMetadataBytes
 	}
-	if err := f.MemoryBudget.reserve(ctx, metadataBytes); err != nil {
+	if err := f.MemoryBudget.reserveRaw(metadataBytes); err != nil {
 		return nil, err
 	}
 	return &bufferedDataFileObject{
@@ -194,7 +194,7 @@ func (o *bufferedDataFileObject) Write(p []byte) (int, error) {
 		// Reserve the full new capacity first, then release the old capacity;
 		// accounting only the delta would understate the real growth peak by
 		// almost 2x for a geometrically growing buffer.
-		if err := o.budget.reserve(o.ctx, int64(nextCapacity)); err != nil {
+		if err := o.budget.reserveRaw(int64(nextCapacity)); err != nil {
 			return 0, err
 		}
 		next := make([]byte, len(o.data), nextCapacity)
@@ -223,7 +223,7 @@ func (o *bufferedDataFileObject) Close() error {
 	// the payload before returning. Reserve that second live copy explicitly;
 	// streaming ObjectWriter support can remove this conservative allowance.
 	copyBytes := int64(len(o.data))
-	if err := o.budget.reserve(o.ctx, copyBytes); err != nil {
+	if err := o.budget.reserveRaw(copyBytes); err != nil {
 		o.releaseBuffer()
 		return err
 	}
