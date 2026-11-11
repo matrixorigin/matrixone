@@ -71,6 +71,43 @@ func TestLimitedZstdConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
+// A failed decode must not poison the shared codec, including while other
+// callers are using its encoder and decoder.
+func TestLimitedZstdDecodeFailureAndReuse(t *testing.T) {
+	c := ParquetOptions{}.compression().(*limitedZstd)
+	payload := bytes.Repeat([]byte("window boundary and reuse"), 8000)
+	encoded, err := c.Encode(nil, payload)
+	require.NoError(t, err)
+	_, err = c.Decode(nil, []byte("not a zstd frame"))
+	require.Error(t, err)
+	decoded, err := c.Decode(nil, encoded)
+	require.NoError(t, err)
+	require.Equal(t, payload, decoded)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			src := bytes.Repeat([]byte{byte(i), byte(i + 1), byte(i + 2)}, 50000+i)
+			compressed, err := c.Encode(nil, src)
+			if err != nil {
+				t.Errorf("encode %d: %v", i, err)
+				return
+			}
+			if _, err := c.Decode(nil, []byte("bad frame")); err == nil {
+				t.Errorf("decode %d: expected error", i)
+				return
+			}
+			got, err := c.Decode(nil, compressed)
+			if err != nil || !bytes.Equal(src, got) {
+				t.Errorf("round trip %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
 func TestFanoutZstdOwnerAcrossRotation(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
