@@ -44,11 +44,12 @@ func BenchmarkIssue32500LookupSingleTable64(b *testing.B) {
 	for j := range objects {
 		txn.registerCNObjects(objects[j], 1, 10, 100, nil, "db", "table", 0, false)
 	}
+	var summaries cnObjectSummaryReader
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for j := range objects {
-			issue32500BenchSummary = issue32500BenchLookup(txn, objects[j], 100)
+			issue32500BenchSummary = summaries.get(txn, 100, objects[j])
 		}
 	}
 }
@@ -83,11 +84,12 @@ func BenchmarkIssue32500CloneCompactionLookup64x3(b *testing.B) {
 	for j := range blocks {
 		issue32500BenchAddDeleted(deletes, 300, &blocks[j], []int64{0, 1, 2, 3})
 	}
+	var summaries cnObjectSummaryReader
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for j := range objects {
-			issue32500BenchSummary = issue32500BenchLookup(txn, objects[j], 300)
+			issue32500BenchSummary = summaries.get(txn, 300, objects[j])
 			issue32500BenchGetDeleted(deletes, 300, blocks[j:j+1], func(types.Rowid) {
 				issue32500BenchRows++
 			})

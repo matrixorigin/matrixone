@@ -3513,6 +3513,22 @@ func (txn *Transaction) registerCNObjects(
 	}
 }
 
+// cnObjectSummaryReader reuses the current table's object map during one
+// locked compaction pass. Its zero value is ready to use and it owns no state
+// beyond that pass.
+type cnObjectSummaryReader struct {
+	tableID uint64
+	objects map[types.Objectid]Summary
+}
+
+func (r *cnObjectSummaryReader) get(txn *Transaction, tableID uint64, objectID types.Objectid) Summary {
+	if r.objects == nil || r.tableID != tableID {
+		r.tableID = tableID
+		r.objects = txn.cnObjsSummary[tableID]
+	}
+	return r.objects[objectID]
+}
+
 func (txn *Transaction) WriteFileLocked(
 	typ int,
 	accountId uint32,
@@ -4917,9 +4933,10 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	for {
 		var missing []lookup
 		seen := make(map[tableKey]bool)
+		var summaries cnObjectSummaryReader
 		txn.deletedBlocks.iter(
 			func(key deletedBlockKey, offsets []int64) bool {
-				summary := txn.cnObjsSummary[key.tableID][*key.blockID.Object()]
+				summary := summaries.get(txn, key.tableID, *key.blockID.Object())
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -5047,6 +5064,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		bat     *batch.Batch
 	}
 	affectedBats := make(map[affectedBatchKey]struct{})
+	var summaries cnObjectSummaryReader
 
 	txn.deletedBlocks.iter(
 		func(key deletedBlockKey, offsets []int64) bool {
@@ -5054,7 +5072,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				objectID: *key.blockID.Object(),
 				tableID:  key.tableID,
 			}
-			summary := txn.cnObjsSummary[objectKey.tableID][objectKey.objectID]
+			summary := summaries.get(txn, objectKey.tableID, objectKey.objectID)
 
 			affectedBats[affectedBatchKey{
 				tableID: key.tableID,

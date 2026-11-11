@@ -26,6 +26,23 @@ func TestRegisterCNObjectsPreservesSharedObjectTableOwnership(t *testing.T) {
 	require.Equal(t, "b", summaries[200].tbName)
 }
 
+func TestCNObjectSummaryReaderSwitchesTables(t *testing.T) {
+	txn := &Transaction{cnObjsSummary: map[uint64]map[types.Objectid]Summary{}}
+	var objectID types.Objectid
+	txn.registerCNObjects(objectID, 1, 10, 100, nil, "db", "a", 0, false)
+	txn.registerCNObjects(objectID, 1, 10, 200, nil, "db", "b", 0, false)
+
+	var summaries cnObjectSummaryReader
+	require.Equal(t, "a", summaries.get(txn, 100, objectID).tbName)
+	require.Equal(t, "b", summaries.get(txn, 200, objectID).tbName)
+	require.Equal(t, "a", summaries.get(txn, 100, objectID).tbName)
+
+	txn.registerCNObjects(objectID, 1, 10, 200, nil, "db", "b2", 0, false)
+	require.Equal(t, "b2", summaries.get(txn, 200, objectID).tbName)
+	require.Zero(t, summaries.get(txn, 300, objectID).tableId)
+	require.Equal(t, "a", summaries.get(txn, 100, objectID).tbName)
+}
+
 func TestDeletedBlocksIsolateSharedBlockByTable(t *testing.T) {
 	const (
 		tableA uint64 = 100
