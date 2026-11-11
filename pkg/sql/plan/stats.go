@@ -1605,6 +1605,75 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
+// Simple comparisons still need ExprIsZonemappable's semantic check. A missing
+// selectivity estimate is not evidence that a column has no useful ZoneMaps.
+func isSimpleZoneMapFilter(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	n := 2
+	switch fn.GetFunc().GetObjName() {
+	case "=", "<", "<=", ">", ">=":
+	case "between":
+		n = 3
+	case "in_range":
+		n = 4
+	default:
+		return false
+	}
+	if len(fn.Args) != n {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return false
+		}
+	}
+	if fn.Args[0].GetCol() == nil {
+		return n == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
+	}
+	for _, arg := range fn.Args[1:] {
+		if !isRuntimeConstExpr(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// This branch's isRuntimeConstExpr also accepts rand() and variable reads.
+// Evaluating those once for storage pruning can discard rows the residual would
+// accept. Do not infer stability merely from the absence of column references.
+func zoneMapExprIsStable(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_Col, *plan.Expr_P, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		ov, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if !ok || ov.CannotFold() || ov.IsRealTimeRelated() || ov.IsAgg() || ov.IsWin() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !zoneMapExprIsStable(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if !zoneMapExprIsStable(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if builder.isRestore {
 		return DefaultHugeStats()
@@ -1619,59 +1688,61 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultMinimalStats()
 	}
 
-	//ts := timestamp.Timestamp{}
-	//if node.ScanTS != nil {
-	//	ts = *node.ScanTS
-	//}
-
 	var scanSnapshot *plan.Snapshot
 	if node.ScanSnapshot != nil {
 		scanSnapshot = node.ScanSnapshot
 	}
 
 	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
-	if err != nil || s == nil {
+	if err != nil {
+		s = nil
+	}
+	hint := 0
+	if builder.optimizerHints != nil {
+		hint = builder.optimizerHints.blockFilter
+	}
+	// Partition pruning on this release has a different Fold consumer contract.
+	// Keep its previous admission policy rather than importing another subsystem.
+	enhanced := node.TableDef.Partition == nil
+	if s == nil && !enhanced {
 		return DefaultStats()
 	}
-
-	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
-	var blockSel float64 = 1
-
+	blockSel := 1.0
 	var blockExprList []*plan.Expr
-	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if builder.optimizerHints != nil {
-			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
-				node.BlockFilterList = nil
-			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-						copyOfExpr := DeepCopyExpr(node.FilterList[i])
-						copyOfExpr.Selectivity = currentBlockSel
-						blockExprList = append(blockExprList, copyOfExpr)
-					}
+	if s == nil && hint != 2 {
+		// Preserve filters from earlier rewrites without mutating their slice.
+		blockExprList = append(blockExprList, node.BlockFilterList...)
+	}
+	for _, filter := range node.FilterList {
+		currentBlockSel := 1.0
+		if s != nil {
+			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
+		}
+		admit := strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) ||
+			(enhanced && isSimpleZoneMapFilter(filter)) || (s != nil && (hint == 1 || currentBlockSel < 1))
+		if hint != 2 && admit && zoneMapExprIsStable(filter) && ExprIsZonemappable(builder.GetContext(), filter) {
+			duplicate := false
+			for _, existing := range blockExprList {
+				if exprStructuralEqual(existing, filter) {
+					duplicate = true
+					break
 				}
 			}
-		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
+			if !duplicate {
+				copyOfExpr := DeepCopyExpr(filter)
+				copyOfExpr.Selectivity = currentBlockSel
+				blockExprList = append(blockExprList, copyOfExpr)
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
+	if s == nil {
+		return DefaultStats()
+	}
+	stats := new(plan.Stats)
+	stats.TableCnt = s.TableCnt
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel

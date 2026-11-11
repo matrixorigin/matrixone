@@ -93,6 +93,15 @@ func ConstructBasePKFilter(
 	if expr == nil {
 		return
 	}
+	if tblDef != nil && tblDef.Pkey != nil && tblDef.Pkey.CompPkeyCol == nil {
+		for _, col := range tblDef.Cols {
+			if col.Name == tblDef.Pkey.PkeyColName && isFloatColumn(col) {
+				// NaNs break sorted row search; raw encodings distinguish SQL-equal
+				// signed zeros. Leave floating PK predicates to the row filter.
+				return
+			}
+		}
+	}
 
 	defer func() {
 		if tblDef.Pkey.CompPkeyCol != nil {
@@ -102,7 +111,7 @@ func ConstructBasePKFilter(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		switch name := exprImpl.F.Func.ObjName; name {
+		switch name := columnFilterOperator(exprImpl.F); name {
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
