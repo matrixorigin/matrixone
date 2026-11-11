@@ -106,6 +106,11 @@ copied synchronously into the existing accounted function result. Source bytes
 never leave the reader; each reader's fixed scalar-formatting scratch is part
 of its accounted handle. Calls on one reader are sequential; independent
 readers can be used concurrently. Other paths and types use the owned selection.
+For composite and extended values the existing formatter is admitted with a
+conservative temporary bound of `32 * encoded bytes + 2304` (plus the owned
+output charge), so a tight statement budget can reject before the actual peak
+would consume that amount. This bound favors safe admission over precise
+measurement; it is not a claim of minimal memory use for these values.
 
 Memory-only admission obtains memory authority for the existing execution
 generation, not spill authority. Promotion initializes spill capacity on that
