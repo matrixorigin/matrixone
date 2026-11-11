@@ -321,8 +321,11 @@ func (w *FanoutParquetDataWriter) relieveMemoryPressure(ctx context.Context) err
 				size += n
 			}
 		}
+		if size < remaining/4 {
+			return nil
+		}
 		key, found := w.leastRecentlyUsed(true)
-		if !found || size < remaining/4 {
+		if !found {
 			return nil
 		}
 		if err := w.closeActive(ctx, key); err != nil {
