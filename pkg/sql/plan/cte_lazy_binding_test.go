@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -739,6 +740,39 @@ func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
 	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN),
 		"a transparent LIMIT above a blocking aggregate cannot truncate its input")
 	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+}
+
+func TestCTEMultiReferenceReusesBoundedScalarUnionLimit(t *testing.T) {
+	for _, branches := range []int{2, 4, 8} {
+		for _, limit := range []int{branches - 1, branches, branches + 1} {
+			t.Run(fmt.Sprintf("branches_%d_limit_%d", branches, limit), func(t *testing.T) {
+				consumers := make([]string, branches)
+				for i := range consumers {
+					consumers[i] = fmt.Sprintf("select %d as metric, mx, mn from totals", i)
+				}
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				logicPlan, err := runOneStmt(mock, t, fmt.Sprintf(`
+					with grouped as (
+						select l_suppkey, sum(l_extendedprice) as total
+						from lineitem group by l_suppkey
+					), totals as (select max(total) as mx, min(total) as mn from grouped)
+					select row_number() over () as rn, u.* from (%s) u limit %d`,
+					strings.Join(consumers, " union all "), limit))
+				require.NoError(t, err)
+				query := logicPlan.GetQuery()
+				wantScans := branches
+				if limit >= branches {
+					wantScans = 1
+					require.Positive(t, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+				} else {
+					require.Zero(t, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+						"a truncating LIMIT must retain the conservative inline plan")
+				}
+				require.Equal(t, wantScans, countReachableNodeType(query, planpb.Node_TABLE_SCAN),
+					"a non-truncating LIMIT must not duplicate the common base scan")
+			})
+		}
+	}
 }
 
 func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
@@ -1495,6 +1529,115 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	for id := range cteReachablePlanNodes(query) {
 		require.NotEqual(t, planpb.Node_SINK, query.Nodes[id].NodeType,
 			"skipped consumers must not publish an eager CTE producer")
+	}
+}
+
+func TestCTEScalarUnionRowBound(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		root   int32
+		change func([]*planpb.Node)
+		want   uint64
+	}{
+		{name: "scalar aggregate", root: 1, want: 1},
+		{name: "transparent filter and window", root: 4, want: 1},
+		{name: "union below sort", root: 6, want: 2},
+		{name: "limit is not a tighter bound", root: 6, want: 2, change: func(nodes []*planpb.Node) {
+			nodes[5].Limit = MakePlan2Uint64ConstExprWithType(1)
+		}},
+		{name: "zero limit is not an empty bound", root: 6, want: 2, change: func(nodes []*planpb.Node) {
+			nodes[1].Limit = MakePlan2Uint64ConstExprWithType(0)
+		}},
+		{name: "scan estimate is not a proof", root: 0},
+		{name: "scan limit is not a proof", root: 0, change: func(nodes []*planpb.Node) {
+			nodes[0].Limit = MakePlan2Uint64ConstExprWithType(1)
+		}},
+		{name: "grouped aggregate", root: 6, change: func(nodes []*planpb.Node) {
+			nodes[1].GroupBy = []*planpb.Expr{MakePlan2Int64ConstExprWithType(1)}
+		}},
+		{name: "grouping extension", root: 6, change: func(nodes []*planpb.Node) {
+			nodes[1].GroupingFlag = []bool{true}
+		}},
+		{name: "unknown union sibling", root: 6, change: func(nodes []*planpb.Node) {
+			nodes[5].Children[1] = 0
+		}},
+		{name: "union distinct", root: 6, change: func(nodes []*planpb.Node) {
+			nodes[5].NodeType = planpb.Node_UNION
+		}},
+		{name: "join", root: 6, change: func(nodes []*planpb.Node) {
+			nodes[5].NodeType = planpb.Node_JOIN
+		}},
+		{name: "aggregate arity", root: 1, change: func(nodes []*planpb.Node) {
+			nodes[1].Children = nil
+		}},
+		{name: "transparent arity", root: 4, change: func(nodes []*planpb.Node) {
+			nodes[4].Children = []int32{1, 1}
+		}},
+		{name: "union arity", root: 5, change: func(nodes []*planpb.Node) {
+			nodes[5].Children = nil
+		}},
+		{name: "cycle", root: 4, change: func(nodes []*planpb.Node) {
+			nodes[4].Children = []int32{4}
+		}},
+		{name: "nil node", root: 4, change: func(nodes []*planpb.Node) { nodes[4] = nil }},
+		{name: "negative id", root: -1},
+		{name: "out of range id", root: 7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := []*planpb.Node{
+				{NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 1}},
+				{NodeType: planpb.Node_AGG, Children: []int32{0}},
+				{NodeType: planpb.Node_PROJECT, Children: []int32{1}},
+				{NodeType: planpb.Node_FILTER, Children: []int32{2}},
+				{NodeType: planpb.Node_WINDOW, Children: []int32{3}},
+				{NodeType: planpb.Node_UNION_ALL, Children: []int32{4, 1}},
+				{NodeType: planpb.Node_SORT, Children: []int32{5}},
+			}
+			if test.change != nil {
+				test.change(nodes)
+			}
+			builder := &QueryBuilder{qry: &planpb.Query{Nodes: nodes}}
+			memo := make(map[int32]uint64)
+			require.Equal(t, test.want, builder.cteScalarUnionRowBound(test.root, memo))
+			require.Equal(t, test.want, builder.cteScalarUnionRowBound(test.root, memo))
+		})
+	}
+
+	// A compact DAG crosses the overflow boundary without an exponential tree.
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN},
+		{NodeType: planpb.Node_AGG, Children: []int32{0}},
+	}}}
+	for i := int32(1); i <= 64; i++ {
+		builder.qry.Nodes = append(builder.qry.Nodes,
+			&planpb.Node{NodeType: planpb.Node_UNION_ALL, Children: []int32{i, i}})
+	}
+	memo := make(map[int32]uint64)
+	require.Equal(t, uint64(1)<<63, builder.cteScalarUnionRowBound(64, memo))
+	require.Zero(t, builder.cteScalarUnionRowBound(65, memo))
+}
+
+func TestCTEMultiReferenceBoundedLimitKeepsUnsafeConsumersInline(t *testing.T) {
+	for _, test := range []struct{ name, sql string }{
+		{"grouped output", `with c as (
+			select l_suppkey, sum(l_extendedprice) as v from lineitem group by l_suppkey
+		) select v from c union all select v from c limit 2`},
+		{"inner truncating limit", `with c as (
+			select l_suppkey, sum(l_extendedprice) as v from lineitem group by l_suppkey
+		) select sum(v) from (select v from c limit 1) a
+		union all select sum(v) from (select v from c limit 1) b limit 2`},
+		{"zero consumer limit", `with c as (
+			select sum(cast(l_comment as bigint)) as v from lineitem
+		) (select v from c limit 0) union all (select v from c limit 0) limit 2`},
+		{"fallible extra output", `with c as (
+			select max(l_comment) as raw, cast(max(l_comment) as bigint) as risky from lineitem
+		) select length(raw) from c union all select risky from c limit 2`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+			require.Zero(t, countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN))
+		})
 	}
 }
 
