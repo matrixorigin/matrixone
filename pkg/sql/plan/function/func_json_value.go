@@ -408,7 +408,19 @@ func jsonValueExecuteCore(
 		if len(readers) != 0 {
 			if textResult != nil {
 				var selectionErr error
-				selectedText, selectionErr = readers[0].QueryTextAtPath(int(row), parsedPath, false)
+				var appended bool
+				if direct, ok := readers[0].(vector.JSONDirectTextReader); ok && textImplicit {
+					selectedText, appended, selectionErr = direct.QueryTextAtPathTo(int(row), parsedPath, false, int(textTarget.Width), textResult)
+				} else {
+					selectedText, selectionErr = readers[0].QueryTextAtPath(int(row), parsedPath, false)
+				}
+				if appended {
+					selectedText.Close()
+					if selectionErr != nil {
+						return selectionErr
+					}
+					continue
+				}
 				selected := selectedText
 				if selectionErr == nil && selected.Exists && !selected.InputNull && !selected.ValueNull && !selected.Multiple && !selected.TextError {
 					var conversionErr error
@@ -1066,13 +1078,24 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 			}
 			continue
 		}
-		selected, err := reader.QueryText(row, path, legacyFloat)
+		var selected vector.JSONTextSelection
+		var appended bool
+		var err error
+		if direct, ok := reader.(vector.JSONDirectTextReader); ok {
+			selected, appended, err = direct.QueryTextTo(row, path, legacyFloat, -1, writer)
+		} else {
+			selected, err = reader.QueryText(row, path, legacyFloat)
+		}
 		if err != nil {
 			selected.Close()
 			if selected.InvalidPath {
 				return moerr.NewInvalidArgNoCtx("json_value", "invalid path expression")
 			}
 			return err
+		}
+		if appended {
+			selected.Close()
+			continue
 		}
 		if !selected.Exists || selected.InputNull || selected.ValueNull || selected.Multiple {
 			err := writer.AppendMustNullForBytesResult()

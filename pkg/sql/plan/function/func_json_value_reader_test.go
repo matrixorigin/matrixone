@@ -586,10 +586,10 @@ func TestJSONValueReaderAdmissionFailuresAreHard(t *testing.T) {
 		contract bool
 		text     bool
 	}{{"legacy", false, true}, {"text-contract", true, true}, {"typed-contract", true, false}} {
-		for _, path := range []string{"$.keep", "$.arr[*]"} {
+		for _, path := range []string{"$.keep", "$.object", "$.arr[*]"} {
 			t.Run(mode.name+"/"+path, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				raw := mustJsonBinaryString(t, `{"keep":"123","arr":[1,2]}`)
+				raw := mustJsonBinaryString(t, `{"keep":"123","object":{"v":1},"arr":[1,2]}`)
 				inputs := []FunctionTestInput{
 					NewFunctionTestInput(types.T_json.ToType(), []string{raw, raw}, nil),
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{path}, nil),
@@ -644,8 +644,13 @@ func TestJSONValueReaderAdmissionFailuresAreHard(t *testing.T) {
 				}
 				require.NoError(t, fc.result.PreExtendAndReset(2))
 				err = JsonValueWithReader(reader, fc.parameters, fc.result, proc, 2, nil)
-				require.ErrorIs(t, err, want, "ON ERROR cannot swallow allocation failures")
-				require.Equal(t, baseline, live, "failed execution must release partial reservations")
+				if path == "$.keep" && (!mode.contract || mode.text) {
+					require.NoError(t, err, "an accounted direct result needs no independent reader allocation")
+					require.Equal(t, "123", string(fc.result.GetResultVector().GetBytesAt(0)))
+				} else {
+					require.ErrorIs(t, err, want, "ON ERROR cannot swallow allocation failures")
+				}
+				require.Equal(t, baseline, live, "execution must release partial reservations")
 				remaining = -1
 				require.NoError(t, fc.result.PreExtendAndReset(2))
 				require.NoError(t, JsonValueWithReader(reader, fc.parameters, fc.result, proc, 2, nil))
