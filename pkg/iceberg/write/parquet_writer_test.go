@@ -860,3 +860,74 @@ func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
 		require.Equal(t, strconv.Itoa(i), *row.Name)
 	}
 }
+
+func TestParquetRowGroupStringBudget(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"a", "b"})
+	a, b := vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())
+	// The first two rows exactly fill the aggregate budget; the third crosses it.
+	valuesA := []string{strings.Repeat("a", (1<<19)-8), "", "z", strings.Repeat("x", (1<<20)+1), "tail"}
+	valuesB := []string{strings.Repeat("b", (1<<19)-8), "", "", "", ""}
+	for i := range valuesA {
+		require.NoError(t, vector.AppendBytes(a, []byte(valuesA[i]), false, mp))
+		require.NoError(t, vector.AppendBytes(b, []byte(valuesB[i]), false, mp))
+	}
+	bat.Vecs[0], bat.Vecs[1] = a, b
+	bat.SetRowCount(len(valuesA))
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "a", Type: api.IcebergType{Kind: api.TypeString}}, {ID: 2, Name: "b", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "budget.parquet"}, &buf)
+	require.NoError(t, err)
+	for _, indexes := range [][]int{{0}, {1, 2}, {3}, {4}} {
+		require.NoError(t, w.WriteRows(ctx, bat.Attrs, bat, indexes))
+	}
+	fileInfo, err := w.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), fileInfo.RecordCount)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	counts := make([]int64, 0, len(file.Metadata().RowGroups))
+	for _, group := range file.Metadata().RowGroups {
+		counts = append(counts, group.NumRows)
+	}
+	require.Equal(t, []int64{2, 1, 1, 1}, counts)
+	reader := parquet.NewGenericReader[struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}, 5)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, 5, n)
+	for i := range rows {
+		require.Equal(t, valuesA[i], rows[i].A)
+		require.Equal(t, valuesB[i], rows[i].B)
+	}
+}
+
+type failingParquetSink struct{}
+
+func (failingParquetSink) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "error.parquet", ParquetOptions: ParquetOptions{codec: "uncompressed"}}, failingParquetSink{})
+	require.NoError(t, err)
+	require.Error(t, w.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = w.Close(ctx)
+	require.Error(t, err)
+}
