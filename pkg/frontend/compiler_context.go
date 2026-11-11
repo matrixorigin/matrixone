@@ -807,6 +807,18 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 
 	if isSystemVar {
+		if strings.EqualFold(varName, ProtectedDatabases) {
+			switch ses := tcc.GetSession().(type) {
+			case *Session:
+				if ses.GetFromRealUser() {
+					return protectedPolicyValueForStatement(ctx, ses)
+				}
+			case *backSession:
+				if ses.protectedPolicy != nil {
+					return ses.protectedPolicy.raw, nil
+				}
+			}
+		}
 		if isGlobalVar {
 			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
 				return

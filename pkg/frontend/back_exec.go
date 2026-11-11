@@ -649,6 +649,9 @@ func executeStmtInBack(backSes *backSession,
 	var cmpBegin time.Time
 	var ret interface{}
 
+	if err = checkProcedureProtectedWrites(execCtx.reqCtx, backSes, execCtx.stmt, nil); err != nil {
+		return err
+	}
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontendInBack(backSes, execCtx)
@@ -708,6 +711,11 @@ func executeStmtInBack(backSes *backSession,
 	// cw.Compile may rewrite the stmt in the EXECUTE statement, we fetch the latest version
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		if err = checkProcedureProtectedWrites(execCtx.reqCtx, backSes, execCtx.stmt, cw.Plan()); err != nil {
+			return err
+		}
+	}
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontendInBack(backSes, execCtx)
@@ -1048,6 +1056,7 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 type backSession struct {
 	feSessionImpl
 	parentBackSession *backSession
+	protectedPolicy   *derivedProtectedPolicy
 	// routingIntent is the immutable statement-owned scheduling snapshot. A
 	// back session has no process of its own, so it must keep the snapshot here
 	// until doComQueryInBack seeds the child process. In particular, this keeps
@@ -1555,6 +1564,51 @@ func (backSes *backSession) GetRestoreFail() bool {
 
 type SqlHelper struct {
 	ses *Session
+}
+
+func (sh *SqlHelper) CheckDatabaseWrite(ctx context.Context, db string) error {
+	allowed, err := checkProtectedDatabaseWrite(ctx, sh.ses, db)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
+	// A sequence function can be evaluated after the enclosing SELECT was
+	// authorized. Loading a fresh policy at that point must not combine it
+	// with privileges from an older snapshot. Recheck the enclosing statement
+	// once against the policy snapshot before any sequence mutation.
+	if sh.ses.GetFromRealUser() && !canWriteProtectedDatabase(sh.ses) {
+		compiler := sh.ses.GetTxnCompileCtx()
+		if compiler == nil {
+			return moerr.NewInternalError(ctx, "sequence authorization has no execution context")
+		}
+		compiler.mu.Lock()
+		execution := compiler.execCtx
+		compiler.mu.Unlock()
+		if execution == nil || execution.ses != sh.ses || execution.stmt == nil {
+			return moerr.NewInternalError(ctx, "sequence authorization has no current statement")
+		}
+		execution.sequenceAuthorization.Do(func() {
+			wrapper, ok := execution.cw.(*TxnComputationWrapper)
+			if !ok {
+				execution.sequenceAuthErr = moerr.NewInternalError(ctx, "sequence authorization has no statement plan")
+				return
+			}
+			if execution.prepareStmt != nil {
+				_, execution.sequenceAuthErr = authenticatePreparedStatement(ctx, sh.ses, execution.stmt, wrapper.plan, execution.prepareStmt)
+				return
+			}
+			_, execution.sequenceAuthErr = authenticateUserCanExecuteStatement(ctx, sh.ses, execution.stmt)
+			if execution.sequenceAuthErr == nil && wrapper.plan != nil {
+				_, execution.sequenceAuthErr = authenticateCanExecuteStatementAndPlan(ctx, sh.ses, execution.stmt, wrapper.plan)
+			}
+		})
+		if execution.sequenceAuthErr != nil {
+			return execution.sequenceAuthErr
+		}
+	}
+	return nil
 }
 
 func (sh *SqlHelper) GetCompilerContext() any {

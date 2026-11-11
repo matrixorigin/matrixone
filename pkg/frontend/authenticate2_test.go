@@ -102,53 +102,53 @@ func Test_verifyLightPrivilege(t *testing.T) {
 	var ret bool
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		false, clusterTableNone)
+		false, clusterTableNone, nil)
 	assert.False(t, ret)
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		true, clusterTableCreate)
+		true, clusterTableCreate, nil)
 	assert.True(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", true,
-		true, clusterTableCreate)
+		true, clusterTableCreate, nil)
 	assert.False(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", true,
-		false, clusterTableCreate)
+		false, clusterTableCreate, nil)
 	assert.True(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", false,
-		false, clusterTableCreate)
+		false, clusterTableCreate, nil)
 	assert.True(t, ret)
 
 	ses.SetTenantInfo(nonSys)
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		false, clusterTableNone)
+		false, clusterTableNone, nil)
 	assert.False(t, ret)
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		true, clusterTableCreate)
+		true, clusterTableCreate, nil)
 	assert.False(t, ret)
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		true, clusterTableSelect)
+		true, clusterTableSelect, nil)
 	assert.True(t, ret)
 
 	ret = verifyLightPrivilege(ses, moCatalog, true,
-		true, clusterTableNone)
+		true, clusterTableNone, nil)
 	assert.True(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", true,
-		true, clusterTableCreate)
+		true, clusterTableCreate, nil)
 	assert.False(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", true,
-		false, clusterTableCreate)
+		false, clusterTableCreate, nil)
 	assert.True(t, ret)
 
 	ret = verifyLightPrivilege(ses, "abc", false,
-		false, clusterTableCreate)
+		false, clusterTableCreate, nil)
 	assert.True(t, ret)
 }
 

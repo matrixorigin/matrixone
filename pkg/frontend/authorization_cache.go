@@ -72,6 +72,10 @@ func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Tim
 	if execution != nil && (execution.ses != ses || execution.reqCtx == nil) {
 		execution = nil
 	}
+	if execution != nil {
+		execution.authorizationMu.Lock()
+		defer execution.authorizationMu.Unlock()
+	}
 	if execution != nil && !execution.authorizationSnapshot.IsEmpty() {
 		return execution.authorizationSnapshot, nil
 	}

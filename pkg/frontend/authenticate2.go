@@ -54,14 +54,17 @@ func verifyLightPrivilege(ses *Session,
 	dbName string,
 	writeDBTableDirect bool,
 	isClusterTable bool,
-	clusterTableOperation clusterTableOperationType) bool {
+	clusterTableOperation clusterTableOperationType,
+	protectedDatabases map[string]struct{}) bool {
 	var ok bool
 	if ses.GetFromRealUser() && writeDBTableDirect {
 		if len(dbName) == 0 {
 			dbName = ses.GetDatabaseName()
 		}
-		if !canWriteProtectedDatabase(ses) && isProtectedDatabase(ses, dbName) {
-			return false
+		if !canWriteProtectedDatabase(ses) {
+			if _, protected := protectedDatabases[resolveProtectedDatabaseRuntimeTarget(ses, dbName)]; protected {
+				return false
+			}
 		}
 		dbName = strings.ToLower(dbName)
 		if ok2 := isBannedDatabase(dbName); ok2 {
@@ -120,6 +123,14 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 	var err error
 	var pls []privilegeLevelType
 	var yes2 bool
+	var protectedDatabases map[string]struct{}
+	if priv.writeDatabaseAndTableDirectly {
+		var err error
+		protectedDatabases, err = protectedPolicyForStatement(ctx, ses)
+		if err != nil {
+			return false, err
+		}
+	}
 	cache := ses.GetPrivilegeCache()
 	if cache != nil && enableCache {
 		for _, entry := range priv.entries {
@@ -134,7 +145,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
 					priv.isClusterTable,
-					priv.clusterTableOperation)
+					priv.clusterTableOperation, protectedDatabases)
 
 				if yes2 {
 					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, entry, pls)
@@ -178,7 +189,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								tempEntry.databaseName,
 								writeDirectly,
 								mi.isClusterTable,
-								mi.clusterTableOperation)
+								mi.clusterTableOperation, protectedDatabases)
 
 							if yes2 {
 								//At least there is one success
@@ -359,47 +370,23 @@ func protectedDatabaseSetFromString(ses *Session, raw string) map[string]struct{
 	return protected
 }
 
-func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
-	if ses == nil {
-		return nil
-	}
-	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
-	if err != nil {
-		return nil
-	}
-	raw, ok := value.(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	return protectedDatabaseSetFromString(ses, raw)
-}
-
-func isProtectedDatabase(ses *Session, dbName string) bool {
-	dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
-	if dbName == "" {
-		return false
-	}
-	_, ok := getProtectedDatabaseSet(ses)[dbName]
-	return ok
-}
-
-func checkProtectedDatabaseWrite(ctx context.Context, ses *Session, dbNames ...string) bool {
+func checkProtectedDatabaseWrite(ctx context.Context, ses *Session, dbNames ...string) (bool, error) {
 	if len(dbNames) == 0 {
-		return true
+		return true, nil
 	}
 	if ses == nil || !ses.GetFromRealUser() {
-		return true
+		return true, nil
 	}
 	if canWriteProtectedDatabase(ses) {
-		return true
+		return true, nil
 	}
 
-	pDbs := getProtectedDatabaseSet(ses)
-	if len(pDbs) == 0 {
-		return true
+	pDbs, err := protectedPolicyForStatement(ctx, ses)
+	if err != nil {
+		return false, err
 	}
 
-	return checkProtectedDatabaseWriteWithSet(ctx, ses, pDbs, dbNames...)
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, pDbs, dbNames...), nil
 }
 
 func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, protectedDatabases map[string]struct{}, dbNames ...string) bool {
@@ -418,21 +405,14 @@ func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, prote
 	return true
 }
 
-func checkProtectedDatabaseWriteByPrivilege(ctx context.Context, ses *Session, priv *privilege) bool {
+func checkProtectedDatabaseWriteByPrivilege(ctx context.Context, ses *Session, priv *privilege) (bool, error) {
 	if ses == nil || !ses.GetFromRealUser() {
-		return true
+		return true, nil
 	}
 	if priv == nil || len(priv.writeDatabaseTargets) == 0 {
-		return true
+		return true, nil
 	}
-	if canWriteProtectedDatabase(ses) {
-		return true
-	}
-	protectedDatabases := getProtectedDatabaseSet(ses)
-	if len(protectedDatabases) == 0 {
-		return true
-	}
-	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, priv.writeDatabaseTargets...)
+	return checkProtectedDatabaseWrite(ctx, ses, priv.writeDatabaseTargets...)
 }
 
 func privilegeTipWritesDatabase(tip privilegeTips) bool {

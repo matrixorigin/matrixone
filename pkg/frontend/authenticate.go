@@ -2590,11 +2590,13 @@ const (
 // privilegeCache cache privileges on table
 type privilegeCache struct {
 	// All retained grant facts belong to one reachable SQL role.
-	grantRoleID      int64
-	observedVersions [authorizationDependencyCount]engine.TableContentVersion
-	certificate      authorizationCertificate
-	scopeEntries     int
-	nameBytes        int
+	grantRoleID       int64
+	observedVersions  [authorizationDependencyCount]engine.TableContentVersion
+	certificate       authorizationCertificate
+	protectedPolicyMu sync.Mutex
+	protectedPolicy   protectedPolicyCertificate
+	scopeEntries      int
+	nameBytes         int
 	// For objectType table
 	// For objectType table *.*
 	storeForTable [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
@@ -7689,6 +7691,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var pls []privilegeLevelType
 	var yes bool
 	var yes2 bool
+	var protectedDatabases map[string]struct{}
+	if priv.writeDatabaseAndTableDirectly {
+		protectedDatabases, err = protectedPolicyForStatement(ctx, ses)
+		if err != nil {
+			return false, 0, err
+		}
+	}
 
 	// there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
@@ -7711,7 +7720,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
 					priv.isClusterTable,
-					priv.clusterTableOperation)
+					priv.clusterTableOperation, protectedDatabases)
 
 				if yes2 {
 					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, usePrivilegeCache)
@@ -7774,7 +7783,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							tempEntry.databaseName,
 							writeDirectly,
 							mi.isClusterTable,
-							mi.clusterTableOperation)
+							mi.clusterTableOperation, protectedDatabases)
 						if yes2 {
 							viewChain := mi.originViews
 							directView := mi.directView
@@ -8415,8 +8424,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
-	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
-		return false, stats, nil
+	if allowed, err := checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv); !allowed || err != nil {
+		return false, stats, err
 	}
 	ok, delta, roleID, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
@@ -8826,8 +8835,12 @@ func authenticateStatementPlanPrivilege(ctx context.Context, ses *Session, stmt 
 	stats.Reset()
 
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
-		if !checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)) {
-			return false, stats, nil
+		targetDB := string(st.Table.SchemaName)
+		if target := p.GetDdl().GetCreateTable(); target != nil && target.GetDatabase() != "" {
+			targetDB = target.GetDatabase()
+		}
+		if allowed, err := checkProtectedDatabaseWrite(ctx, ses, targetDB); !allowed || err != nil {
+			return false, stats, err
 		}
 		// CTAS needs source-query SELECT privilege even when target-table CREATE
 		// is valid, so we check the source plan explicitly here.
@@ -8846,7 +8859,7 @@ func authenticateStatementPlanPrivilege(ctx context.Context, ses *Session, stmt 
 	return evaluatePlanAuthorization(ctx, ses, &requirement)
 }
 
-func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, bool) {
+func getInsertTargetTableName(stmt *tree.Insert, ses FeSession) (string, string, bool) {
 	if stmt == nil || stmt.Table == nil {
 		return "", "", false
 	}
@@ -8870,7 +8883,7 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 }
 
 func appendMergeActionPrivilegeTips(
-	ses *Session,
+	ses FeSession,
 	stmt *tree.Merge,
 	p *plan.Plan,
 	arr privilegeTipsArray,
@@ -8929,7 +8942,7 @@ func appendMergeActionPrivilegeTips(
 	return arr
 }
 
-func getMergeTargetTableName(stmt *tree.Merge, ses *Session) (string, string, bool) {
+func getMergeTargetTableName(stmt *tree.Merge, ses FeSession) (string, string, bool) {
 	if stmt == nil || stmt.Target == nil {
 		return "", "", false
 	}
@@ -9897,8 +9910,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 	}
 	tenant := ses.GetTenantInfo()
 
-	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
-		return false, stats, nil
+	if allowed, err := checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv); !allowed || err != nil {
+		return false, stats, err
 	}
 
 	if priv.privilegeKind() == privilegeKindNone {
@@ -11743,6 +11756,17 @@ func doInterpretCall(
 	interpreter.varScope = &varScope
 	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
+	if back, ok := bh.(*backExec); ok {
+		if caller, ok := ses.(*backSession); ok && caller.protectedPolicy != nil {
+			back.backSes.protectedPolicy = caller.protectedPolicy
+		} else if owner := upstreamUserSession(ses); owner != nil && owner.GetFromRealUser() {
+			raw, err := protectedPolicyValueForStatement(ctx, owner)
+			if err != nil {
+				return nil, err
+			}
+			back.backSes.protectedPolicy = &derivedProtectedPolicy{owner: owner, raw: raw}
+		}
+	}
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
@@ -11932,7 +11956,12 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
 	varName = strings.ToLower(varName)
-	bh := ses.GetBackgroundExec(ctx)
+	var bh BackgroundExec
+	if varName == ProtectedDatabases {
+		bh = ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -11941,6 +11970,11 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if varName == ProtectedDatabases {
+		if err = lockAndValidateProtectedPolicy(ctx, ses, bh, varValue); err != nil {
+			return err
+		}
+	}
 
 	// check if var exists
 	sql := getSqlForGetSysVarWithAccount(accountId, varName)
@@ -11954,7 +11988,14 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		return
 	}
 
-	if execResultArrayHasData(erArray) {
+	if varName == ProtectedDatabases {
+		value := quoteSQLStringLiteral(getVariableValue(varValue))
+		if execResultArrayHasData(erArray) {
+			sql = fmt.Sprintf("update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = 'protected_databases' and system_variables = true", value, accountId)
+		} else {
+			sql = fmt.Sprintf("insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, 'protected_databases', %s, true)", accountId, quoteSQLStringLiteral(accountName), value)
+		}
+	} else if execResultArrayHasData(erArray) {
 		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
 	} else {
 		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))

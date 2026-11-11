@@ -510,6 +510,138 @@ func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 	assert.Equal(t, ts, c.LatestLogtailAppliedTime())
 }
 
+func TestAcquirePeerTableReadSnapshotWaitsForActualApply(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	recvC := make(chan morpc.Message, 4)
+	stream.EXPECT().Receive().Return(recvC, nil)
+	stream.EXPECT().ID().AnyTimes().Return(uint64(1))
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	frontier := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 2}
+	table := api.TableID{DbId: 1, TbId: 2, AccId: 3, DbName: "mo_catalog", TbName: "mo_mysql_compatibility_mode"}
+	requestSent := make(chan struct{}, 1)
+	encode := func(response *service.LogtailResponse) (*service.LogtailResponseSegment, error) {
+		payload, err := response.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		return &service.LogtailResponseSegment{MessageSegment: logtail.MessageSegment{MessageSize: int32(len(payload)), Sequence: 1, MaxSequence: 1, Payload: payload}}, nil
+	}
+	stream.EXPECT().Send(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(func(_ context.Context, message morpc.Message) error {
+		request := message.(*service.LogtailRequest).GetReadBarrier()
+		if request == nil || request.GetTableReadTarget() == nil {
+			return fmt.Errorf("expected table read target request")
+		}
+		if got := request.GetTableReadTarget(); got.DbId != table.DbId || got.TbId != table.TbId || got.AccId != table.AccId {
+			return fmt.Errorf("unexpected table read target: %+v", got)
+		}
+		response, err := encode(&service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			Response: &logtail.LogtailResponse_ReadBarrierResponse{ReadBarrierResponse: &logtail.ReadBarrierResponse{
+				BarrierId: request.BarrierId, Timestamp: &frontier,
+			}},
+		}})
+		if err != nil {
+			return err
+		}
+		recvC <- response
+		requestSent <- struct{}{}
+		return nil
+	})
+	peer, err := service.NewLogtailClient(t.Context(), stream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	sub, err := encode(&service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+		Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{
+			SupportsReadBarrier: true, SupportsTableReadTarget: true,
+		}},
+	}})
+	require.NoError(t, err)
+	recvC <- sub
+	_, err = peer.Receive(t.Context())
+	require.NoError(t, err)
+	recvCtx, stopRecv := context.WithCancel(t.Context())
+	recvDone := make(chan error, 1)
+	go func() {
+		for {
+			_, recvErr := peer.Receive(recvCtx)
+			if recvErr != nil {
+				recvDone <- recvErr
+				return
+			}
+		}
+	}()
+	defer func() { stopRecv(); <-recvDone }()
+
+	client := &PushClient{
+		subscriber:      newLogTailSubscriber(),
+		timestampWaiter: &barrierTimestampWaiter{get: func(_ context.Context, target timestamp.Timestamp) (timestamp.Timestamp, error) { return target, nil }},
+	}
+	client.replayVersion.Store(nextReplayVersion.Add(1))
+	expectedGeneration := client.replayVersion.Load()
+	client.subscriber.swapClient(peer)
+	client.subscriber.setReady()
+	client.receivedLogTailTime.tList = make([]atomic.Value, consumerNumber+1)
+	for i := range client.receivedLogTailTime.tList {
+		client.receivedLogTailTime.tList[i].Store(frontier.Prev())
+	}
+	client.receivedLogTailTime.timestampWaiter = client.timestampWaiter
+	client.receivedLogTailTime.ready.Store(true)
+	type result struct {
+		snapshot   timestamp.Timestamp
+		generation uint64
+		supported  bool
+		err        error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snapshot, generation, supported, acquireErr := client.AcquirePeerTableReadSnapshot(t.Context(), table, timestamp.Timestamp{})
+		done <- result{snapshot: snapshot, generation: generation, supported: supported, err: acquireErr}
+	}()
+	select {
+	case <-requestSent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("table target request was not sent")
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("returned before target logtail was applied: %+v", got)
+	case <-time.After(10 * time.Millisecond):
+	}
+	for i := range client.receivedLogTailTime.tList {
+		client.receivedLogTailTime.updateTimestamp(i, frontier, time.Now())
+	}
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.True(t, got.supported)
+		require.Equal(t, expectedGeneration, got.generation)
+		require.Equal(t, frontier.Next(), got.snapshot)
+	case <-time.After(5 * time.Second):
+		t.Fatal("did not finish after applying target logtail")
+	}
+
+	for i := range client.receivedLogTailTime.tList {
+		client.receivedLogTailTime.tList[i].Store(frontier.Prev())
+	}
+	done = make(chan result, 1)
+	go func() {
+		snapshot, generation, supported, acquireErr := client.AcquirePeerTableReadSnapshot(t.Context(), table, timestamp.Timestamp{})
+		done <- result{snapshot: snapshot, generation: generation, supported: supported, err: acquireErr}
+	}()
+	select {
+	case <-requestSent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second table target request was not sent")
+	}
+	client.invalidateReadContinuity()
+	select {
+	case got := <-done:
+		require.Error(t, got.err, "replay reset must release a wait tied to the previous generation")
+	case <-time.After(5 * time.Second):
+		t.Fatal("replay reset did not release the table target wait")
+	}
+}
+
 func TestAcquireAppliedLogtailReadBarrier(t *testing.T) {
 	frontier := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
 	waiter := &barrierTimestampWaiter{get: func(
