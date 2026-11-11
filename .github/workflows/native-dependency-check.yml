@@ -7,13 +7,47 @@ permissions:
   contents: read
 
 jobs:
-  macos-native-flags-diagnostic:
+  gossip-normal-diagnostic:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Check system tools and native Make target contract
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build native CPU dependencies
         run: |
-          node --version
-          /usr/bin/make --version
-          PATH="/usr/bin:/bin:$PATH" node --test .github/ci/native-provenance-makeflags.test.cjs
+          export GOEXPERIMENT=simd GOMAXPROCS=2
+          go version
+          make cgo NATIVE_BUILD_JOBS=2
+      - name: Run original normal test
+        shell: bash
+        run: |
+          export GOEXPERIMENT=simd GOMAXPROCS=2
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path.cwd() / 'pkg/logservice/gossip_fixture_test.go'
+          target = Path(os.environ['RUNNER_TEMP']) / 'gossip-baseline.go'
+          overlay = Path(os.environ['RUNNER_TEMP']) / 'gossip-baseline.json'
+          text = source.read_text()
+          old = 'occupied, err = net.Listen("tcp", cfg.GossipListenAddr())'
+          check = '\t\thost, port, err := net.SplitHostPort(injectedConfigs[1].GossipListenAddr())\n\t\trequire.NoError(t, err)\n\t\trequire.Contains(t, collisionErr.Error(), fmt.Sprintf("Failed to start TCP listener on %q port %s", host, port))\n'
+          assert text.count(old) == 1 and text.count(check) == 1
+          text = text.replace(old, 'occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())').replace(check, '')
+          target.write_text(text)
+          overlay.write_text(json.dumps({'Replace': {str(source): str(target)}}))
+          PY
+          set +e
+          set -o pipefail
+          .agents/skills/mo-dev/scripts/mo-cgo-test -vet=off -short -v -tags matrixone_test -p=1 -count=1 -timeout=5m -overlay="$RUNNER_TEMP/gossip-baseline.json" -run '^TestGossipFixtureStartupRealBindCollision$' ./pkg/logservice 2>&1 | tee "$RUNNER_TEMP/gossip-baseline-normal.log"
+          result=${PIPESTATUS[0]}
+          echo "BASELINE_EXIT=$result"
+          if [[ "$result" -ne 0 && "$result" -ne 1 ]]; then exit "$result"; fi
+      - name: Run final candidate normal test
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOEXPERIMENT=simd GOMAXPROCS=2
+          .agents/skills/mo-dev/scripts/mo-cgo-test -vet=off -short -v -tags matrixone_test -p=1 -count=1 -timeout=5m -run '^TestGossipFixtureStartupRealBindCollision$' ./pkg/logservice
