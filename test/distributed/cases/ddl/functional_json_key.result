@@ -16,16 +16,16 @@ create table empty_docs(id int primary key,doc json);
 create index idx_json_value on empty_docs ((doc));
 not supported: functional index result type
 create index idx_json_extract on empty_docs ((json_extract(doc,'$.kind')));
-not supported: functional index expression must have session-independent semantics
+not supported: functional index expression is not supported: json_extract(doc,'$.kind')
 create index idx_unbounded_text on empty_docs ((doc ->> '$.kind'));
-not supported: functional index expression must have session-independent semantics
+not supported: functional index expression is not supported: json_unquote(json_extract(doc,'$.kind'))
 create index idx_path_too_large on empty_docs ((cast(doc ->> '$[4294967296]' as char(20))));
-not supported: functional index expression must have session-independent semantics
+not supported: functional index expression is not supported: cast(json_unquote(json_extract(doc,'$[4294967296]')) as char(20))
 select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_json_key_bvt' and att_relname='empty_docs' and attr_has_generated=1;
 hidden_generated
 0
 create index idx_path_integer_overflow on empty_docs ((cast(doc ->> '$[999999999999999999999999999999999999]' as char(20))));
-not supported: functional index expression must have session-independent semantics
+not supported: functional index expression is not supported: cast(json_unquote(json_extract(doc,'$[999999999999999999999999999999999999]')) as char(20))
 select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_json_key_bvt' and att_relname='empty_docs' and attr_has_generated=1;
 hidden_generated
 0
@@ -86,4 +86,135 @@ select id from docs where cast(doc ->> '$.kind' as char(20))='alpha' order by id
 id
 1
 2
+create table nj32(id int primary key,doc json);
+insert into nj32 values(1,'{"a":42}'),(2,'{"a":"123"}'),(3,'{"a":null}'),(4,'{}'),(5,NULL);
+create index nj32_int on nj32 ((cast(json_extract(doc,'$.a') as int)));
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_json_key_bvt' and att_relname='nj32' and attr_has_generated=1;
+hidden_generated
+1
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42 order by id;
+id
+1
+select id from nj32 ignore index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42 order by id;
+id
+1
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=123 order by id;
+id
+2
+select id from nj32 where cast(json_extract(doc,'$.a') as int) is null order by id;
+id
+3
+4
+5
+insert into nj32 values(6,'{"a":2147483648}');
+invalid argument operator cast, bad value [JSON -> INT]
+insert into nj32 values(7,'{"a":7}');
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42 order by id;
+id
+1
+create table nj32_like like nj32;
+insert into nj32_like select * from nj32;
+select id from nj32_like force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42 order by id;
+id
+1
+insert into nj32_like values(8,'{"a":2147483648}');
+invalid argument operator cast, bad value [JSON -> INT]
+alter table nj32 add column extra int, algorithm=copy;
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42 order by id;
+id
+1
+insert into nj32(id,doc) values(8,'{"a":2147483648}');
+invalid argument operator cast, bad value [JSON -> INT]
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_json_key_bvt' and att_relname='nj32' and attr_has_generated=1;
+hidden_generated
+1
+create table nj64(id int primary key,doc json);
+insert into nj64 values(1,'{"a":42}'),(2,'{"a":2147483648}'),(3,'{"a":"123"}'),(4,'{}'),(5,NULL);
+create index nj64_signed on nj64 ((cast(json_extract(doc,'$.a') as signed integer)));
+show create table nj64;
+Table	Create Table
+nj64	CREATE TABLE `nj64` (\n  `id` int NOT NULL,\n  `doc` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `nj64_signed` ((cast(json_extract(`doc`, '$.a') as signed)))\n)
+select id from nj64 force index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=42 order by id;
+id
+1
+select id from nj64 ignore index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=42 order by id;
+id
+1
+select id from nj64 force index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+select id from nj64 ignore index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+select id from nj64 where cast(json_extract(doc,'$.a') as signed) is null order by id;
+id
+4
+5
+create table nj64_like like nj64;
+insert into nj64_like select * from nj64;
+select id from nj64_like force index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+alter table nj64 add column extra int, algorithm=copy;
+select id from nj64 force index(nj64_signed) where cast(json_extract(doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+alter table nj64 rename column doc to renamed_doc;
+show create table nj64;
+Table	Create Table
+nj64	CREATE TABLE `nj64` (\n  `id` int NOT NULL,\n  `renamed_doc` json DEFAULT NULL,\n  `extra` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `nj64_signed` ((cast(json_extract(`renamed_doc`, '$.a') as signed)))\n)
+select id from nj64 force index(nj64_signed) where cast(json_extract(renamed_doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+create table nj64_renamed_like like nj64;
+insert into nj64_renamed_like select * from nj64;
+select id from nj64_renamed_like force index(nj64_signed) where cast(json_extract(renamed_doc,'$.a') as signed)=2147483648 order by id;
+id
+2
+create table nu64(id int primary key,doc json);
+insert into nu64 values(1,'{"a":42}'),(2,'{"a":4294967296}'),(3,'{"a":"77"}'),(4,'{}'),(5,NULL);
+create index nu64_uns on nu64 ((cast(json_extract(doc,'$.a') as unsigned integer)));
+show create table nu64;
+Table	Create Table
+nu64	CREATE TABLE `nu64` (\n  `id` int NOT NULL,\n  `doc` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `nu64_uns` ((cast(json_extract(`doc`, '$.a') as unsigned)))\n)
+select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42 order by id;
+id
+1
+select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42 order by id;
+id
+1
+select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=4294967296 order by id;
+id
+2
+select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=4294967296 order by id;
+id
+2
+select id from nu64 where cast(json_extract(doc,'$.a') as unsigned) is null order by id;
+id
+4
+5
+select id from nj32 force index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+id
+1
+select id from nj32 ignore index(nj32_int) where cast(json_extract(doc,'$.a') as int)=42.0 order by id;
+id
+1
+select id from nj32 where cast(json_extract(doc,'$.a') as int)=123.0 order by id;
+id
+2
+select id from nu64 force index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+id
+1
+select id from nu64 ignore index(nu64_uns) where cast(json_extract(doc,'$.a') as unsigned)=42.0 order by id;
+id
+1
+select id from nu64 where cast(json_extract(doc,'$.a') as unsigned)=42.5 order by id;
+id
+create index bad_ny_med on nj32 ((cast(json_extract(doc,'$.a') as mediumint)));
+CAST to MEDIUMINT is not supported is not yet implemented
+create index bad_ny_int3 on nj32 ((cast(json_extract(doc,'$.a') as int3)));
+CAST to MEDIUMINT is not supported is not yet implemented
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_json_key_bvt' and att_relname='nj32' and attr_has_generated=1;
+hidden_generated
+1
 drop database functional_json_key_bvt;

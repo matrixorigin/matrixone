@@ -857,6 +857,9 @@ func (node Exprs) Format(ctx *FmtCtx) {
 		ctx.WriteString(prefix)
 		n.Format(ctx)
 		prefix = ", "
+		if ctx.compactArgLists {
+			prefix = ","
+		}
 	}
 }
 
