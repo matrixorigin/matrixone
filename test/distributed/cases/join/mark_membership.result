@@ -1,0 +1,125 @@
+drop database if exists mark_membership;
+create database mark_membership;
+use mark_membership;
+create table probes(id int);
+create table members(id int);
+create table extra(id int);
+insert into probes values (NULL), (1), (2), (3);
+insert into members values (1), (1);
+insert into extra values (4);
+select id, id in (select id from members) as member,
+id not in (select id from members) as nonmember from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1
+select count(*) from probes where id not in (select id from members union all select id from extra);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from probes where id in (select id from members union all select 4);
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into extra values (NULL);
+select id, id in (select id from members union all select id from extra) as member,
+id not in (select id from members union all select id from extra) as nonmember from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null
+select count(*) from probes where id not in (select id from members union all select id from extra);
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare membership_stmt from 'select id, id not in (select id from extra) as nonmember from probes order by id';
+execute membership_stmt;
+➤ id[4,32,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+delete from extra where id is NULL;
+execute membership_stmt;
+➤ id[4,32,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+delete from extra;
+execute membership_stmt;
+➤ id[4,32,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+deallocate prepare membership_stmt;
+delete from members;
+insert into members values (NULL);
+select id, id in (select id from members) as member from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+delete from members;
+select id, id in (select id from members) as member,
+id not in (select id from members) as nonmember from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  0  ¦  1  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1
+create table string_probes(id int, k varchar(8192));
+create table string_members(k varchar(8192));
+insert into string_probes values (1, ''), (2, repeat('x', 4096)), (3, concat('a', char(0), 'b')), (4, 'a'), (5, NULL);
+insert into string_members values (''), (repeat('x', 4096)), (concat('a', char(0), 'b')), (NULL);
+select id, k in (select k from string_members) as member,
+k not in (select k from string_members) as nonmember from string_probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  ¦  nonmember[-7,1,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null
+insert into members values (-1), (2);
+select id, id in (select abs(id) from members) as member from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0
+select id, (id, id) in (select id, id from members) as member from probes order by id;
+➤ id[4,32,0]  ¦  member[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  0
+select id, id not in (select id from members where members.id < probes.id) as nonmember from probes order by id;
+➤ id[4,32,0]  ¦  nonmember[-7,1,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+delete from probes;
+delete from members;
+insert into probes values
+(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16),(17),
+(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),(31),(32),(33),
+(34),(35),(36),(37),(38),(39),(40),(41),(42),(43),(44),(45),(46),(47),(48),(49),
+(50),(51),(52),(53),(54),(55),(56),(57),(58),(59),(60),(61),(62),(63),(64),(65),(66),
+(1),(NULL);
+insert into members values (1),(NULL);
+prepare membership_threshold from 'select count(*) as total, count(distinct id) as distinct_ids, count(case when member then 1 end) as in_true, count(case when not member then 1 end) as in_false, count(case when member is null then 1 end) as in_null, count(case when nonmember then 1 end) as not_in_true, count(case when not nonmember then 1 end) as not_in_false, count(case when nonmember is null then 1 end) as not_in_null from (select id, id in (select id from members) as member, id not in (select id from members) as nonmember from probes) marks';
+execute membership_threshold;
+➤ total[-5,64,0]  ¦  distinct_ids[-5,64,0]  ¦  in_true[-5,64,0]  ¦  in_false[-5,64,0]  ¦  in_null[-5,64,0]  ¦  not_in_true[-5,64,0]  ¦  not_in_false[-5,64,0]  ¦  not_in_null[-5,64,0]  𝄀
+67  ¦  66  ¦  1  ¦  0  ¦  66  ¦  0  ¦  1  ¦  66
+delete from members where id is NULL;
+execute membership_threshold;
+➤ total[-5,64,0]  ¦  distinct_ids[-5,64,0]  ¦  in_true[-5,64,0]  ¦  in_false[-5,64,0]  ¦  in_null[-5,64,0]  ¦  not_in_true[-5,64,0]  ¦  not_in_false[-5,64,0]  ¦  not_in_null[-5,64,0]  𝄀
+67  ¦  66  ¦  1  ¦  65  ¦  1  ¦  65  ¦  1  ¦  1
+delete from members;
+execute membership_threshold;
+➤ total[-5,64,0]  ¦  distinct_ids[-5,64,0]  ¦  in_true[-5,64,0]  ¦  in_false[-5,64,0]  ¦  in_null[-5,64,0]  ¦  not_in_true[-5,64,0]  ¦  not_in_false[-5,64,0]  ¦  not_in_null[-5,64,0]  𝄀
+67  ¦  66  ¦  0  ¦  67  ¦  0  ¦  67  ¦  0  ¦  0
+deallocate prepare membership_threshold;
+drop database mark_membership;
