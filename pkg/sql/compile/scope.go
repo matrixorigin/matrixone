@@ -172,7 +172,7 @@ func (s *Scope) freeOperatorsWithOwnProcess() {
 		return
 	}
 	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		op.Free(s.Proc, false, nil)
+		vm.Free(op, s.Proc, false, nil)
 		return nil
 	})
 }
@@ -445,7 +445,7 @@ func (s *Scope) FreeOperator(c *Compile) {
 	}
 
 	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-		op.Free(c.proc, false, nil)
+		vm.Free(op, c.proc, false, nil)
 		return nil
 	})
 }
@@ -2135,25 +2135,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSup
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 
-		// todo:
-		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
-		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		{
-			n := s.DataSource.node
-			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() == nil {
-						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-						c.proc.SetCloneTxnOperator(txnOp)
-					}
-
-					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-					}
-				}
-			}
-		}
+		ctx, _ = scanSnapshotContext(ctx, c.proc.GetTxnOperator(), s.DataSource.node.ScanSnapshot)
 
 		var mainRds []engine.Reader
 

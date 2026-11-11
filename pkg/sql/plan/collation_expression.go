@@ -149,7 +149,7 @@ func collationForExpression(expr *Expr) (expressionCollation, bool) {
 		switch name {
 		case "user", "current_user", "version", "database", "schema":
 			c.rank = 3
-		case "cast", "convert":
+		case "cast", "convert", "binary":
 			c.rank = 2
 		default:
 			// Foreign/old plans may lack provenance. Read types only; never
@@ -279,8 +279,17 @@ func expressionCollationIndexes(name string, arity int) []int {
 		if arity == 2 {
 			return []int{1}
 		}
+	case "regexp_like":
+		// MySQL resolves the comparison collation of REGEXP_LIKE from the
+		// subject and pattern only; the match_type argument never
+		// participates, so a COLLATE on it cannot conflict. LIKE and ILIKE
+		// differ here: MySQL aggregates every LIKE argument, ESCAPE included.
+		if arity >= 2 {
+			return []int{0, 1}
+		}
 	case "=", "<=>", "<", "<=", ">", ">=", "<>", "!=", "between", "in", "not_in",
-		"concat", "concat_ws", "nullif", "union", "values":
+		"concat", "concat_ws", "nullif", "union", "values",
+		"reg_match", "not_reg_match", "find_in_set", "like", "ilike":
 		indexes := make([]int, arity)
 		for i := range indexes {
 			indexes[i] = i
@@ -291,6 +300,122 @@ func expressionCollationIndexes(name string, arity int) []int {
 		return []int{index}
 	}
 	return nil
+}
+
+// regexpBinaryDomainGuard names the regexp collation consumers whose
+// compatibility check must still see an operand's original binary domain.
+// Converting a binary operand to the selected text collation here would
+// erase a _binary introducer before that check can reject the mix the way
+// MySQL does (error 3995). LIKE and FIND_IN_SET are deliberately outside
+// this guard: MySQL resolves their comparison collation from both operands,
+// so an explicit COLLATE converts a binary operand and folds, while an
+// unconverted binary operand keeps the executors' byte-wise routing.
+func regexpBinaryDomainGuard(name string) bool {
+	switch name {
+	case "reg_match", "not_reg_match", "regexp_like":
+		return true
+	}
+	return false
+}
+
+func hasStaticBinaryStringOperand(args []*Expr, indexes []int) bool {
+	for _, index := range indexes {
+		if args[index] != nil &&
+			types.StaticStringDomain(makeTypeByPlan2Expr(args[index])) == types.StringDomainBinary {
+			return true
+		}
+	}
+	return false
+}
+
+// patternSelectedCollationConsumer names the matchers whose executor reads
+// the comparison collation from one operand (the LIKE/REGEXP subject, the
+// FIND_IN_SET list). They need the selected collation delivered even when
+// legacy conversion stays inactive. ILIKE folds on every string domain by
+// definition, so it is deliberately absent.
+func patternSelectedCollationConsumer(name string) bool {
+	switch name {
+	case "like", "reg_match", "not_reg_match", "regexp_like", "find_in_set":
+		return true
+	}
+	return false
+}
+
+// patternBinaryCollationAdmission names the matchers this issue aggregated
+// into collation resolution. Before that, their executors owned the
+// binary-versus-text mix: LIKE/ILIKE/FIND_IN_SET routed byte-wise through
+// the binary operand's string domain, and the regexp functions rejected the
+// mix with error 3995. Equality and the other aggregated functions keep the
+// generic resolution, including its rejection of the same mix.
+func patternBinaryCollationAdmission(name string) bool {
+	switch name {
+	case "like", "ilike", "find_in_set", "reg_match", "not_reg_match", "regexp_like":
+		return true
+	}
+	return false
+}
+
+// pairwiseBinaryTieWinner replays MySQL's pairwise aggregation for the one
+// mix the generic resolver rejects but the pattern executors always owned:
+// at equal non-explicit coercibility a binary operand absorbs every operand
+// it meets, so a case-insensitive column matched against CAST(x AS BINARY)
+// resolves to the binary character set instead of raising error 1267. A
+// text/text conflict or a carried merge conflict keeps the generic verdict,
+// and an explicit COLLATE wins before any tie matters.
+func pairwiseBinaryTieWinner(candidates []expressionCollation) (expressionCollation, bool) {
+	winningRank := uint32(6)
+	for _, candidate := range candidates {
+		winningRank = min(winningRank, candidate.rank)
+	}
+	if winningRank == 0 {
+		return expressionCollation{}, false
+	}
+	var acc expressionCollation
+	accSet, sawBinary := false, false
+	for _, candidate := range candidates {
+		if candidate.rank != winningRank {
+			continue
+		}
+		if candidate.conflict {
+			return expressionCollation{}, false
+		}
+		if !accSet {
+			acc, accSet = candidate, true
+			sawBinary = candidate.charset == uint32(types.CharsetBinary)
+			continue
+		}
+		if acc.charset == uint32(types.CharsetBinary) || candidate.charset == uint32(types.CharsetBinary) {
+			acc = expressionCollation{charset: uint32(types.CharsetBinary), rank: winningRank}
+			sawBinary = true
+			continue
+		}
+		if acc.charset == candidate.charset && acc.version == candidate.version {
+			continue
+		}
+		return expressionCollation{}, false
+	}
+	if !sawBinary {
+		return expressionCollation{}, false
+	}
+	return acc, true
+}
+
+// stringOperandsMatchSelectedCollation reports whether every aggregated
+// string operand already carries the selected charset and version.
+// Coercibility alone does not require delivery: the matchers read only the
+// comparison charset, and keeping the legacy identities avoids no-op casts
+// on the common column-versus-literal shapes.
+func stringOperandsMatchSelectedCollation(args []*Expr, indexes []int, selected expressionCollation) bool {
+	for _, index := range indexes {
+		expr := args[index]
+		if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+			continue
+		}
+		if expr.Typ.Charset != selected.charset || expr.Typ.CollationVersion != selected.version {
+			return false
+		}
+	}
+	return true
 }
 
 func expressionCollationCandidates(args []*Expr, indexes []int) []expressionCollation {
@@ -337,9 +462,42 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 		}
 	}
 	indexes := expressionCollationIndexes(name, len(args))
-	selected, active, err := resolveExpressionCollation(ctx, name, expressionCollationCandidates(args, indexes))
-	if err != nil || !active {
+	candidates := expressionCollationCandidates(args, indexes)
+	selected, active, err := resolveExpressionCollation(ctx, name, candidates)
+	if err != nil && patternBinaryCollationAdmission(name) {
+		if restored, ok := pairwiseBinaryTieWinner(candidates); ok {
+			// Restore the routing these matchers had before they joined
+			// collation resolution: the binary operand wins the tie, and the
+			// unchanged operands reach the executor, which compares byte-wise
+			// (LIKE/ILIKE/FIND_IN_SET) or rejects the mix (error 3995).
+			selected, active, err = restored, false, nil
+		}
+	}
+	if err != nil {
 		return args, err
+	}
+	if regexpBinaryDomainGuard(name) && hasStaticBinaryStringOperand(args, indexes) {
+		// A binary string operand must reach the regexp compatibility check
+		// with its original domain. Converting it to the selected collation
+		// here would erase a _binary introducer before the check can reject
+		// the mix the way MySQL does (error 3995), regardless of whether any
+		// other operand activates conversion.
+		return args, nil
+	}
+	if !active {
+		// Pattern matchers read the comparison collation from a single
+		// operand, so the selected collation must still be delivered when
+		// implicit version-zero operands disagree with it (for example a
+		// text _bin column matched against a case-insensitive column).
+		// Every other function keeps its legacy operand identities here,
+		// operands already carrying the selection need no conversion, and a
+		// binary selection already routes every matcher byte-wise through
+		// the binary operand's own string domain.
+		if selected.charset == uint32(types.CharsetBinary) ||
+			!patternSelectedCollationConsumer(name) ||
+			stringOperandsMatchSelectedCollation(args, indexes, selected) {
+			return args, nil
+		}
 	}
 	result := append([]*Expr(nil), args...)
 	var convert func(*Expr) (*Expr, error)
@@ -379,6 +537,9 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 			copy.Typ = target
 			return &copy, nil
 		}
+		if types.IsCaseInsensitiveCollation(uint8(selected.charset)) {
+			clearConvertedBinaryLiteralForm(expr, selected.rank)
+		}
 		return appendCastBeforeExpr(ctx, expr, target)
 	}
 	for _, index := range indexes {
@@ -388,6 +549,37 @@ func normalizeExpressionCollations(ctx context.Context, name string, args []*Exp
 		}
 	}
 	return result, nil
+}
+
+// clearConvertedBinaryLiteralForm drops the binary string provenance of a
+// constant binary literal whose value the conversion cast reinterprets under
+// a case-insensitive selected collation, but only when that collation won by
+// strictly stronger coercibility than the literal's own (an explicit COLLATE,
+// or a winning implicit one such as a column's). MySQL keeps a binary string
+// byte-wise at equal coercibility, so a coercible-versus-coercible tie (for
+// example 'abc' LIKE _binary 'ABC%' or FIND_IN_SET('A', _binary 'a,b')) must
+// retain the literal's binary domain and stay byte-wise. When the strict win
+// holds, the converted value compares under the selected collation instead of
+// routing the pattern matchers byte-wise (issue #31175). The cast target type
+// is unchanged; only the domain the literal claims for itself follows the
+// conversion.
+func clearConvertedBinaryLiteralForm(expr *Expr, selectedRank uint32) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return
+	}
+	switch literal.LiteralForm {
+	case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plan.StringLiteralForm_STRING_LITERAL_BIT:
+	default:
+		return
+	}
+	candidate, ok := collationForExpression(expr)
+	if !ok || selectedRank >= candidate.rank {
+		return
+	}
+	literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
 }
 
 func numericBetweenCollationArguments(ctx context.Context, args []*Expr) ([]*Expr, error) {
@@ -451,6 +643,18 @@ func setExpressionCollation(ctx context.Context, name string, args []*Expr, typ 
 		if args[1].Typ.CollationCoercibilitySet {
 			selected, _ := collationForExpression(args[1])
 			selected.apply(typ)
+		}
+		return nil
+	}
+	if name == "binary" {
+		// BINARY is a cast operator, so its result keeps MySQL's IMPLICIT
+		// coercibility (2) rather than inheriting an argument's text collation
+		// or falling to the default rank: either would let a case-insensitive
+		// column strictly outrank it and convert the binary operand back to
+		// text (issue #31175). Constant folding preserves this Typ, so the
+		// stamp also covers a folded BINARY literal.
+		if !typ.CollationCoercibilitySet {
+			typ.CollationCoercibility, typ.CollationCoercibilitySet = 2, true
 		}
 		return nil
 	}

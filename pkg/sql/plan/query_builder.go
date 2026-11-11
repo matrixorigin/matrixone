@@ -4736,6 +4736,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	if builder.optimizerHints == nil || builder.optimizerHints.runtimeFilter == 0 {
+		builder.qry.LocalRuntimeFilterDomains = LocalRuntimeFilterDomains(builder.qry, func(scan *plan.Node, column string) float64 {
+			stats := builder.getStatsInfoByTableID(scan.TableDef.TblId)
+			if stats == nil || stats.GetStats() == nil {
+				return -1
+			}
+			return stats.GetStats().NdvMap[column]
+		})
+	}
 	return builder.qry, nil
 }
 

@@ -75,7 +75,7 @@ func (b *DetachedBuffer) CanAttachTo(
 	v *Vector,
 	kind DetachedBufferKind,
 ) bool {
-	if b == nil || v == nil || cap(b.data) == 0 ||
+	if b == nil || v == nil || v.IsDictionary() || cap(b.data) == 0 ||
 		!AllocationAccountSelectionsEqual(b.selection, v.allocationAccount) ||
 		kind > DetachedAreaBuffer {
 		return false

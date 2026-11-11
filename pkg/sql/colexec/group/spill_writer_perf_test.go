@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"runtime"
 	"testing"
@@ -330,6 +331,106 @@ func BenchmarkGroupSpillWriterDiskAccounting(b *testing.B) {
 			generation.Close()
 			budget.Close()
 			require.Zero(b, pool.CurrNB())
+		})
+	}
+}
+
+func TestGroupSpillVarlenaWriterMatchesReference(t *testing.T) {
+	pool := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(pool); require.Zero(t, pool.CurrNB()) })
+	require.NoError(t, vector.AppendStringList(source, []string{"", "short",
+		string(bytes.Repeat([]byte("x"), 23)), string(bytes.Repeat([]byte("y"), 24)),
+		string(bytes.Repeat([]byte("large"), spillWrBufSize/5+1))}, nil, pool))
+	rows := []int32{3, 1, 4, 0, 2, 3}
+	var reference bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+	for _, direct := range []bool{false, true} {
+		t.Run(fmt.Sprint("direct=", direct), func(t *testing.T) {
+			var target bytes.Buffer
+			writer, err := newGroupSpillWriter(&container{mp: pool}, &target, context.Background(), nil)
+			require.NoError(t, err)
+			t.Cleanup(writer.Free)
+			writer.disabled = direct
+			record := spillRecordWriter{target: writer}
+			require.NoError(t, source.MarshalSelectedRowsTo(&record, rows))
+			require.NoError(t, writer.Flush())
+			require.Equal(t, int64(reference.Len()), record.written)
+			require.Equal(t, reference.Bytes(), target.Bytes())
+		})
+	}
+	var fallback bytes.Buffer
+	record := spillRecordWriter{target: &fallback}
+	require.NoError(t, source.MarshalSelectedRowsTo(&record, rows))
+	require.Equal(t, reference.Bytes(), fallback.Bytes())
+	require.Equal(t, int64(reference.Len()), record.written)
+	t.Run("failed flush is not replayed", func(t *testing.T) {
+		target := &groupSpillPartialWriter{limit: 4}
+		writer, err := newGroupSpillWriter(&container{mp: pool}, target, context.Background(), nil)
+		require.NoError(t, err)
+		t.Cleanup(writer.Free)
+		record := spillRecordWriter{target: writer}
+		require.ErrorIs(t, source.MarshalSelectedRowsTo(&record, rows), io.ErrShortWrite)
+		require.Equal(t, 1, target.writes)
+		require.ErrorIs(t, writer.Flush(), io.ErrShortWrite)
+		require.Equal(t, 1, target.writes)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	writer, err := newGroupSpillWriter(&container{mp: pool}, io.Discard, ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(writer.Free)
+	cancel()
+	n, err := writer.WriteSelectedVarlenaRows(vector.MustFixedColNoTypeCheck[types.Varlena](source), source.GetArea(), rows)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, n)
+}
+
+func BenchmarkGroupSpillSelectedVarlenaRows(b *testing.B) {
+	pool := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	b.Cleanup(func() { source.Free(pool); require.Zero(b, pool.CurrNB()) })
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(b, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		require.Zero(b, account.Snapshot().Used)
+		_, first, err := registry.CompleteTerminal(account)
+		require.NoError(b, err)
+		require.True(b, first)
+	})
+	values := make([]string, 8192)
+	rows := make([]int32, 0, 256)
+	for i := range values {
+		values[i] = fmt.Sprintf("product-%060d", i)
+		if i%32 == 0 {
+			rows = append(rows, int32(i))
+		}
+	}
+	require.NoError(b, vector.AppendStringList(source, values, nil, pool))
+	for _, fast := range []bool{false, true} {
+		b.Run(fmt.Sprint("fast=", fast), func(b *testing.B) {
+			ctx, cancel := context.WithCancel(context.Background())
+			b.Cleanup(cancel)
+			writer, err := newGroupSpillWriter(&container{mp: pool, allocationAccount: account}, io.Discard, ctx, nil)
+			require.NoError(b, err)
+			b.Cleanup(writer.Free)
+			record := spillRecordWriter{target: writer}
+			var target io.Writer = &record
+			if !fast {
+				target = groupSpillWriteOnly{Writer: &record}
+			}
+			b.SetBytes(int64(len(rows) * (4 + len(values[0]))))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := source.MarshalSelectedRowsTo(target, rows); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			require.NoError(b, writer.Flush())
 		})
 	}
 }
