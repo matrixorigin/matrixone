@@ -195,6 +195,10 @@ func (d *DiskCache) prefetchRead(
 		f.mu.Unlock()
 		return nil, 0, false
 	}
+	if f.closing == nil {
+		f.closing, f.cancelReads = context.WithCancel(context.Background())
+	}
+	closing := f.closing
 	addRun := func(first, last int, now time.Time) {
 		start := windowStart + int64(first)*block
 		end := windowStart + int64(last+1)*block
@@ -244,7 +248,11 @@ func (d *DiskCache) prefetchRead(
 	for i, r := range runs {
 		go func(fl *prefetchFlight) {
 			defer f.reads.Done()
-			err := fl.read(context.WithoutCancel(ctx), open)
+			// The read outlives the read that starts it, not the cache.
+			readCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			defer cancel()
+			defer context.AfterFunc(closing, cancel)()
+			err := fl.read(readCtx, open)
 			content := fl.content()
 			if err == nil && len(content) == 0 {
 				err = io.ErrUnexpectedEOF
@@ -426,14 +434,22 @@ type prefetchFlights struct {
 	m      map[string][]*prefetchFlight
 	closed bool
 	reads  sync.WaitGroup // reads of runs and their cache writes
+	// closing is canceled when the cache closes; it cancels the reads of runs.
+	closing     context.Context
+	cancelReads context.CancelFunc
 }
 
-// closePrefetches stops new prefetch reads and waits for those under way, or ctx.
+// closePrefetches stops new prefetch reads, cancels those under way and waits for them,
+// or ctx.
 func (d *DiskCache) closePrefetches(ctx context.Context) {
 	f := &d.prefetchFlights
 	f.mu.Lock()
 	f.closed = true
+	cancelReads := f.cancelReads
 	f.mu.Unlock()
+	if cancelReads != nil {
+		cancelReads()
+	}
 	done := make(chan struct{})
 	go func() {
 		f.reads.Wait()

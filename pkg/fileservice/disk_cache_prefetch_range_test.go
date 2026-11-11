@@ -473,3 +473,72 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	require.True(t, ok, "cached after its reader's context ended")
 	require.Equal(t, int64(128<<10), r.size)
 }
+
+// Deleting an object deletes its cached ranges: a read of another offset in a range
+// cached before the delete reads the object written after it.
+func TestDeleteRemovesCachedRanges(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	ctx := context.Background()
+	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.NoError(t, fs.Delete(ctx, "object"))
+	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object")))
+	_, err := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 6000, 100)
+	require.False(t, err, "the deleted object's ranges are not indexed")
+
+	recreated := slices.Clone(data)
+	for i := range recreated {
+		recreated[i] ^= 0xff
+	}
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(recreated)), Data: recreated}}, Policy: SkipDiskCache | SkipMemoryCache}))
+	require.Equal(t, recreated[6000:6100], readRangeOf(t, fs, 0, 6000, 100))
+	require.Equal(t, int64(2), storage.reads.Load(), "the read goes to object storage")
+}
+
+// stuckStorage blocks a read until its context is canceled or the test ends.
+type stuckStorage struct {
+	ObjectStorage
+	started chan struct{}
+	end     chan struct{}
+}
+
+func (b *stuckStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	b.started <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.end:
+		return nil, io.ErrUnexpectedEOF
+	}
+}
+
+// Closing the disk cache cancels the prefetch range reads under way, which outlive the
+// reads that start them.
+func TestCloseCancelsPrefetchRangeReads(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	storage := &stuckStorage{ObjectStorage: fs.storage, started: make(chan struct{}, 1), end: make(chan struct{})}
+	fs.storage = storage
+	t.Cleanup(func() { close(storage.end) })
+	readCtx, cancel := context.WithCancel(context.Background())
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 5000, Size: 2}}}
+		_ = fs.Read(readCtx, vec)
+		vec.Release()
+	}()
+	<-storage.started
+	cancel()
+	<-readDone
+
+	closed := make(chan struct{})
+	go func() {
+		fs.diskCache.Close(context.Background())
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("close waits for a blocked prefetch range read")
+	}
+}

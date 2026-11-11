@@ -107,7 +107,8 @@ results; a general-purpose cache library; tuning the policy per workload at runt
   the object that contains it, else by object storage. Range files of objects whose
   paths have no separator are indexed by object when they enter the cache, including
   those found on disk at startup; a read passes over and forgets an indexed file the
-  cache no longer holds.
+  cache no longer holds. Deleting an object deletes its indexed range files, so no read
+  of the object after the delete is served from them.
 - **Eviction and bound.** Inserts leave eviction to an evictor already running, which
   checks again when it stops, so a burst cannot lose a wakeup. Eviction removes
   bounded batches and runs every removal callback outside all locks, so a callback may

@@ -128,7 +128,8 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
   another reader may already be using its bytes.
 - Closing the file service drops every queued download, cancels the downloads that
   are running and waits for them, bounded by the caller's context. Closing the disk
-  cache also cancels running prefetch downloads.
+  cache also cancels running prefetch downloads, and the reads of prefetch ranges,
+  which outlive the reads that start them, before waiting for them.
 
 ### An index row fetch prefetches only its columns (decision)
 

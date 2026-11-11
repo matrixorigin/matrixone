@@ -1645,8 +1645,10 @@ func (d *DiskCache) DeletePaths(
 		return err
 	}
 	for _, path := range canonical {
-		//TODO also delete IOEntry files
 		if err = d.removeOnePath(ctx, path); err != nil {
+			return
+		}
+		if err = d.removeRangeFiles(ctx, path); err != nil {
 			return
 		}
 	}
@@ -1692,6 +1694,30 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 	}
 
 	return
+}
+
+// removeRangeFiles deletes the cached range files of the object at path.
+func (d *DiskCache) removeRangeFiles(ctx context.Context, path string) error {
+	for _, r := range d.ranges.of(d.rangeObjectKey(path)) {
+		if err := d.removeRangeFile(ctx, r.diskPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DiskCache) removeRangeFile(ctx context.Context, diskPath string) error {
+	doneUpdate, err := d.startUpdateContext(ctx, diskPath)
+	if err != nil {
+		return err
+	}
+	defer doneUpdate()
+	d.ranges.remove(diskPath)
+	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	d.cache.Delete(ctx, diskPath)
+	return nil
 }
 
 func (d *DiskCache) Evict(ctx context.Context, done chan int64) {
