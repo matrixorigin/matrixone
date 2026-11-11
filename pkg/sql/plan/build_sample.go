@@ -127,11 +127,42 @@ func validSample(ctx *BindContext, builder *QueryBuilder) error {
 //	percents float64
 //}
 
+// SAMPLE has no aggregate GROUPING bitmap. Its branch membership is known at
+// binding, so evaluate GROUPING here rather than confusing actual and omitted NULLs.
+func rewriteSampleGrouping(expr *plan.Expr, ctx *BindContext) {
+	walkGroupingExpr(expr, func(e *plan.Expr) {
+		fn := e.GetF()
+		if fn == nil || fn.Func.ObjName != "grouping" {
+			return
+		}
+		var mask int64
+		for _, arg := range fn.Args {
+			c := arg.GetCol()
+			if c == nil || c.RelPos != ctx.groupTag || int(c.ColPos) >= len(ctx.groupingFlag) {
+				return
+			}
+			mask <<= 1
+			if !ctx.groupingFlag[c.ColPos] {
+				mask |= 1
+			}
+		}
+		*e = *MakePlan2Int64ConstExprWithType(mask)
+	})
+}
+
 func generateSamplePlanNode(ctx *BindContext, childNodeID int32) *plan.Node {
+	groups := append([]*plan.Expr(nil), ctx.groups...)
+	for i, present := range ctx.groupingFlag {
+		if !present {
+			typ := groups[i].Typ
+			typ.NotNullable = false
+			groups[i] = &plan.Expr{Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+		}
+	}
 	sampleNode := &plan.Node{
 		NodeType:    plan.Node_SAMPLE,
 		Children:    []int32{childNodeID},
-		GroupBy:     ctx.groups,
+		GroupBy:     groups,
 		AggList:     ctx.sampleFunc.columns,
 		BindingTags: []int32{ctx.groupTag, ctx.sampleTag},
 		SampleFunc:  &plan.SampleFuncSpec{Rows: NotSampleByRows, Percent: NotSampleByPercents},

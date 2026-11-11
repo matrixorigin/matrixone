@@ -257,4 +257,67 @@ select * from sample_null_union order by z,chosen;
 select sample(v,100 percent) chosen from empty_src group by grouping sets ((),());
 select g,sample(v,0 percent) chosen from src group by grouping sets ((g),(g));
 
+-- 内部传输保留二进制键的 grouping bitmap：实际 NULL 与总计 NULL 的标记不同。
+create table binary_key(k binary(4),v int not null);
+insert into binary_key values('a',1),('b',2),(null,4);
+create table varbinary_key(k varbinary(4),v int not null);
+insert into varbinary_key values('a',1),('b',2),(null,4);
+select k is null null_key,grouping(k) flag,sum(v) s from binary_key group by k with rollup order by flag,s;
+create table binary_markers as
+select k is null null_key,grouping(k) flag,sum(v) s from binary_key group by k with rollup;
+select * from binary_markers order by flag,s;
+create table varbinary_markers as
+select hex(k) hk,grouping(k) flag,sum(v) s from varbinary_key group by k with rollup;
+select * from varbinary_markers order by flag,s;
+
+-- SAMPLE 必须使用当前集合，补 NULL 的键不能参与原明细分组或继续声明非空。
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup order by flag,g,chosen;
+create table sampled_rollup as
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup;
+select * from sampled_rollup order by flag,g,chosen;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='sampled_rollup' order by ordinal_position;
+select g,h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h) order by flag,g,h,chosen;
+create table sampled_cube as
+select g,h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h);
+select * from sampled_cube order by flag,g,h,chosen;
+select h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h) order by flag,h,chosen;
+select g,grouping(g) flag,sample(v,100 percent) chosen
+from src group by grouping sets ((g),(g),()) order by flag,g,chosen;
+select g,grouping(g) flag,sample(v,100 percent) chosen
+from nullable_src group by g with rollup order by flag,g,chosen;
+select g,grouping(g) flag,sample(v,100 percent) chosen from empty_src group by g with rollup;
+
+-- 窗口读取合成 NULL 后必须刷新值类型；partition-only 键属于上游坐标。
+select first_value(g) over(order by g) f from src group by g with rollup;
+create view first_group_value as select first_value(g) over(order by g) f from src group by g with rollup;
+select * from first_group_value;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='first_group_value';
+create table first_group_ctas as select first_value(g) over(order by g) f from src group by g with rollup;
+select * from first_group_ctas;
+create table partition_group_ctas as
+select first_value(g) over(partition by h order by g) f from src group by g,h with rollup;
+select * from partition_group_ctas order by f;
+create table first_group_fallback as
+select coalesce(first_value(g) over(order by g),7) f,count(*) over() n from src group by g with rollup;
+select * from first_group_fallback;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='first_group_fallback' order by ordinal_position;
+
+-- DISTINCT 必须拒绝 tuple 的未选列，而不是把它当没有列依赖的常量。
+select distinct g from src group by g,h order by (g,h);
+select distinct g from src group by g,h with rollup order by (g,h);
+create table rejected_tuple_order as select distinct g from src group by g,h with rollup order by (g,h);
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_tuple_order';
+
+-- 只消费 COUNT 时不需要传输分组键；SAMPLE 的合法排序表达式在 DISTINCT 后计算。
+select sum(c) from (select count(*) c from src group by g,h with rollup) t;
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by chosen+1;
+create table ordered_sample as
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by chosen+1;
+select * from ordered_sample order by chosen;
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by h;
+
 drop database grouping_ctas_test;

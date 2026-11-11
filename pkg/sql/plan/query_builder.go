@@ -413,6 +413,14 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		expr.Typ.NotNullable = input[impl.Col.ColPos].Typ.NotNullable
+	case *plan.Expr_W:
+		refreshExprNullabilityFromInput(impl.W.WindowFunc, input)
+		// PartitionBy belongs to the upstream PARTITION node's input
+		// coordinates; those keys need not survive into this WINDOW input.
+		for _, order := range impl.W.OrderBy {
+			refreshExprNullabilityFromInput(order.Expr, input)
+		}
+		expr.Typ.NotNullable = expr.Typ.NotNullable && impl.W.WindowFunc.Typ.NotNullable
 	case *plan.Expr_F:
 		for _, arg := range impl.F.Args {
 			refreshExprNullabilityFromInput(arg, input)
@@ -1181,7 +1189,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(len(node.ProjectList)),
+						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -1431,6 +1439,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
+			// Binding preceded grouping/UNION null extension. Refresh both
+			// the evaluated window arguments and its published result proof.
+			refreshExprNullabilityFromInput(expr, childProjList)
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -2478,9 +2489,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		nodes[idx] = nodeID
 	}
 
-	// reset all select's return Projection(type cast up)
-	// we use coalesce function's type check&type cast rule
-	for columnIdx, argsType := range projectTypList {
+	// SQL set operands use COALESCE's common-type rules. Internal grouping
+	// arms instead carry identically bound slots (only nullability differs).
+	// Recoercing them can discard GROUPING bitmaps, e.g. BINARY -> BLOB.
+	for columnIdx := 0; !grouping && columnIdx < len(projectTypList); columnIdx++ {
+		argsType := projectTypList[columnIdx]
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
@@ -4231,6 +4244,11 @@ func (builder *QueryBuilder) appendSampleNode(
 	boundHavingList []*plan.Expr,
 ) (newNodeID int32, err error) {
 	nodeID = builder.appendNode(generateSamplePlanNode(ctx, nodeID), ctx)
+	for _, exprs := range [][]*plan.Expr{ctx.projects, boundHavingList} {
+		for _, expr := range exprs {
+			rewriteSampleGrouping(expr, ctx)
+		}
+	}
 
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr

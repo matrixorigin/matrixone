@@ -38,6 +38,35 @@ type groupingStage struct {
 	// SAMPLE also carries arbitrary input columns through its output. Its
 	// complete post-sample projection is transported, rather than a key list.
 	projectionInputTag int32
+	inputs             map[[2]int32]int32
+}
+
+// Walk only this expression's scope. Subquery plans keep their own bindings;
+// the quantified operand belongs to the outer scope. Frame bounds are constants.
+func walkGroupingExpr(expr *plan.Expr, visit func(*plan.Expr)) {
+	visit(expr)
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			walkGroupingExpr(arg, visit)
+		}
+	}
+	if w := expr.GetW(); w != nil {
+		walkGroupingExpr(w.WindowFunc, visit)
+		for _, p := range w.PartitionBy {
+			walkGroupingExpr(p, visit)
+		}
+		for _, order := range w.OrderBy {
+			walkGroupingExpr(order.Expr, visit)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			walkGroupingExpr(item, visit)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Child != nil {
+		walkGroupingExpr(sub.Child, visit)
+	}
 }
 
 func (builder *QueryBuilder) appendGroupingStage(
@@ -49,37 +78,81 @@ func (builder *QueryBuilder) appendGroupingStage(
 	// Provenance indexes describe the user projection, not this transport
 	// projection. A user NULL at slot i must not retype aggregate input i.
 	ctx.bareNulls = nil
-	stage.resultLen, stage.orderBys, stage.having = resultLen, orders, having
+	stage.resultLen, stage.orderBys = resultLen, orders
+	_, stage.having = splitWindowDependentHavingFilters(having, ctx.windowTag)
 	stage.notCacheable = notCacheable
 
 	if ctx.sampleFunc.hasSampleFunc {
 		stage.projectionInputTag = builder.genNewBindTag()
+		selected := ctx.projects[:resultLen]
 		stage.projects = make([]*plan.Expr, len(ctx.projects))
-		ctx.headings = make([]string, len(ctx.projects))
+		ctx.headings = make([]string, 0, len(ctx.projects))
+		payload := make([]*plan.Expr, 0, len(ctx.projects))
 		for i, expr := range ctx.projects {
-			ctx.headings[i] = fmt.Sprintf("__grouping_%d", i)
+			if i >= resultLen {
+				// Keep reconstructible sort expressions, not opaque hidden slots:
+				// DISTINCT may use chosen+1 when chosen is a selected sample.
+				if order, ok := groupingDistinctOrder(DeepCopyExpr(expr), selected, stage.projectionInputTag); ok {
+					stage.projects[i] = order
+					continue
+				}
+			}
+			pos := int32(len(payload))
+			payload = append(payload, expr)
+			ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", pos))
 			stage.projects[i] = &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: stage.projectionInputTag, ColPos: int32(i),
+					RelPos: stage.projectionInputTag, ColPos: pos,
 				}},
 			}
 		}
+		ctx.projects = payload
 	} else {
-		ctx.projects = make([]*plan.Expr, 0, len(ctx.groups)+len(ctx.aggregates))
+		stage.inputs = make(map[[2]int32]int32)
+		collect := func(expr *plan.Expr) {
+			walkGroupingExpr(expr, func(e *plan.Expr) {
+				if c := e.GetCol(); c != nil && (c.RelPos == ctx.groupTag || c.RelPos == ctx.aggregateTag) {
+					stage.inputs[[2]int32{c.RelPos, c.ColPos}] = -1
+				}
+			})
+		}
+		for _, exprs := range [][]*plan.Expr{stage.projects, ctx.windows, stage.having} {
+			for _, expr := range exprs {
+				collect(expr)
+			}
+		}
+		for _, order := range orders {
+			collect(order.Expr)
+		}
+		ctx.projects = make([]*plan.Expr, 0, len(stage.inputs))
 		ctx.headings = make([]string, 0, cap(ctx.projects))
 		for _, input := range []struct {
 			tag   int32
 			exprs []*plan.Expr
 		}{{ctx.groupTag, ctx.groups}, {ctx.aggregateTag, ctx.aggregates}} {
 			for i, expr := range input.exprs {
+				key := [2]int32{input.tag, int32(i)}
+				if _, used := stage.inputs[key]; !used {
+					continue
+				}
+				stage.inputs[key] = int32(len(ctx.projects))
+				typ := expr.Typ
+				if input.tag == ctx.groupTag && i < len(ctx.groupingFlag) && !ctx.groupingFlag[i] {
+					typ.NotNullable = false
+				}
 				ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", len(ctx.projects)))
 				ctx.projects = append(ctx.projects, &plan.Expr{
-					Typ:  expr.Typ,
+					Typ:  typ,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: input.tag, ColPos: int32(i)}},
 				})
 			}
 		}
+	}
+	if len(ctx.projects) == 0 {
+		// Carry cardinality without forcing an unused (possibly wide) key.
+		ctx.projects = []*plan.Expr{MakePlan2Int64ConstExprWithType(1)}
+		ctx.headings = []string{"__grouping_0"}
 	}
 	nodeID, err := builder.appendProjectionNode(ctx, nodeID, notCacheable)
 	ctx.results = ctx.projects
@@ -89,48 +162,27 @@ func (builder *QueryBuilder) appendGroupingStage(
 // Rebind already-bound expressions, including every window input. No function is
 // rebound against branch-local input after grouping sets have been combined.
 func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *plan.Node) {
-	if col := expr.GetCol(); col != nil {
+	walkGroupingExpr(expr, func(e *plan.Expr) {
+		col := e.GetCol()
+		if col == nil {
+			return
+		}
 		if tag := branch.groupingStage.projectionInputTag; tag != 0 && col.RelPos == tag {
 			col.RelPos = union.BindingTags[0]
-			expr.Typ = union.ProjectList[col.ColPos].Typ
+			e.Typ = union.ProjectList[col.ColPos].Typ
 			return
 		}
 		switch col.RelPos {
-		case branch.groupTag:
+		case branch.groupTag, branch.aggregateTag:
+			col.ColPos = branch.groupingStage.inputs[[2]int32{col.RelPos, col.ColPos}]
 			col.RelPos = union.BindingTags[0]
-			expr.Typ = union.ProjectList[col.ColPos].Typ
-		case branch.aggregateTag:
-			col.RelPos, col.ColPos = union.BindingTags[0], int32(len(branch.groups))+col.ColPos
-			expr.Typ = union.ProjectList[col.ColPos].Typ
+			e.Typ = union.ProjectList[col.ColPos].Typ
 		case branch.windowTag:
 			col.RelPos = output.windowTag
 		case branch.projectTag:
 			col.RelPos = output.projectTag
 		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			rebindGroupingExpr(arg, branch, output, union)
-		}
-	}
-	if w := expr.GetW(); w != nil {
-		rebindGroupingExpr(w.WindowFunc, branch, output, union)
-		for _, p := range w.PartitionBy {
-			rebindGroupingExpr(p, branch, output, union)
-		}
-		for _, order := range w.OrderBy {
-			rebindGroupingExpr(order.Expr, branch, output, union)
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			rebindGroupingExpr(item, branch, output, union)
-		}
-	}
-	if sub := expr.GetSub(); sub != nil && sub.Child != nil {
-		// IN/ANY/ALL keep their outer operand here, not in function Args.
-		rebindGroupingExpr(sub.Child, branch, output, union)
-	}
+	})
 }
 
 // Hidden sort expressions must be evaluated after DISTINCT using only surviving
@@ -151,7 +203,22 @@ func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, tag int32) (*
 		}
 		return expr, true
 	}
-	return expr, expr.GetCol() == nil
+	if list := expr.GetList(); list != nil {
+		for i, item := range list.List {
+			var ok bool
+			list.List[i], ok = groupingDistinctOrder(item, selected, tag)
+			if !ok {
+				return nil, false
+			}
+		}
+		return expr, true
+	}
+	switch expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec, *plan.Expr_Fold:
+		return expr, true
+	default:
+		return nil, false
+	}
 }
 
 func (builder *QueryBuilder) finishGroupingStage(
