@@ -355,6 +355,12 @@ func predicateBorrowsInputs(executor ExpressionExecutor) bool {
 		switch e.fid {
 		case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
 			function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN, function.ISNULL, function.ISNOTNULL:
+		case function.IN, function.NOT_IN:
+			// Membership owns its copied list state and only reads the probe
+			// during Eval. The RHS must remain outside the selected row domain.
+			if e.fixedMembershipList() == nil {
+				return false
+			}
 		default:
 			return false
 		}

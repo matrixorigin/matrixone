@@ -100,7 +100,7 @@ func (expr *FunctionExpressionExecutor) freeDictionaryParameters() {
 	expr.dictionaryParameters = nil
 }
 
-// comparisonProducesNoNulls admits only synchronous strict comparisons whose
+// comparisonProducesNoNulls admits audited comparisons and fixed-list membership whose
 // existing dictionary capability also closes prepared/mixed/grouping shapes.
 // It is checked for every evaluation, including flat inputs; schema nullability
 // and the representation alone do not prove the current logical argument domain.
@@ -113,6 +113,13 @@ func (expr *FunctionExpressionExecutor) comparisonProducesNoNulls() bool {
 	switch expr.fid {
 	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
 		function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN:
+	case function.IN, function.NOT_IN:
+		// The kernel caches list membership, including its NULL bit. A
+		// per-batch or unproven list cannot establish a non-NULL cache result.
+		list := expr.fixedMembershipList()
+		if list == nil || len(expr.parameterResults) != 2 || expr.parameterResults[1] != list {
+			return false
+		}
 	default:
 		return false
 	}
@@ -125,4 +132,26 @@ func (expr *FunctionExpressionExecutor) comparisonProducesNoNulls() bool {
 		}
 	}
 	return true
+}
+
+// fixedMembershipList identifies the execution-owned literal/runtime-filter
+// list, whose row domain and contents stay independent of input batches. These
+// executors do not resize the list in Eval. As for the existing membership
+// cache, changing its contents requires ResetForNextQuery before evaluation.
+// No new cache/generation state is introduced at the expression boundary.
+func (expr *FunctionExpressionExecutor) fixedMembershipList() *vector.Vector {
+	if len(expr.parameterExecutor) != 2 {
+		return nil
+	}
+	list, ok := expr.parameterExecutor[1].(*FixedVectorExpressionExecutor)
+	if !ok || !list.noNeedToSetLength || list.resultVector == nil {
+		return nil
+	}
+	value := list.resultVector
+	oid := value.GetType().Oid
+	if !(oid.IsSignedInt() || oid.IsUnsignedInt() || oid.IsMySQLString()) ||
+		value.IsDictionary() || value.HasGrouping() || value.IsPreparedJSONComparisonParam() {
+		return nil
+	}
+	return value
 }
