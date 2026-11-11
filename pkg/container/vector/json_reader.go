@@ -17,14 +17,23 @@ package vector
 import (
 	"io"
 	"math"
+	"reflect"
 	"sync"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/internal/jsonread"
+)
+
+var (
+	jsonReaderVectorSize      = reflect.TypeFor[Vector]().Size()
+	jsonReaderLeaseSize       = reflect.TypeFor[RefCountedBufferLease]().Size()
+	jsonReaderBuilderSize     = reflect.TypeFor[JSONReaderBuilder]().Size()
+	jsonReaderHandleSize      = reflect.TypeFor[jsonReader]().Size()
+	jsonReaderQueryResultSize = reflect.TypeFor[jsonQueryResult]().Size()
+	jsonReaderCursorSize      = reflect.TypeFor[jsonCursor]().Size()
 )
 
 // JSONReader is an immutable column version. Implementations keep their
@@ -239,7 +248,7 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 		return nil, true, moerr.NewInvalidInputNoCtx("invalid JSON reader descriptors")
 	}
 	admission := firstJSONReaderMemoryAdmission(admissions)
-	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})))
+	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(jsonReaderVectorSize+jsonReaderLeaseSize))
 	if err != nil {
 		return nil, false, err
 	}
@@ -298,7 +307,7 @@ func NewJSONReaderBuilder(mp *mpool.MPool, selection *AllocationAccountSelection
 		return nil, moerr.NewInvalidInputNoCtx("JSON reader builder requires a pool")
 	}
 	admission := firstJSONReaderMemoryAdmission(admissions)
-	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})+unsafe.Sizeof(JSONReaderBuilder{})))
+	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(jsonReaderVectorSize+jsonReaderLeaseSize+jsonReaderBuilderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +361,7 @@ func (b *JSONReaderBuilder) Close() {
 }
 
 func publishJSONReader(column *Vector, mp *mpool.MPool, admission JSONReaderMemoryAdmission, ownerMeta func()) (JSONReader, error) {
-	releaseMeta, err := ReserveJSONReaderMetadata(column.allocationAccount, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(column.allocationAccount, admission, JSONReaderMetadataCapacity(jsonReaderHandleSize))
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +389,7 @@ func (r *jsonReader) Window(start, end int) (JSONReader, error) {
 	if start < 0 || end < start || end > r.length {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader window")
 	}
-	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderHandleSize))
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +409,7 @@ func (r *jsonReader) Repeat(row, length int) (JSONReader, error) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
 	}
 	physicalRow := r.physicalRow(row)
-	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderHandleSize))
 	if err != nil {
 		return nil, err
 	}
@@ -425,12 +434,12 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 			return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader selection")
 		}
 	}
-	ownerMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})))
+	ownerMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderVectorSize+jsonReaderLeaseSize))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { releaseJSONReaderMetadata(ownerMeta) }()
-	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderHandleSize))
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +531,7 @@ func (r *jsonReader) Query(row int, path *bytejson.Path) (JSONQueryResult, error
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderQueryResultSize))
 	if err != nil {
 		return nil, err
 	}
@@ -577,7 +586,7 @@ func (r *jsonReader) OpenCursor() (JSONCursor, error) {
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonCursor{})))
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(jsonReaderCursorSize))
 	if err != nil {
 		return nil, err
 	}

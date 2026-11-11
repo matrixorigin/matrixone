@@ -20,9 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sync"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -339,9 +339,13 @@ func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, byte(bytejson.TpCodeString), owned.Type)
 	private := reader.(*cacheJSONReader).column.GetBytesAt(0)
-	start := uintptr(unsafe.Pointer(unsafe.SliceData(private)))
-	text := uintptr(unsafe.Pointer(unsafe.StringData(owned.Text)))
-	require.True(t, text < start || text >= start+uintptr(len(private)), "returned text must not alias the cache backing")
+	index := bytes.Index(private, []byte("owned text"))
+	require.GreaterOrEqual(t, index, 0)
+	original := private[index]
+	private[index] = 'X'
+	text := owned.Text
+	private[index] = original
+	require.Equal(t, "owned text", text, "returned text must not alias the private backing")
 	null, err := reader.QueryText(1, []byte("invalid path"), false)
 	require.NoError(t, err)
 	require.True(t, null.InputNull)
@@ -434,9 +438,9 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 			}()
 			capacity := uint64(data.Capacity())
 			require.Positive(t, capacity)
-			ownerMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(vector.Vector{}) + unsafe.Sizeof(vector.RefCountedBufferLease{}))
-			handleMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{}))
-			cursorMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONCursor{}))
+			ownerMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[vector.Vector]().Size() + reflect.TypeFor[vector.RefCountedBufferLease]().Size())
+			handleMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONReader]().Size())
+			cursorMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONCursor]().Size())
 			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
 			require.NoError(t, err)
 			limit := capacity + ownerMeta + 2*handleMeta + cursorMeta

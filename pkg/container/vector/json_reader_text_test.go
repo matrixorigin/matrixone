@@ -15,9 +15,9 @@
 package vector
 
 import (
+	"bytes"
 	"io"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -67,9 +67,13 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, byte(bytejson.TpCodeString), owned.Type)
 	private := reader.(*jsonReader).column.GetBytesAt(0)
-	start := uintptr(unsafe.Pointer(unsafe.SliceData(private)))
-	text := uintptr(unsafe.Pointer(unsafe.StringData(owned.Text)))
-	require.True(t, text < start || text >= start+uintptr(len(private)), "returned text must not alias the private document")
+	index := bytes.Index(private, []byte("owned text"))
+	require.GreaterOrEqual(t, index, 0)
+	original := private[index]
+	private[index] = 'X'
+	text := owned.Text
+	private[index] = original
+	require.Equal(t, "owned text", text, "returned text must not alias the private backing")
 	null, err := reader.QueryText(1, []byte("invalid path"), false)
 	require.NoError(t, err)
 	require.True(t, null.InputNull)

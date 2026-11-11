@@ -23,11 +23,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -987,6 +987,8 @@ func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	return bj.getObjectVal(idx), true
 }
 
+var queryCollectorElementSize = uint64(reflect.TypeFor[ByteJson]().Size())
+
 type queryCollector struct {
 	values  []ByteJson
 	reserve func(uint64) (func(), error)
@@ -1007,11 +1009,11 @@ func (c *queryCollector) append(value ByteJson) {
 		if capacity == 0 {
 			capacity = 1
 		}
-		if capacity < cap(c.values) || uint64(capacity) > uint64(math.MaxInt)/uint64(unsafe.Sizeof(ByteJson{})) {
+		if capacity < cap(c.values) || uint64(capacity) > uint64(math.MaxInt)/queryCollectorElementSize {
 			c.err = moerr.NewInvalidInputNoCtx("JSON query result size overflow")
 			return
 		}
-		release, err := c.reserve(uint64(capacity) * uint64(unsafe.Sizeof(ByteJson{})))
+		release, err := c.reserve(uint64(capacity) * queryCollectorElementSize)
 		if err != nil {
 			if release != nil {
 				release()

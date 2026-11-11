@@ -16,10 +16,10 @@ package vector
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestJSONReaderQueryRespectsBudget(t *testing.T) {
 	defer cursor.Close()
 	path := jsonReaderPath(t, "$[*]")
 
-	limit = live + JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{}))
+	limit = live + JSONReaderMetadataCapacity(reflect.TypeFor[jsonQueryResult]().Size())
 	result, err := reader.Query(0, path)
 	if result != nil {
 		result.Close()
@@ -64,7 +64,7 @@ func TestJSONReaderQueryRespectsBudget(t *testing.T) {
 	single := jsonReaderPath(t, "$[0]")
 	_, err = reader.QueryTextAtPath(0, *single, false)
 	require.ErrorIs(t, err, want, "owned output text must be admitted before copying")
-	limit = live + JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{}))
+	limit = live + JSONReaderMetadataCapacity(reflect.TypeFor[jsonQueryResult]().Size())
 	result, err = reader.Query(0, single)
 	require.NoError(t, err)
 	defer result.Close()
@@ -106,7 +106,7 @@ func TestJSONReaderQueryBudgetLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	defer first.Close()
 	afterFirst := live
-	require.Greater(t, afterFirst-baseline, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{})))
+	require.Greater(t, afterFirst-baseline, JSONReaderMetadataCapacity(reflect.TypeFor[jsonQueryResult]().Size()))
 	second, err := reader.Query(0, path)
 	require.NoError(t, err)
 	defer second.Close()
@@ -166,7 +166,7 @@ func TestJSONReaderQueryUsesAllocationAccount(t *testing.T) {
 	require.Equal(t, baseline, state.account.Snapshot().Used)
 
 	snapshot := state.account.Snapshot()
-	metadata := JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{}))
+	metadata := JSONReaderMetadataCapacity(reflect.TypeFor[jsonQueryResult]().Size())
 	require.Greater(t, snapshot.Limit-snapshot.Used, metadata)
 	fillerSize := snapshot.Limit - snapshot.Used - metadata
 	reservation, err := state.account.ReserveCapacity(fillerSize, testVectorAllocationOwner, testVectorDataAllocationSite)

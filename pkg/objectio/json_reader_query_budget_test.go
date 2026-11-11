@@ -16,9 +16,9 @@ package objectio
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -58,7 +58,7 @@ func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 	path, err := bytejson.ParseJsonPath("$[*]")
 	require.NoError(t, err)
 
-	limit = live + vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONQueryResult{}))
+	limit = live + vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONQueryResult]().Size())
 	result, err := reader.Query(0, &path)
 	if result != nil {
 		result.Close()
@@ -71,7 +71,7 @@ func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.QueryTextAtPath(0, single, false)
 	require.ErrorIs(t, err, want, "owned output text must be admitted before copying")
-	limit = live + vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONQueryResult{}))
+	limit = live + vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONQueryResult]().Size())
 	result, err = reader.Query(0, &single)
 	require.NoError(t, err)
 	defer result.Close()
@@ -117,7 +117,7 @@ func TestJSONCacheReaderQueryBudgetLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	defer first.Close()
 	afterFirst := live
-	require.Greater(t, afterFirst-baseline, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONQueryResult{})))
+	require.Greater(t, afterFirst-baseline, vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONQueryResult]().Size()))
 	second, err := reader.Query(0, &path)
 	require.NoError(t, err)
 	defer second.Close()
