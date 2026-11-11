@@ -178,7 +178,7 @@ func (f *DictionaryInputFrame) predicateBatch(proc *process.Process, input *batc
 		clear(f.predicateSeen)
 	}
 	f.predicateColumns = f.predicateColumns[:0]
-	if !predicateColumns(executor, f.predicateSeen, &f.predicateColumns) {
+	if !CollectExpressionInputColumns(executor, f.predicateSeen, &f.predicateColumns) {
 		output, _, err := SelectBatchColumns(input, loaded, rows, proc.Mp(), account, false)
 		return output, false, err
 	}

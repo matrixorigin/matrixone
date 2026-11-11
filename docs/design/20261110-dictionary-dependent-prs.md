@@ -451,3 +451,38 @@ tests; private predicate scratch now has an explicit borrowed/reuse oracle.
 Validate original-row/error ordering, NULL/metadata, repeated memo roots,
 capacity-refusal cleanup and private-bank reuse before local all22 timing and
 per-query allocation/copy accounting. Keep regressions and coverage gaps blocking.
+
+
+## Approved projection-aware column publication — local only
+
+The requester approved classifying columns at the reader/projection handoff.
+Prepared audited expression dependencies classify inputs as retained forwarded
+outputs, owned computed-expression inputs, or predicate-only unused columns.
+Forwarding takes priority when an input also occurs in a computation. Unknown
+executors, absent projections and incompatible policy shapes preserve the old
+all-retained behavior. Local-domain consumers keep all columns aligned; no
+unused slot is cleared while whole-batch domain compaction can still occur.
+
+Residual predicates see the complete original live-row input. After selection,
+only escaping columns enter immutable retained construction. Proven unused early
+columns clear their logical contents, while private unique nonconstant owned
+computed inputs compact in place using existing Shrink metadata/COW protocols.
+Borrowed, legacy-alias, dictionary and constant inputs keep safe retention/owned
+fallback. Late payload materialization and appendable/tombstone/RowID/Top-K paths
+remain unchanged. Selected-output length validation accepts an empty column only
+when the proven local policy explicitly marks it unused. Projection receives
+all of its dependencies; opaque clients keep the original full-schema contract.
+
+Request-owned non-owning publication operands replace per-block temporary slice
+allocations. Their capacity is bounded by scan width; every success/error path
+clears source/destination references. Only Workspace owns displaced reader
+headers; output owns the committed selected headers. Failed construction frees
+its prefix and restores unconsumed spare headers. No ownership handle, cached
+payload, goroutine, wire format or cache policy is added by this scratch.
+
+Proof covers prepared-expression liveness, shared forward/computed precedence,
+domain alignment, an actual persisted read dropping a predicate-only column,
+retained immutable siblings, in-place owned header/buffer identity and failed
+prefix cleanup. Existing fallback/visibility/Top-K controls remain. Run local
+all22 timing and per-query accounting without pushing; any unresolved regression
+or counter-coverage gap continues to block acceptance.

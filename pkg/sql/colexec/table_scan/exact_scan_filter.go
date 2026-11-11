@@ -259,6 +259,7 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 // prepareSelectionWorkspace is called only after the downstream edge admits
 // views. Flat-only scans never allocate publication/snapshot/map banks.
 func (tableScan *TableScan) prepareSelectionWorkspace() {
+	tableScan.prepareColumnUses()
 	if tableScan.ctr.readerWorkspace == nil {
 		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
 	}
@@ -273,6 +274,7 @@ func (tableScan *TableScan) prepareSelectionWorkspace() {
 		tableScan.ctr.readerSelection = &vector.DictionaryVectorSlot{}
 	}
 	if request := tableScan.ctr.readerFilter; request != nil {
+		request.ColumnUses = tableScan.ctr.columnUses
 		request.Workspace = tableScan.ctr.readerWorkspace
 		request.ReusableHeaders = tableScan.ctr.readerHeaders
 		request.SnapshotSlots = tableScan.ctr.readerSnapshots

@@ -1190,6 +1190,9 @@ func blockDataReadWithFilter(
 	}
 
 	for _, pos := range earlyColumns {
+		if selectedOutput && applyFilter.ColumnUse(pos, len(outputBat.Vecs)) == engine.ReaderColumnUnused && outputBat.Vecs[pos].Length() == 0 {
+			continue
+		}
 		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
 			return moerr.NewInvalidInputNoCtxf(
 				"residual filter left early column %d with %d rows for batch row count %d",

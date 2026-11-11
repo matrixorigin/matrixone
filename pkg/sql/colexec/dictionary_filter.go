@@ -289,9 +289,9 @@ func compactPredicateRows(value *vector.Vector, rows int, scratch []int64, selec
 	return scratch[:kept]
 }
 
-// Collect only the current predicate's columns. Unknown executors retain the
-// full-schema owned fallback rather than guessing their dependencies.
-func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) bool {
+// CollectExpressionInputColumns reports audited input dependencies. Unknown
+// executors decline rather than guessing that a column is dead.
+func CollectExpressionInputColumns(executor ExpressionExecutor, seen []bool, columns *[]int) bool {
 	switch e := executor.(type) {
 	case *ColumnExpressionExecutor:
 		if e.relIndex != 0 || e.colIndex < 0 || e.colIndex >= len(seen) {
@@ -304,20 +304,20 @@ func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) 
 	case *FixedVectorExpressionExecutor:
 	case *FunctionExpressionExecutor:
 		for _, child := range e.parameterExecutor {
-			if !predicateColumns(child, seen, columns) {
+			if !CollectExpressionInputColumns(child, seen, columns) {
 				return false
 			}
 		}
 	case *decimalTypedExecutor:
-		return predicateColumns(e.root, seen, columns)
+		return CollectExpressionInputColumns(e.root, seen, columns)
 	case *decimalMulSubExecutor:
-		return predicateColumns(e.root, seen, columns)
+		return CollectExpressionInputColumns(e.root, seen, columns)
 	case *decimalChainExecutor:
-		return predicateColumns(e.root, seen, columns)
+		return CollectExpressionInputColumns(e.root, seen, columns)
 	case *memoExpressionExecutor:
-		return predicateColumns(e.state.executor, seen, columns)
+		return CollectExpressionInputColumns(e.state.executor, seen, columns)
 	case *memoRootExpressionExecutor:
-		return predicateColumns(e.executor, seen, columns)
+		return CollectExpressionInputColumns(e.executor, seen, columns)
 	default:
 		return false
 	}

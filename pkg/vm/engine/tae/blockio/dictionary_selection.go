@@ -31,59 +31,95 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 		output.SetRowCount(0)
 		return nil
 	}
-	sources := make([]*vector.Vector, len(positions))
-	selected := make([]*vector.Vector, len(positions))
-	for i, pos := range positions {
-		sources[i] = output.Vecs[pos]
+
+	scratch := request.SelectionScratch(len(positions))
+	defer scratch.Clear()
+	width := len(output.Vecs)
+	for _, pos := range positions {
+		source := output.Vecs[pos]
+		use := request.ColumnUse(pos, width)
+		if use == engine.ReaderColumnUnused {
+			continue
+		}
+		if use == engine.ReaderColumnOwned && !source.IsConst() && !source.IsDictionary() && !source.HasBorrowedBacking() && source.CanDetach(vector.BackingData) && source.CanDetach(vector.BackingArea) {
+			continue
+		}
+		scratch.Columns = append(scratch.Columns, pos)
+		scratch.Sources = append(scratch.Sources, source)
+		scratch.Vectors = append(scratch.Vectors, nil)
 	}
+	sources, selected := scratch.Sources, scratch.Vectors
 	defer func() {
 		if retErr != nil {
-			for _, vec := range selected {
-				if vec != nil {
-					vec.Free(mp)
+			for _, v := range selected {
+				if v != nil {
+					v.Free(mp)
 				}
 			}
 		}
 	}()
 	var reuse []*vector.Vector
-	if len(request.ReusableHeaders) == len(output.Vecs) {
-		reuse = make([]*vector.Vector, len(positions))
-		for i, pos := range positions {
-			reuse[i] = request.ReusableHeaders[pos]
+	if len(request.ReusableHeaders) == width {
+		for _, pos := range scratch.Columns {
+			scratch.Headers = append(scratch.Headers, request.ReusableHeaders[pos])
 			request.ReusableHeaders[pos] = nil
 		}
+		reuse = scratch.Headers
 		defer func() {
-			for i, pos := range positions {
+			for i, pos := range scratch.Columns {
 				request.ReusableHeaders[pos] = reuse[i]
 			}
 		}()
 	}
 	var snapshots []*vector.DictionaryVectorSlot
-	if len(request.SnapshotSlots) == len(output.Vecs) {
-		snapshots = make([]*vector.DictionaryVectorSlot, len(positions))
-		for i, pos := range positions {
-			snapshots[i] = request.SnapshotSlots[pos]
+	if len(request.SnapshotSlots) == width {
+		for _, pos := range scratch.Columns {
+			scratch.Snapshots = append(scratch.Snapshots, request.SnapshotSlots[pos])
+		}
+		snapshots = scratch.Snapshots
+	}
+	if len(sources) > 0 {
+		admitted, err := vector.TrySelectDictionaryVectorsWithWorkspace(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse, snapshots, request.SelectionSlot)
+		if err != nil {
+			return err
+		}
+		if !admitted {
+			for i, source := range sources {
+				selected[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), request.OutputAllocation)
+				if err != nil {
+					return err
+				}
+				if err = selected[i].Union(source, rows, mp); err != nil {
+					return err
+				}
+				source.CopyExpressionMetadataTo(selected[i])
+			}
 		}
 	}
-	admitted, err := vector.TrySelectDictionaryVectorsWithWorkspace(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse, snapshots, request.SelectionSlot)
-	if err != nil {
-		return err
+	// Classification was made before construction. Aliases can gain leases during
+	// construction; Shrink's existing COW admission still protects those snapshots.
+	nextRetained := 0
+	for _, pos := range positions {
+		if nextRetained < len(scratch.Columns) && scratch.Columns[nextRetained] == pos {
+			nextRetained++
+			continue
+		}
+		source := output.Vecs[pos]
+		if request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
+			continue
+		}
+		if err := source.Shrink(rows, false, mp); err != nil {
+			return err
+		}
 	}
-	if !admitted {
-		for i, source := range sources {
-			selected[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), request.OutputAllocation)
-			if err != nil {
-				return err
-			}
-			if err = selected[i].Union(source, rows, mp); err != nil {
-				return err
-			}
-			source.CopyExpressionMetadataTo(selected[i])
+	for _, pos := range positions {
+		if request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
+			output.Vecs[pos].CleanOnlyData()
 		}
 	}
 	columns := 0
 	var logical int64
-	for i, pos := range positions {
+	for i, pos := range scratch.Columns {
 		if selected[i].IsDictionary() {
 			columns++
 			logical += int64(selected[i].Size())

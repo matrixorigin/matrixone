@@ -326,3 +326,39 @@ func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectionColumnUses(t *testing.T) {
+	for _, shape := range []string{"mixed", "forward-priority", "domain", "unknown"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			typ := types.T_int32.ToType()
+			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}}
+			scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ), lateTestCompare(t, ">", 1, 3)}
+			if shape == "forward-priority" {
+				scan.ProjectList = append(scan.ProjectList, lateTestCol(1, typ))
+			}
+			require.NoError(t, scan.PrepareProjection(proc))
+			t.Cleanup(func() { scan.FreeProjection(proc) })
+			if shape == "domain" {
+				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: true}}
+			}
+			if shape == "unknown" {
+				scan.ProjectExecutors[0].Free()
+				scan.ProjectExecutors[0] = nil
+			}
+			scan.prepareColumnUses()
+			if shape == "unknown" {
+				require.Nil(t, scan.ctr.columnUses)
+				return
+			}
+			want := []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnOwned, engine.ReaderColumnUnused}
+			if shape == "forward-priority" {
+				want[1] = engine.ReaderColumnRetain
+			}
+			if shape == "domain" {
+				want[2] = engine.ReaderColumnOwned
+			}
+			require.Equal(t, want, scan.ctr.columnUses)
+		})
+	}
+}

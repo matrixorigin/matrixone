@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,4 +44,48 @@ func (tableScan *TableScan) selectReaderFilter(proc *process.Process, bat *batch
 	rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, tableScan.ctr.allFilterExecutors, tableScan.OutputAllocation,
 		&tableScan.ctr.filterRows, &tableScan.ctr.filterBs, tableScan.OpAnalyzer, before, &tableScan.ctr.dictionaryInputs)
 	return engine.ReaderFilterResult{Sels: rows, All: all}, err
+}
+
+// prepareColumnUses distinguishes values leaving projection from private inputs.
+// Directly forwarded columns take priority over computed uses of the same input.
+func (tableScan *TableScan) prepareColumnUses() {
+	if tableScan.ctr.columnUsesReady {
+		return
+	}
+	tableScan.ctr.columnUsesReady = true
+	if len(tableScan.ProjectList) == 0 || len(tableScan.ProjectExecutors) != len(tableScan.ProjectList) {
+		return
+	}
+	uses := make([]engine.ReaderColumnUse, len(tableScan.Types))
+	for i := range uses {
+		uses[i] = engine.ReaderColumnUnused
+	}
+	seen := make([]bool, len(uses))
+	columns := make([]int, 0, len(uses))
+	for i, executor := range tableScan.ProjectExecutors {
+		clear(seen)
+		columns = columns[:0]
+		if !colexec.CollectExpressionInputColumns(executor, seen, &columns) {
+			return
+		}
+		use := engine.ReaderColumnOwned
+		if _, direct := tableScan.ProjectList[i].Expr.(*plan.Expr_Col); direct && executor.IsColumnExpr() {
+			use = engine.ReaderColumnRetain
+		}
+		for _, column := range columns {
+			if use == engine.ReaderColumnRetain || uses[column] == engine.ReaderColumnUnused {
+				uses[column] = use
+			}
+		}
+	}
+	// Domain probes can subsequently shrink the whole batch. Preserve aligned
+	// values for every column in that mode instead of publishing empty slots.
+	if len(tableScan.ctr.domainSources)+len(tableScan.ctr.domainProbes) > 0 {
+		for i, use := range uses {
+			if use == engine.ReaderColumnUnused {
+				uses[i] = engine.ReaderColumnOwned
+			}
+		}
+	}
+	tableScan.ctr.columnUses = uses
 }
