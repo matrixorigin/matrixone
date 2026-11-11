@@ -376,6 +376,16 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 		(to.IsDecimal() || textResult)
 }
 
+// Grouping sets synthesize NULL in the aggregate output, not in the input
+// expression evaluated and encoded by the aggregator.
+func groupingOutputType(node *plan.Node, index int) plan.Type {
+	typ := node.GroupBy[index].Typ
+	if index < len(node.GroupingFlag) && !node.GroupingFlag[index] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
 func isIfNullCase(fn *plan.Function) bool {
 	if fn.Func.ObjName != "case" || len(fn.Args) != 3 {
 		return false
@@ -1045,7 +1055,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingOutputType(node, idx),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1090,7 +1100,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingOutputType(node, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -3190,6 +3200,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		if selectClause.GroupBy != nil {
+			if selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube {
+				// Expansion belongs to this planning invocation. CTAS and CTEs
+				// can bind the same source AST again, including formatting it.
+				localClause := *selectClause
+				localGroup := *selectClause.GroupBy
+				localGroup.GroupByExprsList = []tree.Exprs{localGroup.GroupByExprsList[0]}
+				localClause.GroupBy = &localGroup
+				selectClause = &localClause
+			}
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
 					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])
@@ -3221,10 +3240,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
+					having := selectClause.Having
+					if having != nil {
+						localHaving := *having
+						localHaving.RollupHaving = true
+						having = &localHaving
+					}
 					for i, list := range selectClause.GroupBy.GroupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							Distinct: selectClause.Distinct,
 							Exprs:    selectClause.Exprs,
@@ -3237,7 +3259,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having: selectClause.Having,
+							Having: having,
 							Option: selectClause.Option,
 						}
 					}

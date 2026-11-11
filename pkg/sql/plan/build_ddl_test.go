@@ -773,6 +773,17 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		nullable []bool
 	}{
 		{"count control", "select count(*) as c from nation", []bool{false}},
+		{"rollup", "select n_nationkey as k,count(*) as c from nation group by n_nationkey with rollup", []bool{true, false}},
+		{"multi key rollup", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by n_nationkey,n_regionkey with rollup", []bool{true, true, false}},
+		{"cube", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by cube(n_nationkey,n_regionkey)", []bool{true, true, false}},
+		{"grouping sets", "select n_nationkey as k,count(*) as c from nation group by grouping sets ((n_nationkey),())", []bool{true, false}},
+		{"grouping control", "select n_nationkey as k,count(*) as c from nation group by n_nationkey", []bool{false, false}},
+		{"grouping sets present control", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by grouping sets ((n_nationkey,n_regionkey),(n_nationkey))", []bool{false, true, false}},
+		{"rollup fallback control", "select coalesce(n_nationkey,-1) as k,count(*) as c from nation group by n_nationkey with rollup", []bool{false, false}},
+		{"empty grouping set", "select count(*) as c from nation group by grouping sets (())", []bool{false}},
+		{"grouping indicator", "select n_nationkey as k,count(*) as c,grouping(n_nationkey) as flag from nation group by n_nationkey with rollup", []bool{true, false, true}},
+		{"pruned rollup keys", "select 1 as k from nation group by n_nationkey with rollup", []bool{false}},
+		{"duplicate grouping sets", "select n_nationkey as k,count(*) as c from nation group by grouping sets ((n_nationkey),(n_nationkey),())", []bool{true, false}},
 		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
 		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
 		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},

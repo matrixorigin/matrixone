@@ -497,19 +497,32 @@ type GroupByClause struct {
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
-	prefix := "group by "
-	for _, list := range node.GroupByExprsList {
-		for _, n := range list {
-			ctx.WriteString(prefix)
-			n.Format(ctx)
-			prefix = ", "
-		}
+	lists := node.GroupByExprsList
+	if len(lists) == 0 {
+		return
 	}
+	ctx.WriteString("group by ")
 	if node.Cube {
-		ctx.WriteString("with cube")
-	}
-	if node.Rollup {
+		ctx.WriteString("cube (")
+		lists[0].Format(ctx)
+		ctx.WriteByte(')')
+	} else if node.Rollup {
+		lists[0].Format(ctx)
 		ctx.WriteString(" with rollup")
+	} else if len(lists) > 1 || len(lists[0]) == 0 {
+		// Keep empty and duplicate sets: both affect aggregate row multiplicity.
+		ctx.WriteString("grouping sets (")
+		for i, list := range lists {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+	} else {
+		lists[0].Format(ctx)
 	}
 }
 

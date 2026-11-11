@@ -1,0 +1,249 @@
+drop database if exists grouping_ctas_test;
+create database grouping_ctas_test;
+use grouping_ctas_test;
+create table src(g int not null,h int not null,v int not null);
+insert into src values(1,10,5),(1,20,7),(2,10,9);
+select g,h,sum(v) s from src group by g,h
+union all select g,null,sum(v) from src group by g
+union all select null,null,sum(v) from src
+order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select g,h,sum(v) s from src group by g,h with rollup order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table r as select g,h,sum(v) s from src group by g,h with rollup;
+select * from r order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table inserted(g int,h int,s decimal(38,0));
+insert into inserted select g,h,sum(v) from src group by g,h with rollup;
+select * from inserted order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[3,39,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='r' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  YES  𝄀
+h  ¦  YES  𝄀
+s  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into r(g,h,s) values(null,null,0);
+select count(*) from r where s=0 and g is null and h is null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select g,h,sum(v) s from src group by cube(g,h) order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  10  ¦  14  𝄀
+null  ¦  20  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table c as select coalesce(g,-1) g,coalesce(h,-1) h,sum(v) s
+from src group by cube(g,h);
+select * from c order by g,h;
+➤ g[-5,64,0]  ¦  h[-5,64,0]  ¦  s[-5,64,0]  𝄀
+-1  ¦  -1  ¦  21  𝄀
+-1  ¦  10  ¦  14  𝄀
+-1  ¦  20  ¦  7  𝄀
+1  ¦  -1  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  -1  ¦  9  𝄀
+2  ¦  10  ¦  9
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='c' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+h  ¦  NO  𝄀
+s  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into c(g,h,s) values(null,0,0);
+constraint violation: Column 'g' cannot be null
+insert into c(g,h,s) values(0,null,0);
+constraint violation: Column 'h' cannot be null
+create table sets_result as select g,h,sum(v) s
+from src group by grouping sets ((g,h),(g),());
+select * from sets_result order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table duplicates as select g,sum(v) s
+from src group by grouping sets ((g),(g),());
+select * from duplicates order by g,s;
+➤ g[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  21  𝄀
+1  ¦  12  𝄀
+1  ¦  12  𝄀
+2  ¦  9  𝄀
+2  ¦  9
+create table empty_set as select count(*) c from src group by grouping sets (());
+select * from empty_set;
+➤ c[-5,64,0]  𝄀
+3
+create table duplicate_empty as select count(*) c from src group by grouping sets ((),());
+select * from duplicate_empty order by c;
+➤ c[-5,64,0]  𝄀
+3  𝄀
+3
+create table common_key as select g,h,count(*) c
+from src group by grouping sets ((g,h),(g));
+select * from common_key order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='common_key' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+h  ¦  YES  𝄀
+c  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into common_key(g,h,c) values(null,0,0);
+constraint violation: Column 'g' cannot be null
+insert into common_key(g,h,c) values(0,0,null);
+constraint violation: Column 'c' cannot be null
+insert into common_key(g,h,c) values(3,null,0);
+select * from common_key where g=3;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+3  ¦  null  ¦  0
+create table ordinary as select g,count(*) c from src group by g;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='ordinary' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+c  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into ordinary(g,c) values(null,0);
+constraint violation: Column 'g' cannot be null
+create view grouped_view as select g,h,count(*) c from src group by g,h with rollup;
+select * from grouped_view order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='grouped_view' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  YES  𝄀
+h  ¦  YES  𝄀
+c  ¦  NO
+create table view_result as select * from grouped_view;
+select * from view_result order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+with grouped as (select g,h,count(*) c from src group by cube(g,h))
+select (select count(*) from grouped) a,(select count(*) from grouped) b;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  𝄀
+8  ¦  8
+prepare grouping_stmt from 'select g,h,count(*) c from src group by g,h with rollup order by g,h';
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+deallocate prepare grouping_stmt;
+select g,h,sum(v) s from src group by g,h with rollup having sum(v)>7 order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table pruned as select 1 k from src group by g,h with rollup;
+select count(*) from pruned;
+➤ count(*)[-5,64,0]  𝄀
+6
+create table empty_src(g int not null,h int not null,v int not null);
+create table empty_rollup as select g,h,count(*) c from empty_src group by g,h with rollup;
+select * from empty_rollup order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]
+select count(*) from empty_rollup;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table empty_cube as select g,h,count(*) c from empty_src group by cube(g,h);
+select * from empty_cube order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]
+select count(*) from empty_cube;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table empty_duplicates as select count(*) c from empty_src group by grouping sets ((),());
+select * from empty_duplicates order by c;
+➤ c[-5,64,0]  𝄀
+0  𝄀
+0
+create table nullable_src(g int,h int,v int);
+insert into nullable_src values(null,10,5),(1,null,7);
+select g,h,sum(v) s,grouping(g,h) flag from nullable_src group by g,h with rollup order by g,h,flag;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  null  ¦  5  ¦  1  𝄀
+null  ¦  null  ¦  12  ¦  3  𝄀
+null  ¦  10  ¦  5  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  1
+create table nullable_result as select g,h,sum(v) s,grouping(g,h) flag
+from nullable_src group by g,h with rollup;
+select * from nullable_result order by g,h,flag;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  null  ¦  5  ¦  1  𝄀
+null  ¦  null  ¦  12  ¦  3  𝄀
+null  ¦  10  ¦  5  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  1
+drop database grouping_ctas_test;
