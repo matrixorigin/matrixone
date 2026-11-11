@@ -1024,22 +1024,31 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 }
 
 func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
-	for _, overload := range []int32{CRC32LegacyOverload, CRC32JSONTextOverload} {
-		for _, typ := range []int32{planJSONTypeID, planAnyTypeID, 61} {
-			expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID)<<32 | int64(overload), ObjName: "crc32"}, Args: []*Expr{{Typ: Type{Id: typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}}}}}
-			owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
-			data, err := owner.Marshal()
-			require.NoError(t, err)
-			decoded := &TableDef{}
-			require.NoError(t, decoded.Unmarshal(data))
-			found, err := ContainsCRC32JSONTextBytes(decoded)
-			require.NoError(t, err)
-			require.Equal(t, overload == CRC32JSONTextOverload, found)
-			folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
-			found, err = ContainsCRC32JSONTextBytes(folded)
-			require.NoError(t, err)
-			require.Equal(t, overload == CRC32JSONTextOverload, found)
+	for _, tc := range []struct {
+		typ      int32
+		textCast bool
+	}{
+		{planJSONTypeID, false}, {planAnyTypeID, false}, {61, false}, {planJSONTypeID, true},
+	} {
+		arg := &Expr{Typ: Type{Id: tc.typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if tc.textCast {
+			arg = &Expr{Typ: Type{Id: planTextTypeID}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(21)<<32 | 1, ObjName: "cast"}, Args: []*Expr{arg},
+			}}}
 		}
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID)<<32 | CRC32LegacyOverload, ObjName: "crc32"}, Args: []*Expr{arg}}}}
+		owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		decoded := &TableDef{}
+		require.NoError(t, decoded.Unmarshal(data))
+		found, err := ContainsCRC32JSONTextBytes(decoded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, found)
+		folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
+		found, err = ContainsCRC32JSONTextBytes(folded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, found)
 	}
 }
 

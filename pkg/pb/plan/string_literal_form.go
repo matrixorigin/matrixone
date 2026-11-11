@@ -1340,21 +1340,26 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	return
 }
 
-// CRC32 execution identities are shared with the function registry. Catalog and
-// wire expressions retain the identity selected by their original binder.
-const (
-	CRC32LegacyOverload   = 0
-	CRC32JSONTextOverload = 1
-)
+// CRC32LegacyOverload is the original execution identity in stored expressions.
+const CRC32LegacyOverload = 0
 
-// isCRC32JSONTextBytes recognizes the bound identity, including when an
-// argument is unresolved. It is independent of any peer capability.
+// isCRC32JSONTextBytes recognizes a JSON-to-text CRC32 binding so folded
+// expressions retain their source provenance. It is independent of peer
+// capability.
 func isCRC32JSONTextBytes(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
+	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != crc32FunctionID {
+		return false
+	}
+	if int32(fn.Func.Obj) != CRC32LegacyOverload || len(fn.Args) != 1 || fn.Args[0] == nil || fn.Args[0].Typ.Id != planTextTypeID {
+		return false
+	}
+	cast := fn.Args[0].GetF()
+	return cast != nil && cast.Func != nil && strings.EqualFold(cast.Func.ObjName, "cast") &&
+		int32(cast.Func.Obj) == 1 && len(cast.Args) > 0 && cast.Args[0] != nil && cast.Args[0].Typ.Id == planJSONTypeID
 }
 
 // ContainsCRC32JSONTextBytes identifies the new CRC32 identity, including in

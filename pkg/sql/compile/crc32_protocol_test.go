@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -33,6 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func crc32JSONTextProtocolExpr(t *testing.T, pos int32) *planpb.Expr {
+	t.Helper()
+	arg := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}}}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "crc32", []*planpb.Expr{arg})
+	require.NoError(t, err)
+	return expr
+}
+
 func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 	mediumInt := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
@@ -46,13 +55,7 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 	}
 	// Preserve actual main's widened-result/width-24 assignment-target contract.
 	mediumInt.Typ.Width = 32
-	crc32JSON := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_uint64)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload), ObjName: "crc32"},
-			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
-		}},
-	}
+	crc32JSON := crc32JSONTextProtocolExpr(t, 1)
 	floatCast := floatConversionProtocolExpr(function.CAST, types.T_varchar, types.T_float64)
 	for _, tc := range []struct {
 		name            string
@@ -63,9 +66,9 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 		version         int64
 	}{
 		{"mediumint_only", []*planpb.Expr{mediumInt}, true, false, false, defines.MORPCVersion110},
-		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, false, defines.MORPCVersion80},
-		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, false, defines.MORPCVersion110},
-		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, false, defines.MORPCVersion110},
+		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, false, defines.MORPCVersion129},
+		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, false, defines.MORPCVersion129},
+		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, false, defines.MORPCVersion129},
 		{"float_only", []*planpb.Expr{floatCast}, false, false, true, defines.MORPCVersion132},
 		{"float_then_crc32", []*planpb.Expr{floatCast, crc32JSON}, false, true, true, defines.MORPCVersion132},
 		{"crc32_then_float", []*planpb.Expr{crc32JSON, floatCast}, false, true, true, defines.MORPCVersion132},
@@ -136,17 +139,14 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 func TestCRC32JSONWithIndexSearchRetainsExistingGate(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	require.Equal(t, int64(defines.MORPCVersion111), int64(vectorscan.IndexSearchScanProtocolVersion))
-	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)},
-		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
-	}}}
+	expr := crc32JSONTextProtocolExpr(t, 1)
 	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
 		DataSource: &pipeline.Source{Node: &planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN,
 			IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{expr}}}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.True(t, features.StringNumericResultContracts)
-	require.Equal(t, int64(defines.MORPCVersion80), remoteExpressionProtocolVersion(features))
+	require.Equal(t, int64(defines.MORPCVersion129), remoteExpressionProtocolVersion(features))
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	client.version = defines.MORPCVersion110
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
@@ -156,6 +156,8 @@ func TestCRC32JSONWithIndexSearchRetainsExistingGate(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
 	require.NoError(t, validateVectorPartitionDestination(c.proc, p))
+	client.version = defines.MORPCVersion129
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 	require.Equal(t, client.calls, client.releases)

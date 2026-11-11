@@ -752,7 +752,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithRequestID(
 
 	for {
 		if err := c.prepareClientLocked(ctx); err != nil {
-			if c.isRetryableErrorLocked(err) {
+			if c.isRetryableError(err) {
 				if err := c.waitRetryLocked(ctx); err != nil {
 					return 0, err
 				}
@@ -765,7 +765,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithRequestID(
 			if shouldResetHAKeeperClient(err) {
 				c.resetClientLocked()
 			}
-			if c.isRetryableErrorLocked(err) {
+			if c.isRetryableError(err) {
 				if err := c.waitRetryLocked(ctx); err != nil {
 					return 0, err
 				}
@@ -1200,20 +1200,11 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	// A HAKeeper request owns no application-level retry budget of its own;
 	// every caller supplies a deadline and this loop only retries the failed
-	// transport generation inside that deadline. MORPC can report a transport
-	// closure as ErrBackendClosed or ErrClientClosed rather than EOF. The latter
-	// must be retried when the managed client is still open because a concurrent
-	// reset may have invalidated only this request's generation. The same applies
-	// while the replacement generation is being connected or admitted.
-	// ErrClientClosed is retryable only while the managed client itself remains
-	// open: a concurrent generation reset may close the snapshot held by this
-	// request, but an explicit managed Close is terminal.
-	if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-		c.mu.RLock()
-		closed := c.mu.closed
-		c.mu.RUnlock()
-		return !closed
-	}
+	// transport generation inside that deadline.  MORPC reports a closed
+	// generation as ErrBackendClosed (rather than EOF), so omitting it here
+	// lets one transient connection close escape directly to SQL even though
+	// the managed client has already invalidated the generation.  The same
+	// applies while the replacement generation is being connected or admitted.
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) ||
@@ -1224,15 +1215,6 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrConnectionReset) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF)
-}
-
-// isRetryableErrorLocked is for keyed allocation, which retains c.mu across
-// its RPC to preserve allocation idempotency. It must not acquire c.mu again.
-func (c *managedHAKeeperClient) isRetryableErrorLocked(err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-		return !c.mu.closed
-	}
-	return c.isRetryableError(err)
 }
 
 func shouldResetHAKeeperClient(err error) bool {

@@ -1654,14 +1654,11 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	})
 
 	t.Run("CRC32 JSON text identity retains existing result gate", func(t *testing.T) {
-		crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32JSONTextOverload), ObjName: "crc32"},
-			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
-		}}}
+		crc := crc32JSONTextProtocolExpr(t, 0)
 		pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{crc}}}}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, pipeline), "protocol version 80")
-		for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion134} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, pipeline), "protocol version 129")
+		for _, version := range []int64{defines.MORPCVersion129, defines.MORPCVersion134} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, pipeline))
 		}
@@ -1909,17 +1906,14 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 func TestCRC32JSONTextBytesKeepsExistingStreamMinimum(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	client.version = defines.MORPCVersion134
-	crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-		Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32JSONTextOverload), ObjName: "crc32"},
-		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
-	}}}
+	crc := crc32JSONTextProtocolExpr(t, 0)
 	floatCast := floatConversionProtocolExpr(planfunction.CAST, types.T_varchar, types.T_float64)
 	for _, tc := range []struct {
 		name  string
 		exprs []*planpb.Expr
 		want  int64
 	}{
-		{"crc only", []*planpb.Expr{crc}, 0},
+		{"crc only", []*planpb.Expr{crc}, defines.MORPCVersion129},
 		{"crc then float", []*planpb.Expr{crc, floatCast}, defines.MORPCVersion132},
 		{"float then crc", []*planpb.Expr{floatCast, crc}, defines.MORPCVersion132},
 	} {

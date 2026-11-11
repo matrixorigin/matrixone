@@ -22,7 +22,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -178,9 +177,7 @@ func TestCRC32DefaultCopyRebuildRejectsConvertedInput(t *testing.T) {
 	require.NotNil(t, cCol.Default)
 	converted := 0
 	err = planpb.VisitExprTree(cCol.Default.Expr, func(expr *planpb.Expr) error {
-		f := expr.GetF()
-		if f != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload) {
-			f.Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload)
+		if restoreLegacyCRC32JSONInput(expr) {
 			converted++
 		}
 		return nil

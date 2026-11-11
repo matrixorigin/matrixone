@@ -251,17 +251,6 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	require.True(t, snapshot.SystemVariablesExported)
 	require.False(t, snapshot.UserDefinedVarsSnapshotTooLarge)
 	require.False(t, snapshot.SystemVariablesSnapshotTooLarge)
-	proof := snapshot.PrepareStmts[0].DirectTableSelect
-	require.NotNil(t, proof)
-	require.Equal(t, uint32(1), proof.Version)
-	require.NotZero(t, proof.DatabaseID)
-	require.NotZero(t, proof.TableID)
-	require.Equal(t, snapshot.DB, proof.DatabaseName)
-	require.Equal(t, "t", proof.TableName)
-	require.Len(t, proof.Columns, 2)
-	for _, c := range proof.Columns {
-		require.Equal(t, int32(22), c.TypeID)
-	}
 	require.Zero(t, snapshot.PrepareStmts[0].RequiredProtocolVersion)
 	type runtimeState struct {
 		value   any
@@ -279,11 +268,10 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 			require.Equal(t, want, runtimeState{v, present}, name)
 		}
 	}
-	newTargetRequest := func(id uint32, disposable bool) *query.Request {
+	newTargetRequest := func(id uint32) *query.Request {
 		req := client.NewRequest(query.CmdMethod_MigrateConnTo)
 		req.MigrateConnToRequest = &query.MigrateConnToRequest{
-			CloseTargetOnReplayFailure: disposable,
-			ConnID:                     id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+			ConnID: id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
 			LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
 			LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
 			UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
@@ -293,59 +281,28 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 		}
 		return req
 	}
-	// Catalog/type/account preflight is independent of this target's SELECT
-	// privilege. This exact authorization error is emitted by actual replay,
-	// not the conservative preflight refusal. No fake error or phase timer.
-	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID, true))
+	// Replay must run the target account's normal authorization checks.
+	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID))
 	if failed != nil {
 		client.Release(failed)
 	}
 	require.True(t, moerr.IsMoErrCode(authErr, moerr.ErrInternal), "replay authorization must be reached: %v", authErr)
 	require.ErrorContains(t, authErr, "do not have privilege to execute the statement")
 	assertGlobalsUnchanged()
-	// The pinned sql.Conn cannot reconnect through its sql.DB. Server disposal
-	// must make a round trip fail; another query must not execute the handle.
+	// A direct RPC caller owns the failed target and must discard it, just as
+	// the proxy does after a replay error. Do not retry partially replayed state.
+	require.ErrorIs(t, denied.Raw(func(any) error { return driver.ErrBadConn }), driver.ErrBadConn)
 	require.Error(t, denied.PingContext(ctx))
-	_, err = denied.ExecContext(ctx, "execute owner_handle")
-	require.True(t, errors.Is(err, sql.ErrConnDone) || errors.Is(err, driver.ErrBadConn),
-		"disposed pinned target must return a connection-terminal error: %v", err)
 	assertSourceUsable()
 	assertGlobalsUnchanged()
-	t.Log("authenticated replay authorization failure disposed target; source rows [1,2] and CN globals retained")
+	t.Log("authenticated replay authorization failed; caller discarded target and source rows [1,2] remained usable")
 	// Correct the privilege cause using a NEW authenticated target, not a
 	// same-ConnID retry after partially replayed state.
 	target := openTarget()
 	var targetID uint32
 	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
 	require.NotEqual(t, deniedID, targetID)
-	request = newTargetRequest(targetID, false)
-	// Missing disposal consent refuses before state replay and does not consume
-	// migrateOnce: correcting just that cause can reuse this untouched target.
-	_, err = target.ExecContext(ctx, "set @migration_keep = 71")
-	require.NoError(t, err)
-	var lastID uint64
-	// Only the zero-argument reader is supported. Seed a nonzero real session
-	// value through INSERT, as the existing embed migration fixture does.
-	_, err = target.ExecContext(ctx, "insert into "+snapshot.DB+".migration_seed(marker) values(1)")
-	require.NoError(t, err)
-	require.NoError(t, target.QueryRowContext(ctx, "select last_insert_id()").Scan(&lastID))
-	require.NotZero(t, lastID)
-	require.NotEqual(t, snapshot.LastInsertID, lastID)
-	rejected, rejectedErr := client.SendMessage(ctx, targetAddress, request)
-	if rejected != nil {
-		client.Release(rejected)
-	}
-	require.True(t, moerr.IsMoErrCode(rejectedErr, moerr.OkExpectedNotSafeToStartTransfer))
-	var keep int
-	var stillID uint64
-	var stillDB string
-	require.NoError(t, target.QueryRowContext(ctx, "select @migration_keep, last_insert_id(), database()").Scan(&keep, &stillID, &stillDB))
-	require.Equal(t, 71, keep)
-	require.Equal(t, lastID, stillID)
-	require.Equal(t, snapshot.DB, stillDB)
-	assertGlobalsUnchanged()
-	// Requests are released by SendMessage; allocate a fresh envelope for retry.
-	request = newTargetRequest(targetID, true)
+	request = newTargetRequest(targetID)
 	response, err = client.SendMessage(ctx, targetAddress, request)
 	// An unconfirmed replay is fatal here: require invokes this subtest's
 	// existing dedicated target cleanup immediately, with no same-ConnID retry.

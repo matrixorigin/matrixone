@@ -7829,6 +7829,20 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
+	if strings.EqualFold(name, "crc32") && len(args) == 1 && args[0] != nil &&
+		types.T(args[0].Typ.Id) == types.T_json {
+		// New JSON bindings hash the visible JSON document. Keep CRC32's
+		// original execution identity so old persisted calls still hash their
+		// original binary argument. An explicit TEXT cast preserves JSON string
+		// quoting and does not impose VARCHAR's expression-width limit.
+		target := types.T_text.ToType()
+		cast, castErr := appendExplicitCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+		if castErr != nil {
+			return nil, castErr
+		}
+		args = append([]*Expr(nil), args...)
+		args[0] = cast
+	}
 	if name == "between" && len(args) == 3 &&
 		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {

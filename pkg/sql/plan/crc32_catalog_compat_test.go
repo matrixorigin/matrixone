@@ -232,8 +232,9 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	got, err := buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
 	require.True(t, containsLegacyCRC32(got.Expr))
-	got.Expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
+	got.Expr.GetF().Args[0].GetCol().ColPos = 99
 	require.True(t, containsLegacyCRC32(source.GeneratedCol.Expr), "copy must not mutate source catalog")
+	require.Equal(t, int32(0), source.GeneratedCol.Expr.GetF().Args[0].GetCol().ColPos)
 	for _, inputType := range []types.T{types.T_int64, types.T_varchar} {
 		t.Run(inputType.String(), func(t *testing.T) {
 			changed := []*planpb.ColDef{{Name: "j", Typ: planpb.Type{Id: int32(inputType)}}, source}
@@ -352,12 +353,12 @@ func TestCRC32PersistedDDLUsesExistingAdmission(t *testing.T) {
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	saved, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion129))
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, saved)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion129))
 		}
 	})
 	for _, sql := range []string{

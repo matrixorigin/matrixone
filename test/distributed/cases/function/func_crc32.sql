@@ -106,7 +106,7 @@ select count(*) as row_count from crc32_generated;
 drop table crc32_generated;
 
 -- Composite CRC32 generated input: ordinary integer COPY remains legal.
--- Fresh JSON DDL binds CRC1; this is not a legacy CRC0 catalog regression.
+-- Fresh JSON DDL binds a text conversion; this is not an old-catalog regression.
 drop table if exists crc32_generated_auto_input;
 create table crc32_generated_auto_input(id bigint unsigned not null primary key,val json,g bigint unsigned generated always as (crc32(val)+id) stored);
 insert into crc32_generated_auto_input(id,val) values(1,'1');

@@ -18,10 +18,28 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+// restoreLegacyCRC32JSONInput reconstructs the historical persisted form from
+// a newly bound CRC32(JSON) expression without changing the surrounding tree.
+func restoreLegacyCRC32JSONInput(expr *planpb.Expr) bool {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) ||
+		len(f.Args) != 1 || f.Args[0] == nil || f.Args[0].Typ.Id != int32(types.T_text) {
+		return false
+	}
+	cast := f.Args[0].GetF()
+	if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || int32(cast.Func.Obj) != 1 ||
+		len(cast.Args) == 0 || cast.Args[0] == nil || cast.Args[0].Typ.Id != int32(types.T_json) {
+		return false
+	}
+	f.Args[0] = cast.Args[0]
+	return true
+}
 
 // Bind a lawful composite expression with the production CREATE planner, then
 // inject only its persisted legacy CRC32 overload. Do not infer legacy identity
@@ -37,9 +55,7 @@ func legacyCRC32AutoIncrementCopyFixture(t *testing.T) *MockOptimizer {
 	require.NotNil(t, generated.GeneratedCol)
 	converted := 0
 	err = planpb.VisitExprTree(generated.GeneratedCol.Expr, func(expr *planpb.Expr) error {
-		f := expr.GetF()
-		if f != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload) {
-			f.Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload)
+		if restoreLegacyCRC32JSONInput(expr) {
 			converted++
 		}
 		return nil

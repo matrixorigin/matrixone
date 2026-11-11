@@ -23,7 +23,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -143,16 +142,25 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			request := queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 			request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 				ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+				PreparedStatementProtocolSupported: true,
 			}
 			return queryClient.SendMessage(ctx, queryAddress, request)
 		}
-		_, err = export() // the live COM_STMT prepared crc32(j)
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "binary CRC32 migration rejection: %v", err)
-		check(1, 4012824821) // rejection must leave the original handle executable
+		binarySnapshot, err := export() // the live COM_STMT prepared crc32(j)
+		require.NoError(t, err)
+		require.NotNil(t, binarySnapshot)
+		require.NotNil(t, binarySnapshot.MigrateConnFromResponse)
+		require.Len(t, binarySnapshot.MigrateConnFromResponse.PrepareStmts, 1)
+		queryClient.Release(binarySnapshot)
+		check(1, 4012824821) // exporting must leave the original handle executable
 		require.NoError(t, stmt.Close())
 		exec(`prepare crc32_migration from 'select crc32(cast(''{"t1":"a"}'' as json))'`)
-		_, err = export()
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "SQL CRC32 migration rejection: %v", err)
+		sqlSnapshot, err := export()
+		require.NoError(t, err)
+		require.NotNil(t, sqlSnapshot)
+		require.NotNil(t, sqlSnapshot.MigrateConnFromResponse)
+		require.Len(t, sqlSnapshot.MigrateConnFromResponse.PrepareStmts, 1)
+		queryClient.Release(sqlSnapshot)
 		var checksum uint64
 		require.NoError(t, conn.QueryRowContext(ctx, "execute crc32_migration").Scan(&checksum))
 		require.Equal(t, uint64(4012824821), checksum)
@@ -179,9 +187,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		}()
 		require.NoError(t, plain.Close())
 
-		// An identity-less old-source payload is sent to an actual target routine.
-		// It must reject the later unsafe statement before even the earlier USE
-		// or safe PREPARE. No old binary or protocol value is manufactured here.
+		// Replay both an ordinary statement and a CRC32 statement through a real
+		// target routine. This is a same-build migration, not an upgrade test.
 		exec("create table migration_identity(id bigint unsigned auto_increment primary key, marker int)")
 		targetDB, err := sql.Open("mysql", cfg.FormatDSN())
 		require.NoError(t, err)
@@ -208,20 +215,27 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		request.MigrateConnToRequest = &query.MigrateConnToRequest{
 			ConnID: targetID, DB: "crc32_prepared_contract", LastInsertIDExported: true, LastInsertID: 91,
 			PrepareStmts: []*query.PrepareStmt{
-				{Name: "safe_first", SQL: "select 1"}, {Name: "unsafe_later", SQL: "select crc32(cast(? as json))"},
+				{Name: "safe_first", SQL: "select 1"}, {Name: "crc_later", SQL: "select crc32(cast(? as json))"},
 			},
 		}
-		_, err = queryClient.SendMessage(ctx, queryAddress, request)
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "receiver CRC32 migration rejection: %v", err)
+		response, err := queryClient.SendMessage(ctx, queryAddress, request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		require.NotNil(t, response.MigrateConnToResponse)
+		require.True(t, response.MigrateConnToResponse.Success)
+		queryClient.Release(response)
 		var database sql.NullString
 		var keep int64
 		require.NoError(t, target.QueryRowContext(ctx, "select database(),@keep,last_insert_id()").Scan(&database, &keep, &checksum))
-		require.Equal(t, initialDatabase, database, "rejection must precede USE")
+		require.Equal(t, sql.NullString{String: "crc32_prepared_contract", Valid: true}, database)
 		require.Equal(t, int64(42), keep)
-		require.Equal(t, initialLastInsertID, checksum, "rejection must precede counter restoration")
-		_, err = target.ExecContext(ctx, "deallocate prepare safe_first")
-		var sqlErr *mysql.MySQLError
-		require.ErrorAs(t, err, &sqlErr)
-		require.Equal(t, uint16(1243), sqlErr.Number, "the earlier safe handle must not have been installed")
+		require.Equal(t, uint64(91), checksum)
+		var one int
+		require.NoError(t, target.QueryRowContext(ctx, "execute safe_first").Scan(&one))
+		require.Equal(t, 1, one)
+		_, err = target.ExecContext(ctx, `set @crc_param='{"t1":"a"}'`)
+		require.NoError(t, err)
+		require.NoError(t, target.QueryRowContext(ctx, "execute crc_later using @crc_param").Scan(&checksum))
+		require.Equal(t, uint64(4012824821), checksum)
 	})
 }
