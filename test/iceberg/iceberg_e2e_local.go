@@ -75,6 +75,12 @@ type runSummary struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+func run() (runErr error) {
 	cfg := localE2EConfig{}
 	var lowBudget bool
 	flag.BoolVar(&lowBudget, "low-budget-regression", false, "run only the 4 MiB append budget regression")
@@ -98,20 +104,20 @@ func main() {
 		cfg.Database = "iceci_" + runID
 	}
 	if err := validateIdentifier(cfg.Namespace, "namespace"); err != nil {
-		fatal(err)
+		return err
 	}
 	if err := validateIdentifier(cfg.Catalog, "catalog"); err != nil {
-		fatal(err)
+		return err
 	}
 	if err := validateIdentifier(cfg.Database, "database"); err != nil {
-		fatal(err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if err := os.MkdirAll(cfg.ReportDir, 0o755); err != nil {
-		fatal(fmt.Errorf("create report dir: %w", err))
+		return fmt.Errorf("create report dir: %w", err)
 	}
 	started := time.Now().UTC()
 	summary := runSummary{
@@ -122,27 +128,53 @@ func main() {
 		StartedAt: started.Format(time.RFC3339),
 	}
 
+	var db *sql.DB
+	if lowBudget {
+		// Install recovery before creating the first REST resource. The run context
+		// may already be cancelled when cleanup starts.
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			if db != nil {
+				defer db.Close()
+			}
+			result := (&caseRunner{cfg: cfg, db: db}).cleanupBudgetCase(cleanupCtx)
+			summary.Cases = append(summary.Cases, result)
+			if result.Status != "passed" {
+				runErr = errors.Join(runErr, fmt.Errorf("fixture cleanup: %s", result.Error))
+			}
+			runErr = errors.Join(runErr, writeCaseReport(cfg.ReportDir, result))
+			summary.EndedAt = time.Now().UTC().Format(time.RFC3339)
+			runErr = errors.Join(runErr, writeRunSummary(cfg.ReportDir, summary))
+		}()
+	}
 	if err := seedRESTTables(ctx, cfg); err != nil {
 		result := caseResult{ID: "ICE-CI-E2E-000", Name: "rest-seed", Status: "failed", Error: err.Error()}
 		summary.Cases = append(summary.Cases, result)
 		_ = writeCaseReport(cfg.ReportDir, result)
 		_ = writeRunSummary(cfg.ReportDir, summary)
-		fatal(err)
+		return err
 	}
 	// Keep the successful seed in the report as well. The E2E artifact contract
 	// requires one complete report directory for every case, including the setup
 	// phase that supplies the catalog tables for the SQL scenarios below.
 	if err := recordSuccessfulRESTSeed(cfg.ReportDir, &summary); err != nil {
-		fatal(err)
+		return err
 	}
 
-	db, err := sql.Open("mysql", cfg.DSN)
+	var err error
+	db, err = sql.Open("mysql", cfg.DSN)
 	if err != nil {
-		fatal(fmt.Errorf("open MO connection: %w", err))
+		return fmt.Errorf("open MO connection: %w", err)
 	}
-	defer db.Close()
+	// Cleanup runs before this connection is closed.
+	defer func() {
+		if !lowBudget {
+			db.Close()
+		}
+	}()
 	if err := waitForDB(ctx, db); err != nil {
-		fatal(err)
+		return err
 	}
 
 	runner := &caseRunner{cfg: cfg, db: db, lowBudget: lowBudget}
@@ -151,7 +183,7 @@ func main() {
 		summary.Cases = append(summary.Cases, result)
 		_ = writeCaseReport(cfg.ReportDir, result)
 		_ = writeRunSummary(cfg.ReportDir, summary)
-		fatal(err)
+		return err
 	}
 
 	cases := []func(context.Context) caseResult{
@@ -169,34 +201,22 @@ func main() {
 	if lowBudget {
 		cases = []func(context.Context) caseResult{runner.appendBudgetRowsCase, runner.appendBudgetRejectionCase}
 	}
-	failed := false
+	var caseErr error
 	for _, fn := range cases {
 		result := fn(ctx)
 		if result.Status != "passed" {
-			failed = true
+			caseErr = errors.Join(caseErr, fmt.Errorf("%s: %s", result.ID, result.Error))
 		}
 		summary.Cases = append(summary.Cases, result)
 		if err := writeCaseReport(cfg.ReportDir, result); err != nil {
-			fatal(err)
-		}
-	}
-	if lowBudget {
-		result := runner.cleanupBudgetCase(ctx)
-		if result.Status != "passed" {
-			failed = true
-		}
-		summary.Cases = append(summary.Cases, result)
-		if err := writeCaseReport(cfg.ReportDir, result); err != nil {
-			fatal(err)
+			return errors.Join(caseErr, err)
 		}
 	}
 	summary.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeRunSummary(cfg.ReportDir, summary); err != nil {
-		fatal(err)
+		return errors.Join(caseErr, err)
 	}
-	if failed {
-		fatal(fmt.Errorf("one or more Iceberg E2E local cases failed"))
-	}
+	return caseErr
 }
 
 type caseRunner struct {
@@ -272,16 +292,21 @@ func (r *caseRunner) setup(ctx context.Context) error {
 func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
 	const id, name = "ICE-CI-E2E-028", "append-budget-cleanup"
 	fail := func(err error) caseResult { return failedCase(id, name, nil, nil, nil, err.Error()) }
-	if _, err := r.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE %s", ident(r.cfg.Database))); err != nil {
-		return fail(err)
-	}
-	for _, stmt := range []string{fmt.Sprintf("SHOW DATABASES LIKE %s", sqlString(r.cfg.Database)), fmt.Sprintf("SELECT table_name FROM mo_catalog.mo_iceberg_tables WHERE namespace = %s", sqlString(r.cfg.Namespace))} {
-		rows, err := queryLines(ctx, r.db, stmt)
-		if err != nil {
-			return fail(err)
-		}
-		if len(rows) != 0 {
-			return fail(fmt.Errorf("cleanup query %s returned %v", stmt, rows))
+	var sqlErr error
+	if r.db != nil {
+		if _, err := r.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database))); err != nil {
+			sqlErr = err
+		} else {
+			for _, stmt := range []string{fmt.Sprintf("SHOW DATABASES LIKE %s", sqlString(r.cfg.Database)), fmt.Sprintf("SELECT table_name FROM mo_catalog.mo_iceberg_tables WHERE namespace = %s", sqlString(r.cfg.Namespace))} {
+				rows, err := queryLines(ctx, r.db, stmt)
+				if err != nil {
+					sqlErr = errors.Join(sqlErr, err)
+					continue
+				}
+				if len(rows) != 0 {
+					sqlErr = errors.Join(sqlErr, fmt.Errorf("cleanup query %s returned %v", stmt, rows))
+				}
+			}
 		}
 	}
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
@@ -310,7 +335,7 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
 			return fail(err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode != http.StatusNotFound && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 			return fail(fmt.Errorf("REST cleanup returned %d for %s", resp.StatusCode, target))
 		}
 		request, err = http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -325,6 +350,9 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
 		if resp.StatusCode != http.StatusNotFound {
 			return fail(fmt.Errorf("REST cleanup verification returned %d for %s", resp.StatusCode, target))
 		}
+	}
+	if sqlErr != nil {
+		return fail(sqlErr)
 	}
 	return passedCase(id, name, nil, nil, nil, nil)
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -338,6 +339,17 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		var uncertain string
 		select {
 		case uncertain = <-started:
+			// The upload blocks inside closeActive, before it removes that
+			// writer. Inspect the other partition while Append is paused.
+			active := reflect.ValueOf(inner.writer).Elem().FieldByName("active")
+			otherRows := int64(0)
+			for _, key := range active.MapKeys() {
+				entry := active.MapIndex(key).Elem()
+				if !strings.HasSuffix(uncertain, strings.TrimPrefix(entry.FieldByName("location").String(), "s3://")) {
+					otherRows += entry.FieldByName("writer").Elem().FieldByName("rows").Int()
+				}
+			}
+			require.Positive(t, otherRows, "another partition writer must contain rows at the upload barrier")
 			require.Greater(t, inner.memoryBudget.usedBytes(), weight)
 			cancel()
 		case err := <-done:
