@@ -93,3 +93,21 @@ func TestCommitWaitInjectedTargetsTransaction(t *testing.T) {
 	_, injected = CommitWaitInjected(7, "accepted")
 	require.False(t, injected)
 }
+
+func TestWorkspaceAllocationLimitIsDatabaseScoped(t *testing.T) {
+	enabled := fault.Enable()
+	const point = "fj/cn/workspace_allocation_limit"
+	t.Cleanup(func() {
+		_, _ = fault.RemoveFaultPoint(t.Context(), point)
+		if enabled {
+			fault.Disable()
+		}
+	})
+	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "ECHO", 32, "workspace_test", false))
+	require.Equal(t, uint64(32), CNWorkspaceAllocationLimit("workspace_test"))
+	require.Zero(t, CNWorkspaceAllocationLimit("other_database"))
+	_, err := fault.RemoveFaultPoint(t.Context(), point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "ECHO", 32, "", false))
+	require.Zero(t, CNWorkspaceAllocationLimit("workspace_test"))
+}

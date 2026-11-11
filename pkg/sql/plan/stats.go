@@ -1071,6 +1071,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		}
 	case *plan.Expr_Lit:
 		ret = 1.0
+		// Contradiction folding (normalizeColumnDomain) and constant folding can
+		// reduce a whole filter list to one boolean literal. Its row fraction is
+		// exact: TRUE keeps every row, while FALSE and NULL keep none. Estimating
+		// the always-empty case as 1.0 sized scans and the operators above them
+		// for the full table behind an always-empty filter (#32068). This floor
+		// matches the impossible-interval estimate in estimateIntervalSelectivity.
+		if IsFalseExpr(expr) || exprImpl.Lit.GetIsnull() {
+			ret = 0.00000001
+		}
 	}
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret

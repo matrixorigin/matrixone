@@ -129,9 +129,11 @@ does not imply permission to mutate their physical source.
 Persisted vectors, spill files and network batches remain existing flat logical
 vectors. Materialize before current serialization APIs; never emit DICTIONARY
 class bytes or raw dictionary pointers. Older peers/plans therefore continue on
-flat execution. Unknown class bytes remain invalid on input. No schema migration
-is needed. Reverting producer enablement restores ordinary execution while the
-neutral foundations can remain.
+flat execution. Existing row-buffer formats historically accepted class byte 2;
+their decoded values are materialized and normalize to FLAT, without creating an
+in-memory dictionary or rewriting encoded bytes. Unknown class bytes remain
+invalid on input. No schema migration is needed. Reverting producer enablement
+restores ordinary execution while the neutral foundations can remain.
 
 ## Producer rollout and critical path
 
@@ -156,8 +158,10 @@ neutral foundations can remain.
 The seven production PRs are early filtering; representation/ownership;
 normalization/compatibility; consumer migration; scan producers; shuffle/join
 producers; reader integration. The first three dictionary stages enable no
-production producers. Each dependent stage builds on main after prerequisites
-merge; one isolated candidate is measured against its actual main baseline.
+production producers. Draft development may stack on prerequisite branches before
+merge, with parent dependencies and incremental diffs identified in each PR.
+Production readiness and qualification still wait for prerequisites to merge;
+one isolated candidate is measured against its actual main baseline.
 
 ## Alternatives and verification
 
