@@ -35,12 +35,13 @@ const (
 	AllocationOwnerExternal
 	AllocationOwnerDependent
 	AllocationOwnerWindow
+	AllocationOwnerTxnWorkspace
 )
 
 const (
 	// AllocationOwnerCatalogMax is the largest owner implemented by this
 	// binary. Append new catalog entries immediately before it.
-	AllocationOwnerCatalogMax = AllocationOwnerWindow
+	AllocationOwnerCatalogMax = AllocationOwnerTxnWorkspace
 	// AllocationOwnerMax preserves the existing public bound and reserves IDs
 	// for rolling-version terminal summaries. Unknown owners remain observable
 	// on the wire but cannot allocate locally until catalogued by this binary.
@@ -51,6 +52,8 @@ const (
 // non-zero IDs remain renderable during rolling upgrades.
 func (o AllocationOwner) String() string {
 	switch o {
+	case AllocationOwnerTxnWorkspace:
+		return "txn_workspace"
 	case AllocationOwnerHashBuild:
 		return "hash_build"
 	case AllocationOwnerIndexBuild:

@@ -108,6 +108,7 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 }
 
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
+	oldNodes := qry.Nodes
 	newSteps := make([]int32, 0, len(qry.Steps))
 	newNodes := make([]*plan.Node, 0, len(qry.Nodes))
 
@@ -117,6 +118,7 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 
 	qry.Steps = newSteps
 	qry.Nodes = newNodes
+	remapLocalRuntimeFilterDomains(qry, oldNodes)
 }
 
 func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeID int32, nodes *[]*plan.Node) int32 {

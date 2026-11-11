@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -440,6 +441,7 @@ type Compile struct {
 	// Non-owning, compileQuery-generation evidence for optional deep filters.
 	deepRuntimeFilterTags           map[int32]bool
 	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
+	localRuntimeDomains             []*runtimefilter.LocalDomain
 
 	needLockMeta bool
 	needBlock    bool

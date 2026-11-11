@@ -297,6 +297,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
+		proc: testutil.NewProc(t),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
@@ -317,7 +318,8 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	m := mpool.MustNewZero()
 	normalBat.SetRowCount(1)
 	vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m)
-	txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	_, err := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	require.NoError(t, err)
 
 	txnOp.AddWorkspace(txn)
 
@@ -337,7 +339,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
+	err = ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
