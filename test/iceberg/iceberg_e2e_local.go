@@ -129,7 +129,10 @@ func run() (runErr error) {
 	}
 
 	var db *sql.DB
+	runner := &caseRunner{cfg: cfg, lowBudget: lowBudget}
+	var owned *budgetRESTResources
 	if lowBudget {
+		owned = &budgetRESTResources{}
 		// Install recovery before creating the first REST resource. The run context
 		// may already be cancelled when cleanup starts.
 		defer func() {
@@ -138,7 +141,7 @@ func run() (runErr error) {
 			if db != nil {
 				defer db.Close()
 			}
-			result := (&caseRunner{cfg: cfg, db: db}).cleanupBudgetCase(cleanupCtx)
+			result := runner.cleanupBudgetCase(cleanupCtx, owned)
 			summary.Cases = append(summary.Cases, result)
 			if result.Status != "passed" {
 				runErr = errors.Join(runErr, fmt.Errorf("fixture cleanup: %s", result.Error))
@@ -148,7 +151,7 @@ func run() (runErr error) {
 			runErr = errors.Join(runErr, writeRunSummary(cfg.ReportDir, summary))
 		}()
 	}
-	if err := seedRESTTables(ctx, cfg); err != nil {
+	if err := seedRESTTablesOwned(ctx, cfg, owned); err != nil {
 		result := caseResult{ID: "ICE-CI-E2E-000", Name: "rest-seed", Status: "failed", Error: err.Error()}
 		summary.Cases = append(summary.Cases, result)
 		_ = writeCaseReport(cfg.ReportDir, result)
@@ -177,7 +180,7 @@ func run() (runErr error) {
 		return err
 	}
 
-	runner := &caseRunner{cfg: cfg, db: db, lowBudget: lowBudget}
+	runner.db = db
 	if err := runner.setup(ctx); err != nil {
 		result := caseResult{ID: "ICE-CI-E2E-001", Name: "mo-setup", Status: "failed", Error: err.Error()}
 		summary.Cases = append(summary.Cases, result)
@@ -220,9 +223,10 @@ func run() (runErr error) {
 }
 
 type caseRunner struct {
-	lowBudget bool
-	cfg       localE2EConfig
-	db        *sql.DB
+	lowBudget     bool
+	ownedDatabase bool
+	cfg           localE2EConfig
+	db            *sql.DB
 }
 
 func (r *caseRunner) setup(ctx context.Context) error {
@@ -270,6 +274,8 @@ func (r *caseRunner) setup(ctx context.Context) error {
 			ident(r.cfg.Database), ident(name), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace), sqlString(name)))
 	}
 	if r.lowBudget {
+		// CREATE DATABASE is exclusive; never drop a pre-existing database.
+		statements = statements[2:]
 		catalogs, err := queryLines(ctx, r.db, fmt.Sprintf("SELECT name FROM mo_catalog.mo_iceberg_catalogs WHERE name = %s", sqlString(r.cfg.Catalog)))
 		if err != nil {
 			return err
@@ -277,23 +283,33 @@ func (r *caseRunner) setup(ctx context.Context) error {
 		if len(catalogs) == 1 {
 			// The catalog and its audit records belong to the service fixture;
 			// only database mappings are recreated between runs.
-			statements = append([]string{statements[0], statements[2]}, statements[5:]...)
+			statements = append([]string{statements[0]}, statements[3:]...)
 		}
 	}
 	for _, stmt := range statements {
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("execute setup statement %q: %w", redactText(stmt), err)
 		}
+		if r.lowBudget && stmt == fmt.Sprintf("CREATE DATABASE %s", ident(r.cfg.Database)) {
+			r.ownedDatabase = true
+		}
 	}
 	return nil
 }
 
+type budgetRESTResources struct {
+	namespace bool
+	tables    []string
+}
+
 // cleanupBudgetCase removes and verifies the test-owned SQL and REST resources.
-func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
+func (r *caseRunner) cleanupBudgetCase(ctx context.Context, owned *budgetRESTResources) caseResult {
 	const id, name = "ICE-CI-E2E-028", "append-budget-cleanup"
-	fail := func(err error) caseResult { return failedCase(id, name, nil, nil, nil, err.Error()) }
 	var sqlErr error
-	if r.db != nil {
+	fail := func(err error) caseResult {
+		return failedCase(id, name, nil, nil, nil, errors.Join(sqlErr, err).Error())
+	}
+	if r.db != nil && r.ownedDatabase {
 		if _, err := r.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database))); err != nil {
 			sqlErr = err
 		} else {
@@ -309,6 +325,12 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
 			}
 		}
 	}
+	if owned == nil || !owned.namespace {
+		if sqlErr != nil {
+			return fail(sqlErr)
+		}
+		return passedCase(id, name, nil, nil, nil, nil)
+	}
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
 	req := api.CatalogRequest{Catalog: model.Catalog{Name: r.cfg.Catalog, Type: "rest", URI: r.cfg.CatalogURI, Warehouse: r.cfg.Warehouse, AuthMode: "none"}, ExternalPrincipal: "ci-local"}
 	req, err := catalogRequestWithPrefix(ctx, client, req, r.cfg.Warehouse)
@@ -320,9 +342,9 @@ func (r *caseRunner) cleanupBudgetCase(ctx context.Context) caseResult {
 		return fail(err)
 	}
 	ns := base + "/" + url.PathEscape(r.cfg.Namespace)
-	targets := make([]string, 0, len(e2eTableSpecs(r.cfg.Namespace))+1)
-	for _, spec := range e2eTableSpecs(r.cfg.Namespace) {
-		targets = append(targets, ns+"/tables/"+url.PathEscape(spec.name))
+	targets := make([]string, 0, len(owned.tables)+1)
+	for _, table := range owned.tables {
+		targets = append(targets, ns+"/tables/"+url.PathEscape(table))
 	}
 	targets = append(targets, ns)
 	for _, target := range targets {
@@ -1357,6 +1379,10 @@ func (r *caseRunner) mergeOnReadDeleteCase(ctx context.Context) caseResult {
 }
 
 func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
+	return seedRESTTablesOwned(ctx, cfg, nil)
+}
+
+func seedRESTTablesOwned(ctx context.Context, cfg localE2EConfig, owned *budgetRESTResources) error {
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
 	req := api.CatalogRequest{
 		Catalog: model.Catalog{
@@ -1374,8 +1400,11 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := createNamespace(ctx, cfg, reqWithPrefix.Prefix); err != nil {
+	if err := createNamespaceWithOwnership(ctx, cfg, reqWithPrefix.Prefix, owned != nil); err != nil {
 		return err
+	}
+	if owned != nil {
+		owned.namespace = true
 	}
 	for _, spec := range e2eTableSpecs(cfg.Namespace) {
 		properties := map[string]string{
@@ -1395,6 +1424,9 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 		})
 		if err != nil {
 			return fmt.Errorf("create Iceberg table %s.%s: %w", cfg.Namespace, spec.name, err)
+		}
+		if owned != nil {
+			owned.tables = append(owned.tables, spec.name)
 		}
 	}
 	return nil
@@ -1455,6 +1487,10 @@ func catalogRequestWithPrefix(ctx context.Context, client *catalog.RESTClient, r
 }
 
 func createNamespace(ctx context.Context, cfg localE2EConfig, prefix string) error {
+	return createNamespaceWithOwnership(ctx, cfg, prefix, false)
+}
+
+func createNamespaceWithOwnership(ctx context.Context, cfg localE2EConfig, prefix string, exclusive bool) error {
 	body, err := json.Marshal(map[string]any{
 		"namespace":  []string{cfg.Namespace},
 		"properties": map[string]string{"owner": "matrixone-ci"},
@@ -1473,10 +1509,13 @@ func createNamespace(ctx context.Context, cfg localE2EConfig, prefix string) err
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if exclusive {
+			return fmt.Errorf("create namespace request failed; creation outcome unknown, resource was not claimed for cleanup: %w", err)
+		}
 		return fmt.Errorf("create namespace request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusConflict {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent || (resp.StatusCode == http.StatusConflict && !exclusive) {
 		return nil
 	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

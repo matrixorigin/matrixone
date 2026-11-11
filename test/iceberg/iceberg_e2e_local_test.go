@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -2477,4 +2478,132 @@ func newSnapshotRESTServerWithRetention(t *testing.T, retainOld bool) *httptest.
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func TestBudgetRESTOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		existingNamespace bool
+		failure           string
+	}{
+		{name: "existing namespace and table", existingNamespace: true},
+		{name: "partial seed with conflicting table"},
+		{name: "partial seed with rejected table", failure: "rejected"},
+		{name: "partial seed with unknown table outcome", failure: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			namespace := tc.existingNamespace
+			tables := map[string]bool{}
+			if tc.failure == "" {
+				tables["partition_orders"] = true
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/v1/config"):
+					_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/namespaces"):
+					if namespace {
+						w.WriteHeader(http.StatusConflict)
+					} else {
+						namespace = true
+						w.WriteHeader(http.StatusCreated)
+					}
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/tables"):
+					var body struct {
+						Name string `json:"name"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode create: %v", err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if body.Name == "partition_orders" && tc.failure != "" {
+						if tc.failure == "unknown" {
+							tables[body.Name] = true
+							conn, _, err := w.(http.Hijacker).Hijack()
+							if err != nil {
+								t.Errorf("hijack: %v", err)
+								return
+							}
+							_ = conn.Close()
+						} else {
+							w.WriteHeader(http.StatusInternalServerError)
+						}
+						return
+					}
+					if tables[body.Name] {
+						w.WriteHeader(http.StatusConflict)
+						return
+					}
+					tables[body.Name] = true
+					_, _ = w.Write([]byte(`{"metadata-location":"s3://warehouse/metadata.json","config":{"table-uuid":"uuid-1"}}`))
+				case strings.Contains(r.URL.Path, "/tables/"):
+					name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+					if r.Method == http.MethodDelete {
+						delete(tables, name)
+						w.WriteHeader(http.StatusNoContent)
+					} else if !tables[name] {
+						w.WriteHeader(http.StatusNotFound)
+					}
+				case r.Method == http.MethodDelete:
+					if len(tables) > 0 {
+						w.WriteHeader(http.StatusConflict)
+					} else {
+						namespace = false
+						w.WriteHeader(http.StatusNoContent)
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(server.Close)
+			cfg := localE2ETestConfig()
+			cfg.CatalogURI = server.URL + "/iceberg"
+			owned := &budgetRESTResources{}
+			if err := seedRESTTablesOwned(context.Background(), cfg, owned); err == nil {
+				t.Fatal("expected conflict")
+			}
+			result := (&caseRunner{cfg: cfg}).cleanupBudgetCase(context.Background(), owned)
+			if (tc.existingNamespace || tc.failure == "rejected") && result.Status != "passed" {
+				t.Fatalf("unowned namespace cleanup: %+v", result)
+			}
+			if !tc.existingNamespace && tc.failure != "rejected" && result.Status != "failed" {
+				t.Fatalf("nonempty namespace must report cleanup failure: %+v", result)
+			}
+			wantRetained := tc.failure != "rejected"
+			if namespace != wantRetained || tables["partition_orders"] != wantRetained || tables["append_orders"] {
+				t.Fatalf("unexpected resources after cleanup: namespace=%v tables=%v", namespace, tables)
+			}
+		})
+	}
+}
+
+func TestBudgetDatabaseOwnership(t *testing.T) {
+	for _, created := range []bool{false, true} {
+		t.Run(fmt.Sprintf("created=%v", created), func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			mock.ExpectQuery("SELECT name FROM mo_catalog.mo_iceberg_catalogs").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("ci_catalog"))
+			create := mock.ExpectExec("CREATE DATABASE")
+			if !created {
+				create.WillReturnError(errors.New("database exists"))
+			} else {
+				create.WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnError(errors.New("setup failed"))
+				mock.ExpectExec("DROP DATABASE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("SHOW DATABASES LIKE").WillReturnRows(sqlmock.NewRows([]string{"name"}))
+				mock.ExpectQuery("SELECT table_name FROM mo_catalog.mo_iceberg_tables").WillReturnRows(sqlmock.NewRows([]string{"name"}))
+			}
+			runner := &caseRunner{cfg: localE2ETestConfig(), db: db, lowBudget: true}
+			if err := runner.setup(context.Background()); err == nil {
+				t.Fatal("expected setup failure")
+			}
+			if result := runner.cleanupBudgetCase(context.Background(), nil); result.Status != "passed" {
+				t.Fatalf("cleanup failed: %+v", result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
