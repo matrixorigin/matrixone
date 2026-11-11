@@ -42,7 +42,7 @@ summaries and deletion marks on failure. No transaction lock across cleanup I/O.
 
 Persisted-but-unrecorded objects retain canonical names and a cleanup owner.
 Port the necessary main local unpublishedPending claim/reservation/drain closure,
-including persistence-before-capacity hooks, failed publication handoff, shared
+including capacity admission before persistence hooks, failed publication handoff, shared
 claims, GC producer fencing and bounded Engine.Close. Reuse GC pool/maintenance
 loop and main defaults (500000 object obligations); do not invent a second queue.
 A failed deletion/submission retains ownership; saturation refuses new obligations
@@ -67,3 +67,11 @@ for serial DML, concurrent DML and mixed HashBuild: three paired runs, 30s warmu
 120s minimum measurement. TPS regression and p95 increase must each be <=5% per
 scenario; unstable evidence is INCONCLUSIVE. Never disable accounting to pass.
 No original experiment/PVC/receiver operations. Historical OOM closure is unproven.
+
+## Design review
+
+Revision 1 (2f84010c8ed5) independently reviewed and approved before implementation.
+Mandatory implementation checks: headroomMu -> budget.mu refresh ordering; no
+worker reacquisition of txn lock during compaction join; balance WaitGroup on
+Submit failure; no delete/blocking Submit under queue locks; preserve staged
+claims and object owners on every failure. Approval covers design only, not code.
