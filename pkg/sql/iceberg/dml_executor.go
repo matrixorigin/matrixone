@@ -27,6 +27,8 @@ import (
 )
 
 type DMLActionExecutor struct {
+	ParquetOptions     icebergwrite.ParquetOptions
+	ParquetOptionsErr  error
 	Workflow           dml.CommitWorkflow
 	Catalog            api.CatalogRequest
 	TableLocation      string
@@ -58,6 +60,10 @@ func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteAction
 }
 
 func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateActionStreamRequest) (DMLCommitActionStreamResult, error) {
+	if e.ParquetOptionsErr != nil {
+		return DMLCommitActionStreamResult{}, api.ToMOErr(ctx, e.ParquetOptionsErr)
+	}
+	req.ParquetOptions = e.ParquetOptions
 	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
@@ -75,6 +81,10 @@ func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateAction
 }
 
 func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionStreamRequest) (DMLCommitActionStreamResult, error) {
+	if e.ParquetOptionsErr != nil {
+		return DMLCommitActionStreamResult{}, api.ToMOErr(ctx, e.ParquetOptionsErr)
+	}
+	req.ParquetOptions = e.ParquetOptions
 	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
@@ -92,6 +102,10 @@ func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionSt
 }
 
 func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwriteActionStreamRequest) (DMLCommitActionStreamResult, error) {
+	if e.ParquetOptionsErr != nil {
+		return DMLCommitActionStreamResult{}, api.ToMOErr(ctx, e.ParquetOptionsErr)
+	}
+	req.ParquetOptions = e.ParquetOptions
 	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
