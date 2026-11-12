@@ -311,3 +311,82 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 		require.Zero(t, mp.OnHeapCurrNB())
 	})
 }
+
+// Exercise the real cache across a failed column consumer and a retry at the
+// same snapshot timestamp. This is a component test, not a connect-loop test.
+func TestReplayPartialInsertRetryCache(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	cc := cache.NewCatalog()
+	ts := types.BuildTS(100, 0)
+	insertTables := func() {
+		for _, tbl := range []catalog.Table{
+			{AccountId: 1, DatabaseId: 8, DatabaseName: "db", TableId: 9, TableName: "first"},
+			{AccountId: 1, DatabaseId: 8, DatabaseName: "db", TableId: 10, TableName: "second"},
+		} {
+			func() {
+				b, err := catalog.GenCreateTableTuple(tbl, mp, packer)
+				require.NoError(t, err)
+				defer b.Clean(mp)
+				_, err = fillRandomRowidAndZeroTs(b, mp)
+				require.NoError(t, err)
+				vector.MustFixedColWithTypeCheck[types.TS](b.Vecs[cache.MO_TIMESTAMP_IDX])[0] = ts
+				cc.InsertTable(b)
+			}()
+		}
+	}
+	typ := types.T_uint64.ToType()
+	encoded, err := typ.Marshal()
+	require.NoError(t, err)
+	column := func(id uint64, table, name string, num int32) catalog.Column {
+		return catalog.Column{AccountId: 1, DatabaseId: 8, DatabaseName: "db", TableId: id, TableName: table, Name: name, Num: num, Seqnum: uint16(num - 1), Typ: encoded, ConstraintType: catalog.SystemColNoConstraint}
+	}
+	makeBatch := func(cols ...catalog.Column) *batch.Batch {
+		data, err := catalog.GenCreateColumnTuples(cols, mp, packer)
+		require.NoError(t, err)
+		b := batch.NewWithSize(len(data.Vecs) + 1)
+		b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		copy(b.Vecs[1:], data.Vecs)
+		for range cols {
+			if err := vector.AppendFixed(b.Vecs[0], types.Rowid{}, false, mp); err != nil {
+				b.Clean(mp)
+				require.NoError(t, err)
+			}
+		}
+		b.SetRowCount(len(cols))
+		return b
+	}
+	first := column(9, "first", "keep", 1)
+	stale := column(9, "first", "stale", 2)
+	second := column(10, "second", "other", 1)
+	insertTables()
+	injected := errors.New("second batch failure")
+	calls := 0
+	err = consumeReplayColumnsWithFaults(t.Context(), []*batch.Batch{makeBatch(first, stale), makeBatch(second)}, mp, ts, cc.InsertColumns, nil,
+		func(v *vector.Vector, ts types.TS, mp *mpool.MPool) error {
+			calls++
+			if calls == 3 {
+				return injected
+			}
+			return vector.AppendFixed(v, ts, false, mp)
+		})
+	require.ErrorIs(t, err, injected)
+	require.Equal(t, 3, calls)
+	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").TableDef.Cols[0].Name, cc.GetTableByName(1, 8, "first").TableDef.Cols[1].Name})
+	require.False(t, cc.CanServe(ts))
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	insertTables()
+	err = consumeReplayColumns(t.Context(), []*batch.Batch{makeBatch(first), makeBatch(second)}, mp, ts, cc.InsertColumns)
+	require.NoError(t, err)
+	got := cc.GetTableByName(1, 8, "first")
+	require.NotNil(t, got.TableDef)
+	require.Len(t, got.TableDef.Cols, 1)
+	require.Equal(t, "keep", got.TableDef.Cols[0].Name)
+	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").TableDef.Cols[0].Name)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
