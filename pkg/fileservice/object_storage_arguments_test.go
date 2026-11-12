@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -70,24 +69,6 @@ func TestObjectStorageArguments(t *testing.T) {
 	})
 }
 
-func validCITestS3Prefix(prefix string) bool {
-	return prefix != "" && prefix != "." && !strings.HasPrefix(prefix, "/") && path.Clean(prefix) == prefix && strings.Contains(prefix, "/")
-}
-
-func TestValidCITestS3Prefix(t *testing.T) {
-	for _, tc := range []struct {
-		prefix string
-		valid  bool
-	}{
-		{"ci-ut/run-123", true}, {"", false}, {"/ci-ut/run", false}, {".", false},
-		{"ci-ut", false}, {"ci-ut/../other", false}, {"ci-ut//run", false},
-	} {
-		if got := validCITestS3Prefix(tc.prefix); got != tc.valid {
-			t.Errorf("validCITestS3Prefix(%q) = %v, want %v", tc.prefix, got, tc.valid)
-		}
-	}
-}
-
 func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
 	t.Setenv("MO_CI_S3_PREFIX", "ci-ut/run-123")
 	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint=https://example.invalid,bucket=test,key-id=id,key-secret=secret,is-minio=true")
@@ -107,7 +88,7 @@ func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
 func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
 	t.Helper()
 	root := os.Getenv("MO_CI_S3_PREFIX")
-	if !validCITestS3Prefix(root) || !strings.HasPrefix(args.KeyPrefix, root+"/") {
+	if !validCITestS3Prefix(root) || !validCITestS3Prefix(args.KeyPrefix) || !strings.HasPrefix(args.KeyPrefix, root+"/") {
 		t.Fatal("unsafe CS S3 fixture prefix")
 	}
 	prefix := args.KeyPrefix + "/"
@@ -117,47 +98,16 @@ func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
 		cancel()
 		t.Fatal("cannot initialize CS S3 fixture")
 	}
-	for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+	if err := checkEmptyCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
 		cancel()
-		if object.Err != nil {
-			t.Fatal("cannot inspect CS S3 fixture prefix")
-		}
-		t.Fatal("CS S3 fixture prefix is not empty")
-	}
-	if err := ctx.Err(); err != nil {
-		cancel()
-		t.Fatal("CS S3 fixture prefix inspection timed out")
+		t.Fatal(err)
 	}
 	cancel()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		var keys []string
-		for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
-			if object.Err != nil || !strings.HasPrefix(object.Key, prefix) {
-				t.Error("cannot safely enumerate CS S3 fixture objects")
-				return
-			}
-			keys = append(keys, object.Key)
-			if len(keys) > 10000 {
-				t.Error("CS S3 fixture cleanup exceeded safety limit")
-				return
-			}
-		}
-		for _, key := range keys {
-			if err := sdk.client.RemoveObject(ctx, args.Bucket, key, minio.RemoveObjectOptions{}); err != nil {
-				t.Error("cannot remove CS S3 fixture object")
-				return
-			}
-		}
-		for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
-			if object.Err != nil || object.Key != "" {
-				t.Error("CS S3 fixture prefix is not empty after cleanup")
-				return
-			}
-		}
-		if ctx.Err() != nil {
-			t.Error("CS S3 fixture cleanup timed out")
+		if err := cleanupCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
+			t.Error(err)
 		}
 	})
 }

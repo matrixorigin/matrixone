@@ -141,7 +141,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 	prefixForTest := func() string {
 		prefix := time.Now().Format("2006-01-02-15-04-05.000000")
 		if len(basePrefixes) > 0 && basePrefixes[0] != "" {
-			return path.Join(basePrefixes[0], prefix) + "/"
+			return path.Join(basePrefixes[0], prefix)
 		}
 		return prefix
 	}

@@ -3164,6 +3164,7 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 		t.Run(args.Name, func(t *testing.T) {
 			csPrefix := args.Name == "cs-s3"
+			fixturePrefix := args.KeyPrefix
 			if csPrefix {
 				prepareCITestStorage(t, args)
 			}
@@ -3171,7 +3172,7 @@ func TestS3FSFromSpecs(t *testing.T) {
 			testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 				args.Name = name
 				if csPrefix {
-					args.KeyPrefix = path.Join(args.KeyPrefix, time.Now().Format("2006-01-02.15:04:05.000000"))
+					args.KeyPrefix = path.Join(fixturePrefix, time.Now().Format("2006-01-02.15:04:05.000000"))
 				} else {
 					args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
 				}
