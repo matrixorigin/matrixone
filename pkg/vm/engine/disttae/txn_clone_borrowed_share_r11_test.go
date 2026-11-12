@@ -221,7 +221,6 @@ func TestIssue25590CloneBorrowedNeverHandedOffToQueueR24ControlC(t *testing.T) {
 	// one explicit owner: with the LIVE pool back, the same terminal
 	// drain the B control exercises empties the queue and physically
 	// deletes both moved names (memory FS) — no unowned fixture resource.
-	ctx := context.Background()
 	require.NoError(t, txn.engine.deleteQueuedUnpublishedPendingOnce(ctx))
 	require.Empty(t, issue25590QueuedNames(txn.engine),
 		"control C terminal cleanup: the explicit drain empties the queue the parked schedule left owned")
