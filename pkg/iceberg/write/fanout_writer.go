@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/parquet-go/parquet-go/compress"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -49,6 +51,7 @@ type DataFileOutputAborter interface {
 }
 
 type FanoutWriterConfig struct {
+	ParquetOptions      ParquetOptions
 	Schema              api.Schema
 	PartitionSpec       api.PartitionSpec
 	TableLocation       string
@@ -62,6 +65,7 @@ type FanoutWriterConfig struct {
 type FanoutParquetDataWriter struct {
 	cfg     FanoutWriterConfig
 	factory DataFileOutputFactory
+	codec   compress.Codec
 	active  map[string]*activeDataFileWriter
 	files   []api.DataFile
 	orphans []string
@@ -96,6 +100,7 @@ func NewFanoutParquetDataWriter(ctx context.Context, cfg FanoutWriterConfig, fac
 	return &FanoutParquetDataWriter{
 		cfg:     cfg,
 		factory: factory,
+		codec:   cfg.ParquetOptions.compression(),
 		active:  make(map[string]*activeDataFileWriter),
 	}, nil
 }
@@ -232,12 +237,13 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 	if err != nil {
 		return nil, api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to create data file", map[string]string{"location": api.RedactPath(location)}, err)
 	}
-	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{
-		Schema:        w.cfg.Schema,
-		PartitionSpec: w.cfg.PartitionSpec,
-		FilePath:      location,
-		TimeZone:      w.cfg.TimeZone,
-	}, sink)
+	writer, err := newParquetDataWriter(ctx, DataWriterConfig{
+		Schema:         w.cfg.Schema,
+		ParquetOptions: w.cfg.ParquetOptions,
+		PartitionSpec:  w.cfg.PartitionSpec,
+		FilePath:       location,
+		TimeZone:       w.cfg.TimeZone,
+	}, sink, w.codec)
 	if err != nil {
 		cleanupErr := abortDataFileSink(sink, location)
 		if cleanupErr != nil {
