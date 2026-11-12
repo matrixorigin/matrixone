@@ -803,14 +803,14 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return moerr.NewInternalErrorf(ctx, "cannot transition to running: %v", err)
 	}
 
-	requiredRestartTransition, clearErrMsgErr :=
+	requiredRestartTransition, publishErr :=
 		exec.publishStartupCatalogTransition(
 			ctx,
 			restartGeneration,
 			restartAdmission,
 		)
-	if clearErrMsgErr != nil {
-		return clearErrMsgErr
+	if publishErr != nil {
+		return publishErr
 	}
 
 	// A timeout and catalog publication can cross while ExecWithStatus is in
@@ -820,7 +820,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	// or leaving the detector registered.
 	if !exec.isCurrentStartAttempt(attempt) ||
 		(requiredRestartTransition && !attempt.completeRestart()) {
-		if requiredRestartTransition && clearErrMsgErr == nil {
+		if requiredRestartTransition {
 			exec.reconcileTimedOutStartupPublication(attempt)
 		}
 		return moerr.NewInternalErrorNoCtx("CDC start was superseded by a newer lifecycle generation")
@@ -850,7 +850,6 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 			zap.String("task-id", taskId),
 			zap.String("task-name", taskName),
 			zap.String("state", exec.stateMachine.State().String()),
-			zap.NamedError("clear-err-msg-err", clearErrMsgErr),
 		)
 	}
 
