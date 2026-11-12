@@ -115,6 +115,13 @@ func featureLimitCheckerForAccount(
 	if err != nil {
 		return err
 	}
+	// Cross-account admission reads tenant catalog rows without authenticating
+	// as that tenant. Activate before the quota lock installs its read frontier.
+	if limitQuota > 0 {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, accId); err != nil {
+			return err
+		}
+	}
 	// Serialize finite branch quota checks on the account's quota row. The lock
 	// is held by the caller's background transaction through metadata insertion.
 	if featureCode == featureCodeBranch && limitQuota > 0 {

@@ -47,6 +47,15 @@ type featureLimitBarrierEngine struct {
 	acquire func(context.Context) (timestamp.Timestamp, error)
 }
 
+type featureLimitCatalogEngine struct {
+	engine.Engine
+	activate func(context.Context, uint32) error
+}
+
+func (e *featureLimitCatalogEngine) ActivateTenantCatalog(ctx context.Context, accountID uint32) error {
+	return e.activate(ctx, accountID)
+}
+
 func (e *featureLimitBarrierEngine) AcquireLogtailReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
@@ -65,8 +74,80 @@ func newFeatureLimitTestSession(t *testing.T) *Session {
 	})
 
 	return &Session{
-		feSessionImpl: feSessionImpl{service: service},
+		feSessionImpl: feSessionImpl{service: service, txnHandler: &TxnHandler{}},
 		proc:          proc,
+	}
+}
+
+func TestFeatureQuotaActivatesCatalogBeforeAdmission(t *testing.T) {
+	const accountID = uint32(42)
+	for _, feature := range []struct{ code, scope string }{
+		{featureCodeSnapshot, "account"},
+		{featureCodeBranch, ""},
+	} {
+		for _, scenario := range []struct {
+			name          string
+			quota         int64
+			activationErr bool
+			wantErr       string
+		}{
+			{name: "cold catalog counts existing usage", quota: 1, wantErr: "limit of 1"},
+			{name: "activation error fails closed", quota: 1, activationErr: true, wantErr: "catalog activation failed"},
+			{name: "disabled does not activate", quota: 0, wantErr: "disabled for account"},
+			{name: "unlimited does not activate", quota: -1},
+		} {
+			t.Run(feature.code+"/"+scenario.name, func(t *testing.T) {
+				ses := newFeatureLimitTestSession(t)
+				ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
+				bh := &backgroundExecTest{}
+				bh.init()
+				registrySQL := fmt.Sprintf(
+					"select enabled, scope_spec from %s.%s where feature_code = '%s'",
+					catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY, feature.code)
+				quotaSQL := fmt.Sprintf(
+					"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s'",
+					catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accountID, feature.code, feature.scope)
+				lockedQuotaSQL := quotaSQL + " for update"
+				countSQL := branchQuotaUsageSQL(accountID)
+				if feature.code == featureCodeSnapshot {
+					countSQL = "select count(*) from mo_catalog.mo_snapshots where account_name = 'quota-target' and level = 'account' and kind != 'branch'"
+				}
+				scope, err := types.ParseStringToByteJson(`{"allowed_scope":["account"]}`)
+				require.NoError(t, err)
+				scopeSpec, err := types.EncodeJson(scope)
+				require.NoError(t, err)
+				bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), string(scopeSpec)}})
+				bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{scenario.quota}})
+				bh.sql2result[lockedQuotaSQL] = newMrsForFeatureLimit([][]interface{}{{scenario.quota}})
+				bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
+				activated := false
+				activationErr := moerr.NewInternalErrorNoCtx("catalog activation failed")
+				ses.txnHandler.storage = &featureLimitCatalogEngine{activate: func(ctx context.Context, id uint32) error {
+					require.Equal(t, accountID, id)
+					require.NotContains(t, bh.executedSQLs, lockedQuotaSQL)
+					require.NotContains(t, bh.executedSQLs, countSQL)
+					activated = true
+					if scenario.activationErr {
+						return activationErr
+					}
+					bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{{int64(1)}})
+					return nil
+				}}
+
+				err = featureLimitCheckerForAccount(t.Context(), ses, bh,
+					feature.code, feature.scope, "quota-target", accountID, 1)
+				if scenario.wantErr == "" {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, scenario.wantErr)
+				}
+				require.Equal(t, scenario.quota > 0, activated)
+				if scenario.activationErr {
+					require.ErrorIs(t, err, activationErr)
+					require.Equal(t, []string{registrySQL, quotaSQL}, bh.executedSQLs)
+				}
+			})
+		}
 	}
 }
 
