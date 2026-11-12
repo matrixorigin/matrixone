@@ -50,7 +50,10 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 	for _, cteRef := range builder.cteRefs {
 		producerRootID, hashBuildOccurrences, ok := builder.reusableCTEProducer(cteRef, rootID)
 		if !ok {
-			continue
+			cteRef, producerRootID, hashBuildOccurrences, ok = builder.reusableWindowCTEInput(cteRef, rootID)
+			if !ok {
+				continue
+			}
 		}
 
 		producer := cteRef.occurrences[0]
@@ -158,11 +161,15 @@ func (builder *QueryBuilder) reusableCTEProducer(
 		len(cteRef.occurrences) >= 3 && cteReuseIsProfitableWithSafetyFactor(
 			producerCost, stats.Outcnt, refCount, cteReuseSpillCostSafetyFactor)
 	storageStats := stats
+	if rows, ok := builder.cteConstrainedGroupingRows(producerRootID); ok && rows < stats.Outcnt {
+		storageStats = DeepCopyStats(stats)
+		storageStats.Outcnt = rows
+	}
 	storageTypes := first.types
 	if requiredTypes, narrowed := builder.cteStorageOutputTypes(rootID, cteRef.occurrences); narrowed {
 		storageTypes = requiredTypes
 		if rowSize, fixed := fixedOutputRowSize(requiredTypes); fixed {
-			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
+			storageStats = &planpb.Stats{Outcnt: storageStats.Outcnt, Rowsize: rowSize}
 		}
 	}
 	if !cteReuseFitsStorage(storageStats, storageTypes, spillEligible) {
