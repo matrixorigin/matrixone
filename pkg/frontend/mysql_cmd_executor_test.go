@@ -4480,6 +4480,7 @@ func TestComStmtPrepareRejectsFlushPrivileges(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int(COM_STMT_PREPARE), resp.cmd)
 
 	prepared, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(ses.GetLastStmtId()))
 	require.Error(t, err)
