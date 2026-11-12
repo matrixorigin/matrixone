@@ -247,6 +247,42 @@ func keyAppendCount(dst []*vector.Vector, src []*vector.Vector, start, count int
 // capacity stays with its vector until ordinary cleanup, as RollbackAppend
 // requires; it is never detached from its allocation account.
 func (hb *HashmapBuilder) appendUniqueKeys(proc *process.Process, start, count int, sels []int64) (err error) {
+	if limit := hb.optionalRuntimeFilterMaxKeyBytes; limit > 0 {
+		// Check the row limit before appending: HashOnPK can append an entire
+		// unit before the ordinary cardinality check runs.
+		if hb.optionalRuntimeFilterMaxKeys <= 0 || count > hb.optionalRuntimeFilterMaxKeys-hb.uniqueKeys.count() {
+			return runtimefilter.ErrOptionalKeySize
+		}
+		// Check actual bytes, not declared VARCHAR width: external readers can
+		// produce values wider than the table declaration. This is before any
+		// optional-key copy or serialization; ErrOptionalKeySize abandons only
+		// the optional filter and leaves the hash join authoritative.
+		for slot, src := range hb.curVecs {
+			if src == nil || !hb.collectUniqueKeySlot(slot) || !src.GetType().IsVarlen() || src.IsConstNull() {
+				continue
+			}
+			for i := 0; i < count; i++ {
+				row := start + i
+				if sels != nil {
+					row = int(sels[i])
+				}
+				if src.IsConst() {
+					row = 0
+				}
+				if !src.IsNull(uint64(row)) && len(src.GetRawBytesAt(row)) > limit {
+					return runtimefilter.ErrOptionalKeySize
+				}
+			}
+		}
+		if sels == nil {
+			// UnionBatch may copy the whole source area, including unreachable
+			// bytes left by overwritten values. Union copies only selected rows.
+			sels = make([]int64, count)
+			for i := range sels {
+				sels[i] = int64(start + i)
+			}
+		}
+	}
 	return hb.appendUniqueKeysWithin(proc, start, count, sels, mpool.MaxAllocationSize())
 }
 
