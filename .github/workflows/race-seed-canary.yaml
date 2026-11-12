@@ -85,7 +85,7 @@ jobs:
     concurrency:
       group: cs-${{ inputs.coverage_comparison }}-dedicated-s3-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@1e6717336b497b9a893ce9835331a9b03c1a2688
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@6323d49e7aab5b5068c1bac42f2a422168a850da
     with:
       stack: ${{ inputs.coverage_comparison }}
     secrets:
