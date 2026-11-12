@@ -127,6 +127,9 @@ func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPo
 }
 
 func dictionaryAccountsMatch(left, right *AllocationAccountSelection) bool {
+	if left != nil && left.transient != nil || right != nil && right.transient != nil {
+		return left == right
+	}
 	return (left == nil && right == nil) || (left != nil && right != nil && left.account == right.account)
 }
 
@@ -423,6 +426,13 @@ func (v *Vector) EnsureFlat(mp *mpool.MPool) error {
 func (v *Vector) EnsureWritable(mp *mpool.MPool) error { return v.MaterializeOwned(mp) }
 
 func (v *Vector) materializeDictionary(mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return v.materializeDictionaryWithBuilder(mp, account, nil)
+}
+
+// materializeDictionaryWithBuilder is used by JSON snapshot admission to copy
+// into a private vector before validating it. No such vector may be published
+// before that validation succeeds.
+func (v *Vector) materializeDictionaryWithBuilder(mp *mpool.MPool, account *AllocationAccountSelection, builder func(*Vector, *types.Varlena, *[]byte, *mpool.MPool) error) (*Vector, error) {
 	if mp == nil || v.typ.TypeSize() <= 0 || v.length > math.MaxInt/v.typ.TypeSize() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary materialization size")
 	}
@@ -469,7 +479,13 @@ func (v *Vector) materializeDictionary(mp *mpool.MPool, account *AllocationAccou
 		if v.typ.IsVarlen() {
 			values := toSliceOfLengthNoTypeCheck[types.Varlena](flat, v.length)
 			bytes := base.GetBytesAt(int(index))
-			if err := BuildVarlenaFromByteSlice(flat, &values[row], &bytes, mp); err != nil {
+			var err error
+			if builder == nil {
+				err = BuildVarlenaFromByteSlice(flat, &values[row], &bytes, mp)
+			} else {
+				err = builder(flat, &values[row], &bytes, mp)
+			}
+			if err != nil {
 				flat.Free(mp)
 				return nil, err
 			}

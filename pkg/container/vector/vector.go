@@ -1543,14 +1543,7 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
-			n,
-			owner,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			v.allocationAccount.dataSite,
-			v.allocationAccount.capacityClass,
-		)
+		kinds, err := makeSelectedSlice[PrepareParamKind](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return kinds, owner, err
 	}
 	if owner == nil {
@@ -1589,9 +1582,7 @@ func (v *Vector) allocateStringSources(
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		sources, err := mpool.MakeSliceAccountedWithCapacityClass[types.StringSource](
-			n, owner, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.dataSite, v.allocationAccount.capacityClass)
+		sources, err := makeSelectedSlice[types.StringSource](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return sources, owner, err
 	}
 	if owner == nil {
@@ -3638,9 +3629,7 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
+		storage, err = makeSelectedSlice[uint64](v.allocationAccount, words, mp, v.allocationAccount.nullsSite)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -3872,6 +3861,36 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	}
 	bs := toSliceOfLengthNoTypeCheck[types.Varlena](v, length)
 	return bs[i].GetByteSlice(v.area)
+}
+
+// GetBytesAtChecked reads mutable varlen input without trusting descriptor
+// offsets. The returned bytes still belong to v; this grants no read-only
+// qualification and does not validate a JSON document's contents.
+func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
+	if v == nil || !v.typ.IsVarlen() || i < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsConst() {
+		i = 0
+	} else if i >= v.length {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsDictionary() {
+		base, physicalRow := v.dictionaryPhysicalRow(i)
+		return base.GetBytesAtChecked(physicalRow)
+	}
+	if i >= len(v.data)/types.VarlenaSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](v, i+1)
+	descriptor := &values[i]
+	if !descriptor.IsSmall() {
+		offset, size := descriptor.OffsetLen()
+		if uint64(offset) > uint64(len(v.area)) || uint64(size) > uint64(len(v.area))-uint64(offset) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+		}
+	}
+	return descriptor.GetByteSlice(v.area), nil
 }
 
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
@@ -11250,10 +11269,7 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			target.site, v.allocationAccount.capacityClass,
-		)
+		storage, err := makeSelectedSlice[uint64](v.allocationAccount, words, mp, target.site)
 		if err != nil {
 			for j := range i {
 				scratch[j].release(mp)
