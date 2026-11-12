@@ -133,6 +133,89 @@ func TestReplayCheckpointedInteriorHoleAfterPhysicalTruncate(t *testing.T) {
 	}
 }
 
+func TestReplayCheckpointedTailReuseWithMissingPhysicalPSN(t *testing.T) {
+	for _, shape := range []struct {
+		name             string
+		checkpointedLSN  uint64
+		replacementStart uint64
+	}{
+		{"partial overlap", 1, 2},
+		{"same range", 2, 3},
+	} {
+		for _, missingBefore := range []string{"none", "old", "skip", "replacement"} {
+			for _, truncatedPSN := range []uint64{0, 1} {
+				for _, batchSize := range []int{1, 2, 3, 4, 5, 64} {
+					t.Run(fmt.Sprintf("%s/missing-before-%s/truncate-%d/batch-%d", shape.name, missingBefore, truncatedPSN, batchSize), func(t *testing.T) {
+						// The mock returns each spec's physical PSN; a missing spec
+						// models a Raft command omitted from LogService Read.
+						d := newMockDriver(truncatedPSN, nil, 1)
+						d.checkpointedDSN = shape.checkpointedLSN
+						entries := make(map[uint64]LogEntry)
+						var psn uint64
+						add := func(record LogEntry) uint64 {
+							psn++
+							if psn > truncatedPSN {
+								d.recordSpecs = append(d.recordSpecs, [5]uint64{uint64(Cmd_Normal), psn, 0, 0, 0})
+								entries[psn] = record
+							}
+							return psn
+						}
+						makeUser := func(start, end uint64, payload string) LogEntry {
+							writer := NewLogEntryWriter()
+							for dsn := start; dsn <= end; dsn++ {
+								e := entry.MockEntryWithPayload([]byte(payload))
+								e.DSN = dsn
+								require.NoError(t, writer.AppendEntry(e))
+							}
+							record, err := writer.Finish()
+							require.NoError(t, err)
+							return record
+						}
+						for lsn := uint64(1); lsn <= shape.checkpointedLSN; lsn++ {
+							add(makeUser(lsn, lsn, "checkpointed"))
+						}
+						if missingBefore == "old" {
+							psn++
+						}
+						oldPSN := add(makeUser(3, 3, "obsolete"))
+						if missingBefore == "skip" {
+							psn++
+						}
+						add(SkipMapToLogEntry(map[uint64]uint64{3: oldPSN}))
+						if missingBefore == "replacement" {
+							psn++
+						}
+						add(makeUser(shape.replacementStart, 3, "replacement"))
+
+						var applied []uint64
+						var payloads []string
+						r := newReplayer(func(e *entry.Entry) storeDriver.ReplayEntryState {
+							if e.DSN <= shape.checkpointedLSN {
+								return storeDriver.RE_Truncate
+							}
+							applied = append(applied, e.DSN)
+							payloads = append(payloads, string(e.Entry.GetPayload()))
+							return storeDriver.RE_Nomal
+						}, d, batchSize,
+							WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+							WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
+								return entries[record.Lsn]
+							}))
+						require.NoError(t, r.Replay(context.Background()))
+						if shape.replacementStart == 2 {
+							require.Equal(t, []uint64{2, 3}, applied)
+							require.Equal(t, []string{"replacement", "replacement"}, payloads)
+						} else {
+							require.Equal(t, []uint64{3}, applied)
+							require.Equal(t, []string{"replacement"}, payloads)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 type failFirstWALTruncateClient struct {
 	*mockBackendClient
 	calls atomic.Int32
@@ -1055,7 +1138,7 @@ func Test_ReplayerReadsLegacyV2SkipCmd(t *testing.T) {
 		30,
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
-			if record.Lsn == 20 {
+			if record.Lsn == 120 {
 				return legacyEntry
 			}
 			return baseUnmarshal(record)
@@ -1105,7 +1188,7 @@ func Test_ReplayerDoesNotApplyDuplicateLegacySkipToReusedDSN(t *testing.T) {
 				readBatchSize,
 				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 				WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
-					if record.Lsn == 2 || record.Lsn == 4 {
+					if record.Lsn == 3 || record.Lsn == 5 {
 						return legacyEntry
 					}
 					return baseUnmarshal(record)
