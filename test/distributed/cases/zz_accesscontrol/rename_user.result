@@ -28,7 +28,7 @@ select v from ru30467_db.marker;
 ➤ v[4,32,0]  𝄀
 42
 show grants;
-➤ Grants for admin@localhost[12,633,0]  𝄀
+➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
 GRANT select ON table d.t `ru30467_a`@`localhost`

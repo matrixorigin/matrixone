@@ -1195,15 +1195,27 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 			if err != nil {
 				return nil, err
 			}
+			currentUser, ok := ctx.(interface{ GetCurrentUserName() (string, error) })
+			if !ok {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "current user identity is unavailable")
+			}
+			userName, err := currentUser.GetCurrentUserName()
+			if err != nil {
+				return nil, err
+			}
 			// Keep the legacy column name while resolving the grants by stable user ID.
-			userName := strings.ReplaceAll(ctx.GetUserName(), "`", "``")
-			sql := fmt.Sprintf("select concat('GRANT ', p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end, ' `', u.user_name, '`@`', u.user_host, '`') as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_id = %d;", userName, id)
+			columnName := currentUserShowGrantsColumnName(userName)
+			sql := fmt.Sprintf("select concat('GRANT ', p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end, ' `', u.user_name, '`@`', u.user_host, '`') as `%s` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_id = %d;", columnName, id)
 			return returnByRewriteSQL(ctx, sql, ddlType)
 		}
 		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
 		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 		return returnByRewriteSQL(ctx, sql, ddlType)
 	}
+}
+
+func currentUserShowGrantsColumnName(userName string) string {
+	return fmt.Sprintf("Grants for %s@localhost", strings.ReplaceAll(userName, "`", "``"))
 }
 
 func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error) {

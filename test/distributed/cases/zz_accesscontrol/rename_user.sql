@@ -25,6 +25,7 @@ select connection_id();
 select current_user_id()={{ru30467_a_id}} as source_identity;
 select current_role();
 select v from ru30467_db.marker;
+-- @metacmp(true)
 show grants;
 -- @session
 -- The first pair writes; the second collides with that destination.
@@ -60,8 +61,11 @@ rename user ru30467_moved to ru30467_b;
 -- @session:id=11&user=sys:ru30467_a&password=ru30467_password
 select connection_id()={{ru30467_old_conn}} and current_user_id()={{ru30467_a_id}} as original_session_after_reuse;
 select v from ru30467_db.marker;
+-- @metacmp(true)
 show grants;
+-- @metacmp(true)
 show grants for current_user;
+-- @metacmp(true)
 show grants for current_user();
 show grants for 'ru30467_a';
 show grants for 'ru30467_moved';
