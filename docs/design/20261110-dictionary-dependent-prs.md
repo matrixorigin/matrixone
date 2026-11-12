@@ -819,3 +819,25 @@ borrowable and owned cache entries. This is a component prerequisite, not TPC-H
 acceptance. Confirm real Q7 activation and all22-query instruction/resource
 behavior before delivery. The requester permits demonstrated GC-only differences;
 other instruction/allocation/copy increases and missing coverage remain open.
+
+### Independent CI ownership corrections — 2026-11-12
+
+The published revision's race-mode checks exposed logical-type assertions in
+physical-width dictionary gathers and an ordered-selection assertion before the
+constant-vector Shrink branch. Physical carriers now use the existing raw slice
+converter; nonconstant Shrink retains its sorted-input requirement. The width
+matrix covers both selection index types, with original metadata/value checks.
+
+Expression normalization uses the process MPool, while Group/MergeGroup's
+private NoLock pool owns aggregate/hash storage. Thread the process pool through
+their private cleanup entrypoints. Retention admission also checks that the
+chosen pool can resolve the owned payload's release provenance. NoLock and
+unresolvable physical backing use the existing owned fallback; already leased
+backing retains its own release owner. No new per-vector state, cache, pool or
+unsupported-input error is introduced.
+
+The exact race and two public SQL failures were reproduced, then passed with
+these corrections. Owning race checks and changed-package static checks passed.
+This work does not depend on #32627. Keep the corrected source local until the
+existing all-query/resource and publication gates close; the new fallback must
+be included in final qualification. Preserve C/D plans and all prior evidence.

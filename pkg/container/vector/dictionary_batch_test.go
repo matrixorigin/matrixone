@@ -173,7 +173,7 @@ func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
 				selected, err := NewDictionaryVector(base, rows, mp, nil)
 				require.NoError(t, err)
 				t.Cleanup(func() { selected.Free(mp) })
-				for _, operation := range []string{"one", "multi", "copy"} {
+				for _, operation := range []string{"one", "multi", "copy", "selection32", "selection64"} {
 					func() {
 						output := NewVec(typ.ToType())
 						defer output.Free(mp)
@@ -181,6 +181,11 @@ func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
 							require.NoError(t, output.PreExtend(len(mapping), mp))
 							output.SetLength(len(mapping))
 							output.SetAllNulls(len(mapping))
+						}
+						if operation == "selection32" {
+							require.NoError(t, output.UnionInt32(selected, []int32{0, 1, 2, 3}, mp))
+						} else if operation == "selection64" {
+							require.NoError(t, output.Union(selected, []int64{0, 1, 2, 3}, mp))
 						}
 						repeat := 1
 						if operation == "multi" {
@@ -231,6 +236,45 @@ func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestDictionaryFreezeRespectsPhysicalPoolLifetime(t *testing.T) {
+	for _, shape := range []string{"global-to-global", "no-lock-source", "no-lock-destination"} {
+		t.Run(shape, func(t *testing.T) {
+			sourceMP, destinationMP := mpool.MustNewZero(), mpool.MustNewZero()
+			if shape == "no-lock-source" {
+				mpool.DeleteMPool(sourceMP)
+				sourceMP = mpool.MustNewNoLock("dictionary-source")
+			} else if shape == "no-lock-destination" {
+				mpool.DeleteMPool(destinationMP)
+				destinationMP = mpool.MustNewNoLock("dictionary-destination")
+			}
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(sourceMP)
+				defer mpool.DeleteMPool(destinationMP)
+				require.Zero(t, sourceMP.CurrNB())
+				require.Zero(t, destinationMP.CurrNB())
+			})
+			source := NewOffHeapVecWithType(types.T_int64.ToType())
+			t.Cleanup(func() { source.Free(sourceMP) })
+			require.NoError(t, AppendFixedList(source, []int64{10, 20, 30}, nil, sourceMP))
+			base, admitted, err := TryFreezeVector(source, destinationMP, nil)
+			require.NoError(t, err)
+			if base != nil {
+				t.Cleanup(base.Release)
+			}
+			require.Equal(t, shape == "global-to-global", admitted)
+			if admitted {
+				return
+			}
+			require.Equal(t, OwnedMPoolUnique, source.DataBackingKind())
+			base, err = FreezeVector(source, destinationMP, nil)
+			require.NoError(t, err)
+			t.Cleanup(base.Release)
+			source.Free(sourceMP)
+			require.Equal(t, []int64{10, 20, 30}, MustFixedColNoTypeCheck[int64](base.vec))
+		})
 	}
 }
 

@@ -136,7 +136,7 @@ func TestOwnedReaderSelectionDoesNotPublishBorrowedViews(t *testing.T) {
 				require.NoError(t, vector.AppendFixedList(source, []int64{10, 20, 30, 40}, nil, mp))
 				output.Vecs[0], err = source.WindowWithAllocation(0, 4, mp, allocation)
 				require.NoError(t, err)
-			require.False(t, output.Vecs[0].CanDetach(vector.BackingData))
+				require.False(t, output.Vecs[0].CanDetach(vector.BackingData))
 			}
 			output.SetRowCount(4)
 			request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned}}

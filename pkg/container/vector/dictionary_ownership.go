@@ -158,6 +158,16 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 		}
 	}
 	copyPayload := source.DataBackingKind() == LegacyAlias || source.AreaBackingKind() == LegacyAlias
+	ownedData, ownedArea := source.data, source.area
+	if source.dataLease != nil {
+		ownedData = nil
+	}
+	if source.areaLease != nil {
+		ownedArea = nil
+	}
+	if !mp.CanRetainAllocations(ownedData, ownedArea) {
+		copyPayload = true
+	}
 	if account != nil && source.allocationAccount != nil && source.allocationAccount.account != account.account {
 		copyPayload = true
 	}

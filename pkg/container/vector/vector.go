@@ -6192,7 +6192,7 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 	})
 }
 
-// Shrink use to shrink vectors, sels must be guaranteed to be ordered
+// Shrink compacts a vector. For nonconstant vectors, sels must be ordered.
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 	if v.IsDictionary() {
 		if err := v.EnsureFlat(mp); err != nil {
@@ -6200,7 +6200,6 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 	}
 
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
 	oldSources := v.stringSources
 	oldLength := v.length
@@ -6216,6 +6215,7 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 		return nil
 	}
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	needsWrite := len(sels) > 0
 	if v.cantFreeData && needsWrite {
 		needsWrite = false

@@ -17,6 +17,7 @@ package vector
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
@@ -188,8 +189,10 @@ func gatherDictionaryFixed[T any, S int32 | int64](v, w *Vector, sels []S, offse
 	if base.IsConst() {
 		count = 1
 	}
-	source := toSliceOfLengthNoTypeCheck[T](base, count)
-	target := toSliceOfLengthNoTypeCheck[T](v, v.length)
+	// T is a physical-width carrier, not necessarily the logical SQL type.
+	// The width dispatch and append preflight established these byte ranges.
+	source := util.UnsafeSliceCastToLength[T](base.data, count)
+	target := util.UnsafeSliceCastToLength[T](v.data, v.length)
 	mapping := backing.rows.storageFixed()
 	constant := base.IsConst()
 	if w.nsp.Any() {

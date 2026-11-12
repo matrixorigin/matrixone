@@ -30,7 +30,7 @@ import (
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
 	if mergeGroup.ctr.mp != nil {
-		mergeGroup.ctr.free()
+		mergeGroup.ctr.free(proc.Mp())
 	}
 	mergeGroup.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()

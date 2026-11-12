@@ -140,7 +140,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 				}
 			}
 			input.SetRowCount(4)
-			cols := []*plan.Expr{}
+			cols := make([]*plan.Expr, 0, len(input.Vecs))
 			for side, v := range input.Vecs {
 				cols = append(cols, &plan.Expr{Typ: v.GetType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
 			}
@@ -179,7 +179,7 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 			} else if shape == "prepared-json" {
 				input.Vecs[0].SetPreparedJSONComparisonParam()
 			}
-			cols := []*plan.Expr{}
+			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
 				cols = append(cols, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
 			}

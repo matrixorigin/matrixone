@@ -1326,6 +1326,25 @@ func (mp *MPool) allocAccounted(
 	return bs, nil
 }
 
+// CanRetainAllocations reports whether mp can release the supplied owned
+// buffers from a retained callback. NoLock allocations are scoped to their
+// pool's lifetime; foreign NoLock buffers are absent from the global ledger.
+// Already leased buffers should be omitted because their lease owns release.
+func (mp *MPool) CanRetainAllocations(buffers ...[]byte) bool {
+	if mp == nil || mp.noLock {
+		return false
+	}
+	for _, data := range buffers {
+		if cap(data) == 0 {
+			continue
+		}
+		if _, ok := mp.getPtrHdr(unsafe.Pointer(unsafe.SliceData(data))); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (mp *MPool) Free(bs []byte) {
 	detailk := mp.getDetailK()
 	mp.freeWithDetailK(detailk, bs)

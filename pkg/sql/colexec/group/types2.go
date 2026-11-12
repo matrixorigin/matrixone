@@ -736,8 +736,10 @@ func (ctr *container) freeGroupingRollups() {
 	ctr.groupingRollup = nil
 }
 
-func (ctr *container) free() {
-	ctr.dictionaryInputs.Free(ctr.mp)
+func (ctr *container) free(expressionMP *mpool.MPool) {
+	// Expression normalization uses the process pool. Group's private NoLock
+	// pool owns aggregate/hash storage and cannot release those allocations.
+	ctr.dictionaryInputs.Free(expressionMP)
 	// free container stuff, WTH is the Free0?
 	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
@@ -810,8 +812,8 @@ func (ctr *container) refreshGroupConcatSourceRowTrust() {
 	}
 }
 
-func (ctr *container) reset() {
-	ctr.free()
+func (ctr *container) reset(expressionMP *mpool.MPool) {
+	ctr.free(expressionMP)
 }
 
 func (ctr *container) resetForSpill() {
@@ -958,7 +960,7 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.free()
+	group.ctr.free(proc.Mp())
 	// free projection stuff,
 	group.FreeProjection(proc)
 }
@@ -968,7 +970,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.reset()
+	group.ctr.reset(proc.Mp())
 	if group.ctr.allocationAccount != nil {
 		// Account selections are immutable per execution attempt, and function
 		// projections retain result capacity across ResetForNextQuery. Destroy
@@ -1104,7 +1106,7 @@ func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, 
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.reset()
+	mergeGroup.ctr.reset(proc.Mp())
 	if mergeGroup.ctr.allocationAccount != nil {
 		mergeGroup.FreeProjection(proc)
 	} else {
@@ -1116,7 +1118,7 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.free()
+	mergeGroup.ctr.free(proc.Mp())
 	mergeGroup.FreeProjection(proc)
 }
 
