@@ -173,6 +173,7 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
+	workspaceHandoffFragment ...uuid.UUID,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
@@ -181,6 +182,10 @@ func encodeProcessInfo(
 	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
 	if remoteExecutionID != uuid.Nil {
 		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
+	}
+	if len(workspaceHandoffFragment) != 0 && workspaceHandoffFragment[0] != uuid.Nil {
+		v.WorkspaceHandoffVersion = 1
+		v.WorkspaceHandoffFragment = append([]byte(nil), workspaceHandoffFragment[0][:]...)
 	}
 	return v.Marshal()
 }

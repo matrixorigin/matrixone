@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -71,6 +73,10 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	}
 
 	resBat := input.Batch
+	handoffScope, hasHandoff, err := colexec.WorkspaceHandoffFromBatch(proc, resBat)
+	if err != nil {
+		return input, err
+	}
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
 	// |----------|-----------------------------|-------------------------------------------|---------------------
@@ -93,9 +99,23 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		if err := bat.UnmarshalBinaryWithAnyMp(deltaLocs[i].GetByteSlice(area1), proc.Mp()); err != nil {
 			return input, err
 		}
+		if hasHandoff && len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+			if len(bat.ExtraBuf) != 0 {
+				return input, moerr.NewInvalidStateNoCtx("nested deletion batch already has metadata")
+			}
+			bat.ExtraBuf = append(bat.ExtraBuf[:0], resBat.ExtraBuf...)
+		}
 		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
 		if err != nil {
+			if hasHandoff && len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+				_ = colexec.SettleFailedWorkspaceHandoff(proc, mergeDelete.ctr.delSource, handoffScope, bat, 0)
+			}
 			return input, err
+		}
+		if hasHandoff && len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+			if err := colexec.ConfirmWorkspaceHandoffRecords(proc, handoffScope, bat, 0); err != nil {
+				return input, err
+			}
 		}
 		bat.CleanOnlyData()
 	}

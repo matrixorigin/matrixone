@@ -843,6 +843,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 
 	if writer.outputBat != nil {
 		writer.outputBat.CleanOnlyData()
+		writer.outputBat.ExtraBuf = nil
 	}
 
 	writer.buf.Reset()

@@ -206,9 +206,6 @@ func (e *Engine) handoffUnpublishedPendingLocked(names []string) int {
 			queued++
 		}
 	}
-	if queued > 0 {
-		e.unpublishedPending.arrivalSeq++
-	}
 	for _, n := range names {
 		if _, ok := e.unpublishedPending.ownedNames[n]; ok {
 			delete(e.unpublishedPending.ownedNames, n)
@@ -220,20 +217,33 @@ func (e *Engine) handoffUnpublishedPendingLocked(names []string) int {
 }
 
 type unpublishedPendingQueue struct {
-	mu              sync.Mutex
-	names           []string
-	nameSet         map[string]struct{}
-	drainScheduled  bool
-	drainCtx        context.Context
-	drainCancel     context.CancelFunc
-	drainIdle       chan struct{}
-	ownedNames      map[string]map[*Transaction]struct{}
-	live            int64
-	inFlight        int64
-	arrivalSeq      uint64
-	recordedOwners  map[string]*txnRecordedUnpublished
-	publishedShares map[string]struct{}
-	producerNames   map[string]struct{}
+	mu                 sync.Mutex
+	names              []string
+	nameSet            map[string]struct{}
+	drainScheduled     bool
+	drainCtx           context.Context
+	drainCancel        context.CancelFunc
+	drainIdle          chan struct{}
+	ownedNames         map[string]map[*Transaction]struct{}
+	live               int64
+	inFlight           int64
+	recordedOwners     map[string]*txnRecordedUnpublished
+	publishedShares    map[string]struct{}
+	producerNames      map[string]struct{}
+	remoteHandoffs     map[ioutil.RemoteWorkspaceHandoffID]remoteWorkspaceHandoffRecord
+	remoteByName       map[string]ioutil.RemoteWorkspaceHandoffID
+	remotePending      int64
+	remoteReceipts     map[ioutil.RemoteWorkspaceHandoffID]ioutil.RemoteWorkspaceHandoffDecision
+	remoteReceiptOrder []ioutil.RemoteWorkspaceHandoffID
+	remoteReceiptNext  int
+	// Deduplication receipts are bounded independently from object obligations;
+	// counting both as obligations would charge the same adopted object twice.
+	remoteCoordinatorReceipts  int
+	remoteCoordinatorDecisions map[ioutil.RemoteWorkspaceHandoffID]ioutil.RemoteWorkspaceHandoffDecision
+	// Fixed-size, never-cleared filter. A positive result means a name might
+	// have been adopted under an earlier attempt and must not be deleted.
+	remoteAdoptedNameFilter  *[1 << 17]uint64
+	remoteRejectedNameFilter *[1 << 17]uint64
 }
 
 const unpublishedPendingDrainRounds = 8
@@ -299,12 +309,10 @@ func (e *Engine) enqueueUnpublishedPendingHolderLocked(
 	if e.unpublishedPending.nameSet == nil {
 		e.unpublishedPending.nameSet = make(map[string]struct{}, len(names))
 	}
-	added := 0
 	for _, n := range names {
 		if _, ok := e.unpublishedPending.nameSet[n]; !ok {
 			e.unpublishedPending.nameSet[n] = struct{}{}
 			e.unpublishedPending.names = append(e.unpublishedPending.names, n)
-			added++
 			if e.unpublishedPending.ownedNames != nil {
 				if _, ok := e.unpublishedPending.ownedNames[n]; ok {
 					delete(e.unpublishedPending.ownedNames, n)
@@ -320,9 +328,6 @@ func (e *Engine) enqueueUnpublishedPendingHolderLocked(
 			e.unpublishedPending.recordedOwners[n] = holder
 		}
 	}
-	if added > 0 {
-		e.unpublishedPending.arrivalSeq++
-	}
 	e.finishReservationProducersLocked(names)
 }
 
@@ -334,10 +339,16 @@ func (e *Engine) reserveUnpublishedPendingObject(name string) error {
 	if e.workspaceGCClosed.Load() {
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
+	if e.unpublishedPending.mightHaveRemoteRejectedNameLocked(name) {
+		return moerr.NewInvalidStateNoCtx("object name may have been rejected for remote cleanup")
+	}
 	if _, ok := e.unpublishedPending.producerNames[name]; ok {
 		return moerr.NewInvalidStateNoCtx("object already has a persistence producer")
 	}
-	if len(e.unpublishedPending.names)+int(e.unpublishedPending.live+e.unpublishedPending.inFlight) >= unpublishedPendingAdmissionLimit {
+	if _, ok := e.unpublishedPending.remoteByName[name]; ok {
+		return moerr.NewInvalidStateNoCtx("object already has an unresolved remote handoff")
+	}
+	if len(e.unpublishedPending.names)+int(e.unpublishedPending.live+e.unpublishedPending.inFlight+e.unpublishedPending.remotePending) >= unpublishedPendingAdmissionLimit {
 		return moerr.NewInvalidStateNoCtx("unpublished object admission bound reached")
 	}
 	if e.unpublishedPending.producerNames == nil {
@@ -395,10 +406,18 @@ func (e *Engine) admitUnpublishedPendingRecordedNames(
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
 	for _, n := range names {
+		if e.unpublishedPending.mightHaveRemoteRejectedNameLocked(n) {
+			e.unpublishedPending.mu.Unlock()
+			return moerr.NewInvalidStateNoCtx("object name may have been rejected for remote cleanup")
+		}
 		_, queued := e.unpublishedPending.nameSet[n]
 		if queued {
 			e.unpublishedPending.mu.Unlock()
 			return moerr.NewInvalidStateNoCtx("object cleanup already owns this name")
+		}
+		if _, pending := e.unpublishedPending.remoteByName[n]; pending {
+			e.unpublishedPending.mu.Unlock()
+			return moerr.NewInvalidStateNoCtx("object has an unresolved remote handoff")
 		}
 	}
 	if e.unpublishedPending.ownedNames == nil {
@@ -415,7 +434,7 @@ func (e *Engine) admitUnpublishedPendingRecordedNames(
 	}
 	queued := len(e.unpublishedPending.names)
 	owned := int(e.unpublishedPending.live)
-	inFlight := int(e.unpublishedPending.inFlight)
+	inFlight := int(e.unpublishedPending.inFlight + e.unpublishedPending.remotePending)
 	if queued+owned+inFlight+fresh > unpublishedPendingAdmissionLimit {
 		e.unpublishedPending.mu.Unlock()
 		logutil.Warn(
@@ -741,6 +760,15 @@ func (txn *Transaction) SinkerCapacityOption() ioutil.SinkerOption {
 
 func (txn *Transaction) dumpSinkerCapacityOption() ioutil.SinkerOption {
 	hook := func(name string) error {
+		txn.remoteHandoffMu.RLock()
+		defer txn.remoteHandoffMu.RUnlock()
+		var remoteID ioutil.RemoteWorkspaceHandoffID
+		if txn.remoteHandoffScope != nil {
+			remoteID = txn.remoteHandoffScope.Object(name)
+			if err := validateRemoteWorkspaceHandoff(remoteID); err != nil {
+				return err
+			}
+		}
 		txn.unpublishedDumpReservationsMu.Lock()
 		defer txn.unpublishedDumpReservationsMu.Unlock()
 		if _, ok := txn.unpublishedDumpReservations[name]; ok {
@@ -753,6 +781,13 @@ func (txn *Transaction) dumpSinkerCapacityOption() ioutil.SinkerOption {
 			txn.unpublishedDumpReservations = make(map[string]struct{})
 		}
 		txn.unpublishedDumpReservations[name] = struct{}{}
+		if txn.remoteHandoffScope != nil {
+			if err := txn.bindRemoteWorkspaceHandoffReservationLocked(remoteID); err != nil {
+				delete(txn.unpublishedDumpReservations, name)
+				txn.engine.abandonUnpublishedPendingReservations([]string{name})
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -812,6 +847,19 @@ func (txn *Transaction) recordedUnpublishedObjectNamesLocked(
 func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 	typ int, bat *batch.Batch,
 ) error {
+	var remoteOwner bool
+	if bat != nil {
+		scope, present, err := ioutil.ParseRemoteWorkspaceHandoffScope(bat.ExtraBuf)
+		if err != nil {
+			return err
+		}
+		if present {
+			if txn.op == nil || scope.TxnID != string(txn.op.Txn().ID) {
+				return moerr.NewInvalidStateNoCtx("workspace record has a mismatched remote owner")
+			}
+			remoteOwner = true
+		}
+	}
 	names := txn.recordedUnpublishedObjectNamesLocked(typ, bat)
 	if len(names) == 0 {
 		return nil
@@ -832,7 +880,7 @@ func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 	txn.unpublishedDumpReservationsMu.Unlock()
 	if len(fresh) > 0 {
 		if err := e.admitUnpublishedPendingRecordedNames(txn, fresh); err != nil {
-			if !txn.isCCPRTxn {
+			if !txn.isCCPRTxn && !remoteOwner {
 				txn.retainDefiniteOrphansLocked(fresh,
 					"record refused at the admission bound: the recording side fail-open-retains the refused reservation-less names so a remote fragment's persisted files never lose their cleanup owner (issue #25590 round-21 review)")
 			}
@@ -929,6 +977,20 @@ func (txn *Transaction) drainUnpublishedDumpReservationsLocked(reason string) {
 }
 
 func (txn *Transaction) RetainUnrecordedS3Objects(persisted []string, reason string) {
+	txn.remoteHandoffMu.RLock()
+	if txn.remoteHandoffScope != nil {
+		scope := *txn.remoteHandoffScope
+		for _, name := range persisted {
+			// Only results that never escaped the producing operator can be
+			// rejected locally. Once exposed, delivery remains unknown.
+			if err := txn.stopRemoteWorkspaceProducer(scope.Object(name), true); err != nil {
+				logutil.Errorf("remote workspace producer remains unresolved: %v", err)
+			}
+		}
+		txn.remoteHandoffMu.RUnlock()
+		return
+	}
+	txn.remoteHandoffMu.RUnlock()
 	txn.Lock()
 	defer txn.Unlock()
 	txn.retainUnrecordedS3ObjectsLocked(persisted, reason)
@@ -1106,9 +1168,14 @@ func (e *Engine) closeWorkspaceGC(deadline time.Time) error {
 			e.unpublishedPending.mu.Lock()
 			e.gcMu.Lock()
 			producers, queued := e.gcProducers, len(e.unpublishedPending.names)
+			remotePending := e.unpublishedPending.remotePending
 			e.gcMu.Unlock()
 			e.unpublishedPending.mu.Unlock()
 			if producers == 0 && queued == 0 {
+				if remotePending != 0 {
+					done <- moerr.NewInvalidStateNoCtxf("workspace GC closed with %d remote object handoffs awaiting confirmation", remotePending)
+					return
+				}
 				done <- nil
 				return
 			}

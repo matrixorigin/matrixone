@@ -852,6 +852,7 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
+		testutil.WithFixedWorkspaceBudget(64<<20),
 		// force the commit-time dump of the delete entries
 		testutil.WithDisttaeEngineInsertEntryMaxCount(5),
 	)
@@ -1596,6 +1597,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
+		testutil.WithFixedWorkspaceBudget(64<<20),
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
@@ -2145,6 +2147,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
+			testutil.WithFixedWorkspaceBudget(64<<20),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 			testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),

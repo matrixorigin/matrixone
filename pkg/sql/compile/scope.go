@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1308,6 +1309,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					message.WorkspaceHandoffVersion = ioutil.RemoteWorkspaceHandoffVersion1
 					sender.requestStreamProtocols(message)
 					message.NeedNotReply = false
 					message.Uuid = uuid

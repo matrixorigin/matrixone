@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -133,6 +134,11 @@ func printShuffleResult(dispatch *Dispatch) {
 
 func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := dispatch.OpAnalyzer
+	if colexec.WorkspaceHandoffEnabled(proc) && dispatch.ctr.isRemote {
+		if err := dispatch.requireWorkspaceHandoffReceivers(proc); err != nil {
+			return vm.CancelResult, err
+		}
+	}
 
 	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -140,6 +146,17 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	whichToSend := result.Batch
+	if whichToSend != nil && len(whichToSend.ExtraBuf) != 0 && dispatch.ctr.isRemote {
+		_, present, parseErr := ioutil.ParseRemoteWorkspaceHandoffScope(whichToSend.ExtraBuf)
+		if parseErr != nil {
+			return vm.CancelResult, parseErr
+		}
+		if present {
+			if err := dispatch.requireWorkspaceHandoffReceivers(proc); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+	}
 	if result.Batch == nil {
 		// A remote dispatch must attach every receiver even when its child
 		// produces no batches. Otherwise an early NotRegistered response can
@@ -180,6 +197,20 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 	return result, err
+}
+
+func (dispatch *Dispatch) requireWorkspaceHandoffReceivers(proc *process.Process) error {
+	if !dispatch.ctr.prepared {
+		if _, err := dispatch.waitRemoteRegsReady(proc); err != nil {
+			return err
+		}
+	}
+	for _, receiver := range dispatch.ctr.remoteReceivers {
+		if receiver.WorkspaceHandoffVersion != ioutil.RemoteWorkspaceHandoffVersion1 {
+			return moerr.NewRetryForCNRollingRestart()
+		}
+	}
+	return nil
 }
 
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {

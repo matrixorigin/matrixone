@@ -490,6 +490,80 @@ func WorkspaceSinkerCapacityOption(proc *process.Process) ioutil.SinkerOption {
 	return owner.SinkerCapacityOption()
 }
 
+func WorkspaceHandoffEnabled(proc *process.Process) bool {
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return false
+	}
+	owner, ok := proc.GetTxnOperator().GetWorkspace().(interface {
+		RemoteWorkspaceHandoffScope() (ioutil.RemoteWorkspaceHandoffScope, bool)
+	})
+	if !ok {
+		return false
+	}
+	_, configured := owner.RemoteWorkspaceHandoffScope()
+	return configured
+}
+
+// WorkspaceHandoffObjectNames extracts the object identities in a metadata
+// vector. It is used before output publication and after workspace admission.
+func WorkspaceHandoffObjectNames(bat *batch.Batch, statsColumn int) ([]string, error) {
+	if bat == nil || statsColumn < 0 || statsColumn >= len(bat.Vecs) || bat.Vecs[statsColumn] == nil {
+		return nil, moerr.NewInvalidInputNoCtx("invalid workspace object statistics batch")
+	}
+	vec := bat.Vecs[statsColumn]
+	names := make([]string, 0, vec.Length())
+	for i := 0; i < vec.Length(); i++ {
+		raw := vec.GetBytesAt(i)
+		if len(raw) != objectio.ObjectStatsLen {
+			return nil, moerr.NewInvalidInputNoCtx("invalid workspace object statistics")
+		}
+		stats := objectio.ObjectStats(raw)
+		names = append(names, stats.ObjectName().String())
+	}
+	return names, nil
+}
+
+// AttachWorkspaceHandoffScope labels a final transient DML metadata batch.
+// Batch.Append does not copy ExtraBuf, so the producing operator calls this
+// only after it has combined the metadata for that output batch.
+func AttachWorkspaceHandoffScope(proc *process.Process, bat *batch.Batch, names ...string) error {
+	if bat == nil || bat.IsEmpty() {
+		return nil
+	}
+	var scope ioutil.RemoteWorkspaceHandoffScope
+	var configured bool
+	if proc != nil && proc.GetTxnOperator() != nil {
+		if owner, ok := proc.GetTxnOperator().GetWorkspace().(interface {
+			RemoteWorkspaceHandoffScope() (ioutil.RemoteWorkspaceHandoffScope, bool)
+		}); ok {
+			scope, configured = owner.RemoteWorkspaceHandoffScope()
+		}
+	}
+	if !configured {
+		_, present, err := ioutil.ParseRemoteWorkspaceHandoffScope(bat.ExtraBuf)
+		if present || err != nil {
+			return moerr.NewInvalidStateNoCtx("DML batch retained a stale workspace handoff scope")
+		}
+		return nil
+	}
+	encoded, err := ioutil.MarshalRemoteWorkspaceHandoffScope(scope)
+	if err != nil {
+		return err
+	}
+	if len(bat.ExtraBuf) != 0 && !bytes.Equal(bat.ExtraBuf, encoded) {
+		return moerr.NewInvalidStateNoCtx("DML batch has conflicting workspace handoff metadata")
+	}
+	owner, ok := proc.GetTxnOperator().GetWorkspace().(interface{ MarkRemoteWorkspaceOutputReady([]string) error })
+	if !ok {
+		return moerr.NewInvalidStateNoCtx("remote workspace cannot fence emitted objects")
+	}
+	if err := owner.MarkRemoteWorkspaceOutputReady(names); err != nil {
+		return err
+	}
+	bat.ExtraBuf = append(bat.ExtraBuf[:0], encoded...)
+	return nil
+}
+
 func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
 	if w == nil || w.sinker == nil {
 		return

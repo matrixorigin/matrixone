@@ -179,6 +179,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
+		ctr.resBat.ExtraBuf = nil
 	}
 
 	ctr.batch_size = 0

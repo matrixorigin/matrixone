@@ -53,6 +53,8 @@ const (
 
 	// MOProtocolVersion is the protocol version of the MO services
 	MOProtocolVersion = "protocol-version"
+	// WorkspaceHandoffHandler is published only while this CN's engine is live.
+	WorkspaceHandoffHandlerKey = "workspace-handoff-handler"
 
 	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
 	BackgroundCNSelector = "background-cn-selector"
@@ -71,6 +73,12 @@ const (
 	// ColexecServer is the colexec server owned by one CN service.
 	ColexecServer = "colexec-server"
 )
+
+// WorkspaceHandoffHandler carries a versioned internal operation without
+// making the query service depend on a particular storage engine.
+type WorkspaceHandoffHandler struct {
+	Handle func([]byte) ([]byte, error)
+}
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
 // needs to receive a Runtime and will pass the Runtime to all components of the service.

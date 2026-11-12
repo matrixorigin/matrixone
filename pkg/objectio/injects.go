@@ -872,3 +872,9 @@ func CNWorkspaceAllocationLimit(database string) uint64 {
 	}
 	return uint64(limit)
 }
+
+// CNWorkspaceRemoteRecordRefusal is test-only and targets one named database.
+func CNWorkspaceRemoteRecordRefusal(database string) bool {
+	_, target, injected := fault.TriggerFault("fj/cn/workspace_remote_record_refusal")
+	return injected && target != "" && target == database
+}

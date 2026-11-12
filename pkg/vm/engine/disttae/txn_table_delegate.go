@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -990,6 +991,13 @@ func (tbl *txnTableDelegate) GetPrimaryKeys(
 		return tbl.combined.tbl.GetPrimaryKeys(ctx)
 	}
 	return tbl.origin.GetPrimaryKeys(ctx)
+}
+
+func (tbl *txnTableDelegate) WorkspaceHandoffDecision(id ioutil.RemoteWorkspaceHandoffID) (ioutil.RemoteWorkspaceHandoffDecision, error) {
+	if tbl.combined.is || tbl.origin == nil {
+		return ioutil.RemoteWorkspaceHandoffUnknown, nil
+	}
+	return tbl.origin.WorkspaceHandoffDecision(id)
 }
 
 func (tbl *txnTableDelegate) Write(

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -371,6 +373,11 @@ type statementTransferState struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	remoteHandoffMu    sync.RWMutex
+	remoteHandoffScope *ioutil.RemoteWorkspaceHandoffScope
+	// Guarded by the transaction mutex. Keep receipts until transaction end so
+	// delayed redeliveries cannot reinstall an already retired object.
+	remoteWorkspaceRecords        map[ioutil.RemoteWorkspaceHandoffID]remoteWorkspaceRecordReceipt
 	unpublishedDumpReservationsMu sync.Mutex
 	unpublishedDumpReservations   map[string]struct{}
 	recordedUnpublishedObjects    *txnRecordedUnpublished
@@ -463,6 +470,15 @@ type Transaction struct {
 	}
 
 	compactWorker *ants.Pool
+	// compactionUndo owns the pre-compaction entries until maintenance has
+	// either completed or restored them. Protected by Transaction.Mutex.
+	compactionUndo *workspaceCompactionUndo
+	// Replaced objects can outlive the workspace lock in readers holding copied
+	// object statistics. Keep their obligations until transaction SQL drains.
+	retiredCompactions []*workspaceCompactionUndo
+	// Dump-all may reorder entries only after pending compaction anchors are
+	// no longer needed for rollback.
+	compactionDeferredOrder bool
 
 	//the start time of first statement in a txn.
 	start time.Time
@@ -471,7 +487,15 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	pkCount              int
+	// Protected by txn.Mutex. A failed boundary advance must not make the
+	// subsequent statement rollback discard the preceding statement.
+	incrFailedBeforeBoundary bool
+	incrFailedAfterBoundary  bool
+	incrMaintenanceActive    bool
+	incrMaintenanceBoundary  bool
+	incrMaintenanceInvalid   bool
+	incrRollbackHandled      bool
+	pkCount                  int
 
 	adjustCount int
 
@@ -826,6 +850,9 @@ func (txn *Transaction) PPString() string {
 
 func (txn *Transaction) StartStatement() {
 	txn.statementLifecycle.Add(1)
+	txn.Lock()
+	txn.incrRollbackHandled = false
+	txn.Unlock()
 	if txn.startStatementCalled {
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
@@ -842,7 +869,7 @@ func (txn *Transaction) EndStatement() {
 	txn.incrStatementCalled = false
 }
 
-func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) (retErr error) {
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 	if !commit {
@@ -857,6 +884,59 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	if txn.incrMaintenanceActive {
+		return moerr.NewInvalidStateNoCtx("statement maintenance already active")
+	}
+	txn.incrMaintenanceActive = true
+	txn.incrMaintenanceBoundary = false
+	txn.incrMaintenanceInvalid = false
+	txn.incrRollbackHandled = false
+	boundaryAdvanced := false
+	completed := false
+	txn.incrFailedBeforeBoundary = false
+	txn.incrFailedAfterBoundary = false
+	defer func() {
+		defer func() { txn.incrMaintenanceActive = false }()
+		if txn.incrMaintenanceInvalid {
+			if retErr == nil {
+				retErr = context.Canceled
+			}
+			return
+		}
+		// A panic is not a successful maintenance boundary. Leave the panic
+		// untouched while restoring the prior workspace for frontend rollback.
+		if !completed && retErr == nil {
+			hadCompaction := txn.compactionUndo != nil
+			if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+				logutil.Errorf("workspace compaction restore during panic remains pending: %v", undoErr)
+			}
+			if !commit {
+				txn.incrFailedBeforeBoundary = !boundaryAdvanced
+				txn.incrFailedAfterBoundary = boundaryAdvanced && hadCompaction
+			}
+			return
+		}
+		if retErr == nil {
+			// Commit has another fallible tombstone-transfer stage after this
+			// method returns; keep its compaction undo live through that stage.
+			if commit && txn.compactionUndo != nil {
+				return
+			}
+			retErr = txn.finishCompactionLocked()
+			if retErr == nil {
+				txn.compactNilWorkspaceSlotsLocked()
+				return
+			}
+		}
+		hadCompaction := txn.compactionUndo != nil
+		if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+			retErr = errors.Join(retErr, undoErr)
+		}
+		if !commit {
+			txn.incrFailedBeforeBoundary = !boundaryAdvanced
+			txn.incrFailedAfterBoundary = boundaryAdvanced && hadCompaction
+		}
+	}()
 	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
 		return err
 	}
@@ -864,14 +944,26 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
+	if txn.incrMaintenanceInvalid {
+		return context.Canceled
+	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
 	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
-	txn.compactNilWorkspaceSlotsLocked()
+	if txn.incrMaintenanceInvalid {
+		return context.Canceled
+	}
+	// Compaction journal anchors refer to the original slots through snapshot
+	// advancement and tombstone transfer, both of which can still fail.
+	if txn.compactionUndo == nil {
+		txn.compactNilWorkspaceSlotsLocked()
+	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
 	txn.statementID++
+	boundaryAdvanced = true
+	txn.incrMaintenanceBoundary = true
 
 	if txn.op.Txn().IsRCIsolation() {
 		if txn.transfer.lastTransferred.IsEmpty() {
@@ -889,10 +981,19 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		if err != nil {
 			return err
 		}
+		if txn.incrMaintenanceInvalid {
+			return context.Canceled
+		}
 
-		return txn.transferTombstonesByStatement(ctx, updated, commit)
+		if err := txn.transferTombstonesByStatement(ctx, updated, commit); err != nil {
+			return err
+		}
+		if txn.incrMaintenanceInvalid {
+			return context.Canceled
+		}
 	}
 
+	completed = true
 	return nil
 }
 
@@ -1142,6 +1243,38 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			)
 		})
 	}()
+	// IncrStatementID runs before the new SQL statement. If it failed before
+	// advancing the boundary, offsets[statementID-1] belongs to the preceding
+	// successful statement and must not be truncated or have its load files
+	// deleted. A later retry may advance the boundary normally.
+	txn.Lock()
+	if txn.incrRollbackHandled {
+		txn.Unlock()
+		return nil
+	}
+	maintenanceActive := txn.incrMaintenanceActive
+	if maintenanceActive {
+		txn.incrMaintenanceInvalid = true
+	}
+	hadCompaction := txn.compactionUndo != nil
+	if err := txn.restoreCompactionLocked(); err != nil {
+		txn.Unlock()
+		return err
+	}
+	if txn.incrFailedBeforeBoundary || (maintenanceActive && !txn.incrMaintenanceBoundary) {
+		txn.incrFailedBeforeBoundary = false
+		txn.incrStatementCalled = false
+		// Reservations may belong to an earlier still-running producer. The
+		// failed boundary cannot declare that producer quiescent; retain its
+		// ownership for normal handoff or transaction-terminal cleanup.
+		txn.incrRollbackHandled = true
+		txn.Unlock()
+		return nil
+	}
+	if maintenanceActive && hadCompaction {
+		txn.incrFailedAfterBoundary = true
+	}
+	txn.Unlock()
 	deletedLoadFiles, loadCleanupErr := txn.deleteLoadFiles(ctx, &txn.statementID)
 
 	txn.Lock()
@@ -1195,7 +1328,11 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	}
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 	//rollback the deleted blocks for the current statement.
-	txn.deletedBlocks.clean()
+	failedBoundary := txn.incrFailedAfterBoundary
+	if !failedBoundary {
+		txn.deletedBlocks.clean()
+	}
+	txn.incrFailedAfterBoundary = false
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
@@ -1204,6 +1341,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		return err
 	}
 	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
+	if (maintenanceActive || failedBoundary) && loadCleanupErr == nil {
+		txn.incrRollbackHandled = true
+	}
 	return loadCleanupErr
 }
 

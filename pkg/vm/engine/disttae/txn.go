@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1026,10 +1027,14 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) (err er
 	if orderDeletes {
 		// This stable in-memory reorder has no fallible operation; its implementation
 		// always returns nil. It runs only after the complete dump is prepared.
-		_ = txn.adjustUpdateOrderLocked(0)
+		if txn.compactionUndo != nil {
+			txn.compactionDeferredOrder = true
+		} else {
+			_ = txn.adjustUpdateOrderLocked(0)
+		}
 	}
 	txn.pkCount -= pkCount
-	if dumpAll {
+	if dumpAll && txn.compactionUndo == nil {
 		txn.compactNilWorkspaceSlotsLocked()
 	}
 
@@ -1295,6 +1300,9 @@ func (txn *Transaction) resolveDumpTablesLocked(ctx context.Context, offset int,
 		}
 		objectio.CNDumpResolveWindowWait()
 		txn.Lock()
+		if txn.incrMaintenanceActive && txn.incrMaintenanceInvalid {
+			return nil, false, context.Canceled
+		}
 		if offset > len(txn.writes) {
 			return nil, false, nil
 		}
@@ -1480,22 +1488,73 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
 
 type stagedWorkspaceRecord struct {
 	Entry
-	admittedNames []string
+	admittedNames              []string
+	handoffIDs                 []ioutil.RemoteWorkspaceHandoffID
+	handoffTarget              remoteWorkspaceRecordTarget
+	handoffReceiptReservations int
 }
 
 func (txn *Transaction) stageWorkspaceRecordLocked(typ int, accountId uint32, databaseId, tableId uint64, databaseName, tableName, fileName string, inputBat *batch.Batch, tnStore DNStore, autoIncrEpoch uint32, autoIncrEpochKnown, skipTransfer bool) (*stagedWorkspaceRecord, error) {
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return nil, err
 	}
+	target := remoteWorkspaceRecordTarget{typ: typ, accountID: accountId, databaseID: databaseId, tableID: tableId, autoIncrEpoch: autoIncrEpoch, autoIncrEpochKnown: autoIncrEpochKnown, skipTransfer: skipTransfer}
+	keep, handoffIDs, remote, err := txn.selectRemoteWorkspaceRecordsLocked(typ, inputBat, target)
+	if err != nil {
+		return nil, err
+	}
+	if remote && len(keep) == 0 {
+		return nil, nil
+	}
+	if err = txn.reserveRemoteCoordinatorReceipts(len(handoffIDs)); err != nil {
+		return nil, err
+	}
+	reservationsOwned := true
+	defer func() {
+		if reservationsOwned {
+			kept := 0
+			if remote {
+				kept = txn.retainRejectedRemoteRecordsLocked(handoffIDs, target)
+			}
+			if err := txn.releaseRemoteCoordinatorReceipts(len(handoffIDs) - kept); err != nil {
+				logutil.Errorf("remote workspace receipt reservation remains owned: %v", err)
+			}
+		}
+	}()
+	if remote && objectio.CNWorkspaceRemoteRecordRefusal(databaseName) {
+		return nil, mpool.ErrAllocationAccountCapacity
+	}
 	copied, err := txn.copyWorkspaceBatchForTable(inputBat, databaseName)
 	if err != nil {
 		return nil, err
 	}
-	if err = txn.registerUnpublishedObjectRecordLocked(typ, inputBat); err != nil {
+	recordBat := inputBat
+	if remote {
+		column := 1
+		if typ == DELETE {
+			column = 0
+		}
+		if len(keep) != inputBat.Vecs[column].Length() {
+			if err = shrinkRemoteWorkspaceMetadata(typ, copied, keep); err != nil {
+				copied.Clean(txn.proc.Mp())
+				return nil, err
+			}
+			stats := objectio.ObjectStats(copied.Vecs[column].GetBytesAt(0))
+			fileName = stats.ObjectLocation().String()
+		}
+		copied.ExtraBuf = append(copied.ExtraBuf[:0], inputBat.ExtraBuf...)
+		recordBat = copied
+	}
+	if err = txn.registerUnpublishedObjectRecordLocked(typ, recordBat); err != nil {
 		copied.Clean(txn.proc.Mp())
 		return nil, err
 	}
-	return &stagedWorkspaceRecord{Entry: Entry{typ: typ, accountId: accountId, databaseId: databaseId, tableId: tableId, databaseName: databaseName, tableName: tableName, fileName: fileName, bat: copied, tnStore: tnStore, autoIncrEpoch: autoIncrEpoch, autoIncrEpochKnown: autoIncrEpochKnown, skipTransfer: skipTransfer, pkCheckPos: -1, pkCheckReady: true}, admittedNames: txn.recordedUnpublishedObjectNamesLocked(typ, inputBat)}, nil
+	admittedNames := txn.recordedUnpublishedObjectNamesLocked(typ, recordBat)
+	if remote {
+		copied.ExtraBuf = nil
+	}
+	reservationsOwned = false
+	return &stagedWorkspaceRecord{Entry: Entry{typ: typ, accountId: accountId, databaseId: databaseId, tableId: tableId, databaseName: databaseName, tableName: tableName, fileName: fileName, bat: copied, tnStore: tnStore, autoIncrEpoch: autoIncrEpoch, autoIncrEpochKnown: autoIncrEpochKnown, skipTransfer: skipTransfer, pkCheckPos: -1, pkCheckReady: true}, admittedNames: admittedNames, handoffIDs: handoffIDs, handoffTarget: target, handoffReceiptReservations: len(handoffIDs)}, nil
 }
 func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRecord) {
 	txn.publishStagedWorkspaceRecordAtLocked(s, -1)
@@ -1559,11 +1618,37 @@ func (txn *Transaction) publishStagedWorkspaceRecordAtLocked(s *stagedWorkspaceR
 		txn.engine.finishReservationProducersLocked(s.admittedNames)
 		txn.engine.unpublishedPending.mu.Unlock()
 	}
+	if len(s.handoffIDs) > 0 {
+		if txn.remoteWorkspaceRecords == nil {
+			txn.remoteWorkspaceRecords = make(map[ioutil.RemoteWorkspaceHandoffID]remoteWorkspaceRecordReceipt, len(s.handoffIDs))
+		}
+		q := &txn.engine.unpublishedPending
+		q.mu.Lock()
+		if q.remoteCoordinatorDecisions == nil {
+			q.remoteCoordinatorDecisions = make(map[ioutil.RemoteWorkspaceHandoffID]ioutil.RemoteWorkspaceHandoffDecision, len(s.handoffIDs))
+		}
+		for _, id := range s.handoffIDs {
+			txn.remoteWorkspaceRecords[id] = remoteWorkspaceRecordReceipt{target: s.handoffTarget, decision: ioutil.RemoteWorkspaceHandoffAdopted}
+			q.remoteCoordinatorDecisions[id] = ioutil.RemoteWorkspaceHandoffAdopted
+		}
+		q.mu.Unlock()
+		s.handoffReceiptReservations = 0 // transaction now owns the reservations
+	}
 	s.bat = nil // ownership passed to the workspace entry
 }
 
 func (txn *Transaction) retractUnpublishedRecordAdmissionLocked(st *stagedWorkspaceRecord) {
-	if st == nil || len(st.admittedNames) == 0 {
+	if st == nil {
+		return
+	}
+	if st.handoffReceiptReservations > 0 {
+		if err := txn.releaseRemoteCoordinatorReceipts(st.handoffReceiptReservations); err != nil {
+			logutil.Errorf("remote workspace receipt reservation remains owned: %v", err)
+			return
+		}
+		st.handoffReceiptReservations = 0
+	}
+	if len(st.admittedNames) == 0 {
 		return
 	}
 	txn.recordedUnpublishedObjects.retract(st.admittedNames)
@@ -1965,6 +2050,25 @@ func (txn *Transaction) batchAllocNewRowIds(count int) (ret *vector.Vector, err 
 	return ret, nil
 }
 
+// visitWorkspaceMergeGroups partitions ordered write indexes before the
+// pairwise merge scan. No group crosses a statement or snapshot boundary.
+func visitWorkspaceMergeGroups(idxes []int64, offsets []int, snapshot int64, visit func([]int64) error) error {
+	region := func(idx int64) int { r, _ := slices.BinarySearch(offsets, int(idx)+1); return r }
+	for start := 0; start < len(idxes); {
+		end := start + 1
+		r := region(idxes[start])
+		beforeSnapshot := idxes[start] < snapshot
+		for end < len(idxes) && region(idxes[end]) == r && (idxes[end] < snapshot) == beforeSnapshot {
+			end++
+		}
+		if err := visit(idxes[start:end]); err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
 func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
@@ -2047,8 +2151,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}()
 		used := make(map[int64]bool)
-		region := func(idx int64) int { r, _ := slices.BinarySearch(txn.offsets, int(idx)+1); return r }
-		prepare := func(idxes []int64) error {
+		prepareRegion := func(idxes []int64) error {
 			for i, idx := range idxes {
 				dst := &txn.writes[idx]
 				if used[idx] || dst.bat == nil || dst.bat.RowCount() == objectio.BlockMaxRows {
@@ -2058,7 +2161,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				rows := dst.bat.RowCount()
 				for _, j := range idxes[i+1:] {
 					src := &txn.writes[j]
-					if !used[j] && src.bat != nil && src.tableId == dst.tableId && src.databaseId == dst.databaseId && region(idx) == region(j) && rows+src.bat.RowCount() <= objectio.BlockMaxRows {
+					if !used[j] && src.bat != nil && src.tableId == dst.tableId && src.databaseId == dst.databaseId && rows+src.bat.RowCount() <= objectio.BlockMaxRows {
 						indexes = append(indexes, j)
 						rows += src.bat.RowCount()
 					}
@@ -2084,6 +2187,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				prepared = append(prepared, preparedMerge{indexes, staged})
 			}
 			return nil
+		}
+		// Bitmap iteration is ordered by write index. Split at statement boundaries
+		// before comparing entries, so unrelated historical statements do not
+		// incur a quadratic scan at every statement transition.
+		prepare := func(idxes []int64) error {
+			return visitWorkspaceMergeGroups(idxes, txn.offsets, int64(txn.GetSnapshotWriteOffset()), prepareRegion)
 		}
 		arr := vector.GetSels()
 		defer vector.PutSels(arr)
@@ -2193,60 +2302,23 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 			tables[k] = tbl
 		}
 		txn.Lock()
+		if txn.incrMaintenanceActive && txn.incrMaintenanceInvalid {
+			return nil, context.Canceled
+		}
 	}
 }
 
 // CN blocks compaction for txn
 type compactRepublication struct {
-	bat                 *batch.Batch
-	name                string
-	accountId           uint32
-	databaseId, tableId uint64
-	databaseName        string
-	tableName           string
-	tnStore             DNStore
-	autoIncrEpoch       uint32
-	autoIncrEpochKnown  bool
-}
-
-func (txn *Transaction) publishStagedRepublicationLocked(
-	r *compactRepublication,
-) {
-
-	server := colexec.MustGetServer(txn.engine.service)
-	col, area := vector.MustVarlenaRawData(r.bat.Vecs[1])
-	for i := range col {
-		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-		oid := stats.ObjectName().ObjectId()
-		sid := oid.Segment()
-		server.PutCnSegment(txn.op.Txn().ID, r.tableId, sid,
-			colexec.TxnWorkspaceUnCommitType)
-		txn.registerCNObjects(*oid, r.accountId,
-			r.bat, r.databaseName, r.tableName, r.autoIncrEpoch,
-			r.autoIncrEpochKnown)
-	}
-
-	txn.hasS3Op.Store(true)
-	txn.readOnly.Store(false)
-
-	txn.appendWorkspaceEntryLocked(Entry{
-		typ:                INSERT,
-		accountId:          r.accountId,
-		tableId:            r.tableId,
-		databaseId:         r.databaseId,
-		tableName:          r.tableName,
-		databaseName:       r.databaseName,
-		fileName:           r.name,
-		bat:                r.bat,
-		tnStore:            r.tnStore,
-		pkCheckPos:         -1,
-		pkCheckReady:       true,
-		autoIncrEpoch:      r.autoIncrEpoch,
-		autoIncrEpochKnown: r.autoIncrEpochKnown,
-	})
+	anchor int
+	bat    *batch.Batch
+	name   string
 }
 
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
+	if txn.compactionUndo != nil {
+		return moerr.NewInvalidStateNoCtx("workspace compaction already has an unresolved publication")
+	}
 
 	if txn.deletedBlocks.size() == 0 {
 		return nil
@@ -2277,7 +2349,9 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				blkDel = objBlkDeletion[*blkId.Object()]
 			}
 
-			blkDel[*blkId] = offsets
+			// The worker runs after iter releases deletedBlocks' read lock. Keep
+			// its snapshot independent from concurrent appends to the same block.
+			blkDel[*blkId] = slices.Clone(offsets)
 
 			if _, ok := objTables[*blkId.Object()]; !ok {
 				objTables[*blkId.Object()] = workspaceTableKey{
@@ -2295,6 +2369,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		})
 
 	type compactRewrite struct {
+		anchor    int
 		tbl       *txnTable
 		tbKey     workspaceTableKey
 		writeName string
@@ -2309,12 +2384,15 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	rewrites := make([]compactRewrite, 0, 8)
 
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+	dirtyAnchors := make([]int, 0, 1)
 
 	retired := make([]int, 0, 4)
 	staged := make([]compactRepublication, 0, 8)
 	cleanStagedRepubs := func() {
 		for k := range staged {
-			staged[k].bat.Clean(txn.proc.Mp())
+			if staged[k].bat != nil {
+				staged[k].bat.Clean(txn.proc.Mp())
+			}
 		}
 		staged = staged[:0]
 	}
@@ -2373,20 +2451,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					return err
 				}
 
-				staged = append(staged, compactRepublication{
-					bat:                entryBat,
-					name:               stats.ObjectName().String(),
-					accountId:          entry.accountId,
-					databaseId:         entry.databaseId,
-					tableId:            entry.tableId,
-					databaseName:       entry.databaseName,
-					tableName:          entry.tableName,
-					tnStore:            entry.tnStore,
-					autoIncrEpoch:      entry.autoIncrEpoch,
-					autoIncrEpochKnown: entry.autoIncrEpochKnown,
-				})
+				staged = append(staged, compactRepublication{anchor: i, bat: entryBat, name: stats.ObjectName().String()})
 			} else {
 				dirtyObject = append(dirtyObject, stats)
+				dirtyAnchors = append(dirtyAnchors, i)
 			}
 
 			offset += int(stats.BlkCnt())
@@ -2408,6 +2476,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		tbl.ensureSeqnumsAndTypesExpectRowid()
 		writeName := tbl.tableName
 		rewrites = append(rewrites, compactRewrite{
+			anchor:    dirtyAnchors[i],
 			tbl:       tbl,
 			tbKey:     tbKey,
 			writeName: writeName,
@@ -2449,6 +2518,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 	var compactErr error
 	recordStages := make([]*stagedWorkspaceRecord, 0, len(rewrites))
+	recordAnchors := make([]int, 0, len(rewrites))
 	for i := range rewrites {
 		r := &rewrites[i]
 		if r.err != nil {
@@ -2486,9 +2556,46 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			continue
 		}
 		recordStages = append(recordStages, st)
+		recordAnchors = append(recordAnchors, r.anchor)
+	}
+
+	// Build one replacement per original entry before publishing any of them.
+	// This preserves captured prefix and rollback offsets even when an entry
+	// contains several clean and rewritten objects.
+	groups := make(map[int]*stagedWorkspaceRecord, len(retired))
+	addGroup := func(anchor int, src **batch.Batch, name string, names []string) error {
+		g := groups[anchor]
+		if g == nil {
+			g = &stagedWorkspaceRecord{Entry: txn.writes[anchor]}
+			g.bat = *src
+			*src = nil
+			g.fileName = name
+			groups[anchor] = g
+		} else if _, err := g.bat.AppendWithCopy(ctx, txn.proc.Mp(), *src); err != nil {
+			return err
+		}
+		g.admittedNames = append(g.admittedNames, names...)
+		return nil
+	}
+	if compactErr == nil {
+		for i, st := range recordStages {
+			if compactErr = addGroup(recordAnchors[i], &st.bat, st.fileName, st.admittedNames); compactErr != nil {
+				break
+			}
+		}
+	}
+	if compactErr == nil {
+		for i := range staged {
+			if compactErr = addGroup(staged[i].anchor, &staged[i].bat, staged[i].name, nil); compactErr != nil {
+				break
+			}
+		}
 	}
 
 	if compactErr != nil {
+		for _, g := range groups {
+			g.bat.Clean(txn.proc.Mp())
+		}
 		for _, st := range recordStages {
 			txn.retractUnpublishedRecordAdmissionLocked(st)
 			if st.bat != nil {
@@ -2513,8 +2620,47 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		return compactErr
 	}
 
+	undo := &workspaceCompactionUndo{
+		entries:    make([]workspaceCompactionOldEntry, 0, len(retired)),
+		summaries:  make(map[types.Objectid]workspaceCompactionOldSummary),
+		deleted:    make(map[types.Blockid][]int64),
+		oldObjects: slices.Clone(dirtyObject),
+	}
+	for _, blocks := range objBlkDeletion {
+		for id, offsets := range blocks {
+			undo.deleted[id] = offsets
+		}
+	}
+	// Reserve the journal's retirement slot before replacing any anchor.
+	// Failure rollback can then retain the displaced backing without growing
+	// the slice while memory is already exhausted.
+	txn.retiredCompactions = slices.Grow(txn.retiredCompactions, 1)
+	for _, anchor := range retired {
+		old := txn.writes[anchor]
+		txn.unaccountWorkspaceEntryLocked(&txn.writes[anchor])
+		old.accountedSize = 0
+		txn.writes[anchor].bat = nil
+		held := workspaceCompactionOldEntry{anchor: anchor, entry: old}
+		if g := groups[anchor]; g != nil {
+			for _, stats := range collectObjectStatsFromEntry(g.Entry) {
+				id := *stats.ObjectName().ObjectId()
+				if _, exists := undo.summaries[id]; !exists {
+					value, present := txn.cnObjsSummary[id]
+					undo.summaries[id] = workspaceCompactionOldSummary{value: value, present: present}
+				}
+			}
+			undo.newNames = append(undo.newNames, g.admittedNames...)
+			held.replacement = g.bat
+			txn.publishStagedWorkspaceRecordAtLocked(g, anchor)
+		}
+		undo.entries = append(undo.entries, held)
+	}
+	txn.compactionUndo = undo
 	for _, st := range recordStages {
-		txn.publishStagedWorkspaceRecordLocked(st)
+		if st.bat != nil {
+			st.bat.Clean(txn.proc.Mp())
+		}
+		st.bat = nil
 	}
 	for i := range rewrites {
 		r := &rewrites[i]
@@ -2523,20 +2669,9 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			r.bat = nil
 		}
 	}
-	for k := range staged {
-		txn.publishStagedRepublicationLocked(&staged[k])
-		staged[k].bat = nil
-	}
-
-	for _, i := range retired {
-		txn.releaseWorkspaceEntryBatchLocked(i)
-	}
+	cleanStagedRepubs()
 	txn.assertWorkspaceAccountingLocked()
 
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
-	_ = txn.GCObjsByStats(dirtyObject...)
-
-	txn.deletedBlocks.clean()
 	return nil
 }
 
@@ -2652,6 +2787,9 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 			return err
 		}
 		txn.Lock()
+		if txn.incrMaintenanceActive && txn.incrMaintenanceInvalid {
+			return context.Canceled
+		}
 		if v, ok := rel.(*txnTableDelegate); ok {
 			tables[e.tableId] = v.origin
 		} else {
@@ -2747,22 +2885,51 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	}
 
 	if err := txn.transferTombstonesByCommit(ctx); err != nil {
+		txn.Lock()
+		undoErr := txn.restoreCompactionLocked()
+		txn.Unlock()
+		if undoErr != nil {
+			return nil, errors.Join(err, undoErr)
+		}
 		return nil, err
 	}
+	txn.Lock()
+	err = txn.finishCompactionLocked()
+	if err != nil {
+		if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+			err = errors.Join(err, undoErr)
+		}
+		txn.Unlock()
+		return nil, err
+	}
+	txn.compactNilWorkspaceSlotsLocked()
+	txn.Unlock()
 
 	// mergeTxnWorkspaceLocked (and the compactDeletionOnObjsLocked call
 	// inside it) mutates txn.writes and may release/re-acquire the lock
 	// around metadata resolution, so it must run with the lock held — same
 	// as the IncrStatementID path.
 	txn.Lock()
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+	err = txn.mergeTxnWorkspaceLocked(ctx)
+	if err == nil {
+		err = txn.dumpBatchLocked(ctx, -1)
+	}
+	if err == nil {
+		err = txn.finishCompactionLocked()
+	}
+	if err != nil {
+		if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+			err = errors.Join(err, undoErr)
+		}
+		txn.compactionDeferredOrder = false
 		txn.Unlock()
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
-		txn.Unlock()
-		return nil, err
+	if txn.compactionDeferredOrder {
+		_ = txn.adjustUpdateOrderLocked(0)
+		txn.compactionDeferredOrder = false
 	}
+	txn.compactNilWorkspaceSlotsLocked()
 	txn.Unlock()
 
 	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
@@ -2916,6 +3083,11 @@ func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
 	}
+	if txn.compactionUndo != nil {
+		logutil.Error("unknown commit has unresolved compaction publication")
+		return
+	}
+	txn.releaseRetiredCompactionBuffersUnknownLocked()
 	// The Commit may have reached TN. delTransaction releases only CN-local
 	// state and intentionally does not run gcObjsByIdxRange or delete shared
 	// object-storage data.
@@ -3000,6 +3172,13 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	txn.Lock()
+	undoErr := txn.restoreCompactionLocked()
+	txn.compactionDeferredOrder = false
+	txn.Unlock()
+	if undoErr != nil {
+		return undoErr
+	}
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",
@@ -3028,6 +3207,14 @@ func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
 	}
+	if txn.compactionUndo != nil {
+		logutil.Error("workspace terminal cleanup has unresolved compaction publication")
+		return
+	}
+	if err := txn.retireCompactionBatchesLocked(); err != nil {
+		logutil.Errorf("workspace compaction cleanup remains transaction-owned: %v", err)
+		return
+	}
 
 	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
 	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
@@ -3050,6 +3237,10 @@ func (txn *Transaction) delTransaction() {
 	txn.assertWorkspaceAccountingLocked()
 
 	txn.closeWorkspaceAllocation()
+	if err := txn.releaseRemoteCoordinatorRecordsLocked(); err != nil {
+		logutil.Errorf("remote workspace receipts remain transaction-owned: %v", err)
+		return
+	}
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseOps = nil

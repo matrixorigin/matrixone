@@ -1446,6 +1446,14 @@ func (sinker *Sinker) SyncAndTakeResults(ctx context.Context) ([]objectio.Object
 	}
 	persisted := sinker.result.persisted
 	tail := sinker.result.tail
+	if sinker.config.workspaceOwnedCleanup {
+		// The caller takes the result batches but has not necessarily recorded
+		// their objects in its workspace yet. Keep the names available to the
+		// workspace cleanup owner even after the result slice is transferred.
+		for i := range persisted {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, persisted[i].ObjectName().String())
+		}
+	}
 	sinker.result.persisted = nil
 	sinker.result.tail = nil
 	return persisted, tail, nil

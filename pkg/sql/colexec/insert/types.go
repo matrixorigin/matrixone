@@ -140,6 +140,7 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 	if insert.ctr.buf != nil {
 		insert.ctr.buf.CleanOnlyData()
+		insert.ctr.buf.ExtraBuf = nil
 	}
 }
 

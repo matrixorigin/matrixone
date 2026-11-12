@@ -40,7 +40,48 @@ type backportSinkerTxn struct {
 	workspace client.Workspace
 }
 
+type backportHandoffWorkspace struct {
+	client.Workspace
+	scope ioutil.RemoteWorkspaceHandoffScope
+}
+
+func (w *backportHandoffWorkspace) RemoteWorkspaceHandoffScope() (ioutil.RemoteWorkspaceHandoffScope, bool) {
+	return w.scope, true
+}
+
+func (*backportHandoffWorkspace) MarkRemoteWorkspaceOutputReady([]string) error { return nil }
+
 func (t *backportSinkerTxn) GetWorkspace() client.Workspace { return t.workspace }
+
+func TestWorkspaceHandoffScopeTransientBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	scope := ioutil.RemoteWorkspaceHandoffScope{
+		Version: ioutil.RemoteWorkspaceHandoffVersion1, TxnID: "txn",
+		ExecutionID: [16]byte{1}, FragmentID: [16]byte{2}, ProducerCN: "cn:1",
+	}
+	proc.Base.TxnOperator = &backportSinkerTxn{workspace: &backportHandoffWorkspace{scope: scope}}
+	bat := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_int64.ToType()})
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+	require.NoError(t, AttachWorkspaceHandoffScope(proc, bat))
+	require.NoError(t, AttachWorkspaceHandoffScope(proc, bat))
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	decoded := &batch.Batch{}
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	t.Cleanup(func() { decoded.Clean(proc.Mp()) })
+	got, present, err := ioutil.ParseRemoteWorkspaceHandoffScope(decoded.ExtraBuf)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, scope, got)
+	bat.ExtraBuf = []byte("unrelated metadata")
+	require.Error(t, AttachWorkspaceHandoffScope(proc, bat))
+	proc.Base.TxnOperator = &backportSinkerTxn{}
+	require.NoError(t, AttachWorkspaceHandoffScope(proc, bat))
+	bat.ExtraBuf = decoded.ExtraBuf
+	require.Error(t, AttachWorkspaceHandoffScope(proc, bat), "a reused batch cannot transfer stale provenance")
+}
 func TestBackportS3WorkspaceHookRebind(t *testing.T) {
 	proc := testutil.NewProc(t)
 	fs := testutil.NewSharedFS()

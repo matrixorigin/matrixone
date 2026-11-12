@@ -390,6 +390,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			err = runC.prePipelineInitializer()
 		}
 		if err == nil {
+			err = runC.preflightWorkspaceHandoff(execTopContext)
+		}
+		if err == nil {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()

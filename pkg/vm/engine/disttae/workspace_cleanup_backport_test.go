@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"testing"
 	"time"
@@ -197,10 +198,15 @@ func TestBackportWorkspaceUnknownCommitProtectsSharedObject(t *testing.T) {
 	colexec.NewServer("")
 	fs := newCleanFS(t)
 	e := &Engine{fs: fs, cloneTxnCache: newCloneTxnCache()}
+	budget := process.MustNewHashBuildBudget(16<<20, 8<<20)
+	parent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(parent.Close)
 	makeTxn := func() *Transaction {
 		op, closeOp := client.NewTestTxnOperator(ctx)
 		t.Cleanup(closeOp)
 		txn := &Transaction{op: op, proc: testutil.NewProc(t), engine: e, cnObjsSummary: make(map[types.Objectid]Summary), batchSelectList: make(map[*batch.Batch][]int64), deletedBlocks: &deletedBlocks{offsets: make(map[types.Blockid][]int64)}}
+		require.NoError(t, txn.proc.SetHashBuildBudgetForTesting(parent))
 		op.AddWorkspace(txn)
 		return txn
 	}

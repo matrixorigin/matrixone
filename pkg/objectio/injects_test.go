@@ -64,3 +64,21 @@ func TestWorkspaceAllocationLimitIsDatabaseScoped(t *testing.T) {
 	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "ECHO", 32, "", false))
 	require.Zero(t, CNWorkspaceAllocationLimit("workspace_test"))
 }
+
+func TestWorkspaceRemoteRecordRefusalIsDatabaseScoped(t *testing.T) {
+	enabled := fault.Enable()
+	const point = "fj/cn/workspace_remote_record_refusal"
+	t.Cleanup(func() {
+		_, _ = fault.RemoveFaultPoint(t.Context(), point)
+		if enabled {
+			fault.Disable()
+		}
+	})
+	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "ECHO", 0, "workspace_test", false))
+	require.True(t, CNWorkspaceRemoteRecordRefusal("workspace_test"))
+	require.False(t, CNWorkspaceRemoteRecordRefusal("other_database"))
+	_, err := fault.RemoveFaultPoint(t.Context(), point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "ECHO", 0, "", false))
+	require.False(t, CNWorkspaceRemoteRecordRefusal("workspace_test"))
+}

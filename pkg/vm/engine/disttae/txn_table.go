@@ -1892,6 +1892,16 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 	return attrs, nil
 }
 
+// WorkspaceHandoffDecision exposes only this transaction's fenced result to
+// the local coordinator after an object-recording failure.
+func (tbl *txnTable) WorkspaceHandoffDecision(id ioutil.RemoteWorkspaceHandoffID) (ioutil.RemoteWorkspaceHandoffDecision, error) {
+	txn := tbl.getTxn()
+	if txn == nil || txn.op == nil || string(txn.op.Txn().ID) != id.TxnID {
+		return ioutil.RemoteWorkspaceHandoffUnknown, moerr.NewInvalidStateNoCtx("remote workspace decision transaction mismatch")
+	}
+	return txn.engine.QueryCoordinatorWorkspaceHandoff(id)
+}
+
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")

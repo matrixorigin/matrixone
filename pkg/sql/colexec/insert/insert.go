@@ -117,6 +117,8 @@ func (insert *Insert) OpType() vm.OpType {
 	return vm.Insert
 }
 
+func (insert *Insert) ProducesRemoteWorkspaceObjects() bool { return insert.ToWriteS3 }
+
 func (insert *Insert) Prepare(proc *process.Process) error {
 	if insert.OpAnalyzer == nil {
 		insert.OpAnalyzer = process.NewAnalyzer(insert.GetIdx(), insert.IsFirst, insert.IsLast, "insert")
@@ -382,6 +384,18 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			return result, err
 		}
 		insert.refreshAndReleaseS3MemGrant()
+		var handoffNames []string
+		if colexec.WorkspaceHandoffEnabled(proc) && result.Batch != nil && !result.Batch.IsEmpty() {
+			handoffNames, err = colexec.WorkspaceHandoffObjectNames(result.Batch, 1)
+			if err != nil {
+				insert.ctr.state = vm.End
+				return result, err
+			}
+		}
+		if err = colexec.AttachWorkspaceHandoffScope(proc, result.Batch, handoffNames...); err != nil {
+			insert.ctr.state = vm.End
+			return result, err
+		}
 		insert.ctr.state = vm.End
 		return result, nil
 	}

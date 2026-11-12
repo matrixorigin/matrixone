@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -283,6 +284,107 @@ func TestBackportWorkspaceMergeAdoptsRegeneratedRowids(t *testing.T) {
 		require.Zero(t, txn.workspaceAccount.Snapshot().Used)
 		require.Zero(t, budget.AggregateUsed())
 		parent.Close()
+	}
+}
+
+func TestBackportWorkspaceMergeAvoidsCrossStatementPairs(t *testing.T) {
+	const count = 4000
+	idxes := make([]int64, count)
+	offsets := make([]int, count)
+	for i := range count {
+		idxes[i] = int64(i)
+		offsets[i] = i + 1
+	}
+	groups, pairs := 0, 0
+	err := visitWorkspaceMergeGroups(idxes, offsets, count/2, func(group []int64) error {
+		groups++
+		pairs += len(group) * (len(group) - 1) / 2
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, count, groups)
+	require.Zero(t, pairs, "different statements must never enter the pairwise scan together")
+}
+
+// Measures repeated historical grouping over a growing transaction; this is
+// a mechanism benchmark, not an end-to-end throughput or latency benchmark.
+func BenchmarkWorkspaceMergeGroupingCumulative(b *testing.B) {
+	for _, count := range []int{1000, 2000, 4000} {
+		b.Run(fmt.Sprintf("statements_%d", count), func(b *testing.B) {
+			idxes := make([]int64, count)
+			offsets := make([]int, count)
+			for i := range count {
+				idxes[i], offsets[i] = int64(i), i+1
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for end := 1; end <= count; end++ {
+					if err := visitWorkspaceMergeGroups(idxes[:end], offsets[:end], int64(end), func([]int64) error { return nil }); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBackportWorkspaceMergeRespectsSnapshotBoundary(t *testing.T) {
+	t.Run("snapshot", func(t *testing.T) { testWorkspaceMergeBoundary(t, true) })
+	t.Run("statement", func(t *testing.T) { testWorkspaceMergeBoundary(t, false) })
+}
+
+func testWorkspaceMergeBoundary(t *testing.T, snapshot bool) {
+	colexec.NewServer("")
+	txn := newTransactionWithActivePKTableForTest(t, "v")
+	txn.deletedBlocks = &deletedBlocks{}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	parent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer parent.Close()
+	require.NoError(t, txn.proc.SetHashBuildBudgetForTesting(parent))
+	defer txn.delTransaction()
+	for i := int64(0); i < 30; i++ {
+		src := batch.NewWithSize(1)
+		src.Attrs = []string{"v"}
+		src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], i, false, txn.proc.Mp()))
+		src.SetRowCount(1)
+		b, err := txn.copyWorkspaceBatch(src)
+		src.Clean(txn.proc.Mp())
+		require.NoError(t, err)
+		_, err = txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
+		if err != nil {
+			b.Clean(txn.proc.Mp())
+		}
+		require.NoError(t, err)
+	}
+	if snapshot {
+		txn.snapshotWriteOffset.Store(15)
+	} else {
+		txn.offsets = []int{15}
+	}
+	txn.Lock()
+	err = txn.mergeTxnWorkspaceLocked(context.Background())
+	txn.Unlock()
+	require.NoError(t, err)
+	var before, after []int64
+	for i, entry := range txn.writes {
+		if entry.bat == nil {
+			continue
+		}
+		values := vector.MustFixedColNoTypeCheck[int64](entry.bat.Vecs[1])
+		if i < 15 {
+			before = append(before, values...)
+		} else {
+			after = append(after, values...)
+		}
+	}
+	require.Len(t, before, 15)
+	require.Len(t, after, 15)
+	for i := range 15 {
+		require.Equal(t, int64(i), before[i])
+		require.Equal(t, int64(i+15), after[i])
 	}
 }
 

@@ -36,6 +36,21 @@ func (s *queryService) handleGetProtocolVersion() func(ctx context.Context, req 
 		resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
 			Version: version.(int64),
 		}
+		value, found := runtime.ServiceRuntime(s.serviceID).GetGlobalVariables(runtime.WorkspaceHandoffHandlerKey)
+		handler, supported := value.(*runtime.WorkspaceHandoffHandler)
+		if found && supported && handler != nil && handler.Handle != nil {
+			resp.GetProtocolVersion.WorkspaceHandoffVersion = 1
+		}
+		if len(req.GetProtocolVersion.WorkspaceHandoffRequest) != 0 {
+			if !found || !supported || handler == nil || handler.Handle == nil {
+				return moerr.NewNotSupportedNoCtx("remote workspace handoff is unavailable")
+			}
+			result, err := handler.Handle(req.GetProtocolVersion.WorkspaceHandoffRequest)
+			if err != nil {
+				return err
+			}
+			resp.GetProtocolVersion.WorkspaceHandoffResponse = result
+		}
 		return nil
 	}
 }

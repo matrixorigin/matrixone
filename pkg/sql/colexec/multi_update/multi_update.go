@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -37,6 +38,10 @@ func (update *MultiUpdate) String(buf *bytes.Buffer) {
 
 func (update *MultiUpdate) OpType() vm.OpType {
 	return vm.MultiUpdate
+}
+
+func (update *MultiUpdate) ProducesRemoteWorkspaceObjects() bool {
+	return update.Action == UpdateWriteS3
 }
 
 func (update *MultiUpdate) Prepare(proc *process.Process) error {
@@ -215,6 +220,17 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			writer := update.getFlushableS3WriterFunc()
 			if writer == nil {
 				ctr.state = vm.End
+				var names []string
+				if colexec.WorkspaceHandoffEnabled(proc) && out != nil && !out.IsEmpty() {
+					var err error
+					names, err = workspaceHandoffOutputNames(proc, out)
+					if err != nil {
+						return vm.CancelResult, err
+					}
+				}
+				if err := colexec.AttachWorkspaceHandoffScope(proc, out, names...); err != nil {
+					return vm.CancelResult, err
+				}
 				result.Batch = out
 				return result, nil
 			}
@@ -238,6 +254,37 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 	}
 
 	return vm.CancelResult, nil
+}
+
+func workspaceHandoffOutputNames(proc *process.Process, out *batch.Batch) ([]string, error) {
+	var names []string
+	for i := 0; i < out.RowCount(); i++ {
+		inner := batch.NewOffHeapEmpty()
+		err := inner.UnmarshalBinaryWithAnyMp(out.Vecs[4].GetBytesAt(i), proc.Mp())
+		if err != nil {
+			inner.Clean(proc.Mp())
+			return nil, err
+		}
+		column := -1
+		if len(inner.Attrs) != 0 {
+			switch inner.Attrs[0] {
+			case catalog.BlockMeta_BlockInfo:
+				column = 1
+			case catalog.ObjectMeta_ObjectStats:
+				column = 0
+			}
+		}
+		if column >= 0 {
+			var extracted []string
+			extracted, err = colexec.WorkspaceHandoffObjectNames(inner, column)
+			names = append(names, extracted...)
+		}
+		inner.Clean(proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return names, nil
 }
 
 func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -270,6 +317,10 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	}
 	if input.Batch == nil || input.Batch.IsEmpty() {
 		return input, nil
+	}
+	handoffScope, hasHandoff, err := colexec.WorkspaceHandoffFromBatch(proc, input.Batch)
+	if err != nil {
+		return input, err
 	}
 
 	actions := vector.MustFixedColNoTypeCheck[uint8](input.Batch.Vecs[0])
@@ -309,6 +360,12 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
 				return input, err
 			}
+			if hasHandoff && len(batBufs[actionDelete].Attrs) > 0 && batBufs[actionDelete].Attrs[0] == catalog.ObjectMeta_ObjectStats {
+				if len(batBufs[actionDelete].ExtraBuf) != 0 {
+					return input, moerr.NewInvalidStateNoCtx("nested deletion batch already has metadata")
+				}
+				batBufs[actionDelete].ExtraBuf = append(batBufs[actionDelete].ExtraBuf[:0], input.Batch.ExtraBuf...)
+			}
 			// For REPLACE INTO, we don't count DELETE rows in affected rows
 			// REPLACE INTO should only return the number of INSERT rows
 			name := nameData[i].UnsafeGetString(nameArea)
@@ -319,7 +376,15 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return source.Delete(newCtx, batBufs[actionDelete], name)
 			})
 			if err != nil {
+				if hasHandoff && len(batBufs[actionDelete].Attrs) > 0 && batBufs[actionDelete].Attrs[0] == catalog.ObjectMeta_ObjectStats {
+					_ = colexec.SettleFailedWorkspaceHandoff(proc, source, handoffScope, batBufs[actionDelete], 0)
+				}
 				return input, err
+			}
+			if hasHandoff && len(batBufs[actionDelete].Attrs) > 0 && batBufs[actionDelete].Attrs[0] == catalog.ObjectMeta_ObjectStats {
+				if err := colexec.ConfirmWorkspaceHandoffRecords(proc, handoffScope, batBufs[actionDelete], 0); err != nil {
+					return input, err
+				}
 			}
 			if tableType == UpdateMainTable {
 				update.addDeleteAffectRows(tableType, rowCounts[i])
@@ -335,6 +400,12 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionInsert].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
 				return input, err
 			}
+			if hasHandoff && len(batBufs[actionInsert].Attrs) > 0 && batBufs[actionInsert].Attrs[0] == catalog.BlockMeta_BlockInfo {
+				if len(batBufs[actionInsert].ExtraBuf) != 0 {
+					return input, moerr.NewInvalidStateNoCtx("nested insertion batch already has metadata")
+				}
+				batBufs[actionInsert].ExtraBuf = append(batBufs[actionInsert].ExtraBuf[:0], input.Batch.ExtraBuf...)
+			}
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action
@@ -348,7 +419,15 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return source.Write(newCtx, batBufs[actionInsert])
 			})
 			if err != nil {
+				if hasHandoff && len(batBufs[actionInsert].Attrs) > 0 && batBufs[actionInsert].Attrs[0] == catalog.BlockMeta_BlockInfo {
+					_ = colexec.SettleFailedWorkspaceHandoff(proc, source, handoffScope, batBufs[actionInsert], 1)
+				}
 				return input, err
+			}
+			if hasHandoff && len(batBufs[actionInsert].Attrs) > 0 && batBufs[actionInsert].Attrs[0] == catalog.BlockMeta_BlockInfo {
+				if err := colexec.ConfirmWorkspaceHandoffRecords(proc, handoffScope, batBufs[actionInsert], 1); err != nil {
+					return input, err
+				}
 			}
 			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
 

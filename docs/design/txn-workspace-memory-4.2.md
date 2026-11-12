@@ -48,7 +48,8 @@ loop and main defaults (500000 object obligations); do not invent a second queue
 A failed deletion/submission retains ownership; saturation refuses new obligations
 before persistence. Clean objects and clone/CCPR shares are never newly-owned
 orphans. Unknown commit results never delete possibly committed objects.
-No network/on-disk format, user setting, general spill or production rollout changes.
+No on-disk format, user setting, general spill or production rollout changes.
+The cross-CN handoff follow-up below permits a versioned internal wire change.
 
 ## Validation and delivery
 
@@ -118,3 +119,61 @@ pool-rejected names remain retained, rejects republication of cleanup-owned name
 and independently verifies deletion after explicit drain. Linux-only incremental
 SCA findings were corrected without changing allocation or lifecycle semantics.
 Final owning-package, exact-head CI and runtime acceptance remain separate gates.
+
+## Cross-CN ownership follow-up (implementation in progress)
+
+The pipeline batch ACK only means that a batch reached a receiver queue. It is
+not an object-adoption receipt: `MergeBlock`, `MergeDelete`, and `MultiUpdate`
+record the corresponding object later, and a failure can occur between those
+events. A remote writer therefore keeps a per-object obligation until the
+coordinator confirms recording and accepting cleanup responsibility. The key
+contains transaction, physical execution, fragment, attempt, and object name.
+The producing reservation ends when the actual writer stops; an unknown outcome
+is a bounded pending obligation without a reference to the Transaction. A
+rejection is actionable only if non-adoption is certain. Duplicate confirmations
+can consult a bounded receipt cache; eviction yields unknown, never rejection.
+Neither pending obligations nor receipts survive an Engine process crash.
+
+A versioned transient batch envelope identifies the producing fragment. It must
+survive both direct pipeline results and dispatch, and must be attached *after*
+the DML operator has combined its own metadata batches: `Batch.Append` does not
+copy `ExtraBuf`. Any additional aggregation/copy that can mix producers must
+either preserve per-object provenance or fail closed. INSERT, DELETE and
+multi-update require distinct adoption points and partial-success handling.
+An envelope alone is not capability negotiation or a confirmation. Before any
+remote object is persisted, both sides must negotiate support; mixed-version or
+missing provenance paths cannot fall back to the old unconfirmed lifecycle.
+Capability discovery and decisions use optional fields on the existing query
+service's protocol-version request. An older CN ignores those fields and
+returns version zero, so it is never sent an unknown pipeline message even if
+the peer changes between capability discovery and the actual decision.
+The producer must also distinguish a definitely-unsent result from an ambiguous
+send; only the former may be treated as a rejection without a peer response.
+The local fence marks the objects in each result batch as exposed before the
+operator returns that batch. Objects absent from all returned batches are
+definitely unsent and can enter the existing GC queue when the writer exits.
+An exposed object that never actually reaches its receiver remains pending,
+because the producer cannot infer non-delivery from a timeout or cancellation.
+
+The coordinator retains exact-identity adoption receipts until the transaction
+ends, subject to a CN-wide bound. A repeated delivery for the same target does
+not publish another object record. A mixed delivery filters object statistics
+and their block metadata independently, because their vector lengths differ.
+The producer's bounded receipts can also be queried using the original identity;
+an absent or evicted receipt is always unknown. Failed staging returns its
+coordinator receipt reservation and does not queue a remote-owned object for
+local deletion.
+
+The producer and coordinator each maintain a fixed 1 MiB name-history filter
+for adopted and rejected objects respectively. These filters never forget a
+name during an Engine lifetime; a positive result can conservatively retain a
+new object or reject a later admission, including false positives. They are not
+crash-recovery state. They prevent an old attempt's object name from being
+deleted or readmitted while bounded exact-identity receipts are being retired.
+
+Status: an isolated two-CN Linux SQL test on a candidate snapshot exercised a
+remote writer, object adoption, rollback visibility, and a subsequent commit.
+Focused tests exercise redelivery, per-object partial filtering, refusal, and
+receipt queries. The latest combined changes, explicit non-adoption settlement,
+all forwarding and mixed-version paths, and the prescribed reliability and
+performance gates still need proof. Until then the delivery gate remains open.
