@@ -4680,6 +4680,12 @@ func (c *Compile) compileSinkScanNode(node *plan.Node, curNodeIdx int32) ([]*Sco
 	c.anal.isFirst = false
 
 	rs.Proc.Reg.MergeReceivers = receivers
+	if node.ExtraOptions == plan2.ScalarCTESinkOption {
+		// Expressions such as decimal casts can mutate input vector metadata.
+		// A private connector/spool copies the bounded row before each reader's
+		// projection. No reader may mutate another reader's borrowed vectors.
+		return []*Scope{c.newMergeScope([]*Scope{rs})}, nil
+	}
 	return []*Scope{rs}, nil
 }
 
@@ -4690,7 +4696,13 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	}
 
 	var rs *Scope
-	if c.IsSingleScope(ss) {
+	if node.ExtraOptions == plan2.ScalarCTESinkOption {
+		// The one-row producer may itself execute on a remote CN. Gather it
+		// before local fan-out, and publish the compact SINK schema rather
+		// than its child's pre-projection layout. Other SINK contracts stay as-is.
+		rs = c.newMergeScope(ss)
+		c.compileProjection(node, []*Scope{rs})
+	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
 	} else {
 		rs = c.newMergeScope(ss)

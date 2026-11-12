@@ -28,6 +28,7 @@ import (
 func Test_TxnExecutorExec(t *testing.T) {
 	c, err := embed.NewCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	require.NoError(t, c.Start())
 
 	svc, err := c.GetCNService(0)
@@ -40,9 +41,9 @@ func Test_TxnExecutorExec(t *testing.T) {
 	defer cancel()
 
 	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		_, err = txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
-		require.NoError(t, err)
-		return nil
+		result, err := txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
+		defer result.Close()
+		return err
 	}, executor.Options{}.WithWaitCommittedLogApplied())
 	require.NoError(t, err)
 }

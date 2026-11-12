@@ -28,13 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	fs := vfs.NewStrictMem()
 	service, ccfg, err := logservice.NewTestService(fs)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	return service, &ccfg
 }
 
