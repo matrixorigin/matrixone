@@ -257,3 +257,39 @@ func TestJoinOnParentDiagnosticsOwnership(t *testing.T) {
 		require.Contains(t, err.Error(), "'o.zzz' does not exist")
 	})
 }
+
+// TestJoinOnQualifiedNamespaceErrorClass locks the on-clause class for
+// qualified references that no binding context owns — the forms exercised
+// by the lowercase and decimal BVT cases: a real table of another schema
+// and a database-qualified name that exists nowhere.
+func TestJoinOnQualifiedNamespaceErrorClass(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+
+	t.Run("table elsewhere in the catalog stays rejected with the on-clause class", func(t *testing.T) {
+		queryPlan, err := runOneStmt(mock, t, `
+			SELECT t1.a
+			FROM bvt_test1.t1 AS t1
+			LEFT JOIN bvt_test2.t2 AS t2 ON (bvt_test2.t3.a = t2.a)`)
+		require.Error(t, err, "a table outside the query scope stays rejected")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), "actual: %v", err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, uint16(moerr.ErrBadFieldError), moErr.ErrorCode(),
+			"internal MO code is 20309, not the wire code")
+		require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode(),
+			"wire code is 1054, not the internal code")
+		require.Equal(t, "42S22", moErr.SqlState())
+		require.Equal(t, "Unknown column 'bvt_test2.t3.a' in 'on clause'", moErr.Error())
+		require.Nil(t, queryPlan, "an out-of-scope ON reference never becomes legal")
+	})
+
+	t.Run("database-qualified name existing nowhere keeps its full spelling", func(t *testing.T) {
+		_, err := runOneStmt(mock, t, `
+			SELECT t2.a
+			FROM bvt_test2.t2 AS t2
+			LEFT JOIN bvt_test2.t3 AS t3 ON (t2.b = nosuchdb.t4.a)`)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), "actual: %v", err)
+		require.Equal(t, "Unknown column 'nosuchdb.t4.a' in 'on clause'", err.Error())
+	})
+}
