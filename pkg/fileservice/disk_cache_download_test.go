@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -351,11 +353,15 @@ func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
 
 type blockingWriter struct {
 	entered, release chan struct{}
+	err              error
 }
 
 func (w blockingWriter) Write(p []byte) (int, error) {
 	close(w.entered)
 	<-w.release
+	if w.err != nil {
+		return 0, w.err
+	}
 	return len(p), nil
 }
 
@@ -419,13 +425,273 @@ func TestDiskCacheDownloadCaptureCountsWhenEvictedOnPublish(t *testing.T) {
 	_, err = pw.Write(make([]byte, 4096))
 	require.NoError(t, err)
 	read := newFullObjectDiskCacheReader(&IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 4096}}})
+	defer read.finish(false)
 	require.True(t, read.capture(ctx, cache.download(diskPath)))
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
+	read.finish(true)
 
 	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
 	cache.preloads.mu.Lock()
 	defer cache.preloads.mu.Unlock()
 	require.NotNil(t, cache.preloads.groups[group])
 	require.Greater(t, cache.preloads.groups[group].average, 0.0)
+}
+
+func newPreloadGeneration(t *testing.T, p *preloadUsage, diskPath string, data []byte) *objectDownload {
+	t.Helper()
+	tempPath := filepath.Join(t.TempDir(), "download")
+	require.NoError(t, os.WriteFile(tempPath, data, 0600))
+	o := newObjectDownload(tempPath, false)
+	t.Cleanup(o.retire)
+	o.credit = func(n int64) { p.readDownload(diskPath, o, n) }
+	p.cachedDownload(diskPath, o)
+	return o
+}
+
+type readShareWriterFunc func([]byte) (int, error)
+
+func (f readShareWriterFunc) Write(p []byte) (int, error) { return f(p) }
+
+func newReadShareDownload(t *testing.T, data []byte, advertised int64) (*DiskCache, *objectDownload, string) {
+	t.Helper()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+
+	diskPath := cache.pathForFile("obj")
+	o := newPreloadGeneration(t, cache.preloads, diskPath, data)
+	cache.downloads.m = map[string]*objectDownload{diskPath: o}
+	o.advance(advertised)
+	o.end(true)
+	return cache, o, diskPath
+}
+
+// Read share counts only reads that complete successfully, both before and after
+// the download's bytes are transferred to the published file.
+func TestDiskCacheDownloadReadShareOnlyCountsSuccessfulReads(t *testing.T) {
+	for _, stage := range []string{"before_publish", "after_publish"} {
+		for _, scenario := range []string{"success", "short_read", "writer_error", "cancel", "conversion_error"} {
+			t.Run(stage+"/"+scenario, func(t *testing.T) {
+				data := []byte("01234567")
+				if scenario == "short_read" {
+					data = []byte("012")
+				}
+				cache, o, diskPath := newReadShareDownload(t, data, 8)
+				ctx := context.Background()
+				entry := IOEntry{Size: 8}
+				switch scenario {
+				case "writer_error":
+					entry.WriterForRead = readShareWriterFunc(func([]byte) (int, error) {
+						return 0, errors.New("injected writer error")
+					})
+				case "cancel":
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithCancel(ctx)
+					defer cancel()
+					entry.WriterForRead = readShareWriterFunc(func([]byte) (int, error) {
+						cancel()
+						return 0, ctx.Err()
+					})
+				case "conversion_error":
+					entry.ToCacheData = func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+						return nil, errors.New("injected conversion error")
+					}
+				}
+
+				if stage == "after_publish" {
+					cache.preloads.readDownload(diskPath, o, o.takeServed())
+				}
+				downloading, filled, err := cache.readFromDownload(ctx, diskPath, &entry)
+				require.True(t, downloading)
+				wantShare := int64(0)
+				if scenario == "success" {
+					require.NoError(t, err)
+					require.True(t, filled)
+					require.True(t, entry.done)
+					wantShare = 8
+				} else {
+					require.Error(t, err)
+					require.False(t, filled)
+				}
+				if stage == "before_publish" {
+					cache.preloads.readDownload(diskPath, o, o.takeServed())
+				}
+				cache.preloads.mu.Lock()
+				share, ok := cache.preloads.served[diskPath]
+				cache.preloads.mu.Unlock()
+				require.True(t, ok)
+				require.Equal(t, wantShare, share)
+			})
+		}
+	}
+}
+
+// A failed read that overlaps publication and immediate eviction must not turn
+// its reservation into a non-zero read-share sample.
+func TestDiskCacheDownloadFailedReadDoesNotCountWhenEvictedOnPublish(t *testing.T) {
+	rangeReadsCost(t, time.Hour)
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	const group = 7
+	diskPath := cache.pathForFile("obj")
+	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
+	pr, pw := io.Pipe()
+	filled := make(chan error, 1)
+	go func() {
+		filled <- cache.SetFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil })
+	}()
+	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
+		diskCacheLifecycleTestTimeout, time.Millisecond)
+	_, err = pw.Write(make([]byte, 4096))
+	require.NoError(t, err)
+
+	w := blockingWriter{entered: make(chan struct{}), release: make(chan struct{}), err: errors.New("injected writer error")}
+	read := make(chan error, 1)
+	go func() {
+		entry := IOEntry{Offset: 0, Size: 4096, WriterForRead: w}
+		_, _, err := cache.readFromDownload(ctx, diskPath, &entry)
+		read <- err
+	}()
+	<-w.entered
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	close(w.release)
+	require.Error(t, <-read)
+
+	cache.preloads.mu.Lock()
+	defer cache.preloads.mu.Unlock()
+	require.NotNil(t, cache.preloads.groups[group])
+	require.Zero(t, cache.preloads.groups[group].average)
+}
+
+// Eviction after finishDownload still waits for an acquired reader. The final
+// sample includes that reader only when its read succeeds.
+func TestDiskCacheReadShareRemovalAfterDownloadFinishWaitsForReader(t *testing.T) {
+	cache, o, diskPath := newReadShareDownload(t, []byte("01234567"), 8)
+	p := cache.preloads
+	p.narrowRead(diskPath, 7, func() bool { return true })
+	p.readDownload(diskPath, o, o.takeServed())
+	_, ok := o.acquire()
+	require.True(t, ok)
+	o.retire() // finishDownload removes the public map entry while the reader stays alive.
+
+	p.removed(diskPath, 8)
+	p.mu.Lock()
+	require.Len(t, p.pending, 1)
+	require.Nil(t, p.groups[7])
+	p.mu.Unlock()
+
+	o.serve(8)
+	o.release()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Empty(t, p.pending)
+	require.NotNil(t, p.groups[7])
+	require.Equal(t, 1.0, p.groups[7].average)
+	require.Equal(t, 1, p.groups[7].samples)
+}
+
+// A delayed old-generation eviction cannot delete or charge the new generation
+// that reused the same cache path.
+func TestDiskCacheReadShareRemovalDoesNotTouchReusedPath(t *testing.T) {
+	cache, old, diskPath := newReadShareDownload(t, []byte("01234567"), 8)
+	p := cache.preloads
+	p.narrowRead(diskPath, 7, func() bool { return true })
+	p.readDownload(diskPath, old, old.takeServed())
+	_, ok := old.acquire()
+	require.True(t, ok)
+	old.retire()
+	p.removed(diskPath, 8)
+
+	current := newPreloadGeneration(t, p, diskPath, []byte("01234567"))
+	p.narrowRead(diskPath, 7, func() bool { return true })
+	p.readDownload(diskPath, current, current.takeServed())
+	current.serve(4)
+	old.serve(8)
+	old.release()
+
+	p.mu.Lock()
+	require.Equal(t, int64(4), p.served[diskPath])
+	require.Same(t, current, p.downloads[diskPath])
+	require.Equal(t, 1.0, p.groups[7].average)
+	require.Equal(t, 1, p.groups[7].samples)
+	p.mu.Unlock()
+
+	// A late credit from the old object cannot mutate the current generation.
+	p.readDownload(diskPath, old, 100)
+	p.mu.Lock()
+	require.Equal(t, int64(4), p.served[diskPath])
+	p.mu.Unlock()
+
+	p.removed(diskPath, 8)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Empty(t, p.pending)
+	require.NotContains(t, p.served, diskPath)
+	require.Equal(t, 2, p.groups[7].samples)
+	require.Greater(t, p.groups[7].average, 0.0)
+	require.Less(t, p.groups[7].average, 1.0)
+}
+
+// Full-object captures charge only after fillVector succeeds. Cancellation and
+// conversion failures release their holds without producing read share.
+func TestFullObjectDiskCacheReaderReadShareWaitsForRequestOutcome(t *testing.T) {
+	for _, scenario := range []string{"success", "cancel", "conversion_error"} {
+		t.Run(scenario, func(t *testing.T) {
+			cache, o, diskPath := newReadShareDownload(t, []byte("01234567"), 8)
+			cache.preloads.readDownload(diskPath, o, o.takeServed())
+			entry := IOEntry{Size: 8}
+			if scenario == "conversion_error" {
+				entry.ToCacheData = func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+					return nil, errors.New("injected conversion error")
+				}
+			}
+			read := newFullObjectDiskCacheReader(&IOVector{FilePath: "obj", Entries: []IOEntry{entry}})
+			defer read.finish(false)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.True(t, read.capture(ctx, o))
+
+			success := false
+			switch scenario {
+			case "success":
+				require.NoError(t, read.fillVector(ctx, cache.cacheDataAllocator, "obj"))
+				success = true
+			case "conversion_error":
+				require.Error(t, read.fillVector(ctx, cache.cacheDataAllocator, "obj"))
+			case "cancel":
+				cancel()
+				require.Error(t, ctx.Err())
+			}
+			read.finish(success)
+
+			cache.preloads.mu.Lock()
+			share := cache.preloads.served[diskPath]
+			cache.preloads.mu.Unlock()
+			if success {
+				require.Equal(t, int64(8), share)
+			} else {
+				require.Zero(t, share)
+			}
+		})
+	}
+}
+
+// A short capture is not a successful download read and must not be charged.
+func TestDiskCacheDownloadCaptureDoesNotCountShortReads(t *testing.T) {
+	tempPath := filepath.Join(t.TempDir(), "download")
+	require.NoError(t, os.WriteFile(tempPath, nil, 0600))
+	o := newObjectDownload(tempPath, false)
+	defer o.retire()
+	o.advance(1)
+	o.end(true)
+	read := newFullObjectDiskCacheReader(&IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 1}}})
+	defer read.finish(false)
+	require.False(t, read.capture(context.Background(), o))
+	require.Zero(t, o.takeServed())
 }

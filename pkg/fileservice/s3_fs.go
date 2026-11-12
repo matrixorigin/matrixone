@@ -1498,6 +1498,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
 ) (done bool, err error) {
 	read := newFullObjectDiskCacheReader(vector)
+	defer func() { read.finish(done && err == nil) }()
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
@@ -1609,12 +1610,14 @@ type fullObjectDiskCacheReader struct {
 }
 
 type fullObjectEntryCapture struct {
-	index  int
-	offset int64
-	size   int64
-	data   bytes.Buffer
-	read   bool
-	served bool
+	index    int
+	offset   int64
+	size     int64
+	data     bytes.Buffer
+	read     bool
+	served   bool
+	download *objectDownload // held until the whole request succeeds or fails
+	toServe  int64
 }
 
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
@@ -1655,12 +1658,7 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 			if c.size >= 0 {
 				want = min(want, c.size)
 			}
-			if ok && want > 0 && !c.served {
-				// The bytes count before they are read, as readFromDownload counts them.
-				download.serve(want)
-				c.served = true
-			}
-			if want > 0 && !r.readRange(download, c, want) {
+			if want > 0 && !r.readRange(download, c, want, ok) {
 				all = false
 				continue
 			}
@@ -1671,15 +1669,44 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 	return all
 }
 
-func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64) bool {
+func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64, countRead bool) bool {
 	f, ok := download.acquire()
 	if !ok {
 		return false
 	}
-	defer download.release()
 	c.data.Reset()
-	_, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
-	return err == nil
+	read, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
+	if err != nil || read != n {
+		download.release()
+		return false
+	}
+	if countRead && !c.served {
+		// Hold one reader until fillVector's outcome is known. This keeps eviction
+		// accounting open without charging a capture that the request later rejects.
+		c.served = true
+		c.download = download
+		c.toServe = n
+	} else {
+		download.release()
+	}
+	return true
+}
+
+// finish releases capture holds and charges their bytes only when the complete
+// request succeeds. It is idempotent so cleanup can also run on early returns.
+func (r *fullObjectDiskCacheReader) finish(success bool) {
+	for i := range r.captures {
+		c := &r.captures[i]
+		if c.download == nil {
+			continue
+		}
+		if success && c.toServe > 0 {
+			c.download.serve(c.toServe)
+		}
+		c.download.release()
+		c.download = nil
+		c.toServe = 0
+	}
 }
 
 func (r *fullObjectDiskCacheReader) fillVector(

@@ -82,22 +82,37 @@ type groupUsage struct {
 
 // preloadUsage records the share of each whole-object disk-cache file that is read
 // before the file is evicted, and reports per group whether that share is low.
+type pendingPreloadRemoval struct {
+	path     string
+	size     int64
+	served   int64
+	group    uint64
+	hasGroup bool
+	skip     bool
+}
+
+// preloadUsage records the share of each whole-object disk-cache file that is read
+// before the file is evicted, and reports per group whether that share is low.
 type preloadUsage struct {
-	mu       sync.Mutex
-	served   map[string]int64 // cached whole-object file -> bytes read from it
-	deleting map[string]struct{}
-	objects  map[string]uint64 // whole-object file -> group of the narrow reads of it
-	groups   map[uint64]*groupUsage
-	now      func() time.Time
+	mu        sync.Mutex
+	served    map[string]int64 // cached whole-object file -> bytes read from it
+	deleting  map[string]struct{}
+	objects   map[string]uint64 // whole-object file -> group of the narrow reads of it
+	downloads map[string]*objectDownload
+	pending   map[*objectDownload]*pendingPreloadRemoval
+	groups    map[uint64]*groupUsage
+	now       func() time.Time
 }
 
 func newPreloadUsage() *preloadUsage {
 	return &preloadUsage{
-		served:   make(map[string]int64),
-		deleting: make(map[string]struct{}),
-		objects:  make(map[string]uint64),
-		groups:   make(map[uint64]*groupUsage),
-		now:      time.Now,
+		served:    make(map[string]int64),
+		deleting:  make(map[string]struct{}),
+		objects:   make(map[string]uint64),
+		downloads: make(map[string]*objectDownload),
+		pending:   make(map[*objectDownload]*pendingPreloadRemoval),
+		groups:    make(map[uint64]*groupUsage),
+		now:       time.Now,
 	}
 }
 
@@ -107,6 +122,12 @@ func isFullFileCachePath(diskPath string) bool {
 
 // cached starts tracking a whole-object file that entered the cache.
 func (p *preloadUsage) cached(diskPath string) {
+	p.cachedDownload(diskPath, nil)
+}
+
+// cachedDownload associates a cached file with its download generation. Credits
+// from an older download can then never be applied to a newer file at the same path.
+func (p *preloadUsage) cachedDownload(diskPath string, o *objectDownload) {
 	if p == nil {
 		return
 	}
@@ -115,6 +136,11 @@ func (p *preloadUsage) cached(diskPath string) {
 	}
 	p.mu.Lock()
 	p.served[diskPath] = 0
+	if o == nil {
+		delete(p.downloads, diskPath)
+	} else {
+		p.downloads[diskPath] = o
+	}
 	p.mu.Unlock()
 }
 
@@ -130,6 +156,24 @@ func (p *preloadUsage) read(diskPath string, n int64) {
 	p.mu.Unlock()
 }
 
+// readDownload adds bytes to the download generation that supplied them. Once
+// that generation is evicted, its pending record replaces the path-based entry
+// until its active readers finish.
+func (p *preloadUsage) readDownload(diskPath string, o *objectDownload, n int64) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if pending := p.pending[o]; pending != nil {
+		pending.served += n
+	} else if p.downloads[diskPath] == o {
+		if v, ok := p.served[diskPath]; ok {
+			p.served[diskPath] = v + n
+		}
+	}
+	p.mu.Unlock()
+}
+
 // deleted marks diskPath as leaving the cache by an explicit delete, not an eviction.
 func (p *preloadUsage) deleted(diskPath string) {
 	if p == nil {
@@ -138,29 +182,76 @@ func (p *preloadUsage) deleted(diskPath string) {
 	p.mu.Lock()
 	delete(p.served, diskPath)
 	delete(p.objects, diskPath)
+	delete(p.downloads, diskPath)
+	for _, pending := range p.pending {
+		if pending.path == diskPath {
+			pending.skip = true
+		}
+	}
 	p.deleting[diskPath] = struct{}{}
 	p.mu.Unlock()
 }
 
-// removed records diskPath of size bytes leaving the cache.
+// removed records diskPath of size bytes leaving the cache. A download with
+// active readers keeps a generation-owned pending record until they finish, so
+// their successful reads are included and failed reads are excluded.
 func (p *preloadUsage) removed(diskPath string, size int64) {
 	if p == nil {
 		return
 	}
+	o := p.prepareRemoval(diskPath, size)
+	if o != nil {
+		o.afterReads(func() { p.finishRemoval(o) })
+	}
+}
+
+// prepareRemoval detaches the current path generation. If it belongs to a
+// download, the returned object owns the deferred final sample.
+func (p *preloadUsage) prepareRemoval(diskPath string, size int64) *objectDownload {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.deleting[diskPath]; ok {
 		delete(p.deleting, diskPath)
-		return
+		return nil
 	}
 	served, ok := p.served[diskPath]
 	if !ok {
-		return
+		return nil
 	}
 	delete(p.served, diskPath)
-	group, ok := p.objects[diskPath]
+	group, hasGroup := p.objects[diskPath]
 	delete(p.objects, diskPath)
-	if !ok || size <= 0 {
+	o := p.downloads[diskPath]
+	delete(p.downloads, diskPath)
+	if o == nil {
+		if hasGroup {
+			p.recordRemoval(served, size, group)
+		}
+		return nil
+	}
+	if !hasGroup || size <= 0 {
+		return nil
+	}
+	p.pending[o] = &pendingPreloadRemoval{
+		path: diskPath, size: size, served: served, group: group, hasGroup: hasGroup,
+	}
+	return o
+}
+
+func (p *preloadUsage) finishRemoval(o *objectDownload) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pending := p.pending[o]
+	delete(p.pending, o)
+	if pending == nil || pending.skip || !pending.hasGroup {
+		return
+	}
+	p.recordRemoval(pending.served, pending.size, pending.group)
+}
+
+// recordRemoval records one final read-share sample; p.mu must be held.
+func (p *preloadUsage) recordRemoval(served, size int64, group uint64) {
+	if size <= 0 {
 		return
 	}
 	now := p.now()
