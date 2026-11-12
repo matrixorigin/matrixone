@@ -81,6 +81,7 @@ grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
 grant ownership on database protected_bvt_db to protected_bvt_writer;
 grant all on table protected_bvt_db.* to protected_bvt_writer with grant option;
+grant select on view protected_bvt_db.v1 to protected_bvt_writer;
 grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;

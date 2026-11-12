@@ -172,6 +172,9 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								return false, nil
 							}
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+							if entry.compound.perObjectCovers {
+								tempEntry.objType = mi.objType
+							}
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
 							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -192,10 +195,17 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								mi.clusterTableOperation, protectedDatabases)
 
 							if yes2 {
-								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, tempEntry, pls)
-								if err != nil {
-									return false, err
+								candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
+								for _, candidate := range candidates[:count] {
+									candidateEntry := tempEntry
+									candidateEntry.privilegeId = candidate
+									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, candidateEntry, pls)
+									if err != nil {
+										return false, err
+									}
+									if yes {
+										break
+									}
 								}
 							}
 						}

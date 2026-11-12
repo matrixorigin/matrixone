@@ -2437,6 +2437,25 @@ type privilegeItem struct {
 // compoundEntry is the entry has multi privilege items
 type compoundEntry struct {
 	items []privilegeItem
+	// Plan requirements must all be met; ALL and ownership cover only the
+	// individual object on which they were granted.
+	perObjectCovers bool
+}
+
+// planPrivilegeCandidates keeps covering grants local to the item being
+// checked. Non-plan compounds retain their existing exact-privilege semantics.
+func planPrivilegeCandidates(entry privilegeEntry, perObjectCovers bool) ([3]PrivilegeType, int) {
+	types := [3]PrivilegeType{entry.privilegeId}
+	n := 1
+	if perObjectCovers && (entry.objType == objectTypeTable || entry.objType == objectTypeView) {
+		for _, typ := range [...]PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+			if typ != entry.privilegeId {
+				types[n] = typ
+				n++
+			}
+		}
+	}
+	return types, n
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
@@ -7443,15 +7462,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	// NOTE: when the arr is nil, it denotes that there is no operation on the table.
 
-	type pair struct {
-		databaseName string
-		tableName    string
-	}
-
-	dedup := make(map[pair]int8)
-
 	// multi privileges take effect together
-	entries := make([]privilegeEntry, 0, len(arr))
 	multiPrivs := make([]privilegeItem, 0, len(arr))
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
@@ -7465,25 +7476,15 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 			isClusterTable:        tips.isClusterTable,
 			clusterTableOperation: tips.clusterTableOperation,
 		})
-
-		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
-
-	me := &compoundEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
-
-	// optional predefined privilege : tableAll, ownership
-	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
-	for _, p := range predefined {
-		for par := range dedup {
-			e := privilegeEntriesMap[p]
-			e.databaseName = par.databaseName
-			e.tableName = par.tableName
-			entries = append(entries, e)
-		}
+	if len(multiPrivs) == 0 {
+		priv.entries = nil
+		return
 	}
-
-	priv.entries = entries
+	priv.entries = []privilegeEntry{{
+		privilegeEntryTyp: privilegeEntryTypeCompound,
+		compound:          &compoundEntry{items: multiPrivs, perObjectCovers: true},
+	}}
 }
 
 // getSqlFromPrivilegeEntry generates the query sql for the privilege entry
@@ -7832,9 +7833,17 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									if !useCache {
 										cacheToUse = nil
 									}
-									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
-									if err != nil {
-										return false, 0, err
+									candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
+									for _, candidate := range candidates[:count] {
+										candidateEntry := tempEntry
+										candidateEntry.privilegeId = candidate
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, candidateEntry, pls, useCache)
+										if err != nil {
+											return false, 0, err
+										}
+										if yes {
+											break
+										}
 									}
 								}
 								if yes && matchedRoleID == 0 {
