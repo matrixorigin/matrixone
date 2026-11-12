@@ -47,7 +47,11 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		if t.Oid.IsMySQLString() {
 			hasString = true
 		}
-		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
+		// MySQL treats TRUE/FALSE as the integers 1/0, so BOOL counts as
+		// numeric here: a string value branch next to a BOOL branch resolves
+		// to a string result instead of casting the string to BOOL
+		// (issue #31294).
+		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() || t.Oid == types.T_bool {
 			hasNumeric = true
 		}
 		if hasString && hasNumeric {
@@ -154,7 +158,7 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
-	width := int32(0)
+	bound := stringResultBound{}
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
@@ -170,30 +174,17 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_varbinary:
 			hasBinary = true
 			sameFixedBinary = false
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
-			// Character widths count runes, while VARBINARY widths count bytes.
-			// Reserve the maximum utf8mb4 encoding size without exceeding the
-			// largest representable VARBINARY width.
-			byteWidth := int32(types.MaxVarBinaryLen)
-			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
-				byteWidth = typ.Width * utf8.UTFMax
-			}
-			if byteWidth > width {
-				width = byteWidth
-			}
 		default:
 			return types.Type{}, false
 		}
+		inputBound := declaredStringByteBound(typ)
+		bound.unknown = bound.unknown || inputBound.unknown
+		bound.bytes = max(bound.bytes, inputBound.bytes)
 	}
 	if !hasBinary {
 		return types.Type{}, false
@@ -201,7 +192,11 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
 	}
-	return types.New(types.T_varbinary, width, 0), true
+	// This is an expression bound, not a storage assignment capacity. Capping
+	// UTF-8 bytes at MaxVarBinaryLen would make the implicit branch CAST discard
+	// selected bytes before the real assignment owner can check them. Promote
+	// large/unknown bounds to BLOB; keep finite small results indexable.
+	return binaryStringResultType(bound), true
 }
 
 // MixedTextBinaryCommonType returns a binary common type only when a set
@@ -358,35 +353,6 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
-// caseVectorCommonType returns the complete vector result type when at least
-// one CASE value branch is a vector. Vector CASE branches deliberately use a
-// stricter contract than IF: every concrete value branch must have the same
-// vector OID and declared dimension. Untyped NULL branches are cast to the
-// selected vector type.
-func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
-	for i := range source {
-		if source[i].Oid.IsArray() {
-			retType = source[i]
-			hasVector = true
-			break
-		}
-	}
-	if !hasVector {
-		return types.Type{}, false, false
-	}
-
-	for i := range source {
-		if source[i].Oid == types.T_any {
-			continue
-		}
-		if !source[i].Oid.IsArray() ||
-			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
-			return types.Type{}, true, false
-		}
-	}
-	return retType, true, true
-}
-
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 // caseConditionFinalType returns the execution type for a searched CASE
 // condition slot. MySQL evaluates a JSON condition with conditional numeric
@@ -416,8 +382,8 @@ func isEnumToBoolCastFunctionId(id int32) bool {
 // legacyConditionalBooleanCheck reproduces the pre-contract IF/CASE condition
 // admission for native-mode statements (D11): JSON conditions reject, and an
 // ENUM/SET operand keeps the ordinary string/numeric typing base produced.
-// The bodies are byte-for-byte the pre-contract checkers; only their names
-// differ, so native-mode parity is constructional.
+// The condition admission is byte-for-byte the pre-contract checkers'; vector
+// value branches resolve through commonVectorType in both modes.
 func legacyConditionalBooleanCheck(id int32, _ []overload, inputs []types.Type) (checkResult, bool) {
 	switch id {
 	case IFF:
@@ -487,7 +453,7 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -676,7 +642,7 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -808,7 +774,15 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func caseCheck(_ []overload, inputs []types.Type) checkResult {
+func caseCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, caseValueArgument, caseCheckTypes)
+}
+
+func caseValueArgument(i, n int) bool {
+	return i%2 == 1 || (n%2 == 1 && i == n-1)
+}
+
+func caseCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
 	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
 	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
@@ -911,7 +885,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -1311,7 +1285,15 @@ var (
 	}
 )
 
-func iffCheck(_ []overload, inputs []types.Type) checkResult {
+func iffCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, iffValueArgument, iffCheckTypes)
+}
+
+func iffValueArgument(i, n int) bool {
+	return n == 3 && i > 0
+}
+
+func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
 		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
@@ -1372,7 +1354,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -1976,4 +1958,79 @@ func funcIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, le
 		}
 	}
 	return nil
+}
+
+// boolValueBranchesAsNumeric gives CASE/IF/COALESCE MySQL's numeric meaning
+// of TRUE/FALSE when BOOL value branches are mixed with numeric ones:
+// COALESCE(2, TRUE) is 2 and IF(c, 1.5e0, TRUE) is 1.5e0. BOOL has no
+// implicit cast to a number in fixedCanImplicitCastRule (on purpose, see
+// fixedTypeMatchWithBoolNumericCast), so the plain checkers picked BOOL as the
+// common type and turned every numeric branch into 0/1.
+//
+// The common type is resolved as if each BOOL value branch were BIGINT, or
+// DECIMAL(1,0) when a DECIMAL branch takes part: TRUE/FALSE only ever are
+// 1/0, a single integral digit, so a high-scale DECIMAL branch must not be
+// widened by the 19 digits a BIGINT stand-in would claim (DECIMAL(65,58)
+// mixed with TRUE would otherwise need 77 digits and fall off DECIMAL256).
+// The BOOL branches are then cast to the resolved type. Conditions are left
+// alone. If the BOOL branches cannot be cast to the chosen type, the original
+// resolution is kept; a mixture the numeric domains cannot resolve (e.g.
+// DECIMAL(76,76) with TRUE needs 77 digits) is an error, not a silent fold
+// back to BOOL.
+func boolValueBranchesAsNumeric(
+	overloads []overload,
+	inputs []types.Type,
+	isValue func(i, n int) bool,
+	check func([]overload, []types.Type) checkResult,
+) checkResult {
+	hasBool, hasNumeric, hasDecimal := false, false, false
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) {
+			continue
+		}
+		switch {
+		case input.Oid == types.T_bool:
+			hasBool = true
+		case input.Oid == types.T_any:
+		case input.IsNumeric() && input.Oid != types.T_bit:
+			hasNumeric = true
+			hasDecimal = hasDecimal || input.Oid.IsDecimal()
+		default:
+			return check(overloads, inputs)
+		}
+	}
+	if !hasBool || !hasNumeric {
+		return check(overloads, inputs)
+	}
+
+	replacement := types.T_int64.ToType()
+	if hasDecimal {
+		replacement = types.New(types.T_decimal64, 1, 0)
+	}
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if isValue(i, len(inputs)) && normalized[i].Oid == types.T_bool {
+			normalized[i] = replacement
+		}
+	}
+	matched := check(overloads, normalized)
+	var finalTypes []types.Type
+	switch matched.status {
+	case succeedMatched:
+		finalTypes = normalized
+	case succeedWithCast:
+		finalTypes = append([]types.Type(nil), matched.finalType...)
+	default:
+		return matched
+	}
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) || input.Oid != types.T_bool {
+			continue
+		}
+		if target := finalTypes[i]; !target.IsNumeric() || target.Oid == types.T_bit ||
+			!IfTypeCastSupported(types.T_bool, target.Oid) {
+			return check(overloads, inputs)
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
 }

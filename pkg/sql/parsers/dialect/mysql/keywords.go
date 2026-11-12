@@ -51,6 +51,7 @@ func init() {
 		"begin":                      BEGIN,
 		"between":                    BETWEEN,
 		"bigint":                     BIGINT,
+		"serial":                     SERIAL,
 		"bindings":                   BINDINGS,
 		"binary":                     BINARY,
 		"_binary":                    UNDERSCORE_BINARY,

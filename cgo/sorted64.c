@@ -70,6 +70,41 @@ static int mo_sorted64_cmp(const void *a, const void *b) {
   return (x > y) - (x < y);
 }
 
+uint64_t *mo_sorted64_create(size_t capacity) {
+  if (capacity > SIZE_MAX / sizeof(uint64_t) - 1) return NULL;
+  uint64_t *payload = malloc((capacity + 1) * sizeof(uint64_t));
+  if (payload) payload[0] = 0;
+  return payload;
+}
+
+bool mo_sorted64_add_fixed(uint64_t *payload, size_t capacity,
+                           const void *key, size_t len, size_t elemsz,
+                           size_t nitem, const void *nullmap, size_t nullmaplen) {
+  if (!payload || (elemsz != 1 && elemsz != 2 && elemsz != 4 && elemsz != 8) ||
+      nitem > len / elemsz || (nitem && !key) || payload[0] > capacity ||
+      nitem > capacity - payload[0] ||
+      (nullmap && nitem && (nitem - 1) / 8 >= nullmaplen)) return false;
+  const uint8_t *data = key;
+  size_t count = payload[0];
+  for (size_t i = 0; i < nitem; i++) {
+    if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
+    payload[1 + count++] = mo_sorted64_decode_le(data + i * elemsz, elemsz);
+  }
+  payload[0] = count;
+  return true;
+}
+
+void mo_sorted64_finalize(uint64_t *payload) {
+  if (!payload) return;
+  uint64_t *values = payload + 1;
+  size_t count = payload[0], unique = 0;
+  qsort(values, count, sizeof(uint64_t), mo_sorted64_cmp);
+  for (size_t i = 0; i < count; i++) {
+    if (unique == 0 || values[unique - 1] != values[i]) values[unique++] = values[i];
+  }
+  payload[0] = unique;
+}
+
 uint64_t *mo_sorted64_build_fixed(const void *key, size_t len, size_t elemsz,
                                   size_t nitem, const void *nullmap,
                                   size_t nullmaplen) {

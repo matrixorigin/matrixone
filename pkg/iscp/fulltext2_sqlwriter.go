@@ -75,6 +75,39 @@ type Fulltext2SqlWriter struct {
 	cdc   *fulltext2.Cdc
 	ndata int
 	last  string
+
+	// ignored records the rows whose text the index cannot read; nil without an ignored table.
+	ignored *ignoredRows
+	pkTyp   *types.Type
+}
+
+func (w *Fulltext2SqlWriter) setIgnored(g *ignoredRows) {
+	w.ignored = g
+}
+
+// ignoredKey returns pk, a native primary key, as the ignored rows key it.
+func (w *Fulltext2SqlWriter) ignoredKey(pk any) any {
+	return sqlStringRepr(pk, w.pkTyp)
+}
+
+// leaveOut records that the index cannot store the row with key pk because of err, and reports
+// whether it does; an error that is no such reason, or an index without an ignored table, is
+// returned.
+func (w *Fulltext2SqlWriter) leaveOut(pk any, err error) (bool, error) {
+	if w.ignored == nil {
+		return false, err
+	}
+	if _, ok := vectorindex.UnstorableCode(err); !ok {
+		return false, err
+	}
+	return true, w.ignored.ignore(w.ignoredKey(pk), err)
+}
+
+// indexed records that the row with key pk is in the index or no longer exists.
+func (w *Fulltext2SqlWriter) indexed(pk any) {
+	if w.ignored != nil {
+		w.ignored.indexed(w.ignoredKey(pk))
+	}
 }
 
 // datalinkText resolves a datalink column to its file's plain text (PDF/DOCX extracted),
@@ -232,6 +265,7 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 			JSONNoKeys: flat[catalog.IndexAlgoParamJSONIncludeKeys] == "false",
 		},
 		pkType:       int32(pkTyp.Id),
+		pkTyp:        &types.Type{Oid: types.T(pkTyp.Id), Width: pkTyp.Width, Scale: pkTyp.Scale},
 		pkPos:        pkPos,
 		textPos:      textPos,
 		textTypes:    textTypes,
@@ -274,8 +308,10 @@ func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_INSERT
 	text, err := w.rowText(ctx, row)
 	if err != nil {
+		_, err = w.leaveOut(row[w.pkPos], err)
 		return err
 	}
+	w.indexed(row[w.pkPos])
 	pk := ftCopyPk(row[w.pkPos])
 	inc := w.rowInclude(row)
 	w.cdc.Insert(pk, text, inc)
@@ -290,8 +326,16 @@ func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_UPSERT
 	text, err := w.rowText(ctx, row)
 	if err != nil {
+		left, err := w.leaveOut(row[w.pkPos], err)
+		if left {
+			// the version the index holds goes
+			pk := ftCopyPk(row[w.pkPos])
+			w.cdc.Delete(pk)
+			w.ndata += ftAnyBytes(pk) + 16
+		}
 		return err
 	}
+	w.indexed(row[w.pkPos])
 	pk := ftCopyPk(row[w.pkPos])
 	inc := w.rowInclude(row)
 	w.cdc.Upsert(pk, text, inc)
@@ -302,6 +346,7 @@ func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 	// a delete row carries only the pk in position 0 (mirrors HnswSqlWriter).
 	w.last = vectorindex.CDC_DELETE
+	w.indexed(row[0])
 	pk := ftCopyPk(row[0])
 	w.cdc.Delete(pk)
 	w.ndata += ftAnyBytes(pk) + 16
@@ -359,7 +404,7 @@ func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, er
 			}
 			ts, err := fulltext2.JSONTupleColumn(row[pos], opt)
 			if err != nil {
-				return "", err
+				return "", fulltext2.JSONError(err)
 			}
 			terms = append(terms, ts...)
 		}
@@ -387,16 +432,17 @@ func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, er
 				ft, err = fulltext2.FlattenJSONColumn(row[pos])
 			}
 			if err != nil {
-				return "", err
+				return "", fulltext2.JSONError(err)
 			}
 			b.Write(ft)
 		} else if types.T(w.textTypes[i]) == types.T_datalink {
 			// Resolve the datalink to its file CONTENT (parity with the sync build). Any
 			// resolution error is propagated so the CDC iteration retries (see datalinkText);
 			// with no resolver attached (unit tests) it indexes the URL string.
-			dt, err := w.datalinkText(ctx, ftRowText(row[pos]))
+			url := ftRowText(row[pos])
+			dt, err := w.datalinkText(ctx, url)
 			if err != nil {
-				return "", err
+				return "", fulltext2.DatalinkError(url, err)
 			}
 			b.Write(dt)
 		} else {

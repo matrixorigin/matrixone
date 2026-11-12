@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
@@ -34,6 +35,21 @@ import (
 var _ catalogplugin.Hooks = CatalogHooks{}
 
 type CatalogHooks struct{}
+
+// MaintenanceOperands projects config fields onto the relations HNSW consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.Hnsw_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.Hnsw_TblType_Storage, Name: cfg.IndexTable},
+	}
+	if cfg.DictTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.Hnsw_TblType_Dict, Name: cfg.DictTable})
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
 
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{

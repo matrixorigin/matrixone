@@ -135,8 +135,9 @@ func (c *subscriptionMetadataTestContext) DatabaseExists(
 func (c *subscriptionMetadataTestContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if strings.EqualFold(databaseName, INFORMATION_SCHEMA) &&
 		strings.EqualFold(tableName, informationSchemaStatistics) {
 		obj, tableDef := subscriptionStatisticsTestView()
@@ -144,9 +145,9 @@ func (c *subscriptionMetadataTestContext) Resolve(
 	}
 	subscription := c.subscriptionFor(databaseName)
 	if subscription == nil {
-		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot)
+		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 	}
-	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot)
+	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot, nil)
 	if err != nil || tableDef == nil {
 		return obj, tableDef, err
 	}
@@ -197,7 +198,7 @@ type subscriptionMetadataTestOptimizer struct {
 }
 
 func (o subscriptionMetadataTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	built, err := BuildPlan(o.ctx, stmt, false)
+	built, err := BuildPlan(o.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +438,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	queryPlan, err := BuildPlan(ctx, statements[0], true)
+	queryPlan, err := BuildPlan(ctx, statements[0], true, nil)
 	require.NoError(t, err)
 	require.True(t, PreparedPlanDependsOnSubscriptionMetadata(queryPlan))
 	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
@@ -594,7 +595,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount)
 		require.Nil(t, ctx.GetQueryingSubscription())
@@ -627,7 +628,7 @@ func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
 	defer statements[0].Free()
 
 	for build := 0; build < 2; build++ {
-		queryPlan, buildErr := BuildPlan(ctx, statements[0], false)
+		queryPlan, buildErr := BuildPlan(ctx, statements[0], false, nil)
 		require.NoError(t, buildErr)
 		require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), 129)
 		require.Nil(t, ctx.GetQueryingSubscription())
@@ -647,7 +648,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
-		plan, err := BuildPlan(ctx, statements[0], false)
+		plan, err := BuildPlan(ctx, statements[0], false, nil)
 		return plan, err, ctx
 	}
 
@@ -794,7 +795,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Zero(t, ctx.publisherBindCount,
 			"admission must reject the occurrence before binding any publisher view")
@@ -815,7 +816,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
 		require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount,
 			"the fifth occurrence must fail admission before binding another publisher view")
@@ -838,7 +839,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		canceledCtx, cancel := context.WithCancelCause(context.Background())
 		cancel(wantErr)
 		ctx.SetContext(canceledCtx)
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, wantErr)
 		require.Zero(t, ctx.metadataCalls,
 			"pre-canceled planning must stop before subscription enumeration")
@@ -859,7 +860,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		ctx.SetContext(planningCtx)
 		ctx.cancelPublisherBind = 1
 		ctx.cancelPlanning = cancel
-		_, err = BuildPlan(ctx, statements[0], false)
+		_, err = BuildPlan(ctx, statements[0], false, nil)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, 1, ctx.publisherBindCount,
 			"the loop must observe cancellation before binding the next publisher view")
@@ -903,7 +904,7 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 					if len(statements) != 1 {
 						b.Fatalf("expected one statement, got %d", len(statements))
 					}
-					_, err = BuildPlan(ctx, statements[0], false)
+					_, err = BuildPlan(ctx, statements[0], false, nil)
 					statements[0].Free()
 					if err != nil {
 						b.Fatal(err)

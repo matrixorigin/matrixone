@@ -158,7 +158,7 @@ type PushClient struct {
 	}
 	// pauseC is the channel used to control whether the receiver is paused.
 	pauseC  chan bool
-	resumeC chan struct{}
+	resumeC chan chan struct{}
 
 	consumeErrC chan error
 	receiver    []*routineController
@@ -445,7 +445,7 @@ func (c *PushClient) init(
 		c.receiver = make([]*routineController, consumerNumber)
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
-		c.resumeC = make(chan struct{})
+		c.resumeC = make(chan chan struct{})
 	}
 	c.initialized = true
 
@@ -816,14 +816,26 @@ func (c *PushClient) pause(s bool) {
 	}
 }
 
-func (c *PushClient) resume() {
+// resume waits until the receiver has accepted this recovery. The connector is
+// the only caller; a wakeup must not be lost before the receiver starts waiting.
+func (c *PushClient) resume(ctx context.Context) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	paused := c.mu.paused
+	c.mu.Unlock()
+	if !paused {
+		return ctx.Err() == nil
+	}
+	ack := make(chan struct{})
 	select {
-	case c.resumeC <- struct{}{}:
-		c.mu.paused = false
-	default:
-		logutil.Info("logtail.consumer.not.in.pause.state")
+	case c.resumeC <- ack:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-ack:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -934,7 +946,11 @@ func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-c.resumeC:
+		case ack := <-c.resumeC:
+			c.mu.Lock()
+			c.mu.paused = false
+			c.mu.Unlock()
+			close(ack)
 			return true
 		case <-firstReplayDone:
 			// First-connect retries own recovery until replay completes. After
@@ -1086,89 +1102,78 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	if err != nil {
 		return err
 	}
-	defer func() {
-		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeoutCause(ctx, e.Hints().CommitOrRollbackTimeout, moerr.CauseReplayCatalogCache)
-		defer cancel()
-		if err != nil {
-			_ = op.Rollback(ctx2)
-		} else {
-			_ = op.Commit(ctx2)
-		}
-	}()
+	defer func() { finishReplayTransaction(ctx, e.Hints().CommitOrRollbackTimeout, op, err) }()
 	err = e.New(ctx, op)
 	if err != nil {
 		return err
 	}
 
-	// read databases
-	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
-	if err != nil {
-		return err
-	}
 	rowCntF := func(bat []*batch.Batch) string {
 		return stringifySlice(bat, func(b any) string {
+			if b.(*batch.Batch) == nil {
+				return "nil"
+			}
 			return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
 		})
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCntF(result.Batches))
-	defer result.Close()
-	for _, b := range result.Batches {
-		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+	readStage := func(query string, insert func(*batch.Batch)) error {
+		result, err := execReadSql(ctx, op, query, true)
+		if err != nil {
 			return err
 		}
-		ccache.InsertDatabase(b)
+		defer result.Close()
+		logutil.Infof("FIND_TABLE read catalog %v rows", rowCntF(result.Batches))
+		for _, b := range result.Batches {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+				return err
+			}
+			insert(b)
+		}
+		return nil
 	}
-
-	// read tables
-	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery, true)
-	if err != nil {
+	if err = readStage(catalog.MoDatabaseBatchQuery, ccache.InsertDatabase); err != nil {
 		return err
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCntF(result.Batches))
-	defer result.Close()
-	for _, b := range result.Batches {
-		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
-			return err
-		}
+	if err = readStage(catalog.MoTablesBatchQuery, func(b *batch.Batch) {
 		e.tryAdjustSysTablesCreatedTimeWithBatch(b)
 		ccache.InsertTable(b)
+	}); err != nil {
+		return err
 	}
-
-	// read columns
 	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery, true)
 	if err != nil {
 		return err
 	}
-	defer result.Close()
 	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCntF(result.Batches))
-
-	if isColumnsBatchPerfectlySplitted(result.Batches) {
-		for _, b := range result.Batches {
-			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
-				return err
-			}
-			ccache.InsertColumns(b)
-		}
-	} else {
-		logutil.Info("FIND_TABLE merge mo_columns results")
-		bat := result.Batches[0]
-		for _, b := range result.Batches[1:] {
-			bat, err = bat.Append(ctx, result.Mp, b)
-			if err != nil {
-				return err
-			}
-		}
-		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
-			return err
-		}
-		ccache.InsertColumns(bat)
+	if err = consumeReplayColumns(ctx, result.Batches, result.Mp, typeTs, ccache.InsertColumns); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
 	}
 
 	ccache.UpdateDuration(typeTs, types.MaxTs())
 	c.dcaConfirmAndApply()
 	return nil
 
+}
+
+func finishReplayTransaction(ctx context.Context, timeout time.Duration, op client.TxnOperator, replayErr error) {
+	if replayErr != nil {
+		// Rollback must still be able to reach the transaction service when
+		// replay failed because its context was canceled.
+		ctx = context.WithoutCancel(ctx)
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseReplayCatalogCache)
+	defer cancel()
+	if replayErr != nil {
+		_ = op.Rollback(ctx)
+	} else {
+		_ = op.Commit(ctx)
+	}
 }
 
 func (c *PushClient) connect(ctx context.Context, e *Engine) {
@@ -1197,7 +1202,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 					continue
 				}
 
-				c.resume()
+				if !c.resume(ctx) {
+					return
+				}
 				continue
 			}
 			if err := c.waitTimestamp(ctx); err != nil {
@@ -1257,7 +1264,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		// After init, start up again.
 		c.startConsumers(ctx, e)
 
-		c.resume()
+		if !c.resume(ctx) {
+			return
+		}
 
 		c.dcaReset()
 		err = c.subSysTables(ctx)
@@ -2225,6 +2234,15 @@ func (s *logTailSubscriber) client() *service.LogtailClient {
 	client := s.logTailClient
 	s.mu.RUnlock()
 	return client
+}
+
+// tryClient lets optional observations decline while transport state changes.
+func (s *logTailSubscriber) tryClient() *service.LogtailClient {
+	if !s.mu.TryRLock() {
+		return nil
+	}
+	defer s.mu.RUnlock()
+	return s.logTailClient
 }
 
 func (s *logTailSubscriber) closeClient() error {

@@ -1152,6 +1152,31 @@ func (g *ExecutionResourceGeneration) Used() uint64 {
 	return g.used
 }
 
+// AvailableMemory observes the smaller remaining query and CN allowances in
+// one snapshot. It is a planning hint, not a reservation: actual allocations
+// must still be admitted against the live budget.
+func (g *ExecutionResourceGeneration) AvailableMemory() (uint64, error) {
+	if g == nil || g.budget == nil {
+		return 0, ErrExecutionResourceInvalid
+	}
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if g.closed || b.closed {
+		return 0, ErrExecutionResourceClosed
+	}
+	if g.used > g.cap {
+		return 0, ErrExecutionResourceInvalid
+	}
+	// The live CN ceiling can shrink below already admitted allocations.
+	// This is ordinary capacity pressure; existing leases remain valid and no
+	// additional parallel admission is possible until usage falls below it.
+	if b.aggregateUsed >= b.aggregateCap {
+		return 0, nil
+	}
+	return min(g.cap-g.used, b.aggregateCap-b.aggregateUsed), nil
+}
+
 // Peak reports the maximum physically owned bytes observed by this
 // generation. It is observational only; admission and release remain owned by
 // AllocationAccount-backed MPool allocations.
@@ -1339,6 +1364,45 @@ func (g *ExecutionResourceGeneration) ReserveTransientMemory(
 	}, nil
 }
 
+// TransientMemoryAdmissionGuard serializes a transient-memory decision with
+// an owner's terminal state. ResolveAdmissionFailure runs with the guard held
+// and the budget unlocked; it must not acquire the guard, sample a provider,
+// or release resources. stopped is the state of done at the decision point.
+type TransientMemoryAdmissionGuard interface {
+	Lock()
+	Unlock()
+	ResolveAdmissionFailure(err error, stopped bool) error
+}
+
+func resolveTransientAdmissionFailure(guard TransientMemoryAdmissionGuard, err error, stopped bool) error {
+	if resolved := guard.ResolveAdmissionFailure(err, stopped); resolved != nil {
+		return resolved
+	}
+	// A rejection must never become an uncharged successful reservation.
+	return err
+}
+
+// ReserveTransientMemoryGuarded uses the ordinary query/CN budget while
+// ordering a final rejection against the owner's terminal state. Provider and
+// headroom sampling never run under the guard. A successful token has exactly
+// the same owner and release contract as ReserveTransientMemory.
+func (g *ExecutionResourceGeneration) ReserveTransientMemoryGuarded(
+	size uint64, done <-chan struct{}, guard TransientMemoryAdmissionGuard,
+) (*ExecutionTransientMemoryReservation, error) {
+	if guard == nil {
+		return nil, ErrExecutionResourceInvalid
+	}
+	if size == 0 {
+		return &ExecutionTransientMemoryReservation{}, nil
+	}
+	if err := g.acquireMemoryWithClass(size, false, done, guard); err != nil {
+		return nil, err
+	}
+	return &ExecutionTransientMemoryReservation{
+		budget: g.budget, generation: g, size: size,
+	}, nil
+}
+
 func (r *ExecutionTransientMemoryReservation) Release() bool {
 	if r == nil || r.budget == nil || r.generation == nil || r.size == 0 ||
 		!r.state.CompareAndSwap(0, 1) {
@@ -1363,11 +1427,11 @@ func (r *ExecutionTransientMemoryReservation) Release() bool {
 // is the only owner of the charge and releases it from MPool.Free; there is no
 // parallel estimate/reservation token.
 func (g *ExecutionResourceGeneration) acquireMemory(size uint64) error {
-	return g.acquireMemoryWithClass(size, false)
+	return g.acquireMemoryWithClass(size, false, nil, nil)
 }
 
 func (g *ExecutionResourceGeneration) acquireRecoveryCapacity(size uint64) error {
-	err := g.acquireMemoryWithClass(size, true)
+	err := g.acquireMemoryWithClass(size, true, nil, nil)
 	if err == nil && size != 0 {
 		observeExecutionResourceBudget("recovery_memory", "reserve", "query", size)
 		observeExecutionResourceBudget("recovery_memory", "reserve", "cn", size)
@@ -1378,35 +1442,81 @@ func (g *ExecutionResourceGeneration) acquireRecoveryCapacity(size uint64) error
 func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 	size uint64,
 	recoveryReserve bool,
+	done <-chan struct{},
+	guard TransientMemoryAdmissionGuard,
 ) error {
+	stopped := func() bool {
+		if guard == nil {
+			return false
+		}
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 	if g == nil || g.budget == nil {
-		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "nil execution resource generation"}
+		err := &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "nil execution resource generation"}
+		if guard == nil {
+			return err
+		}
+		guard.Lock()
+		defer guard.Unlock()
+		return resolveTransientAdmissionFailure(guard, err, stopped())
 	}
 	b := g.budget
+	lock := func() {
+		if guard != nil {
+			guard.Lock()
+		}
+		b.mu.Lock()
+	}
+	unlock := func() {
+		b.mu.Unlock()
+		if guard != nil {
+			guard.Unlock()
+		}
+	}
+	reject := func(err error, wasStopped bool) error {
+		b.mu.Unlock()
+		if guard == nil {
+			return err
+		}
+		defer guard.Unlock()
+		return resolveTransientAdmissionFailure(guard, err, wasStopped)
+	}
+	resolveRefreshError := func(err error) error {
+		if guard == nil {
+			return err
+		}
+		lock()
+		return reject(err, stopped())
+	}
 	// A closed budget/generation has a deterministic lifecycle result and does
 	// not need to touch the live provider.
-	b.mu.Lock()
+	lock()
 	if b.closed || g.closed {
+		wasStopped := stopped()
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "query", size)
 		err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
-		b.mu.Unlock()
-		return err
+		return reject(err, wasStopped)
 	}
 	if b.memoryHeadroomRefreshNeededLocked() {
-		b.mu.Unlock()
+		unlock()
 		// The sampler records aggregateUsed at the same boundary; every acquire
 		// below consumes from that cached physical headroom as well as the static
 		// query/CN ceilings. Recovery-class physical allocations borrow a floor
 		// which was admitted here earlier and therefore do not pay twice.
 		_, _ = b.sampleMemoryHeadroom()
-		b.mu.Lock()
+		lock()
 		if b.closed || g.closed {
+			wasStopped := stopped()
 			g.rejectCount++
 			observeExecutionResourceBudget("memory", "reject", "query", size)
 			err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
-			b.mu.Unlock()
-			return err
+			return reject(err, wasStopped)
 		}
 	}
 
@@ -1416,15 +1526,18 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 	_, epoch, hasProvider, cached, err := b.aggregateCapRefreshDecisionLocked(false, 0)
 	if cached {
 		if err != nil {
-			b.mu.Unlock()
-			return err
+			return reject(err, stopped())
 		}
+		wasStopped := stopped()
 		firstErr, aggregateRejected := g.acquireMemoryLocked(
 			size,
 			false,
 			recoveryReserve,
 		)
-		b.mu.Unlock()
+		if firstErr != nil && !aggregateRejected {
+			return reject(firstErr, wasStopped)
+		}
+		unlock()
 		if firstErr == nil && !aggregateRejected {
 			observeExecutionResourceBudget("memory", "reserve", "query", size)
 			observeExecutionResourceBudget("memory", "reserve", "cn", size)
@@ -1433,22 +1546,26 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 			return firstErr
 		}
 	} else {
-		b.mu.Unlock()
+		unlock()
 		// The provider is sampled once on first use and then shared by all
 		// reservations until the TTL expires. refreshAggregateCap serializes
 		// only the sampling itself.
 		var refreshed bool
 		epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
 		if err != nil {
-			return err
+			return resolveRefreshError(err)
 		}
-		b.mu.Lock()
+		lock()
+		wasStopped := stopped()
 		firstErr, aggregateRejected := g.acquireMemoryLocked(
 			size,
 			false,
 			recoveryReserve,
 		)
-		b.mu.Unlock()
+		if firstErr != nil && !aggregateRejected {
+			return reject(firstErr, wasStopped)
+		}
+		unlock()
 		if firstErr == nil && !aggregateRejected {
 			observeExecutionResourceBudget("memory", "reserve", "query", size)
 			observeExecutionResourceBudget("memory", "reserve", "cn", size)
@@ -1466,25 +1583,24 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 	// The epoch check turns concurrent retries into a single-flight operation.
 	if hasProvider {
 		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
-			return err
+			return resolveRefreshError(err)
 		}
 	}
 
-	b.mu.Lock()
-	err, aggregateRejected := g.acquireMemoryLocked(
+	lock()
+	wasStopped := stopped()
+	err, _ = g.acquireMemoryLocked(
 		size,
 		true,
 		recoveryReserve,
 	)
-	b.mu.Unlock()
-	if err == nil && !aggregateRejected {
-		observeExecutionResourceBudget("memory", "reserve", "query", size)
-		observeExecutionResourceBudget("memory", "reserve", "cn", size)
+	if err != nil {
+		return reject(err, wasStopped)
 	}
-	if aggregateRejected {
-		return err
-	}
-	return err
+	unlock()
+	observeExecutionResourceBudget("memory", "reserve", "query", size)
+	observeExecutionResourceBudget("memory", "reserve", "cn", size)
+	return nil
 }
 
 // acquireMemoryLocked attempts one physical-memory admission. b.mu must be
@@ -2109,4 +2225,12 @@ func (proc *Process) automaticSpillDiskAvailable() uint64 {
 		return 0
 	}
 	return available
+}
+
+// OpenIndependentGeneration opens an independently closed owner on the same CN ledger.
+func (g *ExecutionResourceGeneration) OpenIndependentGeneration() (*ExecutionResourceGeneration, error) {
+	if g == nil || g.budget == nil || g.Closed() {
+		return nil, ErrExecutionResourceClosed
+	}
+	return g.budget.openProcessGeneration(executionResourceGenerationSequence.Add(1), g.Cap(), g.SpillDiskCap())
 }

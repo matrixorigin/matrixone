@@ -604,6 +604,11 @@ func (parser *CSVParser) maxRecordSize() int64 {
 	return int64(config.LargestEntryLimit)
 }
 
+// MaxRecordSize returns the effective per-record size limit.
+func (parser *CSVParser) MaxRecordSize() int64 {
+	return parser.maxRecordSize()
+}
+
 // recordSizeLimitError reports a record whose accumulated raw content passed
 // the parser's single-record bound. It is deliberately NOT a syntax error
 // (see IsSyntaxError): tolerant loading must fail loudly rather than skip an

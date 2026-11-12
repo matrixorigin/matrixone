@@ -830,7 +830,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		}
 		require.False(t, ctx.DatabaseExists("BINDING_DB", nil))
 		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
-		_, _, err := ctx.Resolve("BINDING_DB", "BINDING_TABLE", nil)
+		_, _, err := ctx.Resolve("BINDING_DB", "BINDING_TABLE", nil, nil)
 		require.ErrorIs(t, err, expected)
 		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
 		_, _, err = ctx.ResolveById(13, nil)
@@ -852,7 +852,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		originalTop := proc.GetTopContext()
 		require.False(t, ctx.DatabaseExists("db", nil))
 		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
-		_, _, err := ctx.Resolve("db", "table", nil)
+		_, _, err := ctx.Resolve("db", "table", nil, nil)
 		require.ErrorIs(t, err, expected)
 		require.Equal(t, originalTop, proc.GetTopContext())
 		storage.EXPECT().GetNameById(gomock.Any(), gomock.Any(), uint64(19)).Return("", "", expected)
@@ -874,7 +874,7 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 				"sub": {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
 			},
 		}
-		_, _, err := ctx.Resolve("sub", "table", nil)
+		_, _, err := ctx.Resolve("sub", "table", nil, nil)
 		var unavailable *viewRefreshDependencyUnavailableError
 		require.ErrorAs(t, err, &unavailable)
 	})

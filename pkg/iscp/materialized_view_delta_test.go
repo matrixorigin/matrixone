@@ -434,7 +434,7 @@ func TestMaterializedViewDeltaTransportAvoidsUserSignColumns(t *testing.T) {
 		// column even when every token and identifier is individually valid.
 		statement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctes[i]+" SELECT * FROM "+table, 1)
 		require.NoError(t, err)
-		_, err = planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, nil), statement, false)
+		_, err = planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, nil), statement, false, nil)
 		statement.Free()
 		require.NoError(t, err, ctes[i])
 	}

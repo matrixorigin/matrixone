@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -33,15 +34,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 const (
-	UnsupportedIndexCondition = 0
-	EqualIndexCondition       = 1
-	NonEqualIndexCondition    = 2
-	SpatialIndexCondition     = 3
-	RangeIndexCondition       = 4
+	UnsupportedIndexCondition    = 0
+	EqualIndexCondition          = 1
+	NonEqualIndexCondition       = 2
+	SpatialIndexCondition        = 3
+	RangeIndexCondition          = 4
+	CompositeRangeIndexCondition = 5
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -515,8 +518,6 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 	if builder.isViewSchemaMemoScan(nodeID) {
 		return nodeID, nil
 	}
-	var err error
-
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
 		return nodeID, nil
 	}
@@ -529,10 +530,11 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 			!scanHasFullTextBooleanComposition(builder.qry.Nodes[childID]) {
 			continue
 		}
-		node.Children[i], err = builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
+		rewritten, err := builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
 		if err != nil {
 			return -1, err
 		}
+		node.Children[i] = rewritten
 	}
 	if err := builder.rewriteFullTextBooleanConsumers(node); err != nil {
 		return -1, err
@@ -544,7 +546,9 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 		if scanHasFullTextBooleanComposition(node) {
 			return builder.applyFullTextBooleanComposition(nodeID, node, idxColMap)
 		}
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
+		// createQuery has finished its last leaf-statistics pass. Early vector
+		// and copied fulltext scans use the conservative wrapper instead.
+		return builder.applyIndicesForFiltersAtPhase(nodeID, node, colRefCnt, idxColMap, true)
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
@@ -710,16 +714,21 @@ func joinCanConsumeIndexHints(node *plan.Node) bool {
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForFiltersAtPhase(nodeID, node, colRefCnt, idxColMap, false)
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersAtPhase(nodeID int32, node *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, lateBaseStatsFinalized bool) (int32, error) {
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.scanHasMatchedFullTextFilter(node) {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.isScanProtected(node.NodeId) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	// 1. Master Index Check
@@ -775,7 +784,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				}
 			}
 			if isAllFilterColumnsIncluded {
-				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node, indexDef)
+				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node, indexDef), nil
 			}
 		}
 
@@ -783,7 +792,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 END0:
 	// 2. Regular Index Check
 	{
-		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForFiltersRegularIndexAtPhase(nodeID, node, colRefCnt, idxColMap, lateBaseStatsFinalized)
 	}
 }
 
@@ -1230,7 +1239,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	return containsVolatileFunctionImpl(expr, false)
 }
 
-func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bool) bool {
+func containsVolatileFunctionImpl(expr *plan.Expr, allowCandidateAccessIntegerPolicy bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -1244,7 +1253,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
 		stablePolicy := false
-		if ok && allowTemporalIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
+		if ok && allowCandidateAccessIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
 			unstable, known := function.GetFunctionValueUnstableByID(exprImpl.F.Func.Obj)
 			stablePolicy = known && !unstable && !overload.HasRowScopedDiagnostics() && !overload.IsRealTimeRelated()
 		}
@@ -1252,7 +1261,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if containsVolatileFunctionImpl(arg, allowTemporalIntegerPolicy) {
+			if containsVolatileFunctionImpl(arg, allowCandidateAccessIntegerPolicy) {
 				return true
 			}
 		}
@@ -1261,7 +1270,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if containsVolatileFunctionImpl(item, allowTemporalIntegerPolicy) {
+			if containsVolatileFunctionImpl(item, allowCandidateAccessIntegerPolicy) {
 				return true
 			}
 		}
@@ -1553,6 +1562,27 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 	if node != nil && indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, false, nil
 	}
+	// Group/order hint processing runs before ordinary index selection. Reuse
+	// its serialized range access here instead of reducing the range to a
+	// decoded residual over the whole covering index. A different driving
+	// predicate must not expose errors on rows the decoded filters would skip.
+	if usableRegularHintIndex(idxDef) && node != nil && node.Stats != nil && node.TableDef != nil &&
+		hintedIndexContainsQualifyingRows(idxDef, node) && regularIndexFiltersHaveStableEvaluation(node) {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		if match, _ := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); match != nil && match.filterType != EqualIndexCondition {
+			scanSnapshot := node.ScanSnapshot
+			if scanSnapshot == nil {
+				scanSnapshot = &Snapshot{}
+			}
+			idxNodeID, err := builder.applyRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+			if err != nil {
+				return -1, -1, false, err
+			}
+			if idxNodeID != -1 {
+				return idxNodeID, idxNodeID, true, nil
+			}
+		}
+	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, -1, false, err
@@ -1580,7 +1610,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		return -1, -1, nil
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot, nil)
 	if err != nil {
 		return -1, -1, err
 	}
@@ -1656,7 +1686,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		snapshot = &Snapshot{}
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot, nil)
 	if err != nil {
 		return -1, err
 	}
@@ -1824,7 +1854,11 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 // storage metadata are proven to share the logical SQL ordering. Scalar float
 // encoding has an identity order over NaN payloads, while SQL makes all NaNs
 // peers and keeps them last in both directions, so encoded ordering cannot
-// replace the logical sort or drive early truncation.
+// replace the logical sort or drive early truncation. Case-insensitive
+// collations compare folded collation weights, while serialized hidden keys
+// and block zonemaps keep raw bytes: 'b' sorts before 'C' under
+// utf8mb4_general_ci although byte 0x62 > 0x43, so the physical order cannot
+// replace the logical sort or drive byte-threshold pruning there either.
 func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 	for _, expr := range orderExprs {
 		if expr == nil {
@@ -1832,6 +1866,9 @@ func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 		}
 		switch types.T(expr.Typ.Id) {
 		case types.T_float32, types.T_float64:
+			return false
+		}
+		if types.IsCaseInsensitiveCollation(uint8(expr.Typ.Charset)) {
 			return false
 		}
 	}
@@ -2353,6 +2390,7 @@ type regularIndexAccessCandidate struct {
 	leadingEqual       bool
 	residualLeadingPos []int32
 	work               float64
+	observation        *indexCostObservation
 }
 
 // hasPrimaryKeyEquality proves equality on every distinct PK component using
@@ -2395,9 +2433,13 @@ func hasPrimaryKeyEquality(node *plan.Node) bool {
 	return true
 }
 
-func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForFiltersRegularIndexAtPhase(nodeID, node, colRefCnt, idxColMap, false)
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, lateBaseStatsFinalized bool) (int32, error) {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
@@ -2405,7 +2447,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 		// A real, physically ordered full PK is already a point lookup.
 		// Do not build or score partial secondary candidates for a singleton.
-		return nodeID
+		return nodeID, nil
 	}
 	builder.addFunctionalIndexFilters(node)
 
@@ -2456,7 +2498,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	indexes = builder.filterRegularIndexesByScanHints(node, indexes)
 	spatialIndexes = builder.filterIndexesByScanHints(node, spatialIndexes)
 	if len(indexes) == 0 && len(spatialIndexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	scanSnapshot := node.ScanSnapshot
@@ -2484,7 +2526,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
 	prefixEvaluationChecked, prefixEvaluationSafe := false, false
-	consider := func(candidate regularIndexAccessCandidate, affectsFallback bool) {
+	consider := func(candidate regularIndexAccessCandidate, affectsFallback bool) (bool, error) {
 		prefixCandidate := false
 		for _, pos := range candidate.filterIdx {
 			if !costCtx.filterFacts[pos].logicalPrefix {
@@ -2499,29 +2541,70 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				prefixEvaluationChecked = true
 			}
 			if !prefixEvaluationSafe {
-				return
+				return true, nil
 			}
 			break
 		}
 		// Small independent scan inputs retain the established access paths. This
 		// is a conservative admission budget, not a minimum physical block size.
 		if prefixCandidate && !forceIndex && costCtx.valid && costCtx.baseRows <= float64(objectio.BlockMaxRows) {
-			return
+			return true, nil
 		}
 		if candidate.shape == encodedRegularIndexCostBackfill && !prefixCandidate && !allowOrdinaryBackfill {
-			return
+			return true, nil
 		}
 		idxDef := indexes[candidate.indexPos]
-		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
+		scoring := costCtx
+		var estimate *encodedRegularIndexEstimate
+		if access := candidate.observation; access != nil {
+			ctx := builder.GetContext()
+			if cause := context.Cause(ctx); cause != nil {
+				return false, cause
+			}
+			if !spendIndexCostWork(ctx, &access.budget, len(access.full.Cols)+len(idxDef.Parts)) {
+				return false, context.Cause(ctx)
+			}
+			// The private view shares resettable scratch, never a concurrent scorer.
+			view := *costCtx
+			view.baseWork = access.baseWork
+			scoring = &view
+			observed := access.estimate
+			observed.fixedWork = 0
+			estimate = &observed
+			lower, skip, valid := scoring.scoreWithEstimate(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate)
+			if valid && (skip || lower >= access.baseWork || best.indexPos != -1 && lower >= best.work) && len(access.scan.FilterList) == 1 {
+				// Reuse the comparison owner's input proof after observation reentry.
+				// The generated VARCHAR physical key is valid by construction.
+				atom, ok := analyzeIndexComparison(ctx, access.scan.FilterList[0])
+				if ok && atom == access.comparison && atom.column.Typ.ValidateCollation() == nil {
+					return true, context.Cause(ctx)
+				}
+			}
+			fixed, complete, err := necessaryIndexPredicateWork(ctx, idxDef, access)
+			if cause := context.Cause(ctx); cause != nil {
+				return false, cause
+			}
+			if err != nil || !complete {
+				return false, err
+			}
+			estimate.fixedWork = fixed
+		}
+		work, skip, valid := scoring.scoreWithEstimate(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate)
+		candidate.work = work
+		if candidate.observation != nil {
+			if valid && !skip && work < candidate.observation.baseWork && (best.indexPos == -1 || work < best.work) {
+				best = candidate
+			}
+			return true, nil
+		}
 		if candidate.shape == encodedRegularIndexCostBackfill && !valid && !IsDefaultStats(node.Stats) && costCtx.backfillCapacityExceeded(node.Stats.Outcnt) {
 			// Incomparable work cannot erase a known output lower bound.
 			sawScorable = sawScorable || affectsFallback
-			return
+			return true, nil
 		}
-		candidate.work = work
 		if valid && skip {
 			sawScorable = sawScorable || affectsFallback
-			return
+			return true, nil
 		}
 		// This new range path requires a comparable cost even on small tables.
 		// Other access paths retain their established small-table policy.
@@ -2530,7 +2613,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			if valid && !skip && work < costCtx.baseWork && (best.indexPos == -1 || work < best.work) {
 				best = candidate
 			}
-			return
+			return true, nil
 		}
 		if preferSortedScan {
 			// Preserve the sorted-scan shortcut unless a legal point lookup has
@@ -2539,7 +2622,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				(best.indexPos == -1 || work < best.work) {
 				best = candidate
 			}
-			return
+			return true, nil
 		}
 		if ignoreStats {
 			// FORCE and small tables bypass cost rejection because their estimates
@@ -2553,40 +2636,63 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				(candidate.shape == best.shape && candidate.work < best.work) {
 				best = candidate
 			}
-			return
+			return true, nil
 		}
 		if !valid {
 			if fallback.indexPos == -1 {
 				fallback = candidate
 			}
-			return
+			return true, nil
 		}
 		sawScorable = sawScorable || affectsFallback
 		if skip || (best.indexPos != -1 && work >= best.work) {
-			return
+			return true, nil
 		}
 		best = candidate
+		return true, nil
 	}
 
+	var necessaryIndexes []int
+	var comparison indexComparison
+	admitNecessary := !forceIndex && !ignoreStats && !preferSortedScan && len(indexes) <= engine.MaxIndexPlanningDefinitions &&
+		builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized) && builder.qry.ExecutionDependentAccess
+	if admitNecessary {
+		var ok bool
+		if len(node.FilterList) == 1 {
+			comparison, ok = analyzeIndexComparison(builder.GetContext(), node.FilterList[0])
+		}
+		admitNecessary = ok && comparison.necessaryRangeAllowed(builder.planningInput.intent.TimeZone)
+	}
 	for idx, idxDef := range indexes {
+		if admitNecessary && !indexPlanningDefinitionFits(idxDef) {
+			admitNecessary = false
+			necessaryIndexes = nil
+		}
+		if admitNecessary && indexComparisonMatches(node, idxDef, comparison) && costCtx.indexCoversRequiredColumns(idxDef) {
+			necessaryIndexes = append(necessaryIndexes, idx)
+		}
 		if !preferSortedScan {
 			for alternative, match := range builder.matchRegularIndexOnlyScans(idxDef, node, costCtx) {
 				if match == nil {
 					continue
 				}
-				consider(regularIndexAccessCandidate{
+				if _, err := consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
 					filterType: match.filterType, filterIdx: match.filterIdx,
 					leadingEqual: match.leadingEqual, residualLeadingPos: match.residualLeadingPos,
-				}, alternative == 0)
+				}, alternative == 0); err != nil {
+					return nodeID, err
+				}
 			}
 		}
 		if !pointBlocked {
 			if filterIdx := costCtx.matchPointBackfill(idxDef, ignoreStats); len(filterIdx) > 0 {
-				consider(regularIndexAccessCandidate{
+				if _, err := consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostBackfill,
 					filterType: EqualIndexCondition, filterIdx: filterIdx,
-				}, true)
+				}, true); err != nil {
+					return nodeID, err
+				}
 			}
 		}
 		if preferSortedScan || functionalIndexColumn(node.TableDef, idxDef) != nil {
@@ -2605,28 +2711,55 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			if len(filterIdx) == 2 {
 				filterType = RangeIndexCondition
 			}
-			consider(regularIndexAccessCandidate{
+			if _, err := consider(regularIndexAccessCandidate{
 				indexPos: idx, shape: encodedRegularIndexCostBackfill,
 				filterType: filterType, filterIdx: filterIdx,
-			}, true)
+			}, true); err != nil {
+				return nodeID, err
+			}
 		}
 	}
 	if best.indexPos == -1 && !sawScorable {
 		best = fallback
 	}
 
-	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
-		ret := builder.applyRegularIndexOnlyScan(
-			indexes[best.indexPos], node, idxColMap, scanSnapshot,
-			&regularIndexOnlyMatch{
-				filterIdx: best.filterIdx, filterType: best.filterType,
-				leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos,
-			},
-		)
-		if ret != -1 {
-			return ret
+	// Optional observations happen only after ordinary matching has finished.
+	// Existing winners and unscorable fallbacks retain priority.
+	if best.indexPos == -1 && fallback.indexPos == -1 && len(necessaryIndexes) > 0 {
+		access, err := builder.observeIndexCost(nodeID, costCtx)
+		if err != nil {
+			return nodeID, err
 		}
-		return nodeID
+		if access != nil {
+			for _, idx := range necessaryIndexes {
+				complete, err := consider(regularIndexAccessCandidate{indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
+					filterIdx: []int32{0}, residualLeadingPos: []int32{0}, observation: access}, false)
+				if err != nil {
+					return nodeID, err
+				}
+				if !complete {
+					best = regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
+					break
+				}
+			}
+		}
+		if cause := context.Cause(builder.GetContext()); cause != nil {
+			return nodeID, cause
+		}
+	}
+	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
+		match := &regularIndexOnlyMatch{filterIdx: best.filterIdx, filterType: best.filterType, leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos, observation: best.observation}
+		if best.observation != nil || !forceIndex && !ignoreStats && !preferSortedScan && builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized) {
+			match.cost = costCtx
+		}
+		ret, err := builder.applyRegularIndexOnlyScan(indexes[best.indexPos], node, idxColMap, scanSnapshot, match)
+		if err != nil {
+			return nodeID, err
+		}
+		if ret != -1 {
+			return ret, nil
+		}
+		return nodeID, nil
 	}
 
 	// Preserve the established priority of a covering spatial access over a
@@ -2635,7 +2768,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		for i := range spatialIndexes {
 			ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
 			if ret != -1 {
-				return ret
+				return ret, nil
 			}
 		}
 	}
@@ -2644,24 +2777,24 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		retID, idxTableNodeID := builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot)
 		if idxTableNodeID != -1 {
 			builder.applyExtraFiltersOnIndex(idxDef, node, builder.qry.Nodes[idxTableNodeID], best.filterIdx)
-			return retID
+			return retID, nil
 		}
 	}
 
 	if preferSortedScan {
-		return nodeID
+		return nodeID, nil
 	}
 	// Spatial backfill keeps its established policy; it is outside the regular
 	// index scorer's byte/PK work model.
 	if !ignoreStats && (node.Stats.Selectivity >= InFilterSelectivityLimit ||
 		node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) ||
 		catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) && (node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK)) {
-		return nodeID
+		return nodeID, nil
 	}
 	idxToChoose, filterIdx := builder.getIndexForSpatialCond(spatialIndexes, node)
 	if idxToChoose != -1 {
 		retID, _ := builder.applyIndexJoin(spatialIndexes[idxToChoose], node, SpatialIndexCondition, filterIdx, scanSnapshot)
-		return retID
+		return retID, nil
 	}
 
 	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
@@ -2910,6 +3043,36 @@ func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos i
 	return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
 }
 
+// lowerIndexComparisonLeaf lowers one proved component comparison into the
+// physical index domain. Callers supply normalized or inverse-range bounds;
+// this function neither casts a SQL bound nor grants comparison admission.
+func lowerIndexComparisonLeaf(ctx context.Context, column, physical *plan.Expr, name string, values ...*plan.Expr) (*plan.Expr, error) {
+	key := column
+	if physical != nil {
+		key = physical
+		switch name {
+		case "=":
+			name = "prefix_eq"
+		case "between":
+			name = "prefix_between"
+		}
+	}
+	args := make([]*plan.Expr, 1, len(values)+1)
+	args[0] = DeepCopyExpr(key)
+	for _, value := range values {
+		value = DeepCopyExpr(value)
+		if physical != nil {
+			var err error
+			value, err = BindFuncExprImplByPlanExpr(ctx, indexTableComparisonSerialFunc(), []*plan.Expr{value})
+			if err != nil {
+				return nil, err
+			}
+		}
+		args = append(args, value)
+	}
+	return BindFuncExprImplByPlanExpr(ctx, name, args)
+}
+
 func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	if numParts == 1 { //directly equal
@@ -2953,6 +3116,15 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		if !duplicate {
 			compositeFilterSel *= filter.Selectivity
 		}
+	}
+	if len(serialArgs) == 1 {
+		physical := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+		physical.GetCol().Name = idxTableDef.Cols[0].Name
+		result, err := lowerIndexComparisonLeaf(builder.GetContext(), nil, physical, "=", serialArgs[0])
+		if err == nil {
+			result.Selectivity = compositeFilterSel
+		}
+		return result, err
 	}
 	rightArg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableComparisonSerialFunc(), serialArgs)
 	if err != nil {
@@ -3007,12 +3179,10 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	}
 	comparesByteStringColumn := indexFunctionComparesByteStringColumn(fn)
 
-	commuted := false
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
 		// Canonicalize: ensure column is on the left
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
-			commuted = true
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			switch fn.Func.ObjName {
 			case ">":
@@ -3036,15 +3206,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		var err error
 		switch fn.Func.ObjName {
 		case "between":
-			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			if err != nil {
-				return nil, err
-			}
-			fn.Args[2], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
-			if err != nil {
-				return nil, err
-			}
-			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
+			expr, err = lowerIndexComparisonLeaf(builder.GetContext(), nil, fn.Args[0], "between", fn.Args[1], fn.Args[2])
 		case "in":
 			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			if err != nil {
@@ -3052,11 +3214,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 			}
 			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 		case ">", ">=", "<", "<=":
-			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			if err != nil {
-				return nil, err
-			}
-			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+			expr, err = lowerIndexComparisonLeaf(builder.GetContext(), nil, fn.Args[0], fn.Func.ObjName, fn.Args[1])
 		case "in_range":
 			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			if err != nil {
@@ -3079,9 +3237,9 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		if err != nil {
 			return nil, err
 		}
-	} else if commuted {
+	} else if fn.Func.ObjName == "between" || fn.Func.ObjName == ">" || fn.Func.ObjName == ">=" || fn.Func.ObjName == "<" || fn.Func.ObjName == "<=" {
 		var err error
-		expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+		expr, err = lowerIndexComparisonLeaf(builder.GetContext(), fn.Args[0], nil, fn.Func.ObjName, fn.Args[1:]...)
 		if err != nil {
 			return nil, err
 		}
@@ -3186,7 +3344,7 @@ func indexOnlyLookupWillUsePrefixComparison(idxDef *IndexDef, filterList []*plan
 	if idxDef == nil || len(idxDef.Parts) <= 1 || len(leadingPos) == 0 {
 		return false
 	}
-	if filterType == RangeIndexCondition {
+	if filterType == RangeIndexCondition || filterType == CompositeRangeIndexCondition {
 		return true
 	}
 	if leadingEqual {
@@ -4052,10 +4210,9 @@ func regularIndexBackfillInputRows(scanRows, selectedRows float64) float64 {
 	return min(scanRows, max(selectedRows, math.Ceil(selectedRows)*float64(objectio.BlockMaxRows)))
 }
 
-// backfillReaders estimates local reader construction, not a cluster-wide
-// reader count. BuildReaders constructs each reader's packed PK filter, so
-// parallel scan width cannot make this preparation a single per-query cost.
-func (ctx *encodedRegularIndexCostContext) backfillReaders() float64 {
+// localScanReaders estimates local reader count using the same DOP policy as
+// scan planning, capped by the query limit and estimated physical blocks.
+func (ctx *encodedRegularIndexCostContext) localScanReaders() float64 {
 	cpus := max(1, system.GoMaxProcs())
 	if ctx.builder.qry != nil && ctx.builder.qry.MaxDop > 0 && ctx.builder.qry.MaxDop < int64(cpus) {
 		cpus = int(ctx.builder.qry.MaxDop)
@@ -4087,14 +4244,95 @@ func regularIndexBackfillPrepareWork(keys, packedWidth, readers float64) float64
 	return keys * ((2*float64(sliceBytes)+packedWidth)*readers + regularIndexKeyEncodingWork)
 }
 
+// shouldSkipJoinIndexBackfill prices the rows returned by a lookup, not just
+// the build keys. A small build can match most of a non-unique probe index and
+// overflow the backfill filter, leaving a full scan behind an extra dependency.
+func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *IndexDef, buildRows float64) bool {
+	if !ctx.valid || ctx.force || IsDefaultStats(ctx.node.Stats) || !finitePositive(buildRows) {
+		return false
+	}
+	// Removing index pruning exposes scan residuals to more rows. Preserve
+	// the established path unless evaluating every residual is provably safe.
+	if !regularIndexFiltersHaveStableEvaluation(ctx.node) {
+		return false
+	}
+	matches := min(ctx.node.Stats.TableCnt, buildRows)
+	if !idxDef.Unique {
+		wrapper := ctx.builder.getStatsInfoByTableID(ctx.node.TableDef.TblId)
+		if wrapper == nil || wrapper.GetStats() == nil || !finitePositive(wrapper.GetStats().TableCnt) {
+			return false
+		}
+		stats := wrapper.GetStats()
+		keyNDV := 1.0
+		// The final part of a non-unique index is the appended PK, not a
+		// lookup key. Do not multiply component NDVs: they can be correlated.
+		for _, part := range idxDef.Parts[:len(idxDef.Parts)-1] {
+			ndv := stats.NdvMap[catalog.ResolveAlias(part)]
+			if !finitePositive(ndv) || ndv > stats.TableCnt {
+				return false // Unknown statistics retain the established fallback.
+			}
+			keyNDV = max(keyNDV, ndv)
+		}
+		// Build rows bound distinct lookup keys, including when the build has
+		// duplicates. Its input selectivity does not describe the probe domain.
+		matches = min(ctx.node.Stats.TableCnt, buildRows*(ctx.node.Stats.TableCnt/keyNDV))
+	}
+	if ctx.backfillCapacityExceeded(matches) {
+		return true
+	}
+	if ctx.node.Stats.TableCnt < 50000 {
+		return false
+	}
+	pkPos, ok := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName]
+	if !ok || pkPos < 0 || int(pkPos) >= len(ctx.columnWidths) {
+		return false
+	}
+	encodedWidth := 0.0
+	for _, part := range idxDef.Parts {
+		colPos, ok := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || colPos < 0 || int(colPos) >= len(ctx.columnWidths) {
+			return false
+		}
+		if len(idxDef.Parts) == 1 {
+			encodedWidth += ctx.columnWidths[colPos]
+		} else {
+			encodedWidth += ctx.serialWidths[colPos]
+		}
+	}
+	// Compare an optimistic lookup: index keys plus PKs, per-reader filter
+	// preparation, and only matching base rows. Do not assume scattered PKs
+	// or charge a second full scan; selective lookups must remain eligible.
+	work := matches*(encodedWidth+ctx.columnWidths[pkPos]+ctx.baseWidth) +
+		regularIndexBackfillPrepareWork(matches, ctx.serialWidths[pkPos], ctx.localScanReaders())
+	return finitePositive(work) && work >= ctx.baseWork
+}
+
 func (ctx *encodedRegularIndexCostContext) score(
 	idxDef *IndexDef,
 	leadingPos []int32,
 	residualLeadingPos []int32,
 	shape encodedRegularIndexCostShape,
 ) (work float64, shouldReject bool, valid bool) {
+	return ctx.scoreWithEstimate(idxDef, leadingPos, residualLeadingPos, shape, nil)
+}
+
+func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
+	idxDef *IndexDef,
+	leadingPos []int32,
+	residualLeadingPos []int32,
+	shape encodedRegularIndexCostShape,
+	estimate *encodedRegularIndexEstimate,
+) (work float64, shouldReject bool, valid bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || !ctx.valid {
 		return 0, false, false
+	}
+	outputRows := ctx.outputRows
+	if estimate != nil {
+		if shape != encodedRegularIndexCostIndexOnly || len(leadingPos) != 1 || leadingPos[0] != estimate.filter ||
+			!estimate.valid(ctx.node.Stats.TableCnt) {
+			return 0, false, false
+		}
+		outputRows = estimate.outputRows
 	}
 	ctx.resetScratch()
 	if cap(ctx.partWidths) < len(idxDef.Parts) {
@@ -4149,6 +4387,9 @@ func (ctx *encodedRegularIndexCostContext) score(
 				selectivity = ctx.filterFacts[pos].prefixUpper
 			}
 		}
+		if estimate != nil && pos == estimate.filter {
+			selectivity = estimate.selectivity
+		}
 		lowerSelectivity := selectivity
 		if ctx.filterFacts[pos].unknownRangeBounds {
 			boundedLeading = false
@@ -4174,7 +4415,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	}
 	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
 	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
-	candidateRows := max(ctx.outputRows, leadingCandidateRows)
+	candidateRows := max(outputRows, leadingCandidateRows)
 	if !finitePositive(candidateRows) {
 		ctx.resetScratch()
 		return 0, false, false
@@ -4216,7 +4457,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 		}
 	}
 
-	hiddenRows := ctx.outputRows
+	hiddenRows := outputRows
 	lowerHiddenRows := 0.0
 	budgetRows := 0.0
 	hiddenFilterCount := 1
@@ -4316,8 +4557,8 @@ func (ctx *encodedRegularIndexCostContext) score(
 			lowerHiddenSelectivity *= lowerSelectivity
 			hiddenFilterCount++
 		}
-		hiddenRows = max(ctx.outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
-		budgetRows = max(ctx.outputRows, ctx.node.Stats.TableCnt*budgetSelectivity)
+		hiddenRows = max(outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
+		budgetRows = max(outputRows, ctx.node.Stats.TableCnt*budgetSelectivity)
 		lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
 	}
 	if math.IsNaN(hiddenRows) || math.IsInf(hiddenRows, 0) || hiddenRows < 0 {
@@ -4356,7 +4597,11 @@ func (ctx *encodedRegularIndexCostContext) score(
 		hiddenOutputWidth = pkWidth
 	}
 	calculateWork := func(candidateRows, hiddenRows, outputRows float64, optimistic bool) (float64, float64, bool) {
-		hiddenScanInput := candidateRows * hiddenInputWidth
+		inputRows := candidateRows
+		if estimate != nil && estimate.blockInput {
+			inputRows = indexBlockInputRows(ctx.node.Stats.TableCnt, candidateRows)
+		}
+		hiddenScanInput := inputRows * hiddenInputWidth
 		prefixScanInput := hiddenScanInput
 		if prefixAccess && ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
 			// Only new prefix access requires the conservative disabled-pruning
@@ -4366,6 +4611,9 @@ func (ctx *encodedRegularIndexCostContext) score(
 		hiddenScanOutput := hiddenRows * hiddenOutputWidth
 		hiddenPredicates := candidateRows * float64(hiddenFilterCount) * regularIndexPredicateRowWork
 		commonWork := hiddenScanOutput + hiddenPredicates
+		if estimate != nil {
+			commonWork += estimate.fixedWork
+		}
 
 		prefixWidth := 0.0
 		for partPos, part := range idxDef.Parts {
@@ -4424,7 +4672,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 					}
 					prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
 				}
-				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.backfillReaders())
+				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.localScanReaders())
 				// Replace, rather than duplicate, the ranking's per-key proxy.
 				admissionExtra = candidateBuild - hiddenRows*regularIndexPredicateRowWork
 				if !sortedPK {
@@ -4447,7 +4695,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 
 	// Prefix-correlated output estimates cannot discount downstream extraction
 	// or join materialization after candidate/residual work has been charged.
-	outputCostRows := ctx.outputRows
+	outputCostRows := outputRows
 	if hasCorrelatedPrefix {
 		outputCostRows = max(outputCostRows, hiddenRows)
 	}
@@ -4522,6 +4770,8 @@ type regularIndexOnlyMatch struct {
 	filterType         int
 	leadingEqual       bool
 	residualLeadingPos []int32
+	cost               *encodedRegularIndexCostContext
+	observation        *indexCostObservation
 }
 
 func (ctx *encodedRegularIndexCostContext) indexCoversRequiredColumns(idxDef *IndexDef) bool {
@@ -4583,6 +4833,52 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(idxDef *IndexDef, node *p
 	return builder.matchRegularIndexOnlyScanWithLeadingFilter(idxDef, node, costCtx, costCtx.firstFilters[col])
 }
 
+func (builder *QueryBuilder) matchRegularIndexSuffixRange(
+	idxDef *IndexDef,
+	node *plan.Node,
+	costCtx *encodedRegularIndexCostContext,
+	partPos int,
+) []int32 {
+	numKeyParts := len(idxDef.Parts)
+	if !idxDef.Unique {
+		numKeyParts--
+	}
+	if partPos < 1 || partPos >= numKeyParts {
+		return nil
+	}
+	colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
+	if !ok || colPos < 0 || int(colPos) >= len(costCtx.rangeFilters) {
+		return nil
+	}
+
+	lowerPos, upperPos := costCtx.lowerFilters[colPos], costCtx.upperFilters[colPos]
+	if lowerPos >= 0 && upperPos >= 0 {
+		if builder.regularIndexRangeFunctionsUsableAtPart(
+			idxDef, node.TableDef, partPos,
+			node.FilterList[lowerPos].GetF(), node.FilterList[upperPos].GetF(), true,
+		) {
+			return []int32{lowerPos, upperPos}
+		}
+		return nil
+	}
+	for _, filterPos := range costCtx.rangeFilters[colPos] {
+		fn := node.FilterList[filterPos].GetF()
+		if fn == nil {
+			continue
+		}
+		switch fn.Func.ObjName {
+		case ">", ">=", "<", "<=", "between", "in_range":
+		default:
+			continue
+		}
+		if !builder.regularIndexRangeFunctionsUsableAtPart(idxDef, node.TableDef, partPos, fn, nil, true) {
+			continue
+		}
+		return []int32{filterPos}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	idxDef *IndexDef,
 	node *plan.Node,
@@ -4633,6 +4929,12 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 			}
 			leadingPos = append(leadingPos, filterPos)
 		}
+		if regularIndexFiltersHaveStableEvaluation(node) {
+			if suffix := builder.matchRegularIndexSuffixRange(idxDef, node, costCtx, len(leadingPos)); len(suffix) > 0 {
+				leadingPos = append(leadingPos, suffix...)
+				filterType = CompositeRangeIndexCondition
+			}
+		}
 	} else {
 		lowerPos := costCtx.lowerFilters[leadingColPos]
 		upperPos := costCtx.upperFilters[leadingColPos]
@@ -4652,7 +4954,11 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 
 	numParts := len(idxDef.Parts)
 	if idxDef.Unique {
-		if leadingEqual && len(leadingPos) < numParts {
+		if filterType == CompositeRangeIndexCondition {
+			if !hintedIndexContainsQualifyingRows(idxDef, node) {
+				return nil, false
+			}
+		} else if leadingEqual && len(leadingPos) < numParts {
 			return nil, false
 		}
 		if !leadingEqual && numParts > 1 {
@@ -4683,149 +4989,324 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 		idxDef, node.TableDef, node.FilterList, leadingPos,
 		indexOnlyLookupWillUsePrefixComparison(idxDef, node.FilterList, leadingPos, filterType, leadingEqual),
 	)
+	if filterType == CompositeRangeIndexCondition {
+		// Keep the SQL suffix predicate as an exact row-side oracle. The encoded
+		// lookup owns candidate pruning; the residual owns SQL comparison semantics.
+		for _, pos := range leadingPos {
+			needsExactRecheck := costCtx.filterTypes[pos] == NonEqualIndexCondition ||
+				indexFilterUsesPrefixAmbiguousStringColumn(node.TableDef, node.FilterList[pos])
+			if needsExactRecheck && !slices.Contains(residualLeadingPos, pos) {
+				residualLeadingPos = append(residualLeadingPos, pos)
+			}
+		}
+	}
 	return &regularIndexOnlyMatch{
 		filterIdx: leadingPos, filterType: filterType, leadingEqual: leadingEqual,
 		residualLeadingPos: residualLeadingPos,
 	}, true
 }
 
-func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
-	// Functional indexes currently require a base-row residual evaluation.
-	if functionalIndexColumn(node.TableDef, idxDef) != nil {
-		return -1
+func (builder *QueryBuilder) applyRegularIndexOnlyScan(idxDef *IndexDef, node *plan.Node, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot, match *regularIndexOnlyMatch) (int32, error) {
+	indexNode, err := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+	if err != nil || indexNode == nil {
+		return -1, err
 	}
-	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
-	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
-	if !ok {
-		return -1
+	id := builder.appendRegularIndexOnlyScan(node, indexNode)
+	if match.observation != nil {
+		builder.qry.Nodes[id].Stats.ForceOneCN = true
 	}
-	if _, skip, _ := costCtx.score(idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly); skip {
-		return -1
-	}
-	return builder.applyRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+	return id, nil
 }
 
-func (builder *QueryBuilder) applyRegularIndexOnlyScan(
-	idxDef *IndexDef,
-	node *plan.Node,
-	idxColMap map[[2]int32]*plan.Expr,
-	scanSnapshot *Snapshot,
-	match *regularIndexOnlyMatch,
-) int32 {
-	indexNode := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
-	if indexNode == nil {
-		return -1
+// regularIndexPlanningError preserves a substantive error and the request's
+// cancellation cause when an error wraps the context's cancellation sentinel.
+func regularIndexPlanningError(ctx context.Context, err error) error {
+	if ctx == nil {
+		return err
 	}
-	builder.addNameByColRef(indexNode.BindingTags[0], indexNode.TableDef)
-	id := builder.appendNode(indexNode, builder.ctxByNode[node.NodeId])
-	builder.inheritIndexHints(id, node.NodeId)
-	forceScanNodeStatsTP(id, builder)
-	return id
+	cause := context.Cause(ctx)
+	if cause == nil {
+		return err
+	}
+	stop := ctx.Err()
+	if err == nil || err == stop {
+		return cause
+	}
+	if errors.Is(err, stop) && !errors.Is(err, cause) {
+		return errors.Join(err, cause)
+	}
+	return err
+}
+
+// buildRegularIndexColumnMap constructs a private physical index mapping. Each
+// caller owns its publication and the surrounding scan-construction contract.
+func buildRegularIndexColumnMap(
+	ctx context.Context, source *plan.Node, index *IndexDef, hidden *plan.TableDef, leading *plan.Expr, tag int32,
+) (map[[2]int32]*plan.Expr, bool, error) {
+	if ctx == nil || source == nil || source.TableDef == nil || source.TableDef.Pkey == nil || len(source.BindingTags) == 0 ||
+		index == nil || len(index.Parts) == 0 || hidden == nil || leading == nil || leading.GetCol() == nil {
+		return nil, false, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, false, err
+	}
+	mapping := make(map[[2]int32]*plan.Expr, len(index.Parts))
+	for i, part := range index.Parts {
+		if err := context.Cause(ctx); err != nil {
+			return nil, false, err
+		}
+		name := catalog.ResolveAlias(part)
+		pos, ok := source.TableDef.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(source.TableDef.Cols) || source.TableDef.Cols[pos] == nil {
+			return nil, false, nil
+		}
+		key := [2]int32{source.BindingTags[0], pos}
+		switch {
+		case len(index.Parts) == 1:
+			mapping[key] = leading
+		case name == source.TableDef.Pkey.PkeyColName:
+			if len(hidden.Cols) < 2 || hidden.Cols[1] == nil {
+				return nil, false, nil
+			}
+			mapping[key] = GetColExpr(hidden.Cols[1].Typ, tag, 1)
+		default:
+			value, err := MakeSerialExtractExpr(ctx, DeepCopyExpr(leading), source.TableDef.Cols[pos].Typ, int64(i))
+			if err != nil {
+				return nil, false, err
+			}
+			mapping[key] = value
+		}
+	}
+	return mapping, true, nil
 }
 
 // 先构造、后发布，使多分支访问在任一分支失败时仍保留完整原计划。
 func (builder *QueryBuilder) buildRegularIndexOnlyScan(
-	idxDef *IndexDef,
-	node *plan.Node,
-	idxColMap map[[2]int32]*plan.Expr,
-	scanSnapshot *Snapshot,
-	match *regularIndexOnlyMatch,
-) *plan.Node {
-	leadingPos := match.filterIdx
-	numParts := len(idxDef.Parts)
-	missFilterIdx := make([]int, 0, len(node.FilterList))
-	for filterIdx := range node.FilterList {
-		isLeading := false
-		for _, leadingIdx := range leadingPos {
-			if filterIdx == int(leadingIdx) {
-				isLeading = true
-				break
+	idxDef *IndexDef, node *plan.Node, idxColMap map[[2]int32]*plan.Expr,
+	scanSnapshot *Snapshot, match *regularIndexOnlyMatch,
+) (result *plan.Node, err error) {
+	necessary := match.observation != nil
+	defer func() {
+		if result == nil {
+			ctx := builder.compCtx.GetContext()
+			if necessary && ctx != nil {
+				if cause := context.Cause(ctx); cause != nil {
+					err = cause
+				}
+			} else if !necessary {
+				err = regularIndexPlanningError(ctx, err)
 			}
 		}
-		if !isLeading {
-			missFilterIdx = append(missFilterIdx, filterIdx)
+	}()
+	var resolver CompilerContext
+	var hidden TableResolution
+	access := match.observation
+	if necessary {
+		if access.budget <= 0 || access.scan != node || match.cost == nil || match.cost.node != node || idxColMap == nil || node.ObjRef == nil ||
+			node.TableDef == nil || node.Stats == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || len(node.ProjectList) != 0 ||
+			node.NodeId < 0 || int(node.NodeId) >= len(builder.ctxByNode) || builder.qry.Nodes[node.NodeId] != node ||
+			!match.cost.indexCoversRequiredColumns(idxDef) || builder.nextBindTag == math.MaxInt32 {
+			return nil, nil
+		}
+		resolver = builder.borrowingCompiler()
+		if resolver == nil || !resolver.BorrowedTableStillCurrent(builder.compCtx.GetProcess(), access.borrow) || !builder.planningInput.intent.MatchesProcess(builder.compCtx.GetProcess()) {
+			return nil, nil
 		}
 	}
-
-	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
-	if e != nil {
-		panic(e)
+	// Ordinary access allocates and resolves at its established error boundary.
+	// Necessary access reserves a private tag until its final publication proof.
+	idxTag := builder.nextBindTag + 1
+	if !necessary {
+		idxTag = builder.genNewBindTag()
 	}
-	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 {
-		panic(moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata"))
-	}
-	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	var newLeadingFilter *plan.Expr
-	var err error
-	if match.filterType == RangeIndexCondition {
-		newLeadingFilter, err = builder.replaceRangePairCondition(idxDef, node.FilterList, leadingPos, idxTag, idxTableDef)
+	var idxObjRef *plan.ObjectRef
+	var idxTableDef *plan.TableDef
+	if necessary {
+		idxObjRef, idxTableDef, err = resolver.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, &hidden)
 	} else {
-		newLeadingFilter, err = builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
+		idxObjRef, idxTableDef, err = builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
-
-	if numParts == 1 {
-		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
+	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 ||
+		idxTableDef.Cols[0] == nil || idxTableDef.Cols[1] == nil {
+		if necessary {
+			return nil, nil
+		}
+		return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata")
+	}
+	var hint *plan.Expr
+	if necessary {
+		proc := builder.compCtx.GetProcess()
+		if builder.borrowingCompiler() != resolver || idxObjRef.Obj <= 0 || uint64(idxObjRef.Obj) != idxTableDef.TblId ||
+			idxObjRef.PubInfo != nil || idxObjRef.SubscriptionName != "" || IsSnapshotValid(idxObjRef.Snapshot) || idxTableDef.IsTemporary ||
+			hidden.Borrow == nil || !resolver.BorrowedTableStillCurrent(proc, hidden.Borrow) {
+			return nil, nil
+		}
+		comparison, ok, cause := indexCandidateOperands(builder.GetContext(), builder.qry, node.NodeId, idxDef, 0)
+		if cause != nil || !ok {
+			return nil, cause
+		}
+		hint, ok, err = makeNecessaryIndexHint(builder.GetContext(), comparison, idxDef, idxTableDef, idxTag)
+		if err != nil || !ok {
+			return nil, err
+		}
+		for _, col := range idxTableDef.Cols {
+			if col == nil {
+				return nil, nil
+			}
+		}
+	} else if match.cost != nil {
+		useBase, cause := builder.observedBaseCheaper(node, idxDef, match)
+		if cause != nil || useBase {
+			return nil, cause
+		}
+	}
+	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	if necessary {
+		leadingColExpr.GetCol().Name = idxTableDef.Cols[0].Name
+	}
+	var leading *plan.Expr
+	if !necessary {
+		if match.filterType == RangeIndexCondition {
+			leading, err = builder.replaceRangePairCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
+		} else if match.filterType == CompositeRangeIndexCondition {
+			leading, err = builder.replaceCompositeRangeCondition(idxDef, node.FilterList, match.filterIdx, idxTag, idxTableDef)
+		} else {
+			leading, err = builder.replaceLeadingFilter(idxDef, node.FilterList, match.filterIdx, match.leadingEqual, idxTag, idxTableDef)
+		}
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			return nil, nil
+		} // Existing ordinary optional-binding behavior.
+	}
+	var mappingCtx context.Context
+	if len(idxDef.Parts) == 1 && !necessary {
+		mappingCtx = builder.compCtx.GetContext()
+		if mappingCtx == nil {
+			mappingCtx = context.Background()
+		}
 	} else {
-		for i := 0; i < numParts; i++ {
-			colName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := node.TableDef.Name2ColIndex[colName]
-			if colName == node.TableDef.Pkey.PkeyColName {
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
-			} else {
-				origType := node.TableDef.Cols[colIdx].Typ
-				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+		mappingCtx = builder.GetContext()
+	}
+	mapping, ok, cause := buildRegularIndexColumnMap(mappingCtx, node, idxDef, idxTableDef, leadingColExpr, idxTag)
+	if cause != nil {
+		return nil, cause
+	}
+	if !ok {
+		return nil, nil
+	}
+	filters := make([]*plan.Expr, 0, 1+len(node.FilterList)+len(match.residualLeadingPos))
+	if necessary {
+		for _, filter := range node.FilterList {
+			if !indexResidualColumnsMapped(filter, mapping) {
+				return nil, nil
+			}
+			filters = append(filters, replaceColumnsForExpr(DeepCopyExpr(filter), mapping))
+		}
+		valid, cause := access.provider.VerifyIndexPair(builder.GetContext(), access.borrow.Read, engine.IndexPairCheck{
+			BaseRef: node.ObjRef, HiddenRef: idxObjRef, BaseFull: access.full, BaseScan: node.TableDef, HiddenFull: idxTableDef, Index: idxDef, Column: access.column,
+			Hidden: hidden.Borrow.Relation, HiddenRead: hidden.Borrow.Read}, &access.budget)
+		if cause != nil {
+			return nil, cause
+		}
+		proc := builder.compCtx.GetProcess()
+		if !valid || access.budget <= 0 || builder.nextBindTag != idxTag-1 || builder.qry.Nodes[node.NodeId] != node ||
+			builder.borrowingCompiler() != resolver || access.borrow.Read.Op != proc.GetTxnOperator() ||
+			!resolver.BorrowedTableStillCurrent(proc, access.borrow) || !resolver.BorrowedTableStillCurrent(proc, hidden.Borrow) ||
+			!builder.planningInput.intent.MatchesProcess(proc) {
+			return nil, nil
+		}
+		if cause := context.Cause(builder.GetContext()); cause != nil {
+			return nil, cause
+		}
+		builder.genNewBindTag()
+	} else {
+		if cause := regularIndexPlanningError(builder.compCtx.GetContext(), nil); cause != nil {
+			return nil, cause
+		}
+		// Preserve existing remaps from the caller when rewriting ordinary filters.
+		for key, value := range mapping {
+			idxColMap[key] = value
+		}
+		filters = append(filters, leading)
+		for _, idx := range match.residualLeadingPos {
+			residual := replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap)
+			residual.Selectivity = 1
+			filters = append(filters, residual)
+		}
+		for idx, filter := range node.FilterList {
+			if !slices.Contains(match.filterIdx, int32(idx)) {
+				filters = append(filters, replaceColumnsForExpr(filter, idxColMap))
 			}
 		}
 	}
-
-	residualLeadingPos := match.residualLeadingPos
-	filterCapacity := 1 + len(missFilterIdx) + len(residualLeadingPos)
-	newFilterList := make([]*plan.Expr, 0, filterCapacity)
-	newFilterList = append(newFilterList, newLeadingFilter)
-	if len(residualLeadingPos) > 0 {
-		// Keep the original SQL predicate when serial_full lookup bytes are not
-		// an exact semantic oracle: NULL is encoded as key bytes, and a byte-string
-		// terminator can also begin an escaped embedded NUL.
-		for _, idx := range residualLeadingPos {
-			residual := replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap)
-			// The lookup predicate already carries the original selectivity. This
-			// residual is an exact semantic recheck, not another reduction.
-			residual.Selectivity = 1
-			newFilterList = append(newFilterList, residual)
+	if necessary {
+		for key, value := range mapping {
+			idxColMap[key] = value
 		}
 	}
-	for _, idx := range missFilterIdx {
-		newFilterList = append(newFilterList, replaceColumnsForExpr(node.FilterList[idx], idxColMap))
+	result = makeRegularIndexOnlyScan(node, idxDef, &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: idxTableDef, ObjRef: idxObjRef,
+		FilterList: filters, Limit: node.Limit, Offset: node.Offset, BindingTags: []int32{idxTag}, ScanSnapshot: node.ScanSnapshot})
+	if necessary {
+		result.BlockFilterList = []*plan.Expr{hint}
+		result.IndexScanInfo.RequiresCapturedExecution = true
 	}
+	return result, nil
+}
 
-	// recod index table scan info
-	idxScanInfo := plan.IndexScanInfo{
-		IsIndexScan:    true,
-		IndexName:      idxDef.IndexName,
-		BelongToTable:  node.ObjRef.ObjName,
-		Parts:          slices.Clone(idxDef.Parts),
-		IsUnique:       idxDef.Unique,
-		IndexTableName: idxDef.IndexTableName,
+// observedBaseCheaper is a final-phase refinement of an ordinary scored winner.
+// Its caller has already performed the mandatory hidden-table resolution.
+func (builder *QueryBuilder) observedBaseCheaper(node *plan.Node, index *IndexDef, match *regularIndexOnlyMatch) (bool, error) {
+	ctx := builder.GetContext()
+	if !builder.indexObservationAllowed(node.NodeId, true) || len(node.FilterList) != 1 || len(node.BlockFilterList) != 1 || len(match.filterIdx) != 1 || match.filterIdx[0] != 0 ||
+		match.cost == nil || !match.cost.valid || node.NodeId < 0 || int(node.NodeId) >= len(builder.qry.Nodes) || builder.qry.Nodes[node.NodeId] != node {
+		return false, nil
 	}
+	comparison, ok := analyzeIndexComparison(ctx, node.FilterList[0])
+	if !ok || comparison.domain != indexComparisonRaw || !makeTypeByPlan2Expr(comparison.column).IsIntOrUint() || comparison.bound.GetLit() == nil ||
+		!indexComparisonMatches(node, index, comparison) || !match.cost.indexCoversRequiredColumns(index) {
+		return false, nil
+	}
+	if _, _, valid := match.cost.score(index, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly); !valid {
+		return false, nil
+	}
+	access, err := builder.observeIndexCost(node.NodeId, match.cost)
+	if cause := context.Cause(ctx); cause != nil {
+		return false, cause
+	}
+	if err != nil || access == nil {
+		return false, nil
+	}
+	estimate := access.estimate
+	// The refinement must not make an existing winner look cheaper by reducing
+	// its established filter or output estimate.
+	estimate.selectivity = max(estimate.selectivity, node.FilterList[0].Selectivity)
+	estimate.outputRows = max(estimate.outputRows, match.cost.outputRows)
+	cost := *match.cost
+	cost.baseWork = access.baseWork
+	work, _, valid := cost.scoreWithEstimate(index, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly, &estimate)
+	return valid && access.baseWork < work, nil
+}
 
-	return &plan.Node{
-		NodeType:      plan.Node_TABLE_SCAN,
-		TableDef:      idxTableDef,
-		IndexScanInfo: idxScanInfo,
-		ObjRef:        idxObjRef,
-		ParentObjRef:  node.ObjRef,
-		FilterList:    newFilterList,
-		Limit:         node.Limit,
-		Offset:        node.Offset,
-		BindingTags:   []int32{idxTag},
-		ScanSnapshot:  node.ScanSnapshot,
-	}
+func makeRegularIndexOnlyScan(source *plan.Node, index *IndexDef, scan *plan.Node) *plan.Node {
+	scan.ParentObjRef = source.ObjRef
+	scan.IndexScanInfo = plan.IndexScanInfo{IsIndexScan: true, IndexName: index.IndexName,
+		BelongToTable: source.ObjRef.ObjName, Parts: slices.Clone(index.Parts),
+		IsUnique: index.Unique, IndexTableName: index.IndexTableName}
+	return scan
+}
+
+// appendRegularIndexOnlyScan publishes an already constructed scan.
+func (builder *QueryBuilder) appendRegularIndexOnlyScan(source, scan *plan.Node) int32 {
+	builder.addNameByColRef(scan.BindingTags[0], scan.TableDef)
+	id := builder.appendNode(scan, builder.ctxByNode[source.NodeId])
+	builder.inheritIndexHints(id, source.NodeId)
+	forceScanNodeStatsTP(id, builder)
+	return id
 }
 
 func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
@@ -4857,7 +5338,7 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 	}
 
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -4957,7 +5438,18 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 	second *plan.Function,
 	allowUnsafeRange bool,
 ) bool {
-	if idxDef == nil || tableDef == nil || len(idxDef.Parts) == 0 || first == nil {
+	return builder.regularIndexRangeFunctionsUsableAtPart(idxDef, tableDef, 0, first, second, allowUnsafeRange)
+}
+
+func (builder *QueryBuilder) regularIndexRangeFunctionsUsableAtPart(
+	idxDef *IndexDef,
+	tableDef *plan.TableDef,
+	partPos int,
+	first *plan.Function,
+	second *plan.Function,
+	allowUnsafeRange bool,
+) bool {
+	if idxDef == nil || tableDef == nil || partPos < 0 || partPos >= len(idxDef.Parts) || first == nil {
 		return false
 	}
 	if first.Func.ObjName == "prefix_eq" {
@@ -4965,19 +5457,19 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 			return false
 		}
 		lowered, ok := stringPrefixRange(builder.GetContext(), first)
-		return ok && second == nil && builder.regularIndexRangeFunctionsUsable(idxDef, tableDef, lowered.GetF(), nil, false)
+		return ok && second == nil && builder.regularIndexRangeFunctionsUsableAtPart(idxDef, tableDef, partPos, lowered.GetF(), nil, false)
 	}
 
 	if !indexTableStoresSerializedKey(idxDef) {
 		// A pair would be rebound as BETWEEN/IN_RANGE, whose mixed temporal
 		// precision contract need not equal the two original scalar comparisons.
-		return second == nil || !mixedTemporalIndexComparison(first) && !mixedTemporalIndexComparison(second)
+		return partPos == 0 && (second == nil || !mixedTemporalIndexComparison(first) && !mixedTemporalIndexComparison(second))
 	}
-	leadingColPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-	if !ok || leadingColPos < 0 || int(leadingColPos) >= len(tableDef.Cols) {
+	indexedColPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
+	if !ok || indexedColPos < 0 || int(indexedColPos) >= len(tableDef.Cols) {
 		return false
 	}
-	indexedPartType := tableDef.Cols[leadingColPos].Typ
+	indexedPartType := tableDef.Cols[indexedColPos].Typ
 	if !serializedIndexComparisonUsable(builder.GetContext(), first, indexedPartType) ||
 		(second != nil && !serializedIndexComparisonUsable(builder.GetContext(), second, indexedPartType)) {
 		return false
@@ -5162,6 +5654,202 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	return expr, nil
 }
 
+// replaceCompositeRangeCondition bounds an equality prefix by a range on the
+// next key part. The prefix endpoint keeps the lookup inside that equality
+// group while the full endpoint supplies the suffix bound.
+func (builder *QueryBuilder) replaceCompositeRangeCondition(
+	idxDef *IndexDef,
+	filterList []*plan.Expr,
+	filterIdx []int32,
+	idxTag int32,
+	idxTableDef *plan.TableDef,
+) (*plan.Expr, error) {
+	if idxDef == nil || idxTableDef == nil || len(idxTableDef.Cols) == 0 || len(filterIdx) < 2 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range")
+	}
+
+	suffixStart := len(filterIdx) - 1
+	if len(filterIdx) >= 3 {
+		firstPos, secondPos := filterIdx[len(filterIdx)-2], filterIdx[len(filterIdx)-1]
+		if firstPos >= 0 && secondPos >= 0 && int(firstPos) < len(filterList) && int(secondPos) < len(filterList) {
+			firstCol, firstLower := classifyRangeBound(filterList[firstPos].GetF())
+			secondCol, secondLower := classifyRangeBound(filterList[secondPos].GetF())
+			if firstCol != nil && secondCol != nil && firstLower != secondLower &&
+				firstCol.RelPos == secondCol.RelPos && firstCol.ColPos == secondCol.ColPos {
+				suffixStart = len(filterIdx) - 2
+			}
+		}
+	}
+	if suffixStart < 1 || suffixStart >= len(idxDef.Parts) {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range prefix")
+	}
+
+	lookupFilters := make([]*plan.Expr, len(filterIdx))
+	prefixArgs := make([]*plan.Expr, suffixStart)
+	selectivity := 1.0
+	for i, pos := range filterIdx {
+		if pos < 0 || int(pos) >= len(filterList) {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index range filter")
+		}
+		filter := filterList[pos]
+		column := indexComparisonColumn(filter.GetF())
+		if column == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range column")
+		}
+		normalized, err := normalizeSerializedIndexComparison(builder.GetContext(), filter, column.Typ)
+		if err != nil {
+			return nil, err
+		}
+		lookupFilters[i] = normalized
+		selectivity *= filter.Selectivity
+		if i < suffixStart {
+			if normalized.GetF() == nil || normalized.GetF().Func.ObjName != "=" {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index equality prefix")
+			}
+			value := rangeFilterConstValue(normalized.GetF())
+			if value == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index equality bound")
+			}
+			prefixArgs[i], err = builder.makeIndexLookupPartExpr(idxDef, i, value)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	ctx := builder.GetContext()
+	serialFunc := indexTableComparisonSerialFunc()
+	prefix, err := BindFuncExprImplByPlanExpr(ctx, serialFunc, DeepCopyExprList(prefixArgs))
+	if err != nil {
+		return nil, err
+	}
+	bindBound := func(value *plan.Expr) (*plan.Expr, error) {
+		args := append(DeepCopyExprList(prefixArgs), DeepCopyExpr(value))
+		return BindFuncExprImplByPlanExpr(ctx, serialFunc, args)
+	}
+	physical := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	physical.GetCol().Name = idxTableDef.Cols[0].Name
+	fullKey := suffixStart == len(idxDef.Parts)-1
+
+	var result *plan.Expr
+	suffixFilters := lookupFilters[suffixStart:]
+	if len(suffixFilters) == 1 {
+		fn := suffixFilters[0].GetF()
+		switch fn.Func.ObjName {
+		case "between", "in_range":
+			left, err := bindBound(fn.Args[1])
+			if err != nil {
+				return nil, err
+			}
+			right, err := bindBound(fn.Args[2])
+			if err != nil {
+				return nil, err
+			}
+			if fn.Func.ObjName == "between" {
+				name := "prefix_between"
+				if fullKey {
+					name = "between"
+				}
+				result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right})
+			} else {
+				name := "prefix_in_range"
+				flag := DeepCopyExpr(fn.Args[3])
+				if fullKey {
+					name = "in_range"
+				} else if indexFunctionComparesByteStringColumn(fn) {
+					flag = closePrefixRangeLowerBound(flag)
+				}
+				result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right, flag})
+			}
+			if err != nil {
+				return nil, err
+			}
+		default:
+			op := canonicalRangeOp(fn)
+			value := rangeFilterConstValue(fn)
+			if value == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range bound")
+			}
+			bound, err := bindBound(value)
+			if err != nil {
+				return nil, err
+			}
+			var left, right *plan.Expr
+			var flag uint8
+			switch op {
+			case "<":
+				left, right, flag = prefix, bound, 2
+			case "<=":
+				left, right = prefix, bound
+			case ">":
+				left, right, flag = bound, prefix, 1
+			case ">=":
+				left, right = bound, prefix
+			default:
+				return nil, moerr.NewInternalError(builder.GetContext(), "unsupported composite index range operator")
+			}
+			if indexFunctionComparesByteStringColumn(fn) {
+				flag &^= 1
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, "prefix_in_range", []*plan.Expr{
+				physical, left, right, MakePlan2Uint8ConstExprWithType(flag),
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if len(suffixFilters) == 2 {
+		lowerFn, upperFn := suffixFilters[0].GetF(), suffixFilters[1].GetF()
+		if _, lower := classifyRangeBound(lowerFn); !lower {
+			lowerFn, upperFn = upperFn, lowerFn
+		}
+		lowerValue := rangeFilterConstValue(lowerFn)
+		upperValue := rangeFilterConstValue(upperFn)
+		if lowerValue == nil || upperValue == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing composite index range pair")
+		}
+		left, err := bindBound(lowerValue)
+		if err != nil {
+			return nil, err
+		}
+		right, err := bindBound(upperValue)
+		if err != nil {
+			return nil, err
+		}
+		lowerOp, upperOp := canonicalRangeOp(lowerFn), canonicalRangeOp(upperFn)
+		if lowerOp == ">=" && upperOp == "<=" {
+			name := "prefix_between"
+			if fullKey {
+				name = "between"
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right})
+		} else {
+			var flag uint8
+			if lowerOp == ">" {
+				flag |= 1
+			}
+			if upperOp == "<" {
+				flag |= 2
+			}
+			name := "prefix_in_range"
+			flagExpr := MakePlan2Uint8ConstExprWithType(flag)
+			if fullKey {
+				name = "in_range"
+			} else if indexFunctionComparesByteStringColumn(lowerFn) {
+				flagExpr = closePrefixRangeLowerBound(flagExpr)
+			}
+			result, err = BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{physical, left, right, flagExpr})
+		}
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid composite index suffix range")
+	}
+	result.Selectivity = selectivity
+	return result, nil
+}
+
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	if node == nil {
 		return -1, -1
@@ -5170,7 +5858,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		return node.NodeId, -1
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -5360,6 +6048,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
+	var costCtx *encodedRegularIndexCostContext
 	for _, idxDef := range indexes {
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
@@ -5394,8 +6083,16 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		if len(condIdx) < numKeyParts {
 			continue
 		}
+		if !forceJoinIndex {
+			if costCtx == nil {
+				costCtx = builder.newEncodedRegularIndexCostContext(leftChild, colRefCnt)
+			}
+			if costCtx.shouldSkipJoinIndexBackfill(idxDef, rightChild.Stats.Outcnt) {
+				continue
+			}
+		}
 
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 		if err != nil {
 			return -1, err
 		}
@@ -5759,6 +6456,48 @@ func nullPreservingTarget(expr *plan.Expr, tag, position int32) bool {
 			return false
 		}
 		expr = fn.Args[0]
+	}
+	return false
+}
+
+// CapturedExecutionIndexScan identifies a physical index scan whose access was
+// admitted for a particular execution.
+func CapturedExecutionIndexScan(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan && NodeRequiresCapturedExecution(node)
+}
+
+// NodeRequiresCapturedExecution also observes malformed nodes so preflight can
+// reject a misplaced requirement before any execution work is published.
+func NodeRequiresCapturedExecution(node *plan.Node) bool {
+	return node != nil && node.IndexScanInfo.RequiresCapturedExecution
+}
+
+// HasCapturedExecutionAccess checks for the physical execution requirement.
+func HasCapturedExecutionAccess(p *plan.Plan) bool {
+	if p == nil {
+		return false
+	}
+	query := p.GetQuery()
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if NodeRequiresCapturedExecution(node) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCapturedExecutionIndexScans additionally requires a physical index scan.
+func HasCapturedExecutionIndexScans(query *plan.Query) bool {
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if CapturedExecutionIndexScan(node) {
+			return true
+		}
 	}
 	return false
 }

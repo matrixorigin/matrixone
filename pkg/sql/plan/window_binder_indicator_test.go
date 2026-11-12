@@ -89,7 +89,7 @@ func buildIndicatorPlan(t *testing.T, sql string) error {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	return err
 }
 

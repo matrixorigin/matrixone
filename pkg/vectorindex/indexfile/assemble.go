@@ -16,18 +16,20 @@ package indexfile
 
 import (
 	"errors"
+	"hash/crc32"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// assembler writes the chunks of one file, in any order, into f. Every chunk must be
-// present exactly once with its exact length.
+// assembler writes the chunks of one file, in any order, into f and computes the file's
+// CRC32-C from theirs. Every chunk must be present exactly once with its exact length.
 type assembler struct {
 	f     *os.File
 	ref   *Ref
 	n     int64
 	seen  []bool
+	crcs  []uint32
 	count int64
 }
 
@@ -63,7 +65,7 @@ func newAssembler(f *os.File, ref *Ref) (*assembler, error) {
 		return nil, &stagingError{err}
 	}
 	n := ref.numChunks()
-	return &assembler{f: f, ref: ref, n: n, seen: make([]bool, n)}, nil
+	return &assembler{f: f, ref: ref, n: n, seen: make([]bool, n), crcs: make([]uint32, n)}, nil
 }
 
 // add writes chunk chunkID. Chunks outside the file's range are ignored.
@@ -87,19 +89,28 @@ func (a *assembler) add(chunkID int64, data []byte) error {
 		return err
 	}
 	a.seen[i] = true
+	a.crcs[i] = crc32.Checksum(data, castagnoli)
 	a.count++
 	return nil
 }
 
-func (a *assembler) finish() error {
-	if a.count == a.n {
-		return nil
-	}
-	for i, ok := range a.seen {
-		if !ok {
-			return moerr.NewInternalErrorNoCtxf("index file %s: missing chunk %d of %d chunks from %d",
-				a.ref.IndexID, a.ref.FirstChunk+int64(i), a.n, a.ref.FirstChunk)
+// finish checks that every chunk was added and returns the file's CRC32-C.
+func (a *assembler) finish() (uint32, error) {
+	if a.count != a.n {
+		for i, ok := range a.seen {
+			if !ok {
+				return 0, moerr.NewInternalErrorNoCtxf("index file %s: missing chunk %d of %d chunks from %d",
+					a.ref.IndexID, a.ref.FirstChunk+int64(i), a.n, a.ref.FirstChunk)
+			}
 		}
 	}
-	return nil
+	var crc uint32
+	full := xPow8n(ChunkSize)
+	for i, c := range a.crcs {
+		if int64(i) == a.n-1 {
+			return crcCombine(crc, c, a.ref.Size-int64(i)*ChunkSize), nil
+		}
+		crc = multModP(full, crc) ^ c
+	}
+	return crc, nil
 }

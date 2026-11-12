@@ -184,6 +184,13 @@ func getTableForDump(ctx context.Context, ses *Session, table *tree.TableName) (
 	if err != nil {
 		return "", "", nil, err
 	}
+	def := rel.GetTableDef(ctx)
+	if def == nil {
+		return "", "", nil, moerr.NewInternalError(ctx, "table definition is unavailable for index relation admission")
+	}
+	if err := checkResolvedIndexRelation(&ExecCtx{reqCtx: ctx, ses: ses}, tableName, def.Name, def.TableType, def.FeatureFlag); err != nil {
+		return "", "", nil, err
+	}
 	return dbName, tableName, rel, nil
 }
 

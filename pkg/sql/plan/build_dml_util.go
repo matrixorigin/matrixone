@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -878,7 +880,7 @@ func appendRecursiveCascadeLockNode(
 			}
 
 			indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-				delCtx.objRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+				delCtx.objRef, matchedIndex.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -4266,8 +4268,30 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 		return -1, err
 	}
 
-	// 4. create "CrossJoinL2" on tbl x centroids
-	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, includeSourceCols, optype)
+	// 4. create "CrossJoinL2" on tbl x centroids; with an ignored table, product_l2 leaves out
+	// and records the rows the index cannot store
+	centroidx := optype
+	if ignoredDef, ok := multiTableIndex.IndexDefs[catalog.IndexIgnored_TblType]; ok {
+		limit, err := catalog.IndexParamMaxBadRecords(ignoredDef.IndexAlgoParams)
+		if err != nil {
+			return -1, err
+		}
+		cfg, err := json.Marshal(vectorindex.IndexTableConfig{
+			DbName:        idxRefs[0].SchemaName,
+			MetadataTable: indexTableDefs[0].Name,
+			IgnoredTable:  ignoredDef.IndexTableName,
+			MaxBadRecords: limit,
+			PKey:          tableDef.Cols[posOriginPk].Name,
+			PKeyType:      typeOriginPk.Id,
+			PKeyEnum:      typeOriginPk.Enumvalues,
+			KeyPartType:   typeOriginVecColumn.Id,
+		})
+		if err != nil {
+			return -1, err
+		}
+		centroidx = tree.CentroidxOption{OpType: optype, Params: idxdef.IndexAlgoParams, Config: string(cfg)}.String()
+	}
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, includeSourceCols, centroidx)
 
 	// 4b. Quantize the projected entry into the entries column's element type. The
 	// entries table is declared with the QUANTIZATION type while the base column stays
@@ -5100,6 +5124,15 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	entriesObjRef *ObjectRef, entriesTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef) (int32, error) {
+	return appendDeleteHiddenTablePlan(builder, bindCtx, entriesObjRef, entriesTableDef, baseNodeId, tableDef,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.CPrimaryKeyColName)
+}
+
+// appendDeleteHiddenTablePlan joins the rows of an index's hidden table whose column originPkCol
+// is the primary key of a row of baseNodeId, appending the hidden row_id and primary key pkCol.
+func appendDeleteHiddenTablePlan(builder *QueryBuilder, bindCtx *BindContext,
+	entriesObjRef *ObjectRef, entriesTableDef *TableDef,
+	baseNodeId int32, tableDef *TableDef, originPkCol, pkCol string) (int32, error) {
 
 	originPkColumnPos, originPkType := getPkPos(tableDef, false)
 
@@ -5116,40 +5149,31 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	neededCols := make([]*plan.ColDef, 0, 3)
 	scanNodeProject := make([]*Expr, 3)
 	for _, col := range entriesTableDef.Cols {
+		var slots []int
 		if col.Name == catalog.Row_ID {
-			scanNodeProject[0] = &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(len(neededCols)),
-						Name:   col.Name,
-					},
-				},
-			}
-			neededCols = append(neededCols, col)
-		} else if col.Name == catalog.CPrimaryKeyColName {
-			scanNodeProject[1] = &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(len(neededCols)),
-						Name:   col.Name,
-					},
-				},
-			}
-			neededCols = append(neededCols, col)
-		} else if col.Name == catalog.SystemSI_IVFFLAT_TblCol_Entries_pk {
-			scanNodeProject[2] = &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(len(neededCols)),
-						Name:   col.Name,
-					},
-				},
-			}
-			neededCols = append(neededCols, col)
+			slots = append(slots, 0)
 		}
+		if col.Name == pkCol {
+			slots = append(slots, 1)
+		}
+		if col.Name == originPkCol {
+			slots = append(slots, 2)
+		}
+		if len(slots) == 0 {
+			continue
+		}
+		for _, slot := range slots {
+			scanNodeProject[slot] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(len(neededCols)),
+						Name:   col.Name,
+					},
+				},
+			}
+		}
+		neededCols = append(neededCols, col)
 	}
 
 	newEntriesTableDef := CloneTableDefForPlan(entriesTableDef, false)
@@ -5181,7 +5205,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 				Col: &plan.ColRef{
 					RelPos: 0,
 					ColPos: 1,
-					Name:   catalog.CPrimaryKeyColName,
+					Name:   pkCol,
 				},
 			},
 		},
@@ -5193,7 +5217,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: 2,
-				Name:   catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+				Name:   originPkCol,
 			},
 		},
 	}
@@ -5857,7 +5881,7 @@ const (
 // Legacy reads and explicit 16-column inserts remain valid during every earlier
 // state, including a partially applied migration.
 func resolveForeignKeyCatalogLayout(ctx CompilerContext) (foreignKeyCatalogLayout, error) {
-	_, tableDef, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MOForeignKeys, nil)
+	_, tableDef, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MOForeignKeys, nil, nil)
 	if err != nil {
 		return foreignKeyCatalogLegacy, err
 	}
@@ -6332,15 +6356,15 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
 
-			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
@@ -6446,15 +6470,15 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
 
-			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil, nil)
 			if err != nil {
 				return err
 			}
@@ -6486,6 +6510,14 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 				return err
 			}
 
+			// the ignored rows of the deleted or updated keys go; product_l2 records an updated row
+			// again when the index cannot store its new value
+			if ignoredDef, ok := multiTableIndex.IndexDefs[catalog.IndexIgnored_TblType]; ok {
+				if err = appendDeleteIgnoredRows(builder, bindCtx, delCtx, ignoredDef); err != nil {
+					return err
+				}
+			}
+
 			if isUpdate {
 				// do it like simple update
 				lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
@@ -6502,10 +6534,11 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					}
 					builder.appendStep(lastNodeId)
 				}
-				// insert ivf entries using the updated row image
+				// insert ivf entries using the updated row image of every updated row, including the
+				// rows without entries the index ignored
 				{
-					lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-					lastNodeId = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeId, delCtx.updateColPosMap, len(builder.qry.Nodes[lastNodeId].ProjectList)-2)
+					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+					lastNodeId = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeId, delCtx.updateColPosMap, -1)
 
 					preEntriesStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
 					if err != nil {
@@ -6555,10 +6588,46 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 	return nil
 }
 
+// appendDeleteIgnoredRows appends the step that deletes the ignored rows of the rows delCtx deletes.
+func appendDeleteIgnoredRows(builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, ignoredDef *IndexDef) error {
+	ref, tableDef, err := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, ignoredDef.IndexTableName, nil, nil)
+	if err != nil {
+		return err
+	}
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, ignoredDef.IndexName)
+	}
+	var lastNodeId int32
+	var deleteIdx, pkPos int
+	if delCtx.isUnrestrictedDelete {
+		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, ref, tableDef)
+		deleteIdx = getRowIdPos(tableDef)
+		pkPos, _ = getPkPos(tableDef, false)
+	} else {
+		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+		lastNodeId, err = appendDeleteHiddenTablePlan(builder, bindCtx, ref, tableDef, lastNodeId, delCtx.tableDef,
+			catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Pk)
+		deleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
+		pkPos = deleteIdx + 1
+	}
+	if err != nil {
+		return err
+	}
+	_, pkTyp := getPkPos(tableDef, false)
+	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, ref, tableDef, deleteIdx, false, pkPos, pkTyp, delCtx.lockTable)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true, false)
+	putDeleteNodeInfo(delNodeInfo)
+	if err != nil {
+		return err
+	}
+	builder.appendStep(lastNodeId)
+	return nil
+}
+
 func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
-	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -6583,7 +6652,7 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 	// with the primary key of the hidden table as the unique key.
 	// package contains some information needed by the fuzzy filter to run background SQL.
 	if indexdef.GetUnique() {
-		_, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+		_, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -6670,7 +6739,7 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 
 func buildPreInsertMasterIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
-	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -6742,7 +6811,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	usePositionalIndexDelete := skipIndexInsert &&
 		delCtx.sourceTag == 0 && !delCtx.preserveUpdateSourceProjection
 
-	uniqueObjRef, uniqueTableDef, err := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	uniqueObjRef, uniqueTableDef, err := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -6967,7 +7036,7 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 	isUpdate := delCtx.updateColLength > 0
 	// Used by pre-insert vector index.
-	masterObjRef, masterTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	masterObjRef, masterTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -7440,7 +7509,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -7755,7 +7824,7 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	}
 
 	//isUpdate := delCtx.updateColLength > 0
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -7834,7 +7903,7 @@ func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 	isDelete := true
 	isInsert := delCtx.updateColLength > 0
 
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -7855,7 +7924,7 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 	isInsert := true
 	isDeleteWithoutFilters := false
 
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}

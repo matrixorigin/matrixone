@@ -149,7 +149,7 @@ func TestExplicitCollationConflicts(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			var sqlErr *moerr.Error
 			require.ErrorAs(t, err, &sqlErr)
@@ -187,7 +187,7 @@ func TestExpressionCollationAssignmentAdmission(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(compiler, stmt, false)
+		return BuildPlan(compiler, stmt, false, nil)
 	}
 	created, err := build("create table collation_assign(id int primary key,t varchar(4),b varbinary(4))")
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(compiler, stmt, false)
+		return BuildPlan(compiler, stmt, false, nil)
 	}
 	created, err := build("create table collation_charset(s3 varchar(4) collate utf8_unicode_ci,s4 varchar(4) collate utf8mb4_unicode_ci,legacy varchar(4))")
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestExpressionCollationDerivedMetadata(t *testing.T) {
 	} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		built, err := BuildPlan(ctx, stmt, true)
+		built, err := BuildPlan(ctx, stmt, true, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		encoded, err := proto.Marshal(built)
@@ -556,7 +556,7 @@ func TestExpressionCollationWindowTraversal(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
-	built, err := BuildPlan(optimizer.CurrentContext(), stmt, false)
+	built, err := BuildPlan(optimizer.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, countReachableNodeType(built.GetQuery(), pb.Node_WINDOW))
 }
@@ -603,6 +603,155 @@ func TestExpressionCollationSemantics(t *testing.T) {
 		{"if(true,'Á' collate utf8mb4_unicode_ci,'z') = 'a'", "true"},
 		{"ifnull('Á' collate utf8mb4_unicode_ci,'z') = 'a'", "true"},
 		{"concat_ws('-', 'Á' collate utf8mb4_unicode_ci,'b') = 'a-b'", "true"},
+		// Issue #31175: pattern operators honor the resolved collation.
+		{"'a' like 'A'", "true"},
+		{"'ABC' like 'abc'", "true"},
+		{"'ABC' like 'a%'", "true"},
+		{"'a' not like 'A'", "false"},
+		{"'abc' regexp 'ABC'", "true"},
+		{"'abc' regexp '[A-Z]+'", "true"},
+		{"'Apple' like 'apple' collate utf8mb4_unicode_ci", "true"},
+		{"'Apple' regexp 'apple' collate utf8mb4_unicode_ci", "true"},
+		{"'a' like 'A' collate utf8mb4_bin", "false"},
+		{"'abc' regexp 'ABC' collate utf8mb4_bin", "false"},
+		{"_binary'a' like _binary'A'", "false"},
+		{"_binary'abc' regexp _binary'ABC'", "false"},
+		// Issue #31175 review: U+03A3/U+03C3/U+03C2 share one fold orbit
+		// under a ci collation, matching LOCATE/INSTR/POSITION and MySQL's
+		// utf8mb4_general_ci weight 0x03A3.
+		{"'ς' like 'Σ'", "true"},
+		{"'σ' like 'ς'", "true"},
+		{"'Σ' like 'σ'", "true"},
+		{"'ς' regexp 'Σ'", "true"},
+		{"'σ' regexp 'ς'", "true"},
+		{"find_in_set('ς','σ,Σ') = 1", "true"},
+		// Issue #31175 review: MySQL aggregates every LIKE argument, ESCAPE
+		// included, so a COLLATE on the ESCAPE character wins the resolution
+		// and the comparison turns case-sensitive. A REGEXP_LIKE match_type
+		// never participates (MySQL resolves it from the subject and pattern
+		// only), so a COLLATE there can neither conflict nor win.
+		{"'a' like 'A' escape ('!' collate utf8mb4_bin)", "false"},
+		{"'a' like 'A' escape ('!' collate utf8mb4_general_ci)", "true"},
+		{"regexp_like('a' collate utf8mb4_unicode_ci, 'A', 'i' collate utf8mb4_bin)", "true"},
+		{"regexp_like('a' collate utf8mb4_unicode_ci, 'A', 'm' collate utf8mb4_bin)", "true"},
+		// Issue #31175 review: LIKE compares one pattern character against
+		// one value character by the resolved collation's weights
+		// (my_wildcmp_uca). utf8mb4_general_ci folds accented and dotless-i
+		// pairs (á=a, ı=I, ß=s); utf8mb4_unicode_ci compares UCA 4.0.0
+		// primary weight streams (á=a) while ı keeps its own weight and æ
+		// is not ae. LIKE never spans an expansion across characters, so
+		// under unicode_ci ß matches neither s nor ss, unlike FIND_IN_SET
+		// and =, which compare whole collation keys. REGEXP keeps its
+		// case-only fold, so accented letters stay distinct there.
+		{"'á' like 'a'", "true"},
+		{"'áb' like 'a_'", "true"},
+		{"'ı' like 'I'", "true"},
+		{"'ß' like 's'", "true"},
+		{"'ß' like 'ss'", "false"},
+		{"'á' like 'a' collate utf8mb4_unicode_ci", "true"},
+		{"'ı' like 'I' collate utf8mb4_unicode_ci", "false"},
+		{"'ß' like 'ss' collate utf8mb4_unicode_ci", "false"},
+		{"'ss' like 'ß' collate utf8mb4_unicode_ci", "false"},
+		{"'ß' like 's' collate utf8mb4_unicode_ci", "false"},
+		{"'œ' like 'oe' collate utf8mb4_unicode_ci", "false"},
+		{"'æ' like 'ae' collate utf8mb4_unicode_ci", "false"},
+		{"'ß' like '_' collate utf8mb4_unicode_ci", "true"},
+		{"'ß' like '__' collate utf8mb4_unicode_ci", "false"},
+		{"'xßy' like '%ss%' collate utf8mb4_unicode_ci", "false"},
+		{"'xßy' like '%s%' collate utf8mb4_unicode_ci", "false"},
+		{"'xssy' like '%ss%' collate utf8mb4_unicode_ci", "true"},
+		{"'á' regexp 'a'", "false"},
+		{"'á' regexp 'a' collate utf8mb4_unicode_ci", "false"},
+		{"find_in_set('á','a,b') = 1", "true"},
+		{"find_in_set('ß','ss,x') = 0", "true"},
+		{"find_in_set('ß','ss,x' collate utf8mb4_unicode_ci) = 1", "true"},
+		{"find_in_set('ı','I,x') = 1", "true"},
+		{"find_in_set('ı','I,x' collate utf8mb4_unicode_ci) = 0", "true"},
+		// Issue #31175 review: ILIKE keeps its complete Unicode simple-fold
+		// equivalence on every domain: the Kelvin and Angstrom signs fold
+		// with their letters, and the sigma orbit stays together.
+		{"'K' ilike 'k'", "true"},
+		{"'K' ilike 'K'", "true"},
+		{"'Å' ilike 'å'", "true"},
+		{"'Å' ilike 'Å'", "true"},
+		{"'ς' ilike 'Σ'", "true"},
+		{"'xKz' ilike '%k%'", "true"},
+		{"'K_k' ilike 'k!_k' escape '!'", "true"},
+		// Issue #31175 review (values probed on a MySQL 8.0.44 oracle): an
+		// explicit COLLATE wins coercibility aggregation over a binary string
+		// operand in either operand order, so LIKE and FIND_IN_SET compare the
+		// converted binary value under that collation, exactly as the =
+		// comparator above does. With no explicit collation the binary operand
+		// keeps the byte-wise test, and an explicit utf8mb4_bin keeps it too.
+		// The equal-coercibility tie keeps MySQL's byte-wise rule in either
+		// operand order: only a strictly stronger (explicit or implicit)
+		// collation converts the binary literal's domain.
+		{"'abc' like _binary'ABC%'", "false"},
+		{"find_in_set('A',_binary'a,b') = 0", "true"},
+		{"_binary'abc' like ('ABC%' collate utf8mb4_general_ci)", "true"},
+		{"('abc' collate utf8mb4_general_ci) like _binary'ABC%'", "true"},
+		{"_binary'abc' like ('ABC%' collate utf8mb4_unicode_ci)", "true"},
+		{"('abc' collate utf8mb4_unicode_ci) like _binary'ABC%'", "true"},
+		{"_binary'abc' like 'ABC%'", "false"},
+		{"_binary'abc' like ('ABC%' collate utf8mb4_bin)", "false"},
+		{"_binary'abc' like ('abc%' collate utf8mb4_general_ci)", "true"},
+		{"_binary'xbc' like ('ABC%' collate utf8mb4_general_ci)", "false"},
+		{"find_in_set(_binary'A','a,b') = 0", "true"},
+		{"find_in_set(_binary'A','a,b' collate utf8mb4_general_ci) = 1", "true"},
+		{"find_in_set('A' collate utf8mb4_general_ci, _binary'a,b') = 1", "true"},
+		{"find_in_set(_binary'A','a,b' collate utf8mb4_unicode_ci) = 1", "true"},
+		{"find_in_set('A' collate utf8mb4_unicode_ci, _binary'a,b') = 1", "true"},
+		{"find_in_set(_binary'a','a,b' collate utf8mb4_general_ci) = 1", "true"},
+		{"find_in_set(_binary'z','a,b' collate utf8mb4_general_ci) = 0", "true"},
+		{"find_in_set(_binary'A','A,b' collate utf8mb4_bin) = 1", "true"},
+		// A hexadecimal string literal carries the same binary string domain
+		// as a _binary introducer, and the MySQL 8.0.44 oracle gives it the
+		// same treatment: an explicit ci COLLATE folds, no COLLATE stays
+		// byte-wise.
+		{"0x616263 like ('ABC%' collate utf8mb4_general_ci)", "true"},
+		{"0x616263 like 'ABC%'", "false"},
+		{"find_in_set(0x41,'a,b' collate utf8mb4_general_ci) = 1", "true"},
+		{"find_in_set(0x41,'a,b') = 0", "true"},
+		{"find_in_set('a' collate utf8mb4_unicode_ci, 'A,b') = 1", "true"},
+		// A CAST(x AS BINARY) expression carries the same binary string
+		// domain as a _binary literal, and the MySQL 8.0.44 oracle applies
+		// the same coercibility rule: an explicit ci COLLATE on either
+		// operand wins strictly and folds, an equal-coercibility tie or an
+		// explicit utf8mb4_bin stays byte-wise. The conversion cast that
+		// delivers the value must preserve it intact (a T_binary source
+		// carries width -1, which must not truncate) and the folded result
+		// must keep the selected text domain instead of reclaiming the
+		// CAST's binary provenance (issue #31175 round-21 review).
+		{"cast('abc' as binary) like ('ABC%' collate utf8mb4_general_ci)", "true"},
+		{"('abc' collate utf8mb4_general_ci) like cast('ABC%' as binary)", "true"},
+		{"cast('abc' as binary) like ('ABC%' collate utf8mb4_unicode_ci)", "true"},
+		{"('abc' collate utf8mb4_unicode_ci) like cast('ABC%' as binary)", "true"},
+		{"cast('abc' as binary) like 'ABC%'", "false"},
+		{"cast('abc' as binary) like ('ABC%' collate utf8mb4_bin)", "false"},
+		{"cast('abc' as binary) like ('abc%' collate utf8mb4_general_ci)", "true"},
+		{"cast('xyz' as binary) like ('ABC%' collate utf8mb4_general_ci)", "false"},
+		{"find_in_set(cast('A' as binary),'a,b' collate utf8mb4_general_ci) = 1", "true"},
+		{"find_in_set('A' collate utf8mb4_general_ci,cast('a,b' as binary)) = 1", "true"},
+		{"find_in_set(cast('A' as binary),'a,b' collate utf8mb4_unicode_ci) = 1", "true"},
+		{"find_in_set('A' collate utf8mb4_unicode_ci,cast('a,b' as binary)) = 1", "true"},
+		{"find_in_set(cast('A' as binary),'a,b') = 0", "true"},
+		{"find_in_set(cast('a' as binary),'a,b' collate utf8mb4_general_ci) = 1", "true"},
+		{"find_in_set(cast('z' as binary),'a,b' collate utf8mb4_general_ci) = 0", "true"},
+		{"find_in_set(cast('a' as binary),'a,b' collate utf8mb4_bin) = 1", "true"},
+		// Equality and IN over the CAST shape behave exactly as their pure
+		// literal counterparts: utf8mb4_unicode_ci folds, while explicit
+		// utf8mb4_general_ci on literals keeps the pre-existing equality
+		// parity gap ('ALICE' = 'alice' COLLATE utf8mb4_general_ci is 0 on
+		// the base commit as well; that gap is scoped to a follow-up issue
+		// and is unchanged by this repair).
+		{"cast('ALICE' as binary) = ('Alice' collate utf8mb4_general_ci)", "false"},
+		{"('Alice' collate utf8mb4_general_ci) = cast('ALICE' as binary)", "false"},
+		{"cast('ALICE' as binary) = ('Alice' collate utf8mb4_unicode_ci)", "true"},
+		{"('Alice' collate utf8mb4_unicode_ci) = cast('ALICE' as binary)", "true"},
+		{"cast('ALICE' as binary) = 'Alice'", "false"},
+		{"cast('ALICE' as binary) = ('Alice' collate utf8mb4_bin)", "false"},
+		{"cast('ALICE' as binary) in ('Alice' collate utf8mb4_general_ci)", "false"},
+		{"cast('ALICE' as binary) in ('Alice')", "false"},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+tc.input, 1)
@@ -633,6 +782,327 @@ func TestExpressionCollationSemantics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Issue #31175 review: a _binary introducer mixed with an explicit text
+// collation keeps MySQL's error 3995 rejection for REGEXP. Collation
+// normalization must not convert the binary operand away before the regexp
+// compatibility check can see its original domain, in either operand order.
+func TestRegexpBinaryIntroducerKeepsCharsetMismatch(t *testing.T) {
+	for _, input := range []string{
+		"_binary'abc' regexp ('ABC' collate utf8mb4_general_ci)",
+		"('ABC' collate utf8mb4_general_ci) regexp _binary'abc'",
+		"_binary'abc' regexp ('ABC' collate utf8mb4_unicode_ci)",
+		"('ABC' collate utf8mb4_unicode_ci) regexp _binary'abc'",
+		"regexp_like(_binary'abc', 'ABC' collate utf8mb4_general_ci)",
+		"regexp_like('ABC' collate utf8mb4_unicode_ci, _binary'abc')",
+		// A CAST(x AS BINARY) operand is the same binary/ci mixture and is
+		// rejected identically in both operand orders (MySQL 8.0.44 parity).
+		"cast('abc' as binary) regexp ('ABC' collate utf8mb4_general_ci)",
+		"('ABC' collate utf8mb4_general_ci) regexp cast('abc' as binary)",
+		"cast('abc' as binary) regexp 'ABC'",
+		"'abc' regexp cast('ABC' as binary)",
+		"regexp_like(cast('abc' as binary), 'ABC' collate utf8mb4_general_ci)",
+		"regexp_like('ABC' collate utf8mb4_general_ci, cast('abc' as binary))",
+	} {
+		t.Run(input, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+input, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			_, err = NewDefaultBinder(t.Context(), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cannot be used in conjunction")
+		})
+	}
+}
+
+// Issue #31175 review: the selected comparison collation must reach the
+// pattern matchers even when every operand is an implicit version-zero
+// column. With a utf8mb4_general_ci column and a utf8mb4_bin column the
+// resolver selects the _bin collation, so LIKE, REGEXP and FIND_IN_SET must
+// compare case-sensitively in either operand order instead of folding from
+// whichever operand they happen to read. Every other function keeps its
+// legacy operand identities for exactly this operand mix.
+func TestPatternConsumersDeliverSelectedCollation(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	generalType := types.NewWithCharset(types.T_varchar, 30, 0, types.CharsetUTF8)
+	binType := types.NewWithCharset(types.T_varchar, 30, 0, types.CharsetUTF8MB4Bin)
+	newCol := func(typ types.Type, pos int32) *Expr {
+		return &Expr{Typ: typ.PlanType(), Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: pos}}}
+	}
+	for _, tc := range []struct {
+		name string
+		fn   string
+		args []*Expr
+	}{
+		{"like ci subject", "like", []*Expr{newCol(generalType, 0), newCol(binType, 1)}},
+		{"like bin subject", "like", []*Expr{newCol(binType, 1), newCol(generalType, 0)}},
+		{"regexp ci subject", "reg_match", []*Expr{newCol(generalType, 0), newCol(binType, 1)}},
+		{"regexp bin subject", "reg_match", []*Expr{newCol(binType, 1), newCol(generalType, 0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(t.Context(), tc.fn, tc.args)
+			require.NoError(t, err)
+			for _, arg := range bound.GetF().Args {
+				require.Equal(t, uint32(types.CharsetUTF8MB4Bin), arg.Typ.Charset,
+					"the selected _bin collation must be delivered to %s", tc.fn)
+			}
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			bat := batch.NewWithSize(2)
+			defer bat.Clean(proc.Mp())
+			bat.Vecs[0] = vector.NewVec(generalType)
+			bat.Vecs[1] = vector.NewVec(binType)
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("A"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("Alice"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("a"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, proc.Mp()))
+			bat.SetRowCount(2)
+			result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, []bool{false, true}, vector.MustFixedColNoTypeCheck[bool](result),
+				"the _bin selection compares case-sensitively")
+		})
+	}
+	for _, tc := range []struct {
+		name       string
+		args       []*Expr
+		generalVal string
+		binVal     string
+	}{
+		{"find_in_set bin needle", []*Expr{newCol(binType, 1), newCol(generalType, 0)}, "a,b", "A"},
+		{"find_in_set ci needle", []*Expr{newCol(generalType, 0), newCol(binType, 1)}, "A", "a,b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(t.Context(), "find_in_set", tc.args)
+			require.NoError(t, err)
+			for _, arg := range bound.GetF().Args {
+				require.Equal(t, uint32(types.CharsetUTF8MB4Bin), arg.Typ.Charset,
+					"the selected _bin collation must be delivered to find_in_set")
+			}
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			bat := batch.NewWithSize(2)
+			defer bat.Clean(proc.Mp())
+			bat.Vecs[0] = vector.NewVec(generalType)
+			bat.Vecs[1] = vector.NewVec(binType)
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(tc.generalVal), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(tc.binVal), false, proc.Mp()))
+			bat.SetRowCount(1)
+			result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{0}, vector.MustFixedColNoTypeCheck[int32](result),
+				"the _bin selection keeps membership byte-wise")
+		})
+	}
+	// The identical operand mix through a non-pattern function keeps its
+	// legacy behavior: equality is deliberately outside the delivery. The
+	// binder's own comparison merge unifies the operand types for "=", so
+	// pin the observable behavior instead of the representation: this mix
+	// compares case-sensitively in both operand orders.
+	for _, tc := range []struct {
+		name string
+		args []*Expr
+	}{
+		{"equal ci left", []*Expr{newCol(generalType, 0), newCol(binType, 1)}},
+		{"equal bin left", []*Expr{newCol(binType, 1), newCol(generalType, 0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(t.Context(), "=", tc.args)
+			require.NoError(t, err)
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			bat := batch.NewWithSize(2)
+			defer bat.Clean(proc.Mp())
+			bat.Vecs[0] = vector.NewVec(generalType)
+			bat.Vecs[1] = vector.NewVec(binType)
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("A"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("Alice"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("a"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, proc.Mp()))
+			bat.SetRowCount(2)
+			result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, []bool{false, true}, vector.MustFixedColNoTypeCheck[bool](result),
+				"equality keeps its legacy case-sensitive comparison for this mix")
+		})
+	}
+}
+
+// Issue #31175 review: an implicit case-insensitive column and CAST(x AS
+// BINARY) both carry implicit coercibility, and MySQL lets the binary
+// operand absorb that tie. LIKE/ILIKE/FIND_IN_SET therefore compare
+// byte-wise and the regexp functions keep their error 3995 rejection,
+// exactly the routing these matchers had before they joined collation
+// resolution; equality keeps the generic 1267 verdict it already had. The
+// restored admission must leave the operands unconverted (a delivery cast on
+// the column would break projection and prefix-index use) and must not
+// absorb text/text conflicts. FIND_IN_SET's overload matcher preserves each
+// string operand's domain, so a non-constant binary operand (a parameter or
+// an unfolded CAST, exercised below) keeps the byte-wise routing instead of
+// losing its domain to a VARCHAR conversion cast.
+func TestPatternBinaryColumnCastTieRestored(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	compiler := NewMockCompilerContext(false, proc)
+	build := func(sql string) (*Plan, error) {
+		t.Helper()
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(compiler, stmt, false, nil)
+	}
+	created, err := build("create table collation_binary_tie(s varchar(20) collate utf8mb4_unicode_ci, g varchar(20))")
+	require.NoError(t, err)
+	compiler.tables["collation_binary_tie"] = created.GetDdl().GetCreateTable().TableDef
+	compiler.objects["collation_binary_tie"] = &ObjectRef{ObjName: "collation_binary_tie", SchemaName: "tpch"}
+	for _, tc := range []struct {
+		sql  string
+		code uint16
+	}{
+		{"select s like cast('alice%' as binary) from collation_binary_tie", 0},
+		{"select cast('alice%' as binary) like s from collation_binary_tie", 0},
+		{"select s not like cast('alice%' as binary) from collation_binary_tie", 0},
+		{"select find_in_set(s, cast('alice,bob' as binary)) from collation_binary_tie", 0},
+		{"select find_in_set(cast('Alice' as binary), s) from collation_binary_tie", 0},
+		{"select s ilike cast('alice%' as binary) from collation_binary_tie", 0},
+		{"select cast('alice%' as binary) ilike s from collation_binary_tie", 0},
+		// The regexp functions are admitted through the same tie, and their
+		// own compatibility check keeps MySQL's error 3995 rejection for the
+		// binary/ci mix; the generic 1267 verdict must not replace it.
+		{"select s regexp cast('^alice' as binary) from collation_binary_tie", 3995},
+		{"select cast('Alice' as binary) regexp s from collation_binary_tie", 3995},
+		{"select regexp_like(s, cast('^alice' as binary)) from collation_binary_tie", 3995},
+		// A version-zero general_ci column never lost the tie.
+		{"select g like cast('alice%' as binary) from collation_binary_tie", 0},
+		{"select find_in_set(g, cast('alice,bob' as binary)) from collation_binary_tie", 0},
+		// An explicit COLLATE on the text side still wins the resolution and
+		// converts the binary operand; a COLLATE on the binary CAST itself
+		// keeps its 1253 rejection.
+		{"select (s collate utf8mb4_unicode_ci) like cast('alice%' as binary) from collation_binary_tie", 0},
+		{"select s like cast('alice%' as binary) collate utf8mb4_unicode_ci from collation_binary_tie", 1253},
+		// ESCAPE participates in LIKE's aggregation, so the pairwise order
+		// decides the tie exactly the way MySQL aggregates: the binary
+		// operand absorbs every operand it meets, but a text/text conflict
+		// reached before it stays illegal.
+		{"select s like cast('a%' as binary) escape g from collation_binary_tie", 0},
+		{"select s like g escape cast('!' as binary) from collation_binary_tie", 1267},
+		// Equality and text/text mixes keep the generic verdict.
+		{"select s = cast('ALICE' as binary) from collation_binary_tie", 1267},
+		{"select s like g from collation_binary_tie", 1267},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			_, err := build(tc.sql)
+			if tc.code == 0 {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var sqlErr *moerr.Error
+			require.ErrorAs(t, err, &sqlErr)
+			require.Equal(t, tc.code, sqlErr.MySQLCode())
+		})
+	}
+	// The admitted predicate keeps its operands unconverted: the column
+	// stays a bare column reference and the CAST keeps its own expression,
+	// so the plan shape is the pre-aggregation one.
+	t.Run("no delivery cast wraps the column", func(t *testing.T) {
+		p, err := build("select s like cast('alice%' as binary) from collation_binary_tie")
+		require.NoError(t, err)
+		query := p.GetQuery()
+		like := query.Nodes[query.Steps[0]].ProjectList[0]
+		require.Equal(t, "like", like.GetF().Func.ObjName)
+		require.NotNil(t, like.GetF().Args[0].GetCol(), "the column operand must stay a bare column reference")
+		require.NotNil(t, like.GetF().Args[1].GetF(), "the CAST operand keeps its own expression")
+	})
+	uciType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	col := &Expr{Typ: uciType.PlanType(), Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: 0}}}
+	bindConstant := func(expr string) *Expr {
+		t.Helper()
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+expr, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		bound, err := NewDefaultBinder(t.Context(), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+		require.NoError(t, err)
+		return bound
+	}
+	newBatch := func(value string) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(uciType)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, proc.Mp()))
+		bat.SetRowCount(1)
+		return bat
+	}
+	// The admitted tie routes byte-wise through the binary operand's string
+	// domain in either operand order; ILIKE keeps its fold-on-every-domain
+	// behavior, exactly as before the matchers joined resolution.
+	for _, tc := range []struct {
+		name string
+		fn   string
+		args []*Expr
+		want bool
+	}{
+		{"like ci column / binary cast", "like", []*Expr{col, bindConstant("cast('alice%' as binary)")}, false},
+		{"like binary cast / ci column", "like", []*Expr{bindConstant("cast('alice%' as binary)"), col}, false},
+		{"like exact-case control", "like", []*Expr{col, bindConstant("cast('Alice%' as binary)")}, true},
+		{"like non-match control", "like", []*Expr{col, bindConstant("cast('z%' as binary)")}, false},
+		{"ilike folds on the binary domain", "ilike", []*Expr{col, bindConstant("cast('alice%' as binary)")}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(t.Context(), tc.fn, tc.args)
+			require.NoError(t, err)
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			bat := newBatch("Alice")
+			defer bat.Clean(proc.Mp())
+			result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, []bool{tc.want}, vector.MustFixedColNoTypeCheck[bool](result))
+		})
+	}
+	// The unfolded CAST operands evaluate at runtime exactly like a prepared
+	// CAST(? AS BINARY) parameter: the overload matcher must preserve the
+	// binary string domain so membership stays byte-wise in either operand
+	// order, matching the pre-aggregation executor and MySQL.
+	for _, tc := range []struct {
+		name string
+		args []*Expr
+		want int32
+	}{
+		{"find_in_set ci needle / binary list", []*Expr{col, bindConstant("cast('alice,bob' as binary)")}, 0},
+		{"find_in_set binary needle / ci list", []*Expr{bindConstant("cast('Alice' as binary)"), col}, 1},
+		{"find_in_set exact-case control", []*Expr{col, bindConstant("cast('Alice,bob' as binary)")}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(t.Context(), "find_in_set", tc.args)
+			require.NoError(t, err)
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			bat := newBatch("Alice")
+			defer bat.Clean(proc.Mp())
+			result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{tc.want}, vector.MustFixedColNoTypeCheck[int32](result))
+		})
+	}
+	// The regexp compatibility check still sees the operands' original
+	// domains, so the mix keeps MySQL's error 3995 rejection rather than
+	// the generic 1267 verdict the admission replaced.
+	t.Run("regexp keeps the 3995 rejection", func(t *testing.T) {
+		_, err := BindFuncExprImplByPlanExpr(t.Context(), "reg_match",
+			[]*Expr{col, bindConstant("cast('^alice' as binary)")})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot be used in conjunction")
+		var sqlErr *moerr.Error
+		require.ErrorAs(t, err, &sqlErr)
+		require.Equal(t, uint16(3995), sqlErr.MySQLCode())
+	})
 }
 
 func TestExpressionCollationResolution(t *testing.T) {

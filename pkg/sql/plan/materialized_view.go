@@ -109,7 +109,7 @@ func validateMaterializedViewTimezoneColumns(ctx CompilerContext, stmt *tree.Sel
 		if dbName == "" {
 			dbName = ctx.DefaultDatabase()
 		}
-		_, def, err := ctx.Resolve(dbName, string(source.ObjectName), ctx.GetSnapshot())
+		_, def, err := ctx.Resolve(dbName, string(source.ObjectName), ctx.GetSnapshot(), nil)
 		if err != nil {
 			return err
 		}
@@ -214,7 +214,7 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 		if err := validateMaterializedViewSourceTable(ctx, database, name); err != nil {
 			return err
 		}
-		_, def, err := ctx.Resolve(database, name, ctx.GetSnapshot())
+		_, def, err := ctx.Resolve(database, name, ctx.GetSnapshot(), nil)
 		if err != nil {
 			return err
 		}

@@ -27,8 +27,3 @@ func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement str
 	_, err := db.ExecContext(ctx, statement)
 	require.NoErrorf(t, err, "exec failed: %s", statement)
 }
-
-func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
-	t.Helper()
-	_, _ = db.ExecContext(ctx, statement)
-}

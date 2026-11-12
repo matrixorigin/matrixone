@@ -54,10 +54,11 @@ type hnswSource struct {
 }
 
 type hnswCreateRun struct {
-	tf    *TableFunction
-	proc  *process.Process
-	sqls  []string
-	state *hnswCreateState
+	tf      *TableFunction
+	proc    *process.Process
+	sqls    []string
+	state   *hnswCreateState
+	lookups *int
 }
 
 func hnswCfg(src hnswSource, dict bool) string {
@@ -115,6 +116,7 @@ func int64Result(t *testing.T, mp *mpool.MPool, n int64) executor.Result {
 func runHnswCreate(t *testing.T, params, cfg string, src hnswSource) (*hnswCreateRun, error) {
 	mp := mpool.MustNewZero()
 	run := &hnswCreateRun{proc: testutil.NewProcessWithMPool(t, "", mp)}
+	run.lookups = installOrdinaryMaintenanceRelations(t, run.proc)
 	run.tf = &TableFunction{
 		Attrs:    []string{"status"},
 		Rets:     []*plan.ColDef{{Name: "status", Typ: plan.Type{Id: int32(types.T_int32)}}},
@@ -281,6 +283,13 @@ func TestHnswCreateEmptySource(t *testing.T) {
 		"DELETE FROM `db`.`__dict` WHERE TRUE",
 	}, run.find("DELETE"))
 	require.Empty(t, run.find("INSERT"), "an index built empty trains its range on its first sync")
+}
+
+func TestHnswCreateReadmitsConfigAfterReset(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3}
+	run, err := runHnswCreate(t, hnswL2, hnswCfg(src, false), src)
+	require.NoError(t, err)
+	checkVectorMaintenanceReuse(t, run.tf, run.proc, run.state, run.lookups, &run.state.policy)
 }
 
 func TestHnswCreateStreamError(t *testing.T) {

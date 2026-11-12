@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 
@@ -81,8 +82,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -129,24 +132,47 @@ var (
 	cantCompileForPrepareErr = moerr.NewCantCompileForPrepareNoCtx()
 )
 
-// NewCompile is used to new an object of compile
+// CompileSetup selects the existing statement-setup checkpoint. It grants no
+// permission to execute scoped access without validating its execution intent.
+type CompileSetup uint8
+
+const (
+	ImmediateSetup CompileSetup = iota
+	PreflightSetup
+	RetryPreflightSetup
+)
+
+// NewCompile is the single constructor for ordinary and preflight-owned attempts.
+// A definition retry establishes its workspace boundary before allocating the
+// new Compile; a fresh candidate defers both that boundary and Process publication.
 func NewCompile(
 	addr, db, sql, tenant, uid string,
-	e engine.Engine,
-	proc *process.Process,
-	stmt tree.Statement,
-	isInternal bool,
-	cnLabel map[string]string,
-	startAt time.Time,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool,
+	cnLabel map[string]string, startAt time.Time, setup ...CompileSetup,
 ) *Compile {
+	mode := ImmediateSetup
+	if len(setup) > 1 || len(setup) == 1 && setup[0] > RetryPreflightSetup {
+		panic(moerr.NewInternalErrorNoCtx("invalid compile setup mode"))
+	}
+	if len(setup) == 1 {
+		mode = setup[0]
+	}
+	retryOffset := 0
+	if mode == RetryPreflightSetup {
+		retryOffset = txnOffsetOfCompile(proc)
+	}
 	c := allocateNewCompile(proc)
+	c.preflightPending = mode != ImmediateSetup
+	c.txnOffsetPending = mode == PreflightSetup
 
 	c.e = e
 	c.db = db
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
-	c.proc.SetMessageBoard(c.MessageBoard)
+	if mode == ImmediateSetup {
+		c.proc.SetMessageBoard(c.MessageBoard)
+	}
 	c.sequenceState = captureSequenceStatementState(proc)
 	// One fresh tier-2 retry state per statement execution (design §4 D):
 	// publication unset, no retry window until this statement's own first
@@ -171,8 +197,24 @@ func NewCompile(
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
 	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-	c.TxnOffset = txnOffsetOfCompile(c.proc)
+	if mode == ImmediateSetup {
+		c.TxnOffset = txnOffsetOfCompile(c.proc)
+	} else if mode == RetryPreflightSetup {
+		c.TxnOffset = retryOffset
+	}
 	return c
+}
+
+// DiscardPreflight releases an unstarted temporal Compile without
+// touching the shared Process. It is valid only after the preflight rejected.
+func (c *Compile) DiscardPreflight() {
+	if c == nil || !c.preflightPending {
+		panic("preflight discard after publication")
+	}
+	c.isPrepare = false
+	c.preserveProcessOnPoolClear = true
+	c.cnLabel = nil
+	doCompileRelease(c)
 }
 
 // txnOffsetOfCompile returns the workspace write offset a new compile reads
@@ -198,6 +240,10 @@ func txnOffsetOfCompile(proc *process.Process) int {
 
 func (c *Compile) Release() {
 	if c == nil {
+		return
+	}
+	if c.preflightPending {
+		c.DiscardPreflight()
 		return
 	}
 	// Prepared Compiles can remain cached after Release. Semantic CTAS values
@@ -294,7 +340,13 @@ func (c *Compile) FreezeResultMetadata() {
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string, diagnosticProof ...bool) error {
 	// A cached Compile must never expose the previous execution's CTAS values.
 	c.preparedParamValues = nil
+	c.executionIntent = nil
 	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
+	// A physical topology can remain tied to a captured execution after folding.
+	// Clearing the snapshot cannot revoke those expressions, so rebuild instead.
+	if c.capturedExecutionTopology || plan2.HasCapturedExecutionAccess(c.pn) {
+		return cantCompileForPrepareErr
+	}
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -402,6 +454,9 @@ func (c *Compile) capturePlanSnapshot() {
 // applyPlanSnapshot binds the Process transport to this Compile's immutable
 // plan generation. In particular, Reset must apply rather than recapture it.
 func (c *Compile) applyPlanSnapshot() {
+	if c.preflightPending {
+		return
+	}
 	if !c.hasPlanSnapshotTS {
 		c.proc.ClearPlanSnapshotTS()
 		return
@@ -442,6 +497,9 @@ func (c *Compile) captureStringShuffleHashAlgorithm() {
 }
 
 func (c *Compile) applyStringShuffleHashAlgorithm() {
+	if c.preflightPending {
+		return
+	}
 	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
 }
 
@@ -486,6 +544,7 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	c.productL2IgnoredOf = nil
 	// Materialized sources own allocation-account-backed retained and decoded
 	// batches but are not VM operators. Close their compile-owned safety nets
 	// before sealing the execution account, especially on partial-run failures
@@ -494,6 +553,10 @@ func (c *Compile) clear() {
 		source.Close()
 		delete(c.materializedSources, k)
 	}
+	for _, domain := range c.localRuntimeDomains {
+		domain.Close()
+	}
+	c.localRuntimeDomains = nil
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -513,8 +576,12 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
+	c.indexMaintenanceSpec = nil
+	c.indexMaintenanceLiterals = nil
+	c.indexMaintenanceNodeID = 0
 	c.fill = nil
 	c.buildPlanFunc = nil
+	c.buildFallbackPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -538,8 +605,11 @@ func (c *Compile) clear() {
 		c.lockMeta = nil
 	}
 
-	c.proc.Free()
+	if !c.preserveProcessOnPoolClear {
+		c.proc.Free()
+	}
 	c.proc = nil
+	c.preserveProcessOnPoolClear = false
 	c.planSnapshotTS = timestamp.Timestamp{}
 	c.hasPlanSnapshotTS = false
 	c.planGenerationReused = false
@@ -553,6 +623,10 @@ func (c *Compile) clear() {
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
+	c.executionIntent = nil
+	c.capturedExecutionTopology = false
+	c.preflightPending = false
+	c.txnOffsetPending = false
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil
@@ -1429,6 +1503,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if plan2.HasCapturedExecutionIndexScans(qry) && c.execType != plan2.ExecTypeTP {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
 		c.execType = plan2.ExecTypeAP_ONECN
 	}
@@ -1498,6 +1575,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
+	c.bindLocalRuntimeFilterDomains(qry, steps)
 	if queryNeedsGroupingTransport(qry) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
@@ -2154,6 +2232,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		right = c.ensureCoordinatorOnlyFunctions(node, right)
+		if node.JoinType == plan.Node_L2 {
+			ig, err := c.productL2Ignored(node)
+			if err != nil {
+				return nil, err
+			}
+			if ig != nil {
+				if c.productL2IgnoredOf == nil {
+					c.productL2IgnoredOf = make(map[*plan.Node]*productl2.Ignored)
+				}
+				c.productL2IgnoredOf[node] = ig
+			}
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -2209,7 +2299,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		ss, err = c.tryCompileOwnedSetMembership(curNodeIdx, node, left, right)
+		if err != nil {
+			return nil, err
+		}
+		if ss == nil {
+			ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
@@ -2631,28 +2727,34 @@ func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam,
 
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
 	param := &tree.ExternParam{}
+	// Both file-backed and inline loads reconstruct the reader-visible param
+	// from the serialized source param planned into TableDef.Createsql, so the
+	// two scan types honor identical parsed options.
+	if err := json.Unmarshal([]byte(createsql), param); err != nil {
+		return nil, err
+	}
 	if externScan.LoadType == tree.INLINE {
+		// The serialized source param excludes the inline payload to keep it
+		// in ExternScan.Data once; restore the authoritative copy.
 		param.ScanType = int(externScan.LoadType)
 		param.Data = externScan.Data
-		param.Format = externScan.Format
-		param.Tail = new(tree.TailParameter)
-		param.Tail.IgnoredLines = externScan.IgnoredLines
-		param.Tail.Fields = &tree.Fields{
-			Terminated: &tree.Terminated{
-				Value: externScan.Terminated,
-			},
-			EnclosedBy: &tree.EnclosedBy{
-				Value: externScan.EnclosedBy[0],
-			},
-			EscapedBy: &tree.EscapedBy{
-				Value: externScan.EscapedBy[0],
-			},
+		// The flat proto keeps the established inline escape byte: both
+		// planners encode byte 0 (escape processing disabled) when ESCAPED
+		// BY is omitted or empty, and the explicit byte otherwise, while the
+		// serialized source param leaves the field nil for the omitted case,
+		// where the reader would enable its default backslash escape and
+		// change accepted data. Restore the escape byte so inline loads stay
+		// byte-compatible with the established behavior.
+		if param.Tail == nil {
+			param.Tail = new(tree.TailParameter)
 		}
-		param.JsonData = externScan.JsonType
-	} else {
-		if err := json.Unmarshal([]byte(createsql), param); err != nil {
-			return nil, err
+		if param.Tail.Fields == nil {
+			param.Tail.Fields = &tree.Fields{}
 		}
+		if param.Tail.Fields.EscapedBy == nil {
+			param.Tail.Fields.EscapedBy = &tree.EscapedBy{}
+		}
+		param.Tail.Fields.EscapedBy.Value = externScan.EscapedBy[0]
 	}
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
@@ -5367,6 +5469,7 @@ func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) 
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 	op := constructTableFunction(node, c.pn.GetQuery())
+	c.attachIndexMaintenance(node, op)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ds.setRootOperator(op)
 	ss := []*Scope{ds}
@@ -5381,6 +5484,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		ds := newScope(Merge)
 		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
 		op := constructTableFunction(node, c.pn.GetQuery())
+		c.attachIndexMaintenance(node, op)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 
 		if currMcpu > 1 {
@@ -5446,6 +5550,7 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
+		c.attachIndexMaintenance(node, op)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -5644,21 +5749,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if err != nil {
 		return nil, nil, err
 	}
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx = scanSnapshotTxn(ctx, txnOp, node.ScanSnapshot)
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -5814,6 +5905,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	c.filterExprMu.Lock()
 	defer c.filterExprMu.Unlock()
 	storageFilters := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
+	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
+	storageFilters = appendCandidateStorageHints(storageFilters, blockFilters)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5825,7 +5918,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
 	if c.preparedJoinDiagnosticFree {
 		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
 	}
@@ -5859,15 +5951,58 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
+// appendCandidateStorageHints gives memtable/PK readers the same proved hints
+// as object pruning, without forwarding an identical row copy twice.
+func appendCandidateStorageHints(storage, block []*plan.Expr) []*plan.Expr {
+	cloned := false
+	for _, expr := range block {
+		if expr.GetCandidateFilter() {
+			alreadyPresent := false
+			for _, existing := range storage {
+				if existing.GetCandidateFilter() && candidateStorageHintEqual(existing, expr) {
+					alreadyPresent = true
+					break
+				}
+			}
+			if alreadyPresent {
+				continue
+			}
+			if !cloned {
+				storage = append([]*plan.Expr(nil), storage...)
+				cloned = true
+			}
+			storage = append(storage, expr)
+		}
+	}
+	return storage
+}
+
+// Statistics are recalculated separately for row and block filters. They are
+// not part of execution identity, but permission and provenance remain part of
+// the comparison. Clone before clearing stats so reusable plans stay intact.
+func candidateStorageHintEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	normalize := func(expr *plan.Expr) *plan.Expr {
+		copy := proto.Clone(expr).(*plan.Expr)
+		_ = plan.VisitExprTree(copy, func(item *plan.Expr) error {
+			item.Selectivity = 0
+			item.Ndv = 0
+			return nil
+		})
+		return copy
+	}
+	return proto.Equal(normalize(left), normalize(right))
+}
+
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
 func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) []*plan.Expr {
 	var filtered []*plan.Expr
 	for i, expr := range exprs {
-		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
-			plan2.ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
-		if exclude {
+		if !plan2.ScanStorageFilterEligible(proc, expr, provenFree) {
 			if filtered == nil {
 				filtered = make([]*plan.Expr, 0, len(exprs)-1)
 				filtered = append(filtered, exprs[:i]...)
@@ -6404,9 +6539,6 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if keys, dop := c.parallelSetMembership(node, left, right); dop > 1 {
-		return c.compileParallelSetMembership(node, left, right, keys, dop)
-	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
@@ -7208,6 +7340,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
+			op.Ignored = c.productL2IgnoredOf[node]
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			if rs[i].NodeInfo.Mcpu != 1 {
@@ -7619,6 +7752,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
+			c.attachIndexMaintenance(right, op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
@@ -7629,6 +7763,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			c.attachIndexMaintenance(right, op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
@@ -7745,6 +7880,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		if topN, ok := c.preparedPaginationTop(node); ok {
 			return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 		}
+		var scanBound uint64
 		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
@@ -7771,8 +7907,18 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 				// external Order for large prefixes, even with a tiny final LIMIT.
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
+			if !overflow && limit != 0 {
+				scanBound = topN
+			}
+		} else if bound, ok := c.preparedPaginationScanBound(node); ok {
+			scanBound = bound
 		}
-		return c.compileLimit(node, c.compileOffset(node, c.compileOrder(node, ss)))
+		var scan *plan.Node
+		var tag int32
+		if scanBound > mergeTopResidentPlanThreshold {
+			scan, tag = c.paginationCutoffScan(node)
+		}
+		return c.compileLimit(node, c.compileOffset(node, c.compileOrderWithCutoff(node, ss, scan, scanBound, tag)))
 
 	case node.Limit == nil && node.Offset != nil && len(node.OrderBy) > 0: // order and offset
 		return c.compileOffset(node, c.compileOrder(node, ss))
@@ -7988,9 +8134,20 @@ func hasMaterializedTopOrderColumns(orderBy []*plan.OrderBySpec) bool {
 }
 
 func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
+	return c.compileOrderWithCutoff(node, ss, nil, 0, 0)
+}
+
+func (c *Compile) compileOrderWithCutoff(node *plan.Node, ss []*Scope, scan *plan.Node, bound uint64, tag int32) []*Scope {
+	newOrder := func(scope *Scope) *order.Order {
+		op := constructOrder(node)
+		if scan != nil && tag > 0 && bound > 0 && scanCutoffScopeMatches(scope, scan) {
+			op.ScanCutoffLimit, op.ScanCutoffTag = bound, tag
+		}
+		return op
+	}
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		order := constructOrder(node)
+		order := newOrder(ss[0])
 		order.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(order)
 		c.anal.isFirst = false
@@ -8006,7 +8163,7 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		order := constructOrder(node)
+		order := newOrder(ss[i])
 		order.SetIdx(c.anal.curNodeIdx)
 		order.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(order)
@@ -10130,8 +10287,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
-	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	rs.Proc = c.proc.NewNoContextChildProc(0)
 	if len(ss) > 0 {
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 
@@ -10148,7 +10306,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if sameExecutionNode(rs.NodeInfo, ss[i].NodeInfo) {
 			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
+		rs.Proc.Reg.MergeReceivers[j] = process.NewPipelineEdge(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
@@ -10847,21 +11005,7 @@ func collectTombstones(
 	var tombstone engine.Tombstoner
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
-		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
-		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() == nil {
-				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	ctx, _ := scanSnapshotContext(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-----------------------------------------------------------------------------------------------------
 
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
@@ -10873,7 +11017,8 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
+	// 读取事务由 rel 持有，不能把其他扫描的 clone 当作本次读取点记录。
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, nil)
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -10979,24 +11124,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-------------------------------------------------------------------------------------------------------------
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -11049,7 +11177,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
-					return partialResults, partialResultTypes, columnMap
+					// Keep validating the remaining aggregates: the complete node
+					// takes the metadata fast path only if every aggregate is eligible.
+					continue
 				}
 				return nil, nil, nil
 			} else {
@@ -11076,6 +11206,13 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				return nil, nil, nil
 			}
 			if node.TableDef == nil {
+				return nil, nil, nil
+			}
+			// Zone-map metadata cannot replace scanning this block: tae zonemaps
+			// intentionally skip T_decimal256 maintenance (zm.go), so a
+			// decimal256 MIN/MAX would contribute a nil partial and drop the
+			// block's real rows. Decline the complete aggregate.
+			if types.T(node.TableDef.Cols[col.Col.ColPos].Typ.Id) == types.T_decimal256 {
 				return nil, nil, nil
 			}
 			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
@@ -11467,6 +11604,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
+	return c.runSqlWithResultAndMaintenance(sql, accountId, options, nil, nil)
+}
+
+func (c *Compile) runSqlWithResultAndMaintenance(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+	spec *executor.IndexMaintenanceSpec,
+	validator executor.IndexMaintenanceValidator,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -11489,12 +11636,12 @@ func (c *Compile) runSqlWithResultAndOptions(
 	// process. Carry the parent session names explicitly so SQL file
 	// authorization sees the same authenticated identity after planning. This
 	// is independent of accountId, which only selects catalog execution scope.
-	var accountName, roleName string
+	var accountName, roleName, userName string
 	if c.proc != nil && c.proc.Base != nil {
 		parentInfo := c.proc.GetSessionInfo()
-		accountName, roleName = parentInfo.Account, parentInfo.Role
+		accountName, roleName, userName = parentInfo.Account, parentInfo.Role, parentInfo.User
 	}
-	options = options.WithSessionIdentity(accountName, roleName)
+	options = options.WithSessionIdentity(accountName, roleName).WithSessionUser(userName)
 	// Propagate the IsFrontend signal from the outer Compile's proc
 	// to the sub-execution. Without this, sub-Compiles spawned for
 	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)
@@ -11516,6 +11663,9 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
 		WithFrontend(c.proc.Base.IsFrontend)
+	if spec != nil || validator != nil {
+		opts = opts.WithIndexMaintenanceSpec(spec).WithIndexMaintenanceValidator(validator)
+	}
 
 	ctx := c.proc.Ctx
 	if ctx == nil {
@@ -11603,6 +11753,10 @@ func (c *Compile) SetResourceAttemptOwnerEligible() {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+func (c *Compile) SetBuildFallbackPlanFunc(build func(context.Context) (*plan2.Plan, error)) {
+	c.buildFallbackPlanFunc = build
 }
 
 // detectFkSelfRefer checks if foreign key self refer confirmed

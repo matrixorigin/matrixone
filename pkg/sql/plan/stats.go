@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -801,7 +802,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 		if !ok {
 			return 0.1
 		}
-		ret = (val2 - val1 + 1) / (max - min)
+		return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 
 	default:
 		return 0.1
@@ -852,7 +853,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
-				ret = (val2 - val1 + 1) / (max - min)
+				return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 			}
 		}
 	default:
@@ -1070,6 +1071,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		}
 	case *plan.Expr_Lit:
 		ret = 1.0
+		// Contradiction folding (normalizeColumnDomain) and constant folding can
+		// reduce a whole filter list to one boolean literal. Its row fraction is
+		// exact: TRUE keeps every row, while FALSE and NULL keep none. Estimating
+		// the always-empty case as 1.0 sized scans and the operators above them
+		// for the full table behind an always-empty filter (#32068). This floor
+		// matches the impossible-interval estimate in estimateIntervalSelectivity.
+		if IsFalseExpr(expr) || exprImpl.Lit.GetIsnull() {
+			ret = 0.00000001
+		}
 	}
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
@@ -2000,7 +2010,7 @@ func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool
 		return 0, false
 	}
 	value, ok := getLiteralUint64(expr)
-	if !ok && !containsDynamicParam(expr) {
+	if !ok && !containsDynamicParam(expr) && !defines.IsIndexMaintenanceViewBinding(builder.GetContext()) {
 		folded, err := ConstantFold(
 			batch.EmptyForConstFoldBatch,
 			DeepCopyExpr(expr),

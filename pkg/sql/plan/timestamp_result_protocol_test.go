@@ -182,7 +182,7 @@ func TestTimestampPersistedAdmissionAndFoldedView(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 	}
 	_, err = build(defines.MORPCVersion121)
 	require.ErrorContains(t, err, "version 122")
@@ -216,7 +216,7 @@ func TestCTASPopulationProtocolSurvivesQueryReleaseAndFolding(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				p, err := BuildPlan(ctx, stmt, prepared)
+				p, err := BuildPlan(ctx, stmt, prepared, nil)
 				require.NoError(t, err)
 				want := tc.version
 				if prepared {
@@ -262,7 +262,7 @@ func TestCTASPopulationProtocolSurvivesStoredViewExpansion(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		p, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 		require.NoError(t, err)
 		return p
 	}

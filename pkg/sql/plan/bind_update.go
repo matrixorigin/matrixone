@@ -1615,7 +1615,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					continue
 				}
 
-				idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+				idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot, nil)
 				if err != nil {
 					return 0, err
 				}
@@ -2060,7 +2060,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 				continue
 			}
 
-			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -3821,7 +3821,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		checkedUnique = true
 
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			dmlCtx.objRefs[ownerIdx], idxDef.IndexTableName, bindCtx.snapshot)
+			dmlCtx.objRefs[ownerIdx], idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, nil, err
 		}

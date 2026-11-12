@@ -2871,14 +2871,24 @@ Start replication from a specific timestamp.
 {'StartTs'='<timestamp>'}
 ```
 
-**Format**: `YYYY-MM-DD HH:MM:SS`
+**Formats**:
+
+- `YYYY-MM-DD HH:MM:SS` — an unzoned wall-clock time, interpreted in the **creating session's time zone** (`@@session.time_zone`)
+- RFC3339 with an explicit offset, e.g. `2025-01-01T00:00:00Z` or `2025-01-01T08:00:00+08:00` — the offset is honored regardless of the session time zone
 
 **Default**: Current time when task is created
 
-**Example**:
+**Examples**:
 ```sql
+-- Interpreted in the creating session's time zone:
 {'StartTs'='2025-01-01 00:00:00'}
+
+-- Zone-independent absolute boundary (recommended):
+{'StartTs'='2025-01-01T00:00:00Z'}
+{'StartTs'='2025-01-01T08:00:00+08:00'}
 ```
+
+**Time zone contract**: an unzoned `YYYY-MM-DD HH:MM:SS` value is interpreted in the creating session's time zone, so the same statement text produces different absolute boundaries under different session time zones. Supply an RFC3339 value with an explicit offset for a zone-independent boundary. The effective boundary is persisted with its offset and can be inspected as `start_ts` in `mo_catalog.mo_cdc_task`. Fractional seconds in the supplied value are preserved at full precision in the persisted boundary. `SHOW CDC` timestamps and watermarks are rendered in the server's local time zone.
 
 #### EndTs
 
@@ -2888,14 +2898,25 @@ Stop replication at a specific timestamp (bounded replication).
 {'EndTs'='<timestamp>'}
 ```
 
-**Format**: `YYYY-MM-DD HH:MM:SS`
+**Formats**:
+
+- `YYYY-MM-DD HH:MM:SS` — an unzoned wall-clock time, interpreted in the **creating session's time zone** (`@@session.time_zone`)
+- RFC3339 with an explicit offset, e.g. `2025-12-31T23:59:59Z` or `2026-01-01T07:59:59+08:00` — the offset is honored regardless of the session time zone
 
 **Default**: (none - continuous replication)
 
-**Example**:
+**Examples**:
 ```sql
+-- Interpreted in the creating session's time zone:
 {'EndTs'='2025-12-31 23:59:59'}
+
+-- Zone-independent absolute boundary (recommended):
+{'EndTs'='2025-12-31T23:59:59Z'}
 ```
+
+**Time zone contract**: same as `StartTs` above. The effective boundary is persisted with its offset and can be inspected as `end_ts` in `mo_catalog.mo_cdc_task`.
+
+**Bounded replication completion**: when the task's watermark reaches `EndTs`, the window is closed — commits after `EndTs` are not replicated and the watermark stops advancing. The task intentionally remains in the `running` state with no error; bounded replication has no terminal task state. Completion is observable through `SHOW CDC` (watermark reached `EndTs`, sink unchanged afterwards); `PAUSE CDC` and `DROP CDC` remain the lifecycle controls.
 
 **Use Case**: Historical data migration, backfill
 
@@ -3348,7 +3369,7 @@ This section provides comprehensive test scenarios for validating CDC functional
 | Test ID | Test Case | Steps | Expected Result |
 |---------|-----------|-------|-----------------|
 | TC-401 | StartTs respected | 1. CREATE CDC with StartTs=tomorrow<br>2. INSERT now<br>3. Check target | No sync until tomorrow |
-| TC-402 | EndTs respected | 1. CREATE CDC with EndTs=yesterday<br>2. Wait for task completion | Task stops at EndTs |
+| TC-402 | EndTs respected | 1. CREATE CDC with EndTs=yesterday<br>2. Wait for the watermark to reach EndTs | Watermark reaches EndTs and replication stops advancing; the task remains `running` with no error (see 'Bounded replication completion') |
 | TC-403 | Exclude tables | 1. CREATE CDC with Exclude='db1.t2'<br>2. INSERT in t1 and t2<br>3. Check target | Only t1 synced |
 | TC-404 | Database-level with exclusions | 1. Level='database', Exclude='db1.temp'<br>2. INSERT in multiple tables | All except excluded synced |
 

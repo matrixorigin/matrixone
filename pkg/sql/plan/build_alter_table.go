@@ -251,7 +251,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	var snapshot *Snapshot
-	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot)
+	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +274,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	// 2. split alter_option list
+	// A binary conversion must validate the source identity before MODIFY or
+	// CONVERT can erase unsupported persisted collation metadata.
+	for _, option := range stmt.Options {
+		if charset, ok := option.(*tree.TableOptionCharset); ok && charset.Convert && strings.EqualFold(charset.Charset, "binary") {
+			if err := plan.RequireLegacyCollations(tableDef); err != nil {
+				return nil, err
+			}
+		}
+	}
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
 		return nil, err
@@ -351,6 +360,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		if isIgnoredStorageTableOption(spec) {
 			continue
 		}
+		clausePkAffected := false
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
@@ -408,7 +418,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
 				}
 			case tree.AlterTableDropColumn:
-				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx, bindings.clauses[ordinal].preserveIndexes)
+				clausePkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx, bindings.clauses[ordinal].preserveIndexes)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
@@ -419,7 +429,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterAddCol:
-			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
 			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
@@ -428,7 +438,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 			if sourceErr != nil {
 				return nil, sourceErr
 			}
-			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
 			if err == nil && hasSource {
 				generatedDependencySeeds[sourceColumn] = struct{}{}
 			}
@@ -440,7 +450,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 			if sourceErr != nil {
 				return nil, sourceErr
 			}
-			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
 			if err == nil && hasSource {
 				generatedDependencySeeds[sourceColumn] = struct{}{}
 			}
@@ -453,7 +463,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
 		case *tree.AlterTableAlterColumnClause:
-			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.TableOptionAutoIncrement:
 			hasAutoIncrementOption = true
@@ -485,6 +495,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		if err != nil {
 			return nil, err
 		}
+		pkAffected = pkAffected || clausePkAffected
 	}
 	conversion, conversionErr := alterTableCharsetConversion(cctx, stmt.Options)
 	if conversionErr != nil {
@@ -811,7 +822,7 @@ func addAlterCopyForeignKeys(
 		}
 
 		_, parentTableDef, err := cctx.Resolve(
-			fkData.ParentDbName, fkData.ParentTableName, nil,
+			fkData.ParentDbName, fkData.ParentTableName, nil, nil,
 		)
 		if err != nil {
 			return err
@@ -1426,7 +1437,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}

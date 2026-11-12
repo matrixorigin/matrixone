@@ -83,8 +83,13 @@ func (c *simpleCAllocatorMmapCache) put(slice []byte) bool {
 		return false
 	}
 
+	// Avoid preparing pages that cannot be cached. The final locked check
+	// below still handles concurrent insertions and runtime limit changes.
+	c.mu.Lock()
 	capacity := c.capacity()
-	if size > capacity {
+	fits := size <= capacity && c.bytes <= capacity-size
+	c.mu.Unlock()
+	if !fits {
 		return false
 	}
 

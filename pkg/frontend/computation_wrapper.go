@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strconv"
@@ -109,7 +110,9 @@ type TxnComputationWrapper struct {
 	// definition-change retry.
 	preparedStmt *PrepareStmt
 
-	schedulingTrace schedule.TraceRecorder
+	schedulingTrace          schedule.TraceRecorder
+	executionIntent          *plan2.ExecutionIntent
+	executionIntentValidated bool
 
 	// remapDb is the effective database remap for this statement only. A COM_QUERY
 	// can contain statements with different inline overrides, so this metadata
@@ -214,6 +217,8 @@ func (cwft *TxnComputationWrapper) setPlanSnapshotTS(ts timestamp.Timestamp) {
 
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
+	cwft.executionIntent = nil
+	cwft.executionIntentValidated = false
 	cwft.planSnapshotTS = timestamp.Timestamp{}
 	cwft.hasPlanSnapshotTS = false
 	cwft.planGenerationReused = false
@@ -268,6 +273,8 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.cachedPlanIndex = 0
 	cwft.cachedPlanGeneration = nil
 	cwft.schedulingTrace.Reset()
+	cwft.executionIntent = nil
+	cwft.executionIntentValidated = false
 }
 
 func (cwft *TxnComputationWrapper) recordOptimizerStatsVersion(key optimizerStatsTableKey, version uint64) {
@@ -314,31 +321,8 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
-	switch cwft.GetAst().(type) {
-	case *tree.ShowColumns:
-		if len(cols) == 7 {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		} else {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		}
+	if _, ok := cwft.GetAst().(*tree.ShowColumns); ok {
+		return showColumnsWireMetadata(ctx, len(cols))
 	}
 	return columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 }
@@ -405,20 +389,33 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 
 	var preparedExprRetry *preparedExecutionRetry
+	ordinaryAccessRebuilt := false
 	if execCtx.input.isPreparedExpr() {
 		preparedExprRetry = newPreparedExecutionRetry(
 			execCtx.input.preparedParamVals)
 	}
+	cwft.executionIntent = nil
+	cwft.executionIntentValidated = false
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
 		clear(cwft.optimizerStatsVersions)
+		compiler := cwft.ses.GetTxnCompileCtx()
+		var planningInput *plan2.PlanningInput
+		if !execCtx.input.isPreparedExpr() && !execCtx.input.isBinaryProtExecute {
+			if input, intent, ok := planningInputForStatement(cwft.ses, cwft.proc, cwft.schedulingSQL,
+				sessionSQLModeForScheduling(cwft.ses), cwft.stmt); ok {
+				cwft.executionIntent = &intent
+				planningInput = input
+			}
+		}
 		cwft.plan, err = buildPlanWithPrepareMode(
 			execCtx.reqCtx,
 			cwft.ses,
-			cwft.ses.GetTxnCompileCtx(),
+			compiler,
 			cwft.stmt,
 			execCtx.input.isPreparedExpr(),
+			planningInput,
 		)
 		if err != nil {
 			return nil, err
@@ -438,6 +435,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			cwft.plan = runtimePlan
 		}
+	}
+	if !execCtx.input.isBinaryProtExecute && plan2.HasCapturedExecutionAccess(cwft.plan) {
+		previousPlan := cwft.plan
+		cwft.plan, cwft.executionIntentValidated, err = validateCapturedExecutionBeforeCompile(
+			cwft.plan, cwft.executionIntent, cwft.ses, cwft.proc,
+			cwft.schedulingSQLOr(execCtx.sqlOfStmt), sessionSQLModeForScheduling(cwft.ses), cwft.stmt,
+			func() (*plan2.Plan, error) { return cwft.rebuildWithoutCapturedAccess(execCtx) })
+		if err != nil {
+			return nil, err
+		}
+		ordinaryAccessRebuilt = cwft.plan != previousPlan
 	}
 
 	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
@@ -479,18 +487,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		var stmt tree.Statement
 		var sql string
 		var stmtOwned bool
+
 		if isTextProtExecute {
 			executePlan := cwft.plan.GetDcl().GetExecute()
-			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(
-				execCtx, owner, cwft.ses, cwft, executePlan, executePlan.GetName())
+			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(execCtx, owner, cwft.ses, cwft, executePlan, executePlan.GetName())
 			if err != nil {
 				return nil, err
 			}
 			if stmtOwned {
-				cwft.freeStmt()
-				cwft.stmt = stmt
-				cwft.stmtBorrowed = false
+				cwft.installPreparedExecutionStatement(stmt, true)
 			}
+
 			if !cwft.ses.IsBackgroundSession() {
 				// Prepared plans are cached across privilege-cache refreshes. Recheck
 				// the resolved statement and plan at execution time so a revoke cannot
@@ -511,17 +518,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 			cwft.plan = plan
 			if !stmtOwned {
-				cwft.freeStmt()
-				cwft.stmt = stmt
-				cwft.stmtBorrowed = true
+				cwft.installPreparedExecutionStatement(stmt, false)
 			}
 		} else {
 			// binary protocol execute
-			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(
-				execCtx, owner, cwft.ses, cwft, nil, execCtx.input.stmtName)
+			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(execCtx, owner, cwft.ses, cwft, nil, execCtx.input.stmtName)
 			if err != nil {
 				return nil, err
 			}
+
 			if plan != nil {
 				cwft.plan = plan
 			}
@@ -546,9 +551,16 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = true
 			}
 		}
+
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
+
+		// Explicit-account CLONE has a source-only prepared carrier. The
+		// frontend owner resolves and plans the destination in its real account.
+		if clone, ok := cwft.stmt.(*tree.CloneTable); ok && clone.ToAccountOpt != nil && !clone.IsRestore {
+			return nil, nil
+		}
 
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
@@ -594,7 +606,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				&cwft.schedulingTrace,
 				preparedRetry,
 				cwft.preparedStmt.groupConcatMaxLenFloor,
+				nil,
 			)
+
 			if err != nil {
 				cwft.completeRuntimeCacheCandidate(nil, err)
 				return nil, err
@@ -617,6 +631,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.preparedExecutionRetry(),
 				cwft.preparedStmt.defaultDatabase,
 				true,
+				nil,
 			))
 			retComp.SetPlanGenerationReused(cwft.planGenerationReused)
 			// originSQL is the prepared statement text here; the wrapper carries
@@ -639,34 +654,97 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 	} else {
+		if plan2.HasCapturedExecutionAccess(cwft.plan) {
+			previousPlan := cwft.plan
+			cwft.plan, cwft.executionIntentValidated, err = validateCapturedExecutionBeforeCompile(
+				cwft.plan, cwft.executionIntent, cwft.ses, cwft.proc,
+				cwft.schedulingSQLOr(execCtx.sqlOfStmt), sessionSQLModeForScheduling(cwft.ses), cwft.stmt,
+				func() (*plan2.Plan, error) { return cwft.rebuildWithoutCapturedAccess(execCtx) })
+			if err != nil {
+				return nil, err
+			}
+			if cwft.plan != previousPlan {
+				ordinaryAccessRebuilt = true
+			}
+			if cwft.plan != previousPlan && !cwft.ses.IsBackgroundSession() {
+				if cwft.ses.GetTenantInfo() != nil {
+					authStats, authErr := authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+					if authErr != nil {
+						return nil, authErr
+					}
+					stats.PermissionAuth.Add(&authStats)
+				}
+				cwft.ses.SetPlan(cwft.plan)
+				authStats, authErr := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
+				if authErr != nil {
+					return nil, authErr
+				}
+				stats.PermissionAuth.Add(&authStats)
+			}
+		}
 		var planSnapshotTS *timestamp.Timestamp
 		if cwft.preparedStmt != nil {
 			// Executable EXPLAIN uses the already bound prepared plan. Carry the
 			// binding's diagnostic proof and snapshot into Compile as EXECUTE does.
 			preparedExprRetry = cwft.preparedExecutionRetry()
-			planSnapshotTS = &cwft.preparedStmt.Ts
+			if ordinaryAccessRebuilt && cwft.hasPlanSnapshotTS {
+				planSnapshotTS = &cwft.planSnapshotTS
+			} else if !ordinaryAccessRebuilt {
+				planSnapshotTS = &cwft.preparedStmt.Ts
+			}
 		} else if cwft.hasPlanSnapshotTS {
 			planSnapshotTS = &cwft.planSnapshotTS
 		}
-		cwft.compile, err = createCompile(
-			execCtx,
-			cwft.ses,
-			cwft.proc,
-			cwft.ses.GetDatabaseName(),
-			false,
-			execCtx.sqlOfStmt,
-			cwft.schedulingSQLOr(execCtx.sqlOfStmt),
-			nil,
-			cwft.stmt,
-			cwft.plan,
-			planSnapshotTS,
-			cwft.planGenerationReused,
-			fill,
-			false,
-			&cwft.schedulingTrace,
-			preparedExprRetry,
-			0,
-		)
+		compileCurrentPlan := func() (*compile.Compile, error) {
+			return createCompile(
+				execCtx,
+				cwft.ses,
+				cwft.proc,
+				cwft.ses.GetDatabaseName(),
+				false,
+				execCtx.sqlOfStmt,
+				cwft.schedulingSQLOr(execCtx.sqlOfStmt),
+				nil,
+				cwft.stmt,
+				cwft.plan,
+				planSnapshotTS,
+				cwft.planGenerationReused,
+				fill,
+				false,
+				&cwft.schedulingTrace,
+				preparedExprRetry,
+				0,
+				cwft.validatedExecutionIntent(),
+			)
+		}
+		cwft.compile, err = compileCurrentPlan()
+		if errors.Is(err, compile.ErrExecutionIntentDrift) {
+			cwft.plan, err = cwft.rebuildWithoutCapturedAccess(execCtx)
+			if err == nil && !cwft.ses.IsBackgroundSession() {
+				if cwft.ses.GetTenantInfo() != nil {
+					var authStats statistic.StatsArray
+					authStats, err = authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+					if err == nil {
+						stats.PermissionAuth.Add(&authStats)
+					}
+				}
+				if err == nil {
+					cwft.ses.SetPlan(cwft.plan)
+					var authStats statistic.StatsArray
+					authStats, err = checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
+					if err == nil {
+						stats.PermissionAuth.Add(&authStats)
+					}
+				}
+			}
+			if err == nil {
+				planSnapshotTS = nil
+				if cwft.hasPlanSnapshotTS {
+					planSnapshotTS = &cwft.planSnapshotTS
+				}
+				cwft.compile, err = compileCurrentPlan()
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -795,7 +873,7 @@ func (cwft *TxnComputationWrapper) completeCompileExecution(
 	if cwft.cachedPlanSQL != "" {
 		if ses, ok := cwft.ses.(*Session); ok {
 			updated := false
-			if runErr == nil && cwft.hasPlanSnapshotTS {
+			if runErr == nil && cwft.hasPlanSnapshotTS && planReuse(false, cwft.cachedPlanGeneration, ordinaryPlanGeneration).reusable {
 				updated = ses.updateCachedPlanGeneration(
 					cwft.cachedPlanSQL,
 					cwft.cachedPlanIndex,
@@ -990,7 +1068,7 @@ func initExecuteStmtParamInSession(
 		cwft,
 		execPlan,
 		stmtName,
-		executionSes.GetTxnCompileCtx().Resolve,
+		executionSes.GetTxnCompileCtx().resolveForCatalogValidation,
 		executionSes.GetTxnCompileCtx(),
 	)
 }
@@ -998,7 +1076,7 @@ func initExecuteStmtParamInSession(
 type preparedSchemaResolver func(
 	databaseName string,
 	tableName string,
-	snapshot *plan.Snapshot,
+	snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan.ObjectRef, *plan.TableDef, error)
 
 func binaryProtocolPrepareParamKind(
@@ -1377,7 +1455,7 @@ func initExecuteStmtParamWithResolverInSession(
 	execPlan *plan.Execute,
 	stmtName string,
 	resolve preparedSchemaResolver, planningContext plan2.CompilerContext,
-) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
+) (_ *compile.Compile, _ *plan.Plan, _ tree.Statement, _ string, _ bool, _ error) {
 	reqCtx := execCtx.reqCtx
 	if execPlan != nil { // binary protocol, don't have to buildplan, execPlan is nil
 		stmtName = execPlan.GetName()
@@ -1441,7 +1519,7 @@ func initExecuteStmtParamWithResolverInSession(
 			change = true
 		}
 	}
-	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
+	rebuildEveryExecute := !planReuse(false, executionPlan, preparedLogicalPlan).reusable
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
 		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,
 		prepareStmt.Ts, validateSubscriptions, rebuildEveryExecute)
@@ -1565,7 +1643,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		newColDefData, err := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -1625,7 +1703,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+			newColDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, "", false, metadataErr
 			}
@@ -1663,7 +1741,7 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() && !executionIntent.Explicit {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) {
+				planReuse(false, preparePlan.Plan, preparedPhysicalCompile).reusable {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
 				comp, err := createCompile(
@@ -1684,6 +1762,7 @@ func initExecuteStmtParamWithResolverInSession(
 					nil,
 					nil,
 					groupConcatMaxLenFloor,
+					nil,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -1926,7 +2005,8 @@ func initExecuteStmtParamWithResolverInSession(
 			key = preparedTemporalBindingKey(preparedFieldBindingKey(bindingKey, fieldTypes), temporalTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
-			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams && !prepareStmt.hasEwmParams
+			cacheable := bound.DiagnosticFree && !bound.ValueDependent && planReuse(false, bound.Plan, ordinaryPlanGeneration).reusable &&
+				!prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams && !prepareStmt.hasEwmParams
 			switch prepareStmt.PrepareStmt.(type) {
 			case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				cacheable = false
@@ -1955,7 +2035,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		colDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}
@@ -2236,9 +2316,13 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 	if expected.GetPubInfo() == nil {
 		return true, nil
 	}
+	// The alias belongs to captured data T. The resolver independently checks
+	// that alias's publication at current authorization A; a current same-named
+	// alias may refer to an unrelated (and denied) publication.
 	currentRef, currentDef, err := resolve(
 		expected.GetSubscriptionName(),
 		expected.GetObjName(),
+		expected.GetSnapshot(),
 		nil,
 	)
 	if err != nil {
@@ -2248,23 +2332,6 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		return true, nil
 	}
 	expectedTenant := expected.GetPubInfo().GetTenantId()
-	if plan2.IsSnapshotValid(expected.GetSnapshot()) {
-		if currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
-			currentRef.GetPubInfo().GetTenantId() != expectedTenant {
-			return true, nil
-		}
-		currentRef, currentDef, err = resolve(
-			expected.GetSubscriptionName(),
-			expected.GetObjName(),
-			expected.GetSnapshot(),
-		)
-		if err != nil {
-			return false, err
-		}
-		if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
-			return true, nil
-		}
-	}
 	return currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
 		currentRef.GetPubInfo().GetTenantId() != expectedTenant ||
 		currentRef.GetSchemaName() != expected.GetSchemaName() ||
@@ -2817,42 +2884,6 @@ func executeArgumentSourceType(typ plan.Type) types.Type {
 	return types.MustTypeFromPlan(typ)
 }
 
-func shouldCachePrepareCompile(p *plan.Plan) bool {
-	if p == nil {
-		return true
-	}
-	if plan2.PreparedPlanHasPercentileParams(p) {
-		// The percentile marker is evaluated while the physical aggregate is
-		// constructed and becomes immutable executor configuration. Reusing that
-		// compile would reuse an earlier EXECUTE value for the same parameter type.
-		return false
-	}
-	if plan2.PreparedPlanHasEwmParams(p) {
-		// The ewm decay/policy positions are evaluated while the window
-		// arguments' configuration bytes are constructed — execution-
-		// dependent forms (markers, user variables, real-time expressions)
-		// all resolve there per EXECUTE; a reused compile would freeze an
-		// earlier execution's evaluation for the same parameter types.
-		return false
-	}
-	query := p.GetQuery()
-	if query == nil {
-		return true
-	}
-	for _, node := range query.GetNodes() {
-		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
-			// Iceberg tasks are resolved from an external snapshot while the
-			// pipeline is compiled. That snapshot is not covered by MatrixOne's
-			// schema-change timestamp, so a cached Compile would keep scanning the
-			// old snapshot across EXECUTE calls. If Iceberg planning moves to an
-			// execution-time operator in the future this restriction can be
-			// revisited without weakening the generic prepared-statement cache.
-			return false
-		}
-	}
-	return !query.GetHasForeignKeyAction()
-}
-
 func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan) {
 	endpoints, _ := plan2.PreparedPlanGenerateSeriesParameterInfo(p)
 	positions := slices.Concat(prepareStmt.numericOverloadParamPositions, endpoints)
@@ -2860,28 +2891,41 @@ func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan)
 	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)
 }
 
-func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
-	if schemaChanged || p == nil {
-		return schemaChanged
-	}
-	if ddl := p.GetDdl(); ddl != nil {
-		if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
-			return true
-		}
-		if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {
-			return true
-		}
-	}
-	query := p.GetQuery()
-	return query != nil && (query.GetHasForeignKeyAction() ||
-		query.GetViewMetadataDependsOnUdf() ||
-		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
-		plan2.PreparedPlanDependsOnIndexCoverage(p))
-}
-
 func preparedCTASNeedsSemanticParams(stmt tree.Statement) bool {
 	ctas, ok := stmt.(*tree.CreateTable)
 	return ok && ctas.IsAsSelect
+}
+
+func (cwft *TxnComputationWrapper) validatedExecutionIntent() *plan2.ExecutionIntent {
+	if !cwft.executionIntentValidated {
+		return nil
+	}
+	return cwft.executionIntent
+}
+
+func (cwft *TxnComputationWrapper) rebuildWithoutCapturedAccess(execCtx *ExecCtx) (*plan2.Plan, error) {
+	rebuilt, err := buildPlanWithPrepareMode(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, execCtx.input.isPreparedExpr(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if plan2.HasCapturedExecutionAccess(rebuilt) {
+		return nil, moerr.NewInternalErrorNoCtx("unscoped plan rebuild retained captured execution")
+	}
+	cwft.executionIntentValidated = false
+	cwft.markUnscopedPlanRebuilt()
+	return rebuilt, nil
+}
+
+func (cwft *TxnComputationWrapper) markUnscopedPlanRebuilt() {
+	cwft.planGenerationReused = false
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	if cwft.proc != nil && cwft.proc.GetTxnOperator() != nil {
+		cwft.setPlanSnapshotTS(currentTxnSnapshotTSForProcess(cwft.proc))
+	}
+	if ses, ok := cwft.ses.(*Session); ok && cwft.cachedPlanSQL != "" {
+		ses.invalidateCachedPlanGeneration(cwft.cachedPlanSQL, cwft.cachedPlanIndex, cwft.cachedPlanGeneration)
+	}
 }
 
 func createCompile(
@@ -2902,8 +2946,21 @@ func createCompile(
 	schedulingTrace *schedule.TraceRecorder,
 	preparedRetry *preparedExecutionRetry,
 	groupConcatMaxLenFloor uint64,
+	executionIntent *plan2.ExecutionIntent,
 ) (retCompile *compile.Compile, err error) {
 
+	if executionIntent != nil {
+		previousRequestContext := execCtx.reqCtx
+		previousProcessContext := proc.GetTopContext()
+		previousFileService := proc.Base.FileService
+		defer func() {
+			if errors.Is(err, compile.ErrExecutionIntentDrift) {
+				execCtx.reqCtx = previousRequestContext
+				proc.ReplaceTopCtx(previousProcessContext)
+				proc.Base.FileService = previousFileService
+			}
+		}()
+	}
 	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
 	if schedulingSQL == "" {
@@ -2955,6 +3012,10 @@ func createCompile(
 	// was current at PREPARE time. Keep that binding on the Compile as well,
 	// because CTAS and other DDL may execute follow-up SQL through the internal
 	// executor after the client has switched databases.
+	setup := compile.ImmediateSetup
+	if executionIntent != nil && plan2.HasCapturedExecutionAccess(plan) {
+		setup = compile.PreflightSetup
+	}
 	retCompile = compile.NewCompile(
 		addr,
 		databaseName,
@@ -2967,6 +3028,7 @@ func createCompile(
 		ses.GetIsInternal(),
 		deepcopy.Copy(ses.getCNLabels()).(map[string]string),
 		getStatementStartAt(execCtx.reqCtx),
+		setup,
 	)
 	retCompile.SetIsPrepare(isPrepare)
 	if preparedRetry != nil {
@@ -2976,12 +3038,15 @@ func createCompile(
 		retCompile.SetPreparedParamValues(preparedRetry.paramVals)
 	}
 	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
-	if schedulingSQLMode != nil {
+	if executionIntent != nil {
+		retCompile.SetQuerySchedulingIntent(executionIntent.Placement.Scheduling)
+	} else if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
 	} else {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
 	}
+	retCompile.SetValidatedExecutionIntent(executionIntent)
 	if resourceAttemptOwnerEligible(ses) {
 		retCompile.SetResourceAttemptOwnerEligible()
 	}
@@ -2990,12 +3055,46 @@ func createCompile(
 		retCompile.SetPlanSnapshotTS(*planSnapshotTS)
 		retCompile.SetPlanGenerationReused(planGenerationReused)
 	} else if planGenerationReused {
-		return nil, moerr.NewInternalError(execCtx.reqCtx,
+		err = moerr.NewInternalError(execCtx.reqCtx,
 			"reused plan generation is missing its snapshot binding")
+		return
 	}
 	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
-		ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase))
+		ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase, executionIntent))
+	if executionIntent != nil {
+		buildSafe := preparedExecutionBuildPlanFunc(ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase, nil)
+		retCompile.SetBuildFallbackPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+			var safe *plan2.Plan
+			if err := execCtx.withRootSQL(schedulingSQL, func() (err error) {
+				safe, err = buildSafe(ctx)
+				return err
+			}); err != nil {
+				return nil, err
+			}
+			if plan2.HasCapturedExecutionAccess(safe) {
+				return nil, moerr.NewInternalErrorNoCtx("unscoped retry retained captured execution")
+			}
+			if !ses.IsBackgroundSession() {
+				var authStats statistic.StatsArray
+				var err error
+				if ses.GetTenantInfo() != nil {
+					authStats, err = authenticateCanExecuteStatementAndPlan(ctx, ses.(*Session), stmt, safe)
+				}
+				if err != nil {
+					return nil, err
+				}
+				stats.PermissionAuth.Add(&authStats)
+				authStats, err = checkResultQueryPrivilege(proc, safe, ctx, ses.GetService(), ses.(*Session))
+				if err != nil {
+					return nil, err
+				}
+				stats.PermissionAuth.Add(&authStats)
+				ses.SetPlan(safe)
+			}
+			return safe, nil
+		})
+	}
 
 	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
@@ -3048,7 +3147,11 @@ func buildPlanForCompileRetry(
 	stmt tree.Statement,
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
+	intent *plan2.ExecutionIntent,
 ) (*plan2.Plan, error) {
+	if intent != nil && !plan2.ProcessAllowsIndexObservation(compilerContext.GetProcess()) {
+		intent = nil
+	}
 	originalContext := compilerContext.GetContext()
 	planningContext := originalContext
 	if planningContext == nil {
@@ -3074,7 +3177,11 @@ func buildPlanForCompileRetry(
 			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 				CatalogDependencies: preparedRetry.fieldSchemas,
 			}}}
-			changed, err := checkModify(dependencies, compilerContext.Resolve)
+			resolve := compilerContext.Resolve
+			if tcc, ok := compilerContext.(*TxnCompilerContext); ok {
+				resolve = tcc.resolveForCatalogValidation
+			}
+			changed, err := checkModify(dependencies, resolve)
 			if err != nil {
 				return nil, err
 			}
@@ -3082,7 +3189,8 @@ func buildPlanForCompileRetry(
 				return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 			}
 		}
-		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
+		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt,
+			preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err
 		}
@@ -3095,8 +3203,12 @@ func buildPlanForCompileRetry(
 		return bound.Plan, nil
 	}
 	// No permission verification is required when retry execute buildPlan.
+	var input *plan2.PlanningInput
+	if intent != nil && !forcePrepare {
+		input = plan2.NewPlanningInput(planningInputRoot(stmt), *intent, planningCompiler(compilerContext))
+	}
 	retryPlan, err := buildPlanWithPrepareMode(
-		ctx, ses, compilerContext, stmt, forcePrepare)
+		ctx, ses, compilerContext, stmt, forcePrepare, input)
 	if err != nil {
 		return nil, err
 	}
@@ -3132,7 +3244,13 @@ func preparedExecutionBuildPlanFunc(
 	preparedRetry *preparedExecutionRetry,
 	bindingDatabase string,
 	useBindingDatabase bool,
+	executionIntent *plan2.ExecutionIntent,
 ) func(context.Context) (*plan2.Plan, error) {
+	var intent *plan2.ExecutionIntent
+	if executionIntent != nil {
+		copy := *executionIntent
+		intent = &copy
+	}
 	return func(ctx context.Context) (*plan2.Plan, error) {
 		compilerCtx := ses.GetTxnCompileCtx()
 		if useBindingDatabase {
@@ -3147,7 +3265,7 @@ func preparedExecutionBuildPlanFunc(
 			compilerCtx.SetDatabase(bindingDatabase)
 			defer compilerCtx.SetDatabase(currentDatabase)
 		}
-		p, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, forcePrepare, preparedRetry)
+		p, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, forcePrepare, preparedRetry, intent)
 		if err != nil {
 			return nil, err
 		}
@@ -3220,4 +3338,11 @@ func currentCNPipelineAddress(ses FeSession) string {
 		return ""
 	}
 	return pu.ClusterNodes[0].Addr
+}
+
+// Replace the outer text EXECUTE AST with its prepared execution statement.
+func (cwft *TxnComputationWrapper) installPreparedExecutionStatement(stmt tree.Statement, owned bool) {
+	cwft.freeStmt()
+	cwft.stmt = stmt
+	cwft.stmtBorrowed = !owned
 }

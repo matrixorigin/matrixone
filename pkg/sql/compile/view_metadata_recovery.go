@@ -675,15 +675,17 @@ func (c *recoveryCompilerContext) DatabaseExists(
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 func (c *recoveryCompilerContext) Resolve(
 	databaseName string,
 	relationName string,
-	snapshot *plan2.Snapshot,
+	snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
 	for _, dependency := range c.dependencies {
 		bindingDatabase := dependency.BindingDatabaseName
 		if bindingDatabase == "" {
@@ -718,7 +720,7 @@ func (c *recoveryCompilerContext) Resolve(
 		var err error
 		c.withTopContext(physicalContext, func() {
 			object, tableDef, err = c.compilerContext.Resolve(
-				dependency.DatabaseName, dependency.RelationName, snapshot)
+				dependency.DatabaseName, dependency.RelationName, snapshot, nil)
 		})
 		if err != nil {
 			return nil, nil, err
@@ -744,7 +746,7 @@ func (c *recoveryCompilerContext) Resolve(
 		var object *plan2.ObjectRef
 		var tableDef *plan2.TableDef
 		c.withTopContext(physicalContext, func() {
-			object, tableDef, err = c.compilerContext.Resolve(subscription.DbName, relationName, snapshot)
+			object, tableDef, err = c.compilerContext.Resolve(subscription.DbName, relationName, snapshot, nil)
 		})
 		if err != nil || object == nil || tableDef == nil {
 			return object, tableDef, err
@@ -756,7 +758,7 @@ func (c *recoveryCompilerContext) Resolve(
 	var object *plan2.ObjectRef
 	var tableDef *plan2.TableDef
 	c.withTopContext(c.GetContext(), func() {
-		object, tableDef, err = c.compilerContext.Resolve(databaseName, relationName, snapshot)
+		object, tableDef, err = c.compilerContext.Resolve(databaseName, relationName, snapshot, nil)
 	})
 	return object, tableDef, err
 }
@@ -822,7 +824,7 @@ func (c *recoveryCompilerContext) ResolveById(
 			if bindingRelation == "" {
 				bindingRelation = dependency.RelationName
 			}
-			return c.Resolve(bindingDatabase, bindingRelation, snapshot)
+			return c.Resolve(bindingDatabase, bindingRelation, snapshot, nil)
 		}
 	}
 	var object *plan2.ObjectRef

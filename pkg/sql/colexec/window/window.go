@@ -668,7 +668,7 @@ func (ctr *container) newAggregateExecutor(
 			ap.OpAnalyzer.SetMemUsed(retainedMemory)
 		},
 	)
-	if err = exec.GroupGrow(groupCount); err != nil {
+	if err = aggexec.GrowWindowGroups(exec, groupCount); err != nil {
 		return nil, err
 	}
 	succeeded = true

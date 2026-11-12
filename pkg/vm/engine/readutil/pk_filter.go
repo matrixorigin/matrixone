@@ -1658,6 +1658,17 @@ func mergeFilters(
 	if len(left.Disjuncts) > 0 || len(right.Disjuncts) > 0 {
 		return BasePKFilter{}, nil
 	}
+	if connector == function.AND {
+		// Either conjunct is a safe early filter because the complete SQL
+		// expression remains a residual. When every point is in the prefix,
+		// the point set is at least as selective regardless of filter order.
+		if left.Op == function.IN && right.Op == function.PREFIX_EQ && exactPointsWithinPrefix(left, right) {
+			return *left, nil
+		}
+		if right.Op == function.IN && left.Op == function.PREFIX_EQ && exactPointsWithinPrefix(right, left) {
+			return *right, nil
+		}
+	}
 
 	switch connector {
 	case function.AND:
@@ -2000,6 +2011,23 @@ func mergeFilters(
 		}
 	}
 	return
+}
+
+// Called only after both operands have passed the merge validation above.
+func exactPointsWithinPrefix(points, prefix *BasePKFilter) bool {
+	if points.Vec == nil || !supportedPKPrefixType(points.Oid) {
+		return false
+	}
+	length := points.Vec.Length()
+	if points.Vec.IsConst() && length > 1 {
+		length = 1
+	}
+	for i := 0; i < length; i++ {
+		if !bytes.HasPrefix(points.Vec.GetBytesAt(i), prefix.LB) {
+			return false
+		}
+	}
+	return true
 }
 
 func validBasePKMergeOperand(filter BasePKFilter) bool {

@@ -33,6 +33,9 @@ enum UpdateType {
   UserEntryUpdate     = 2;
   TSOUpdate           = 3;
   RequiredLSNUpdate   = 4;
+  RequiredLSNConditionalUpdate = 5;
+  WALTruncateUpdate = 6;
+  RequiredLSNClaimUpdate = 7;
 }
 
 enum NodeState {
@@ -300,6 +303,12 @@ message RSMState {
   uint64 WALRecoveryLastLsn = 11;
   uint64 WALRecoveryOriginalLeaseHolderID = 12;
   bool WALRecoveryComplete = 13;
+  uint64 RequiredLsnRevision = 14;
+  uint64 CheckpointedDSN = 15;
+  bool RequiredLsnConditional = 16;
+  uint64 RequiredLsnOwner = 17;
+  uint64 RequiredLsnLeaderTerm = 18;
+  uint64 RequiredLsnLeaderID = 19;
 }
 
 enum MethodType {
@@ -333,6 +342,10 @@ enum MethodType {
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
   GET_SCHEDULE_COMMANDS = 29;
+  SET_REQUIRED_LSN_IF_CURRENT = 30;
+  TRUNCATE_WAL = 31;
+  CLAIM_REQUIRED_LSN = 32;
+  APPEND_WAL = 33;
 };
 
 enum RecordType {
@@ -360,6 +373,12 @@ message LogRequest {
     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
   bool IncludeExpiredReplicaAddresses = 8;
   bool ExcludeHardDownReplicaAddresses = 9;
+  uint64 ExpectedRequiredLsn = 10;
+  uint64 RequiredLsnRevision = 11;
+  uint64 CheckpointedDSN = 12;
+  uint64 RequiredLsnOwner = 13;
+  uint64 RequiredLsnLeaderTerm = 14;
+  uint64 RequiredLsnLeaderID = 15;
 }
 
 message TsoRequest {
@@ -422,6 +441,10 @@ message LogResponse {
   uint64 Lsn          = 2;
   uint64 LastLsn      = 3;
   uint64 LeaderID     = 4;
+  uint64 RequiredLsnRevision = 5;
+  uint64 CheckpointedDSN = 6;
+  uint64 RequiredLsnOwner = 7;
+  uint64 LeaderTerm = 8;
 }
 
 message AllocateIDResponse {

@@ -19,13 +19,16 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -875,6 +878,102 @@ func TestEstimateConjunctiveYearRange(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestRangeSelectivityClipsToDomain(t *testing.T) {
+	const empty = 1e-8
+	for _, tc := range []struct {
+		name                   string
+		min, max, lower, upper float64
+		want                   float64
+	}{
+		{name: "below domain", min: 0, max: 999, lower: -500, upper: -100, want: empty},
+		{name: "above domain", min: 0, max: 999, lower: 1100, upper: 1200, want: empty},
+		{name: "wide disjoint range", min: 0, max: 999, lower: 1000, upper: 3000, want: empty},
+		{name: "left overlap", min: 0, max: 100, lower: -20, upper: 19, want: 0.2},
+		{name: "right overlap", min: 0, max: 100, lower: 81, upper: 120, want: 0.2},
+		{name: "inside domain", min: 0, max: 100, lower: 20, upper: 39, want: 0.2},
+		{name: "exact domain", min: 0, max: 100, lower: 0, upper: 100, want: 1},
+		{name: "covers domain", min: 0, max: 100, lower: -20, upper: 120, want: 1},
+		{name: "touches minimum", min: 0, max: 100, lower: -20, upper: 0, want: 0.01},
+		{name: "touches maximum", min: 0, max: 100, lower: 100, upper: 120, want: 0.01},
+		{name: "interior point", min: 0, max: 100, lower: 20, upper: 20, want: 0.01},
+		{name: "reversed adjacent bounds", min: 0, max: 100, lower: 21, upper: 20, want: empty},
+		{name: "singleton exact match", min: 10, max: 10, lower: 10, upper: 10, want: 1},
+		{name: "singleton covered", min: 10, max: 10, lower: 9, upper: 11, want: 1},
+		{name: "singleton excluded below", min: 10, max: 10, lower: 8, upper: 9, want: empty},
+		{name: "singleton excluded above", min: 10, max: 10, lower: 11, upper: 12, want: empty},
+		{name: "invalid statistics", min: 100, max: 0, lower: 20, upper: 39, want: 0.1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, op := range []string{"between", "in_range"} {
+				t.Run(op, func(t *testing.T) {
+					literals := []*planpb.Literal{
+						{Value: &planpb.Literal_I64Val{I64Val: int64(tc.lower)}},
+						{Value: &planpb.Literal_I64Val{I64Val: int64(tc.upper)}},
+					}
+					require.InDelta(t, tc.want,
+						calcSelectivityByMinMax(op, tc.min, tc.max, types.T_int64, literals), 1e-12)
+
+					// Decimal conversion and its separate estimator must obey the same interval contract.
+					expr := makeDecimalBetweenExpr(tc.lower, tc.upper, 2)
+					expr.GetF().Func.ObjName = op
+					require.InDelta(t, tc.want,
+						calcSelectivityByMinMaxForDecimal(op, tc.min, tc.max, expr), 1e-12)
+				})
+			}
+		})
+	}
+
+	t.Run("unsupported literal preserves fallback", func(t *testing.T) {
+		valid := &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 20}}
+		invalid := &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "not a number"}}
+		for _, literals := range [][]*planpb.Literal{{invalid, valid}, {valid, invalid}} {
+			require.Equal(t, 0.1, calcSelectivityByMinMax("between", 0, 100, types.T_int64, literals))
+		}
+	})
+}
+
+func TestBoundBetweenSelectivityClipsToDomain(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	part := ctx.tables["part"]
+	require.NotNil(t, part)
+	stats := NewStatsInfo()
+	stats.TableName, stats.TableCnt = "part", 1000
+	stats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	stats.MinValMap["p_retailprice"], stats.MaxValMap["p_retailprice"] = 0, 100
+	cache := NewStatsCache()
+	cache.Set(part.TblId, stats)
+	compiler := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: ctx, statsCache: cache,
+	}}
+	for _, tc := range []struct {
+		name, bounds string
+		want         float64
+	}{
+		{name: "disjoint", bounds: "-50.00 and -10.00", want: 1e-8},
+		{name: "overlap", bounds: "-20.00 and 19.00", want: 0.2},
+		{name: "cover", bounds: "-20.00 and 120.00", want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := mysql.Parse(compiler.GetContext(),
+				"select p_partkey from part where p_retailprice between "+tc.bounds, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			built, err := BuildPlan(compiler, stmts[0], false, nil)
+			require.NoError(t, err)
+			var scan *planpb.Node
+			for _, node := range built.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == "part" {
+					scan = node
+					break
+				}
+			}
+			require.NotNil(t, scan)
+			require.InDelta(t, tc.want, scan.Stats.Selectivity, 1e-12)
+		})
+	}
+}
+
 func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
 	const emptySelectivity = 0.00000001
 	tests := []struct {
@@ -953,7 +1052,7 @@ func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	built, err := BuildPlan(ctx, stmts[0], false)
+	built, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var scan *planpb.Node
@@ -965,6 +1064,1213 @@ func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
 	}
 	require.NotNil(t, scan)
 	require.InDelta(t, (45.0-36.0+1)/(99.99-0.09), scan.Stats.Selectivity, 1e-12)
+}
+
+// TestContradictoryPredicateScanEstimate reproduces #32068 end to end with the
+// SQL planner pipeline: contradictory point predicates on one column fold to a
+// single constant-false filter, so the scan carrying that filter must be
+// estimated near zero, never as a full-table count.
+func TestContradictoryPredicateScanEstimate(t *testing.T) {
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
+	part := mock.tables["part"]
+	require.NotNil(t, part)
+	nation := mock.tables["nation"]
+	require.NotNil(t, nation)
+	orders := mock.tables["orders"]
+	require.NotNil(t, orders)
+
+	statsCache := NewStatsCache()
+	partStats := NewStatsInfo()
+	partStats.TableName = "part"
+	partStats.TableCnt = 1_000_000
+	partStats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	partStats.MinValMap["p_retailprice"] = 900
+	partStats.MaxValMap["p_retailprice"] = 1100
+	partStats.NdvMap["p_retailprice"] = 1000
+	partStats.DataTypeMap["p_size"] = uint64(types.T_int32)
+	partStats.MinValMap["p_size"] = 0
+	partStats.MaxValMap["p_size"] = 100
+	partStats.NdvMap["p_size"] = 101
+	statsCache.Set(part.TblId, partStats)
+	ordersStats := NewStatsInfo()
+	ordersStats.TableName = "orders"
+	ordersStats.TableCnt = 32
+	ordersStats.DataTypeMap["o_orderkey"] = uint64(types.T_int64)
+	ordersStats.MinValMap["o_orderkey"] = 0
+	ordersStats.MaxValMap["o_orderkey"] = 31
+	ordersStats.NdvMap["o_orderkey"] = 32
+	statsCache.Set(orders.TblId, ordersStats)
+	nationStats := NewStatsInfo()
+	nationStats.TableName = "nation"
+	nationStats.TableCnt = 100_000
+	nationStats.DataTypeMap["n_comment"] = uint64(types.T_varchar)
+	nationStats.NdvMap["n_comment"] = 10_000
+	statsCache.Set(nation.TblId, nationStats)
+	fpts := mock.tables["fpts"]
+	require.NotNil(t, fpts)
+	fptsStats := NewStatsInfo()
+	fptsStats.TableName = "fpts"
+	fptsStats.TableCnt = 3
+	fptsStats.DataTypeMap["f"] = uint64(types.T_float64)
+	fptsStats.MinValMap["f"] = 0
+	fptsStats.MaxValMap["f"] = 100
+	fptsStats.NdvMap["f"] = 3
+	fptsStats.DataTypeMap["g"] = uint64(types.T_float32)
+	fptsStats.MinValMap["g"] = 0
+	fptsStats.MaxValMap["g"] = 100
+	fptsStats.NdvMap["g"] = 3
+	statsCache.Set(fpts.TblId, fptsStats)
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: mock, statsCache: statsCache,
+	}}
+
+	buildScan := func(sql string) *planpb.Node {
+		stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		defer stmts[0].Free()
+		built, err := BuildPlan(ctx, stmts[0], false, nil)
+		require.NoError(t, err)
+		var scan *planpb.Node
+		for _, node := range built.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_TABLE_SCAN {
+				scan = node
+			}
+		}
+		require.NotNil(t, scan)
+		return scan
+	}
+
+	// Every falsification of a point domain reduces the scan filter to one
+	// constant-false literal; the estimate of an always-empty filter must stay
+	// near zero no matter which rewrite produced it. A satisfiable same-column
+	// range must not defer that fold of an already-contradictory point domain,
+	// including when the BETWEEN bounds keep the between function alive until
+	// domain normalization.
+	for _, sql := range []string{
+		"select p_partkey from part where p_retailprice = 1000.40 and p_retailprice = 1000.50",
+		"select p_partkey from part where p_retailprice = 1000.40 and p_retailprice <> 1000.40",
+		"select n_nationkey from nation where n_comment = 'x' and n_comment is null",
+		"select p_partkey from part where p_retailprice = 1000.40 and p_retailprice = 1000.50 and p_retailprice between 900 and 1100",
+		"select p_partkey from part where p_retailprice = 1000.40 and p_retailprice <> 1000.40 and p_retailprice between 900 and 1100",
+		"select p_partkey from part where p_size = 1 and p_size = 2 and p_size between 0 and 100",
+		"select p_partkey from part where p_size = 1 and p_size <> 1 and p_size between 0 and 100",
+		"select p_partkey from part where p_retailprice = 1000.40 and p_retailprice = 1000.50 and p_retailprice between 900.00 and 1100.00",
+		"select p_partkey from part where p_name = 'x' and p_name = 'y' and p_name between 'a' and 'z'",
+		// CAST('x' AS SIGNED) folds to an int64 literal with the cast's
+		// declared width/scale; conflicting with a plain integer literal of a
+		// different value must still fold (round-8 companion).
+		"select o_orderkey from orders where o_orderkey = 20 and o_orderkey = cast('21' as signed)",
+		"select o_orderkey from orders where o_orderkey = 20 and o_orderkey = cast('21' as signed) and o_orderkey between 0 and 100",
+		// A DIV-folded literal retains its folded source in Literal.Src; that
+		// retained source must not make the materialized payload a second SQL
+		// value, so a genuinely distinct DIV fold still folds
+		// (round-9 companion).
+		"select o_orderkey from orders where o_orderkey = 19 and o_orderkey = (cast('81.00' as decimal(8,2)) div 1)",
+		"select o_orderkey from orders where o_orderkey = 19 and o_orderkey = (cast('81.00' as decimal(8,2)) div 1) and o_orderkey between 0 and 100",
+		// Scaled double/float casts of a genuinely distinct payload keep their
+		// fold, and a float pair scaled to different comparison values
+		// (19.004 at scale 2 rounds to 19.00, at scale 3 to 19.004) still
+		// tests distinct points (round-9 companion).
+		"select f_id from fpts where f = cast('19' as double(8,2)) and f = cast('81' as double(12,2))",
+		"select f_id from fpts where f = cast('19' as double(8,2)) and f = cast('81' as double(12,2)) and f between 0e0 and 100e0",
+		"select f_id from fpts where g = cast('19.004' as float(8,2)) and g = cast('19.004' as float(12,3)) and g between 0e0 and 100e0",
+	} {
+		scan := buildScan(sql)
+		require.True(t, IsFalseExpr(colexec.RewriteFilterExprList(scan.FilterList)), sql)
+		require.Equal(t, 0.00000001, scan.Stats.Selectivity, sql)
+		require.Less(t, scan.Stats.Outcnt, 1.0, sql)
+	}
+
+	// Duplicate equality keeps the point estimate of the single surviving value.
+	duplicate := buildScan("select p_partkey from part where p_retailprice = 1000.40 and p_retailprice = 1000.40")
+	require.Equal(t, 0.001, duplicate.Stats.Selectivity)
+
+	// A compatible equality plus a weaker bound keeps an estimate that never
+	// exceeds the smaller operand's selectivity.
+	compatible := buildScan("select p_partkey from part where p_retailprice = 1000.40 and p_retailprice >= 950.00")
+	require.Greater(t, compatible.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, compatible.Stats.Selectivity, 0.001+1e-12)
+
+	// A satisfiable same-column BETWEEN keeps a real estimate bounded by the
+	// equality operand; falsification must not over-prune it.
+	satisfiableRange := buildScan("select p_partkey from part where p_retailprice = 1000.40 and p_retailprice between 900 and 1100")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableRange.FilterList)))
+	require.Greater(t, satisfiableRange.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, satisfiableRange.Stats.Selectivity, 0.001+1e-12)
+
+	// The two satisfiable controls above keep the same bounds when the between
+	// function itself survives domain rewriting (typed peers, int and varchar).
+	satisfiableIntRange := buildScan("select p_partkey from part where p_size = 1 and p_size between 0 and 100")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableIntRange.FilterList)))
+	require.Greater(t, satisfiableIntRange.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, satisfiableIntRange.Stats.Selectivity, 1.0/101+1e-12)
+	satisfiableTypedRange := buildScan("select p_partkey from part where p_retailprice = 1000.40 and p_retailprice between 900.00 and 1100.00")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableTypedRange.FilterList)))
+	require.Greater(t, satisfiableTypedRange.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, satisfiableTypedRange.Stats.Selectivity, 0.001+1e-12)
+
+	// A plain integer literal and the SIGNED-cast spelling of the same value
+	// are one SQL domain point: the satisfiable pair keeps its real estimate
+	// with and without a covering BETWEEN (round-8).
+	satisfiableCastPair := buildScan("select o_orderkey from orders where o_orderkey = 19 and o_orderkey = cast('19' as signed) and o_orderkey between 0 and 100")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableCastPair.FilterList)))
+	require.Greater(t, satisfiableCastPair.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, satisfiableCastPair.Stats.Selectivity, 1.0/32+1e-12)
+	satisfiableCastPairNoRange := buildScan("select o_orderkey from orders where o_orderkey = 19 and o_orderkey = cast('19' as signed)")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableCastPairNoRange.FilterList)))
+	require.Greater(t, satisfiableCastPairNoRange.Stats.Selectivity, 0.0)
+	require.LessOrEqual(t, satisfiableCastPairNoRange.Stats.Selectivity, 1.0/32+1e-12)
+
+	// A plain integer literal and the DIV-folded materialization of the same
+	// value are one SQL domain point: the satisfiable pair keeps its real
+	// predicates and estimate in both orders, with and without a covering
+	// BETWEEN (round-9).
+	for _, sql := range []string{
+		"select o_orderkey from orders where o_orderkey = 19 and o_orderkey = (cast('19.00' as decimal(8,2)) div 1) and o_orderkey between 0 and 100",
+		"select o_orderkey from orders where (cast('19.00' as decimal(8,2)) div 1) = o_orderkey and o_orderkey = 19 and o_orderkey between 0 and 100",
+		"select o_orderkey from orders where o_orderkey = 19 and o_orderkey = (cast('19.00' as decimal(8,2)) div 1)",
+		"select o_orderkey from orders where (cast('19.00' as decimal(8,2)) div 1) = o_orderkey and o_orderkey = 19",
+	} {
+		satisfiableDivPeer := buildScan(sql)
+		require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableDivPeer.FilterList)), sql)
+		require.Greater(t, satisfiableDivPeer.Stats.Selectivity, 0.0, sql)
+		require.LessOrEqual(t, satisfiableDivPeer.Stats.Selectivity, 1.0/32+1e-12, sql)
+	}
+
+	// Satisfiable cross-width and cross-scale DOUBLE casts of one value keep
+	// their real predicates and estimate in both orders, with and without a
+	// covering BETWEEN; FLOAT cross-width spellings of one value behave the
+	// same (round-9).
+	for _, sql := range []string{
+		"select f_id from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2)) and f between 0e0 and 100e0",
+		"select f_id from fpts where cast('19' as double(12,2)) = f and f = cast('19' as double(8,2)) and f between 0e0 and 100e0",
+		"select f_id from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2))",
+		"select f_id from fpts where f = cast('19.5' as double(8,1)) and f = cast('19.50' as double(12,2)) and f between 0e0 and 100e0",
+		"select f_id from fpts where g = cast('19.00' as float(8,2)) and g = cast('19.00' as float(12,2)) and g between 0e0 and 100e0",
+	} {
+		satisfiableFloatCast := buildScan(sql)
+		require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(satisfiableFloatCast.FilterList)), sql)
+		require.Greater(t, satisfiableFloatCast.Stats.Selectivity, 0.0, sql)
+		require.LessOrEqual(t, satisfiableFloatCast.Stats.Selectivity, 1.0/3+1e-12, sql)
+	}
+
+	// An impossible interval stays near zero through the grouped-range path.
+	emptyRange := buildScan("select p_partkey from part where p_retailprice > 1095.00 and p_retailprice < 905.00")
+	require.Equal(t, 0.00000001, emptyRange.Stats.Selectivity)
+}
+
+// TestSignedZeroPointDomainSQLValueEquality pins the SQL value semantics of
+// the domain keys: floating +0 and -0 compare equal, so a satisfiable
+// DOUBLE pair (f = 0e0 AND f = -0e0, with or without a BETWEEN) must keep a
+// real predicate, while genuinely distinct double values still fold. Keying
+// by the raw marshaled bits would turn the satisfiable pair into a
+// constant-false filter and discard its matching rows.
+func TestSignedZeroPointDomainSQLValueEquality(t *testing.T) {
+	plusZero := makePlan2Float64ConstExprWithType(0)
+	minusZero := makePlan2Float64ConstExprWithType(math.Copysign(0, -1))
+	plusZeroKey, okPlus := constLiteralKey(plusZero)
+	minusZeroKey, okMinus := constLiteralKey(minusZero)
+	require.True(t, okPlus && okMinus)
+	require.Equal(t, plusZeroKey, minusZeroKey)
+
+	plusF32Key, okF32 := constLiteralKey(makePlan2Float32ConstExprWithType(0))
+	minusF32Key, okF32Minus := constLiteralKey(makePlan2Float32ConstExprWithType(float32(math.Copysign(0, -1))))
+	require.True(t, okF32 && okF32Minus)
+	require.Equal(t, plusF32Key, minusF32Key)
+
+	negOne := makePlan2Float64ConstExprWithType(-1)
+	one := makePlan2Float64ConstExprWithType(1)
+	negThreeHalves := makePlan2Float64ConstExprWithType(-1.5)
+	floatCol := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "f"}},
+		}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	normalize := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"the SQL-equal signed-zero or control filters must not fold to constant false")
+		}
+		return out
+	}
+	eq := func(lit *planpb.Expr) *planpb.Expr {
+		return bind("=", floatCol(), lit)
+	}
+	between := func(lo, hi *planpb.Expr) *planpb.Expr {
+		return bind("between", floatCol(), lo, hi)
+	}
+
+	// Satisfiable signed-zero pair with and without a range: not falsified;
+	// without a range it merges to the one surviving duplicate equality.
+	withRange := normalize(eq(plusZero), eq(minusZero), between(negOne, one))
+	require.Len(t, withRange, 3)
+	noRange := normalize(eq(plusZero), eq(minusZero))
+	require.Len(t, noRange, 1)
+
+	// A satisfiable single equality plus the range keeps both conjuncts.
+	singleEq := normalize(eq(plusZero), between(negOne, one))
+	require.Len(t, singleEq, 2)
+
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+	// Genuinely distinct double values still fold, with and without a range.
+	folded(eq(plusZero), eq(negThreeHalves), between(negOne, one))
+	folded(eq(plusZero), eq(negThreeHalves))
+}
+
+// TestUnicodeCollationPointDomainSQLValueEquality pins the SQL value semantics
+// of the domain keys for text literals: under a native Unicode collation,
+// case- and accent-equivalent literals compare equal (never a distinct-literal
+// contradiction), a binary collation stays byte-wise, CHAR trailing-space
+// equivalence is respected, and genuinely distinct values still fold.
+func TestUnicodeCollationPointDomainSQLValueEquality(t *testing.T) {
+	ciType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	ciPlanType := makePlan2Type(&ciType)
+	binType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4Bin)
+	binPlanType := makePlan2Type(&binType)
+	charType := types.NewWithCharset(types.T_char, 10, 0, types.CharsetLegacy)
+	charPlanType := makePlan2Type(&charType)
+
+	col := func(ptype planpb.Type) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  ptype,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "s"}},
+		}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	eq := func(ptype planpb.Type, lit string) *planpb.Expr {
+		return bind("=", col(ptype), makePlan2StringConstExprWithType(lit))
+	}
+	between := func(ptype planpb.Type, lo, hi string) *planpb.Expr {
+		return bind("between", col(ptype), makePlan2StringConstExprWithType(lo), makePlan2StringConstExprWithType(hi))
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal text literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// Satisfiable ci pair with a covering BETWEEN keeps its real predicates.
+	require.Len(t, keepSatisfiable(eq(ciPlanType, "a"), eq(ciPlanType, "A"), between(ciPlanType, "a", "z")), 3)
+	// Without a range the SQL-equal pair merges like a duplicate equality.
+	require.Len(t, keepSatisfiable(eq(ciPlanType, "a"), eq(ciPlanType, "A")), 1)
+	// A satisfiable single equality plus range keeps both conjuncts.
+	require.Len(t, keepSatisfiable(eq(ciPlanType, "a"), between(ciPlanType, "a", "z")), 2)
+	// Accent-equivalent literals behave like the case pair.
+	require.Len(t, keepSatisfiable(eq(ciPlanType, "e"), eq(ciPlanType, "é"), between(ciPlanType, "a", "z")), 3)
+
+	// Genuine distinct ci values still fold, with and without a range.
+	folded(eq(ciPlanType, "a"), eq(ciPlanType, "z"), between(ciPlanType, "a", "z"))
+	folded(eq(ciPlanType, "a"), eq(ciPlanType, "z"))
+
+	// Binary collation stays byte-wise: 'a' and 'A' are a real contradiction.
+	folded(eq(binPlanType, "a"), eq(binPlanType, "A"), between(binPlanType, "a", "z"))
+	folded(eq(binPlanType, "a"), eq(binPlanType, "A"))
+
+	// CHAR trailing-space equivalence is satisfiable; distinct CHAR values fold.
+	require.Len(t, keepSatisfiable(eq(charPlanType, "a "), eq(charPlanType, "a"), between(charPlanType, "a", "z")), 3)
+	folded(eq(charPlanType, "a"), eq(charPlanType, "c"), between(charPlanType, "a", "z"))
+
+	// The key comparison itself follows each bound comparison domain.
+	typedLit := func(ptype planpb.Type, s string) *planpb.Expr {
+		e := makePlan2StringConstExprWithType(s)
+		e.Typ = ptype
+		return e
+	}
+	key := func(ptype planpb.Type, s string) (string, bool) {
+		return constLiteralKey(typedLit(ptype, s))
+	}
+	ciLowerA, okLower := key(ciPlanType, "a")
+	ciUpperA, okUpper := key(ciPlanType, "A")
+	require.True(t, okLower && okUpper)
+	require.Equal(t, ciLowerA, ciUpperA)
+	ciAccented, okAccented := key(ciPlanType, "é")
+	ciPlainE, okPlainE := key(ciPlanType, "e")
+	require.True(t, okAccented && okPlainE)
+	require.Equal(t, ciAccented, ciPlainE)
+	ciZed, okZed := key(ciPlanType, "z")
+	require.True(t, okZed)
+	require.NotEqual(t, ciLowerA, ciZed)
+
+	binLowerA, okBinLower := key(binPlanType, "a")
+	binUpperA, okBinUpper := key(binPlanType, "A")
+	require.True(t, okBinLower && okBinUpper)
+	require.NotEqual(t, binLowerA, binUpperA)
+
+	charPadded, okPadded := key(charPlanType, "a ")
+	charPlain, okPlain := key(charPlanType, "a")
+	require.True(t, okPadded && okPlain)
+	require.Equal(t, charPadded, charPlain)
+}
+
+// TestTemporalPrecisionPointDomainSQLValueEquality pins the SQL value semantics
+// of the domain keys for temporal literals: runtime temporal comparison tests
+// the materialized payload only, so the same clock value spelled at
+// DATETIME(0) and DATETIME(6) compares equal and is never a distinct-literal
+// contradiction, while genuinely distinct values (including scale-rounded
+// spellings that materialize different payloads) still fold.
+func TestTemporalPrecisionPointDomainSQLValueEquality(t *testing.T) {
+	dtColType := types.New(types.T_datetime, 26, 6)
+	dtColPlanType := makePlan2Type(&dtColType)
+	dtType := func(scale int32) planpb.Type {
+		width := int32(19)
+		if scale > 0 {
+			width = 19 + scale + 1
+		}
+		tt := types.New(types.T_datetime, width, scale)
+		return makePlan2Type(&tt)
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	col := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  dtColPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "d"}},
+		}
+	}
+	dtLiteral := func(scale int32, v types.Datetime) *planpb.Expr {
+		e := makePlan2DateTimeConstExprWithType(int64(v))
+		e.Typ = dtType(scale)
+		return e
+	}
+	eqAt := func(scale int32, v types.Datetime) *planpb.Expr {
+		return bind("=", col(), dtLiteral(scale, v))
+	}
+	between := func(lo, hi types.Datetime) *planpb.Expr {
+		return bind("between", col(), dtLiteral(6, lo), dtLiteral(6, hi))
+	}
+	parse := func(s string) types.Datetime {
+		v, err := types.ParseDatetime(s, 6)
+		require.NoError(t, err)
+		return v
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal temporal literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	sameZero, err := types.ParseDatetime("2024-01-01 00:00:00", 0)
+	require.NoError(t, err)
+	sameFull, err := types.ParseDatetime("2024-01-01 00:00:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, sameZero, sameFull)
+	lo := parse("2023-01-01 00:00:00")
+	hi := parse("2025-01-01 00:00:00")
+
+	// The same value spelled at DATETIME(0) and DATETIME(6) plus a covering
+	// BETWEEN is satisfiable: the matching row survives with its real
+	// predicates.
+	require.Len(t, keepSatisfiable(eqAt(0, sameZero), eqAt(6, sameFull), between(lo, hi)), 3)
+	// Without a range the SQL-equal pair merges like a duplicate equality.
+	require.Len(t, keepSatisfiable(eqAt(0, sameZero), eqAt(6, sameFull)), 1)
+	// A satisfiable single equality plus the range keeps both conjuncts.
+	require.Len(t, keepSatisfiable(eqAt(6, sameFull), between(lo, hi)), 2)
+
+	// Genuinely distinct temporal values still fold, with and without a range.
+	otherDay := parse("2024-01-03 00:00:00")
+	folded(eqAt(0, sameZero), eqAt(6, otherDay), between(lo, hi))
+	folded(eqAt(0, sameZero), eqAt(6, otherDay))
+	// Scale-rounded spellings materialize different runtime values and fold.
+	rounded, err := types.ParseDatetime("2024-01-01 00:00:00.5", 0)
+	require.NoError(t, err)
+	kept, err := types.ParseDatetime("2024-01-01 00:00:00.5", 6)
+	require.NoError(t, err)
+	require.NotEqual(t, rounded, kept)
+	folded(eqAt(0, rounded), eqAt(6, kept), between(lo, hi))
+	folded(eqAt(0, rounded), eqAt(6, kept))
+
+	// The key comparison itself follows the materialized temporal value.
+	key := func(scale int32, v types.Datetime) (string, bool) {
+		return constLiteralKey(dtLiteral(scale, v))
+	}
+	kZero, okZero := key(0, sameZero)
+	kFull, okFull := key(6, sameFull)
+	require.True(t, okZero && okFull)
+	require.Equal(t, kZero, kFull)
+	kOther, okOther := key(6, otherDay)
+	require.True(t, okOther)
+	require.NotEqual(t, kZero, kOther)
+	kRounded, okRounded := key(0, rounded)
+	kKept, okKept := key(6, kept)
+	require.True(t, okRounded && okKept)
+	require.NotEqual(t, kRounded, kKept)
+
+	// TIME and TIMESTAMP share the materialized-payload comparison contract:
+	// equal clock values at different scales key equal.
+	timeZero, err := types.ParseTime("11:11:11", 0)
+	require.NoError(t, err)
+	timeFull, err := types.ParseTime("11:11:11", 6)
+	require.NoError(t, err)
+	require.Equal(t, timeZero, timeFull)
+	timeZeroType := types.New(types.T_time, 10, 0)
+	timeFullType := types.New(types.T_time, 15, 6)
+	timeZeroExpr := makePlan2TimeConstExprWithType(int64(timeZero))
+	timeZeroExpr.Typ = makePlan2Type(&timeZeroType)
+	timeFullExpr := makePlan2TimeConstExprWithType(int64(timeFull))
+	timeFullExpr.Typ = makePlan2Type(&timeFullType)
+	tkZero, okTkZero := constLiteralKey(timeZeroExpr)
+	tkFull, okTkFull := constLiteralKey(timeFullExpr)
+	require.True(t, okTkZero && okTkFull)
+	require.Equal(t, tkZero, tkFull)
+
+	tsZero, err := types.ParseTimestamp(time.Local, "2024-01-01 00:00:00", 0)
+	require.NoError(t, err)
+	tsFull, err := types.ParseTimestamp(time.Local, "2024-01-01 00:00:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, tsZero, tsFull)
+	tsZeroType := types.New(types.T_timestamp, 19, 0)
+	tsFullType := types.New(types.T_timestamp, 26, 6)
+	tsZeroExpr := makePlan2TimestampConstExprWithType(int64(tsZero))
+	tsZeroExpr.Typ = makePlan2Type(&tsZeroType)
+	tsFullExpr := makePlan2TimestampConstExprWithType(int64(tsFull))
+	tsFullExpr.Typ = makePlan2Type(&tsFullType)
+	skZero, okSkZero := constLiteralKey(tsZeroExpr)
+	skFull, okSkFull := constLiteralKey(tsFullExpr)
+	require.True(t, okSkZero && okSkFull)
+	require.Equal(t, skZero, skFull)
+}
+
+// TestDecimalWidthPointDomainSQLValueEquality pins the SQL value semantics of
+// the domain keys for decimal literals: runtime decimal comparison rescales
+// coefficient/scale pairs by operand scale and never consults the declared
+// width, so the same value spelled at DECIMAL(8,2) and DECIMAL(12,2) (and two
+// DECIMAL128 widths) is never a distinct-literal contradiction, while
+// genuinely distinct coefficient/scale pairs still fold.
+func TestDecimalWidthPointDomainSQLValueEquality(t *testing.T) {
+	colType := types.New(types.T_decimal64, 16, 2)
+	colPlanType := makePlan2Type(&colType)
+	bigColType := types.New(types.T_decimal128, 38, 2)
+	bigColPlanType := makePlan2Type(&bigColType)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	col := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  colPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "d"}},
+		}
+	}
+	bigCol := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  bigColPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "e"}},
+		}
+	}
+	// 19.00 is coefficient 1900 at scale 2; 81.25 is coefficient 8125.
+	decLit := func(width, scale int32, coeff int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: width, Scale: scale, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: coeff}},
+			}},
+		}
+	}
+	dec128Lit := func(width int32, coeff int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal128), Width: width, Scale: 2, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{A: coeff}},
+			}},
+		}
+	}
+	eqAt := func(width int32, coeff int64) *planpb.Expr {
+		return bind("=", col(), decLit(width, 2, coeff))
+	}
+	between := func(lo, hi int64) *planpb.Expr {
+		return bind("between", col(), decLit(16, 2, lo), decLit(16, 2, hi))
+	}
+	eq128At := func(width int32, coeff int64) *planpb.Expr {
+		return bind("=", bigCol(), dec128Lit(width, coeff))
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal decimal literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// The same value spelled at DECIMAL(8,2) and DECIMAL(12,2) plus a covering
+	// BETWEEN is satisfiable: the matching row survives with its real
+	// predicates.
+	require.Len(t, keepSatisfiable(eqAt(8, 1900), eqAt(12, 1900), between(0, 10000)), 3)
+	// Without a range the SQL-equal pair merges like a duplicate equality.
+	require.Len(t, keepSatisfiable(eqAt(8, 1900), eqAt(12, 1900)), 1)
+	// A satisfiable single equality plus the range keeps both conjuncts.
+	require.Len(t, keepSatisfiable(eqAt(12, 1900), between(0, 10000)), 2)
+
+	// Genuinely distinct decimal values still fold, with and without a range.
+	folded(eqAt(8, 1900), eqAt(12, 8125), between(0, 10000))
+	folded(eqAt(12, 1900), eqAt(12, 8125))
+
+	// The key comparison itself follows the SQL value: width metadata is not
+	// part of identity, but the coefficient/scale pair stays distinct.
+	k8, ok8 := constLiteralKey(decLit(8, 2, 1900))
+	k12, ok12 := constLiteralKey(decLit(12, 2, 1900))
+	require.True(t, ok8 && ok12)
+	require.Equal(t, k8, k12)
+	kOther, okOther := constLiteralKey(decLit(12, 2, 8125))
+	require.True(t, okOther)
+	require.NotEqual(t, k8, kOther)
+	kScaleOne, okScaleOne := constLiteralKey(decLit(8, 1, 190))
+	require.True(t, okScaleOne)
+	require.NotEqual(t, k8, kScaleOne)
+
+	// DECIMAL128 shares the value comparison contract: the same value typed
+	// at two widths is one domain point; a distinct value still folds.
+	require.Len(t, keepSatisfiable(eq128At(18, 1900), eq128At(30, 1900)), 1)
+	folded(eq128At(18, 1900), eq128At(30, 8125))
+	k128a, okA := constLiteralKey(dec128Lit(18, 1900))
+	k128b, okB := constLiteralKey(dec128Lit(30, 1900))
+	require.True(t, okA && okB)
+	require.Equal(t, k128a, k128b)
+	k128Other, okC := constLiteralKey(dec128Lit(30, 8125))
+	require.True(t, okC)
+	require.NotEqual(t, k128a, k128Other)
+}
+
+// TestDecimalProvenancePointDomainSQLValueEquality pins that binding
+// provenance on decimal literals never decides SQL-value identity: the binder
+// marks a literal whose canonical spelling differs from its source (for
+// example '019.00' canonicalizes to '19.00') with the
+// DecimalLiteralRequiresV82 protocol marker, which survives on the executable
+// expression, but the marked and the ordinary spelling of the same value are
+// SQL-equal and must never falsify a satisfiable point domain; genuinely
+// distinct values still fold.
+func TestDecimalProvenancePointDomainSQLValueEquality(t *testing.T) {
+	colType := types.New(types.T_decimal64, 16, 2)
+	colPlanType := makePlan2Type(&colType)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	col := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  colPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "d"}},
+		}
+	}
+	// The nonce literal mirrors the binder's plain decimal64 shape (width 18);
+	// 19.00 is coefficient 1900 at scale 2 and 81.25 is coefficient 8125.
+	plainLit := func(width int32, coeff int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: width, Scale: 2, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: coeff}},
+			}},
+		}
+	}
+	markedLit := func(width int32, coeff int64) *planpb.Expr {
+		e := plainLit(width, coeff)
+		e.GetLit().DecimalLiteralRequiresV82 = true
+		return e
+	}
+	eqAt := func(width int32, coeff int64) *planpb.Expr {
+		return bind("=", col(), plainLit(width, coeff))
+	}
+	eqMarkedAt := func(width int32, coeff int64) *planpb.Expr {
+		return bind("=", col(), markedLit(width, coeff))
+	}
+	between := func(lo, hi int64) *planpb.Expr {
+		return bind("between", col(), plainLit(16, lo), plainLit(16, hi))
+	}
+	require.True(t, markedLit(18, 1900).GetLit().GetDecimalLiteralRequiresV82())
+	require.False(t, plainLit(18, 1900).GetLit().GetDecimalLiteralRequiresV82())
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal provenance-marked decimal literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// The marked spelling of the same value is satisfiable next to the
+	// ordinary spelling, in both orders, with and without a covering BETWEEN;
+	// binder-shaped same-width (18) and cross-width (8/12) spellings behave
+	// alike because width is already value-irrelevant at the seam.
+	require.Len(t, keepSatisfiable(eqMarkedAt(18, 1900), eqAt(18, 1900), between(0, 10000)), 3)
+	require.Len(t, keepSatisfiable(eqAt(18, 1900), eqMarkedAt(18, 1900), between(0, 10000)), 3)
+	require.Len(t, keepSatisfiable(eqMarkedAt(12, 1900), eqAt(8, 1900), between(0, 10000)), 3)
+	require.Len(t, keepSatisfiable(eqMarkedAt(12, 1900), eqAt(8, 1900)), 1)
+	require.Len(t, keepSatisfiable(eqAt(8, 1900), eqMarkedAt(12, 1900)), 1)
+
+	// Genuinely distinct values still fold with the marked spelling on either
+	// side, with and without the range.
+	folded(eqMarkedAt(18, 1900), eqAt(18, 8125), between(0, 10000))
+	folded(eqAt(18, 1900), eqMarkedAt(18, 8125), between(0, 10000))
+	folded(eqMarkedAt(18, 1900), eqAt(18, 8125))
+
+	// The value key ignores the provenance marker; executable identity
+	// elsewhere explicitly preserves it.
+	kMarked, okM := constLiteralKey(markedLit(12, 1900))
+	kPlain, okP := constLiteralKey(plainLit(12, 1900))
+	require.True(t, okM && okP)
+	require.Equal(t, kMarked, kPlain)
+	kPlain8, okP8 := constLiteralKey(plainLit(8, 1900))
+	require.True(t, okP8)
+	require.Equal(t, kMarked, kPlain8)
+	kOther, okO := constLiteralKey(markedLit(12, 8125))
+	require.True(t, okO)
+	require.NotEqual(t, kMarked, kOther)
+
+	// The IN-list value-set key makes the same provenance decision.
+	bkMarked, okBM := blockFilterLiteralKey(markedLit(12, 1900).GetLit(), markedLit(12, 1900).Typ)
+	bkPlain, okBP := blockFilterLiteralKey(plainLit(12, 1900).GetLit(), plainLit(12, 1900).Typ)
+	require.True(t, okBM && okBP)
+	require.Equal(t, bkMarked, bkPlain)
+	bkOther, okBO := blockFilterLiteralKey(markedLit(12, 8125).GetLit(), markedLit(12, 8125).Typ)
+	require.True(t, okBO)
+	require.NotEqual(t, bkMarked, bkOther)
+}
+
+// TestIntegerCastPointDomainSQLValueEquality pins that declaration metadata on
+// integral literals never decides SQL-value identity: runtime integer equality
+// compares only the materialized payload (function/func_compare.go), and
+// integral Type.Eq ignores Width/Scale (pkg/container/types/types.go), so the
+// plain literal 19 (Width/Scale 0/0) and the folded CAST('19' AS SIGNED)
+// literal (Width 64/Scale -1) are SQL-equal domain points and must never
+// falsify a satisfiable point domain, in either argument order and with or
+// without a covering BETWEEN; genuinely distinct values still fold.
+func TestIntegerCastPointDomainSQLValueEquality(t *testing.T) {
+	colType := types.New(types.T_int64, 0, 0)
+	colPlanType := makePlan2Type(&colType)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	col := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  colPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "v"}},
+		}
+	}
+	// The plain token mirrors the binder's makePlan2Int64ConstExprWithType
+	// shape (Width/Scale 0/0); the cast spelling mirrors the folded
+	// CAST('19' AS SIGNED) literal (Width 64/Scale -1). Both carry I64Val.
+	intLit := func(width, scale int32, v int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64), Width: width, Scale: scale, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: v},
+			}},
+		}
+	}
+	eqAt := func(width, scale int32, v int64) *planpb.Expr {
+		return bind("=", col(), intLit(width, scale, v))
+	}
+	between := func(lo, hi int64) *planpb.Expr {
+		return bind("between", col(), intLit(64, -1, lo), intLit(64, -1, hi))
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal integer literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// The plain and SIGNED-cast spellings of 19 are satisfiable together, in
+	// both orders, with and without a covering BETWEEN.
+	require.Len(t, keepSatisfiable(eqAt(0, 0, 19), eqAt(64, -1, 19), between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(eqAt(64, -1, 19), eqAt(0, 0, 19), between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(eqAt(0, 0, 19), eqAt(64, -1, 19)), 1)
+	require.Len(t, keepSatisfiable(eqAt(64, -1, 19), eqAt(0, 0, 19)), 1)
+
+	// Genuinely distinct values still fold, with and without the range.
+	folded(eqAt(0, 0, 19), eqAt(64, -1, 20), between(0, 100))
+	folded(eqAt(64, -1, 19), eqAt(0, 0, 20))
+
+	// The value key ignores the declaration metadata; the payload stays part
+	// of the key.
+	kPlain, okP := constLiteralKey(intLit(0, 0, 19))
+	kCast, okC := constLiteralKey(intLit(64, -1, 19))
+	require.True(t, okP && okC)
+	require.Equal(t, kPlain, kCast)
+	kOther, okO := constLiteralKey(intLit(64, -1, 20))
+	require.True(t, okO)
+	require.NotEqual(t, kPlain, kOther)
+
+	// The IN-list value-set key makes the same decision.
+	bkPlain, okBP := blockFilterLiteralKey(intLit(0, 0, 19).GetLit(), intLit(0, 0, 19).Typ)
+	bkCast, okBC := blockFilterLiteralKey(intLit(64, -1, 19).GetLit(), intLit(64, -1, 19).Typ)
+	require.True(t, okBP && okBC)
+	require.Equal(t, bkPlain, bkCast)
+	bkOther, okBO := blockFilterLiteralKey(intLit(64, -1, 20).GetLit(), intLit(64, -1, 20).Typ)
+	require.True(t, okBO)
+	require.NotEqual(t, bkPlain, bkOther)
+}
+
+// TestDoubleCastPointDomainSQLValueEquality pins that materialized floating
+// declaration metadata never decides SQL-value identity at the domain seam
+// (round-9): runtime DOUBLE comparison tests the materialized payload only
+// (function/func_compare.go), so the DOUBLE(M,D) width/scale an explicit cast
+// carries cannot make two spellings of one value a distinct-literal
+// contradiction. Runtime FLOAT comparison additionally normalizes each
+// operand by its own declared scale (float32ComparisonNormalizers ->
+// types.Float32ScaleNormalizer), so the value key must follow that effective
+// comparison value: cross-width or cross-scale spellings of one value share
+// one point, while scale-rounded spellings that test different values stay
+// distinct points and still fold. Comparison binding converges floating
+// literal shapes on bare columns (checkNoNeedCast admits any float literal
+// against a float column and recasts both operands to the column shape), so
+// these filters deliberately carry the declaration shapes the parser
+// produces for double(M,D)/float(M,D) casts and exercise the seam directly,
+// guarding any path that delivers those shapes to domain normalization.
+func TestDoubleCastPointDomainSQLValueEquality(t *testing.T) {
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	eqNode := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+	dblCol := func() *planpb.Expr {
+		f64 := types.New(types.T_float64, 0, 0)
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&f64),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "f"}},
+		}
+	}
+	f32Col := func() *planpb.Expr {
+		f32 := types.New(types.T_float32, 0, 0)
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&f32),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2, Name: "g"}},
+		}
+	}
+	dblLit := func(width, scale int32, v float64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64), Width: width, Scale: scale, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Dval{Dval: v},
+			}},
+		}
+	}
+	f32Lit := func(width, scale int32, v float64) *planpb.Expr {
+		f32 := types.New(types.T_float32, width, scale)
+		return &planpb.Expr{
+			Typ: makePlan2Type(&f32),
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Fval{Fval: float32(v)},
+			}},
+		}
+	}
+	dblEq := func(width, scale int32, v float64) *planpb.Expr {
+		return eqNode("=", dblCol(), dblLit(width, scale, v))
+	}
+	dblBetween := func(lo, hi float64) *planpb.Expr {
+		return bind("between", dblCol(), dblLit(0, 0, lo), dblLit(0, 0, hi))
+	}
+	f32Eq := func(width, scale int32, v float64) *planpb.Expr {
+		return eqNode("=", f32Col(), f32Lit(width, scale, v))
+	}
+	f32Between := func(lo, hi float64) *planpb.Expr {
+		return bind("between", f32Col(), f32Lit(0, 0, lo), f32Lit(0, 0, hi))
+	}
+	// The float32 literal payload is stored as a float32 (mirroring
+	// makePlan2Float32ConstExprWithType) and widened to its exact float64
+	// value at runtime comparisons.
+	f32Payload := func(v float64) float64 { return float64(float32(v)) }
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal floating literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// DOUBLE: cross-width and cross-scale spellings of one payload value are
+	// one SQL point in both orders, with or without a covering BETWEEN.
+	require.Len(t, keepSatisfiable(dblEq(8, 2, 19), dblEq(12, 2, 19), dblBetween(0, 100)), 3)
+	require.Len(t, keepSatisfiable(dblEq(12, 2, 19), dblEq(8, 2, 19), dblBetween(0, 100)), 3)
+	require.Len(t, keepSatisfiable(dblEq(8, 2, 19), dblEq(12, 2, 19)), 1)
+	require.Len(t, keepSatisfiable(dblEq(12, 2, 19), dblEq(8, 2, 19)), 1)
+	require.Len(t, keepSatisfiable(dblEq(8, 1, 19.5), dblEq(12, 2, 19.5), dblBetween(0, 100)), 3)
+	require.Len(t, keepSatisfiable(dblEq(12, 2, 19.5), dblEq(8, 1, 19.5)), 1)
+
+	// Genuinely distinct double payloads still fold, with and without a range,
+	// and cross-width spellings do not mask a payload difference.
+	folded(dblEq(8, 2, 19), dblEq(12, 2, 81), dblBetween(0, 100))
+	folded(dblEq(12, 2, 19), dblEq(8, 2, 81))
+	folded(dblEq(0, 0, 19), dblEq(8, 2, 19.5))
+
+	// FLOAT: cross-width spellings of one value (19.00 at (8,2) and (12,4))
+	// and runtime-equal cross-scale spellings (19.5 at (8,2) and (12,3)) are
+	// one SQL point, because each side normalizes to the same comparison value.
+	require.Len(t, keepSatisfiable(f32Eq(8, 2, f32Payload(19)), f32Eq(12, 4, f32Payload(19)), f32Between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(f32Eq(12, 4, f32Payload(19)), f32Eq(8, 2, f32Payload(19)), f32Between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(f32Eq(8, 2, f32Payload(19)), f32Eq(12, 4, f32Payload(19))), 1)
+	require.Len(t, keepSatisfiable(f32Eq(8, 2, f32Payload(19.5)), f32Eq(12, 3, f32Payload(19.5)), f32Between(0, 100)), 3)
+
+	// Scale-rounded float32 spellings whose comparison values differ
+	// (19.004: round(_,2) is 19.00 while round(_,3) is 19.004) stay distinct
+	// points in both orders, with and without the range.
+	folded(f32Eq(8, 2, f32Payload(19.004)), f32Eq(12, 3, f32Payload(19.004)), f32Between(0, 100))
+	folded(f32Eq(12, 3, f32Payload(19.004)), f32Eq(8, 2, f32Payload(19.004)))
+	folded(f32Eq(8, 2, f32Payload(19)), f32Eq(12, 4, f32Payload(81)))
+
+	// The value key decides by payload (after the float32 scale
+	// normalization mirrors the runtime comparison value).
+	dblKeyA, okDA := constLiteralKey(dblLit(8, 2, 19))
+	dblKeyB, okDB := constLiteralKey(dblLit(12, 2, 19))
+	require.True(t, okDA && okDB)
+	require.Equal(t, dblKeyA, dblKeyB)
+	dblKeyC, okDC := constLiteralKey(dblLit(0, 0, 19))
+	require.True(t, okDC)
+	require.Equal(t, dblKeyA, dblKeyC)
+	dblKeyOther, okDO := constLiteralKey(dblLit(12, 2, 81))
+	require.True(t, okDO)
+	require.NotEqual(t, dblKeyA, dblKeyOther)
+
+	f32KeyA, okFA := constLiteralKey(f32Lit(8, 2, f32Payload(19)))
+	f32KeyB, okFB := constLiteralKey(f32Lit(12, 4, f32Payload(19)))
+	require.True(t, okFA && okFB)
+	require.Equal(t, f32KeyA, f32KeyB)
+	f32KeyScaleA, okSA := constLiteralKey(f32Lit(8, 2, f32Payload(19.004)))
+	f32KeyScaleB, okSB := constLiteralKey(f32Lit(12, 3, f32Payload(19.004)))
+	require.True(t, okSA && okSB)
+	require.NotEqual(t, f32KeyScaleA, f32KeyScaleB)
+	f32KeyRounded, okSR := constLiteralKey(f32Lit(8, 2, f32Payload(19)))
+	require.True(t, okSR)
+	// 19.004 at scale 2 tests the value 19.00 at runtime, so its key is the
+	// plain 19.00 key, while the scale-3 spelling (which tests 19.004) keeps
+	// a distinct key.
+	require.Equal(t, f32KeyScaleA, f32KeyRounded)
+	require.NotEqual(t, f32KeyScaleB, f32KeyRounded)
+
+	// The IN-list value-set key makes the same decision.
+	bkDblA, okBA := blockFilterLiteralKey(dblLit(8, 2, 19).GetLit(), dblLit(8, 2, 19).Typ)
+	bkDblB, okBB := blockFilterLiteralKey(dblLit(12, 2, 19).GetLit(), dblLit(12, 2, 19).Typ)
+	require.True(t, okBA && okBB)
+	require.Equal(t, bkDblA, bkDblB)
+	bkDblOther, okBO := blockFilterLiteralKey(dblLit(12, 2, 81).GetLit(), dblLit(12, 2, 81).Typ)
+	require.True(t, okBO)
+	require.NotEqual(t, bkDblA, bkDblOther)
+
+	bkF32A, okBFA := blockFilterLiteralKey(f32Lit(8, 2, f32Payload(19)).GetLit(), f32Lit(8, 2, f32Payload(19)).Typ)
+	bkF32B, okBFB := blockFilterLiteralKey(f32Lit(12, 4, f32Payload(19)).GetLit(), f32Lit(12, 4, f32Payload(19)).Typ)
+	require.True(t, okBFA && okBFB)
+	require.Equal(t, bkF32A, bkF32B)
+	bkF32Rounded, okBFR := blockFilterLiteralKey(f32Lit(12, 3, f32Payload(19.004)).GetLit(), f32Lit(12, 3, f32Payload(19.004)).Typ)
+	require.True(t, okBFR)
+	require.NotEqual(t, bkF32A, bkF32Rounded)
+}
+
+// TestFoldedSourcePointDomainSQLValueEquality pins that a materialized
+// literal and the bind-time source retained in Literal.Src stay one SQL
+// value (round-9): binding folds CAST('19.00' AS DECIMAL(8,2)) DIV 1 into
+// an int64 literal and attaches the folded DIV expression as Literal.Src
+// (the integer-division provenance in constant folding). The point-domain key
+// must decide by the materialized payload, not by the marshaled source
+// bytes, while a source that embeds execution-dependent state (parameter
+// references) cannot prove the payload's value identity and must decline
+// instead of falsifying a satisfiable filter. Executable-expression identity
+// elsewhere keeps Src.
+func TestFoldedSourcePointDomainSQLValueEquality(t *testing.T) {
+	colType := types.New(types.T_int64, 0, 0)
+	colPlanType := makePlan2Type(&colType)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return bound
+	}
+	col := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  colPlanType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1, Name: "v"}},
+		}
+	}
+	intLit := func(v int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64), Width: 0, Scale: 0, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: v},
+			}},
+		}
+	}
+	// The decimal dividend mirrors the folded CAST('19.00' AS DECIMAL(8,2))
+	// literal: coefficient 1900 at scale 2.
+	decLit := func(coeff int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2, NotNullable: true},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: coeff}},
+			}},
+		}
+	}
+	// A real bind-time DIV fold: the result materializes an int64 literal and
+	// retains the folded source expression in Literal.Src.
+	proc := newPlanTestProcess(t)
+	divFold := func(coeff int64) *planpb.Expr {
+		bound := bind("div", decLit(coeff), intLit(1))
+		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, false, true)
+		require.NoError(t, err)
+		return folded
+	}
+	eqInt := func(v int64) *planpb.Expr {
+		return bind("=", col(), intLit(v))
+	}
+	eqExpr := func(e *planpb.Expr) *planpb.Expr {
+		return bind("=", col(), e)
+	}
+	between := func(lo, hi int64) *planpb.Expr {
+		return bind("between", col(), intLit(lo), intLit(hi))
+	}
+
+	div19 := divFold(1900)
+	require.NotNil(t, div19.GetLit())
+	require.Equal(t, int64(19), div19.GetLit().GetI64Val())
+	require.NotNil(t, div19.GetLit().Src, "integer-division fold must retain its source")
+	require.True(t, staticIntegerComparisonPeer(div19.GetLit().Src))
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
+	keepSatisfiable := func(filters ...*planpb.Expr) []*planpb.Expr {
+		out := builder.normalizeColumnDomain(filters)
+		for _, f := range out {
+			require.False(t, IsFalseExpr(f) || f.GetLit() != nil && f.GetLit().GetIsnull(),
+				"SQL-equal folded-source literal filters must not fold to constant false")
+		}
+		return out
+	}
+	folded := func(filters ...*planpb.Expr) {
+		out := builder.normalizeColumnDomain(filters)
+		require.Len(t, out, 1)
+		require.True(t, IsFalseExpr(out[0]))
+	}
+
+	// The plain literal and the DIV-folded materialization of the same value
+	// are one SQL point in both orders, with and without a covering BETWEEN.
+	require.Len(t, keepSatisfiable(eqInt(19), eqExpr(div19), between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(eqExpr(div19), eqInt(19), between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(eqInt(19), eqExpr(div19)), 1)
+	require.Len(t, keepSatisfiable(eqExpr(div19), eqInt(19)), 1)
+
+	// A genuinely distinct DIV-folded value still folds, with and without the
+	// range.
+	folded(eqInt(19), eqExpr(divFold(8100)), between(0, 100))
+	folded(eqExpr(divFold(8100)), eqInt(19))
+
+	// A source that embeds execution-dependent state cannot prove the
+	// materialized payload: the key declines rather than deciding, and the
+	// saturated pair keeps its real filters instead of falsifying.
+	paramSrc := intLit(19)
+	paramSrc.GetLit().Src = &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int64), Width: 0, Scale: 0},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}},
+	}
+	_, okKey := constLiteralKey(paramSrc)
+	require.False(t, okKey, "an execution-dependent source must decline the value key")
+	_, okBlock := blockFilterLiteralKey(paramSrc.GetLit(), paramSrc.Typ)
+	require.False(t, okBlock, "an execution-dependent source must decline the IN-list value key")
+	require.Len(t, keepSatisfiable(eqInt(19), eqExpr(paramSrc), between(0, 100)), 3)
+	require.Len(t, keepSatisfiable(eqExpr(paramSrc), eqInt(19)), 2)
+
+	// The value key decides by the materialized payload once the retained
+	// source is proven statically evaluable.
+	kPlain, okP := constLiteralKey(intLit(19))
+	kFolded, okF := constLiteralKey(div19)
+	require.True(t, okP && okF)
+	require.Equal(t, kPlain, kFolded)
+	kOther, okO := constLiteralKey(divFold(8100))
+	require.True(t, okO)
+	require.NotEqual(t, kPlain, kOther)
+	bkPlain, okBP := blockFilterLiteralKey(intLit(19).GetLit(), intLit(19).Typ)
+	bkFolded, okBF := blockFilterLiteralKey(div19.GetLit(), div19.Typ)
+	require.True(t, okBP && okBF)
+	require.Equal(t, bkPlain, bkFolded)
+	bkOther, okBO := blockFilterLiteralKey(divFold(8100).GetLit(), divFold(8100).Typ)
+	require.True(t, okBO)
+	require.NotEqual(t, bkPlain, bkOther)
+}
+
+// TestFoldedBooleanLiteralSelectivityBounds pins the selectivity of folded
+// constant boolean filters (#32068): TRUE keeps every row, FALSE and NULL keep
+// none, and boolean composition keeps honoring AND/OR/NOT bounds.
+func TestFoldedBooleanLiteralSelectivityBounds(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 10)
+	wrapper := builder.compCtx.GetStatsCache().Get(1)
+	stats := wrapper.GetStats()
+
+	boolFn := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	falseExpr := MakeFalseExpr()
+	require.Equal(t, 0.00000001, estimateExprSelectivity(falseExpr, builder, stats))
+	// The estimate is cached on the expression like every other filter estimate.
+	require.Equal(t, 0.00000001, falseExpr.Selectivity)
+	require.Equal(t, 0.00000001, estimateExprSelectivity(falseExpr, builder, stats))
+
+	require.Equal(t, 1.0, estimateExprSelectivity(makePlan2BoolConstExprWithType(true), builder, stats))
+
+	nullBool := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+	}
+	require.Equal(t, 0.00000001, estimateExprSelectivity(nullBool, builder, stats))
+
+	require.Equal(t, 0.00000001,
+		estimateExprSelectivity(boolFn("and", MakeFalseExpr(), makePlan2BoolConstExprWithType(true)), builder, stats))
+	require.Equal(t, 1.0,
+		estimateExprSelectivity(boolFn("or", MakeFalseExpr(), makePlan2BoolConstExprWithType(true)), builder, stats))
+	require.InDelta(t, 1.0,
+		estimateExprSelectivity(boolFn("not", MakeFalseExpr()), builder, stats), 1e-7)
+
+	// Non-boolean literals are not filter predicates; keep their legacy estimate.
+	require.Equal(t, 1.0, estimateExprSelectivity(makePlan2Int64ConstExprWithType(10), builder, stats))
+}
+
+// TestConsolidatedOrAndInListSelectivityControls executes the OR/IN controls
+// #32068 owns after #32059 was consolidated into it: on one column with many
+// distinct values each single equality keeps the 1/NDV point estimate, and a
+// disjoint OR (and its equivalent IN list) must never estimate below either
+// per-value operand.
+func TestConsolidatedOrAndInListSelectivityControls(t *testing.T) {
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
+	part := mock.tables["part"]
+	require.NotNil(t, part)
+
+	statsCache := NewStatsCache()
+	partStats := NewStatsInfo()
+	partStats.TableName = "part"
+	partStats.TableCnt = 1_000_000
+	partStats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	partStats.MinValMap["p_retailprice"] = 900
+	partStats.MaxValMap["p_retailprice"] = 1100
+	partStats.NdvMap["p_retailprice"] = 1000
+	statsCache.Set(part.TblId, partStats)
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: mock, statsCache: statsCache,
+	}}
+
+	buildScan := func(sql string) *planpb.Node {
+		stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		defer stmts[0].Free()
+		built, err := BuildPlan(ctx, stmts[0], false, nil)
+		require.NoError(t, err)
+		var scan *planpb.Node
+		for _, node := range built.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_TABLE_SCAN {
+				scan = node
+			}
+		}
+		require.NotNil(t, scan)
+		return scan
+	}
+
+	// Per-value control: one equality equals the 1/NDV point estimate.
+	for _, sql := range []string{
+		"select p_partkey from part where p_retailprice = 1000.40",
+		"select p_partkey from part where p_retailprice = 1000.50",
+	} {
+		require.Equal(t, 0.001, buildScan(sql).Stats.Selectivity, sql)
+	}
+
+	// Consolidated OR invariant: disjoint same-column alternatives keep a
+	// union estimate, never one below either operand or above the full table.
+	orScan := buildScan("select p_partkey from part where p_retailprice = 1000.40 or p_retailprice = 1000.50")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(orScan.FilterList)))
+	require.GreaterOrEqual(t, orScan.Stats.Selectivity, 0.001-1e-12)
+	require.LessOrEqual(t, orScan.Stats.Selectivity, 1.0)
+
+	// The equivalent IN list keeps the same per-value floor.
+	inScan := buildScan("select p_partkey from part where p_retailprice in (1000.40, 1000.50)")
+	require.False(t, IsFalseExpr(colexec.RewriteFilterExprList(inScan.FilterList)))
+	require.GreaterOrEqual(t, inScan.Stats.Selectivity, 0.001-1e-12)
+	require.LessOrEqual(t, inScan.Stats.Selectivity, 1.0)
+
+	t.Logf("consolidated controls: per-value=0.001000, or=%.6f, in=%.6f",
+		orScan.Stats.Selectivity, inScan.Stats.Selectivity)
 }
 
 func TestMissingColumnMapsUseUnknownStatsFallbacks(t *testing.T) {
@@ -3059,7 +4365,7 @@ func TestCachedLimitZeroFinalPlan(t *testing.T) {
 	statements, err := mysql.Parse(ctx.GetContext(), "select n_nationkey from nation limit 0", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	qry := p.GetQuery()
 	require.NotNil(t, qry)
@@ -3165,7 +4471,7 @@ func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(ctx, stmts[0], false)
+			p, err := BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.strict, cachedPlanRequiresExactStats(p.GetQuery()), "%s", p.String())
 			for _, node := range p.GetQuery().Nodes {
@@ -3193,7 +4499,7 @@ func BenchmarkCachedPointPlanAdmission(b *testing.B) {
 	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
 	require.NoError(b, err)
 	defer stmts[0].Free()
-	p, err := BuildPlan(ctx, stmts[0], false)
+	p, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(b, err)
 	b.ReportAllocs()
 	b.ResetTimer()

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -279,7 +280,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	}
 
 	lastX := -1
-	var aggs *[AggBatchSize]T
+	var aggs []T
 	var aggVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -989,9 +990,9 @@ func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Typ
 	var exec minMaxExecBytes
 	exec.mp = mp
 	if isMin {
-		exec.comp = compareUTF8mb4GeneralCI
+		exec.comp = collation.CompareGeneralCI
 	} else {
-		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
+		exec.comp = func(x, y []byte) int { return -collation.CompareGeneralCI(x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec
