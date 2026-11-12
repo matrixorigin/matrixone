@@ -34,7 +34,12 @@ func validateJSONPayload(typ types.Type, raw []byte) error {
 }
 
 func validateJSONValue(typ types.Type, value bytejson.ByteJson) error {
-	if typ.Oid == types.T_json && !bytejson.IsValidByteJson(value) {
+	if typ.Oid != types.T_json {
+		return nil
+	}
+	// The stored validator includes the ordinary scalar/structural checks in
+	// its canonical walk; do not traverse the same descendants a second time.
+	if err := bytejson.ValidateStoredJSONDocument(value); err != nil {
 		return moerr.NewInvalidInputNoCtx("invalid JSON vector payload")
 	}
 	return nil
