@@ -55,6 +55,16 @@ func TestRenameUserShowGrants(t *testing.T) {
 			_, err := admin.ExecContext(ctx, query)
 			require.NoError(t, err, query)
 		}
+		grantHeader := func(conn *sql.Conn, query string) string {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, query)
+			require.NoError(t, err, query)
+			defer rows.Close()
+			columns, err := rows.Columns()
+			require.NoError(t, err, query)
+			require.Len(t, columns, 1, query)
+			return columns[0]
+		}
 		grants := func(conn *sql.Conn, query string) []string {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, query)
@@ -91,6 +101,7 @@ func TestRenameUserShowGrants(t *testing.T) {
 		require.NoError(t, admin.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='sg30467_a'").Scan(&id))
 		before := grants(admin, "show grants for 'sg30467_a'")
 		require.NotEmpty(t, before)
+		require.Equal(t, "Grants for sg30467_a@localhost", grantHeader(old, "show grants"))
 		require.Equal(t, before, grants(old, "show grants"))
 		var beforeID uint32
 		require.NoError(t, old.QueryRowContext(ctx, "select current_user_id()").Scan(&beforeID))
@@ -104,6 +115,7 @@ func TestRenameUserShowGrants(t *testing.T) {
 		exec("set session transaction_read_only = 0")
 		movedBeforeReuse := grants(admin, "show grants for 'sg30467_moved'")
 		require.NotEmpty(t, movedBeforeReuse)
+		require.Equal(t, "Grants for sg30467_a@localhost", grantHeader(old, "show grants"))
 		for _, query := range []string{"show grants", "show grants for current_user", "show grants for current_user()"} {
 			require.Equal(t, movedBeforeReuse, grants(old, query), query)
 		}
@@ -126,6 +138,7 @@ func TestRenameUserShowGrants(t *testing.T) {
 		require.Contains(t, strings.ToUpper(strings.Join(wantA, "\n")), "SELECT")
 		require.Contains(t, strings.ToUpper(strings.Join(wantB, "\n")), "INSERT")
 		require.NotEqual(t, wantA, wantB)
+		require.Equal(t, "Grants for sg30467_a@localhost", grantHeader(old, "show grants"))
 		for _, query := range []string{"show grants", "show grants for current_user", "show grants for current_user()"} {
 			require.Equal(t, wantA, grants(old, query), query)
 		}

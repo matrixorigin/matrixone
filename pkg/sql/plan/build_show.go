@@ -1195,7 +1195,9 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 			if err != nil {
 				return nil, err
 			}
-			sql := fmt.Sprintf("select concat('GRANT ', p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end, ' `', u.user_name, '`@`', u.user_host, '`') as `Grants for current user` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_id = %d;", id)
+			// Keep the legacy column name while resolving the grants by stable user ID.
+			userName := strings.ReplaceAll(ctx.GetUserName(), "`", "``")
+			sql := fmt.Sprintf("select concat('GRANT ', p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end, ' `', u.user_name, '`@`', u.user_host, '`') as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_id = %d;", userName, id)
 			return returnByRewriteSQL(ctx, sql, ddlType)
 		}
 		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
