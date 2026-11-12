@@ -3,6 +3,10 @@ name: Race seed canary
 on:
   workflow_dispatch:
     inputs:
+      cs_s3_probe:
+        description: Run read-only signed S3 connectivity probes on CS runners
+        type: boolean
+        default: false
       object_storage_smoke:
         description: Run isolated local MinIO test instead of the coverage comparison
         type: boolean
@@ -36,7 +40,7 @@ permissions:
 
 jobs:
   cs-coverage-canary:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
     with:
       canary_pr_32523: true
@@ -45,7 +49,7 @@ jobs:
       canary_package_parallelism: 8
     secrets: inherit
   cs-minio-smoke:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke && !inputs.coverage_contract_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     runs-on: cs-mnl2-large-7c14g
     timeout-minutes: 90
     steps:
@@ -99,7 +103,7 @@ jobs:
           export CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/cgo -lmo -Wl,-rpath,${GITHUB_WORKSPACE}/cgo -L${GITHUB_WORKSPACE}/thirdparties/install/lib -lusearch_c -Wl,-rpath,${GITHUB_WORKSPACE}/thirdparties/install/lib -lm"
           go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^TestMinioSDK$' -v -count=1 -timeout=20m
   coverage-contract-smoke:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     runs-on: cs-mnl2-large-7c14g
     timeout-minutes: 10
     steps:
@@ -118,6 +122,59 @@ jobs:
           token: ${{ secrets.TOKEN_ACTION }}
       - name: Run Linux coverage contract tests
         run: python3 -m unittest scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
+  cs-s3-readonly-probe:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.cs_s3_probe
+    environment: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: MTY
+            runner: cs-mty-large-7c14g
+          - stack: MNL2
+            runner: cs-mnl2-large-7c14g
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - name: Signed read-only S3 list-buckets probe
+        env:
+          S3_PROBE_CONFIG: ${{ secrets[format('CS_S3_PROBE_{0}', matrix.stack)] }}
+          S3_PROBE_STACK: ${{ matrix.stack }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, hashlib, hmac, os, sys, time, urllib.error, urllib.parse, urllib.request
+          try:
+              endpoint, access, secret = os.environ['S3_PROBE_CONFIG'].split('|', 2)
+              parsed = urllib.parse.urlsplit(endpoint.strip())
+              if parsed.scheme != 'https' or not parsed.netloc or parsed.path not in ('', '/'):
+                  raise ValueError('invalid S3 endpoint shape')
+              now = datetime.datetime.now(datetime.timezone.utc)
+              stamp, date = now.strftime('%Y%m%dT%H%M%SZ'), now.strftime('%Y%m%d')
+              region, service = 'us-east-1', 's3'
+              body_hash = hashlib.sha256(b'').hexdigest()
+              signed = 'host;x-amz-content-sha256;x-amz-date'
+              headers = f'host:{parsed.netloc}\nx-amz-content-sha256:{body_hash}\nx-amz-date:{stamp}\n'
+              request = f'GET\n/\n\n{headers}\n{signed}\n{body_hash}'
+              scope = f'{date}/{region}/{service}/aws4_request'
+              message = f'AWS4-HMAC-SHA256\n{stamp}\n{scope}\n{hashlib.sha256(request.encode()).hexdigest()}'
+              def sign(key, msg): return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+              key = sign(sign(sign(sign(('AWS4' + secret).encode(), date), region), service), 'aws4_request')
+              signature = hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
+              auth = f'AWS4-HMAC-SHA256 Credential={access}/{scope}, SignedHeaders={signed}, Signature={signature}'
+              req = urllib.request.Request(endpoint.rstrip('/') + '/', headers={'Authorization': auth, 'x-amz-date': stamp, 'x-amz-content-sha256': body_hash})
+              start = time.monotonic()
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  status = response.status
+                  response.read(1)
+              print(f"{os.environ['S3_PROBE_STACK']}: signed S3 ListBuckets HTTP {status}, {time.monotonic()-start:.2f}s; no writes")
+          except urllib.error.HTTPError as error:
+              print(f"{os.environ.get('S3_PROBE_STACK')}: signed S3 request failed: HTTP {error.code}")
+              sys.exit(1)
+          except Exception as error:
+              print(f"{os.environ.get('S3_PROBE_STACK')}: signed S3 probe failed: {type(error).__name__}")
+              sys.exit(1)
+          PY
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
