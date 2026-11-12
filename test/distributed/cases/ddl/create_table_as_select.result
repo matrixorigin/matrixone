@@ -1924,8 +1924,14 @@ insert into math01 values (null, null, null, 10);
 drop table if exists agg01;
 create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
 show create table agg01;
-Table    Create Table
-agg01    CREATE TABLE `agg01` (\n  `avgcol` double DEFAULT NULL,\n  `sumcol` decimal(38,0) DEFAULT NULL,\n  `countcol` bigint NOT NULL,\n  `maxcol` double NOT NULL,\n  `mincol` double NOT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+agg01  ¦  CREATE TABLE `agg01` (
+  `avgcol` double DEFAULT NULL,
+  `sumcol` decimal(38,0) DEFAULT NULL,
+  `countcol` bigint NOT NULL,
+  `maxcol` double DEFAULT NULL,
+  `mincol` double DEFAULT NULL
+)
 select * from agg01;
 avgcol    sumcol    countcol    maxcol    mincol
 7571.333333333333    10424    3    10.0    -9392032.0
@@ -2436,4 +2442,302 @@ insert into boolbit_nullable values(null,null);
 select count(*) from boolbit_nullable;
 ➤ count(*)[-5,64,0]  𝄀
 4
+select y,1/y as v,1 div y as d,1 % y as m from nullable_fallback order by y;
+➤ y[4,32,0]  ¦  v[8,54,0]  ¦  d[-5,64,0]  ¦  m[-5,64,0]  𝄀
+0  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  1.0  ¦  1  ¦  0
+select 1/y as v,count(*) as c from nullable_fallback group by 1/y order by v;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1.0  ¦  1
+select distinct 1/y as v from nullable_fallback order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+1.0
+select 1/y as v,count(*) as c from nullable_fallback where y=0 group by 1/y;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1
+select distinct 1/y as v from nullable_fallback where y=0;
+➤ v[8,54,0]  𝄀
+null
+select 1/y as v,count(*) as c from nullable_fallback where false group by 1/y;
+➤ v[8,54,0]  ¦  c[-5,64,0]
+create table direct_domain as select 1/y as v,1 div y as d,1 % y as m from nullable_fallback;
+create table grouped_domain as select 1/y as v,count(*) as c from nullable_fallback group by 1/y;
+create table distinct_domain as select distinct 1/y as v from nullable_fallback;
+select * from direct_domain order by v;
+➤ v[8,54,0]  ¦  d[-5,64,0]  ¦  m[-5,64,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.0  ¦  1  ¦  0
+select * from grouped_domain order by v;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1.0  ¦  1
+select * from distinct_domain order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+1.0
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('direct_domain','grouped_domain','distinct_domain') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+direct_domain  ¦  v  ¦  YES  𝄀
+direct_domain  ¦  d  ¦  YES  𝄀
+direct_domain  ¦  m  ¦  YES  𝄀
+distinct_domain  ¦  v  ¦  YES  𝄀
+grouped_domain  ¦  v  ¦  YES  𝄀
+grouped_domain  ¦  c  ¦  NO
+insert into direct_domain values(null,null,null);
+insert into grouped_domain values(null,1);
+insert into distinct_domain values(null);
+select count(*) as rows_count,count(v) as value_count from direct_domain;
+➤ rows_count[-5,64,0]  ¦  value_count[-5,64,0]  𝄀
+3  ¦  1
+select v,sum(c) from grouped_domain group by v order by v;
+➤ v[8,54,0]  ¦  sum(c)[-5,64,0]  𝄀
+null  ¦  2  𝄀
+1.0  ¦  1
+select count(*) as rows_count,count(v) as value_count from distinct_domain;
+➤ rows_count[-5,64,0]  ¦  value_count[-5,64,0]  𝄀
+3  ¦  1
+create table empty_aggregate as select max(y) as mx,min(y) as mn,sum(y) as sm,avg(y) as av,count(y) as c from nullable_fallback where false;
+select * from empty_aggregate;
+➤ mx[4,32,0]  ¦  mn[4,32,0]  ¦  sm[-5,64,0]  ¦  av[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  0
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='empty_aggregate' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+mx  ¦  YES  𝄀
+mn  ¦  YES  𝄀
+sm  ¦  YES  𝄀
+av  ¦  YES  𝄀
+c  ¦  NO
+insert into empty_aggregate values(null,null,null,null,0);
+insert into empty_aggregate values(0,0,0,0,null);
+constraint violation: Column 'c' cannot be null
+select count(*),count(mx),sum(c) from empty_aggregate;
+➤ count(*)[-5,64,0]  ¦  count(mx)[-5,64,0]  ¦  sum(c)[-5,64,0]  𝄀
+2  ¦  0  ¦  0
+create table window_nullable as select y,lag(y) over(order by y) as lag_v,lead(y) over(order by y) as lead_v,nth_value(y,2) over(order by y) as nth_v,first_value(y) over(order by y rows between 1 preceding and 1 preceding) as first_v,last_value(y) over(order by y rows between 1 following and 1 following) as last_v from nullable_fallback;
+create table window_nonnull as select lag(y,1,7) over(order by y) as lag_v,lead(y,1,7) over(order by y) as lead_v,row_number() over(order by y) as rn,first_value(y) over(order by y) as first_v,last_value(y) over(order by y) as last_v from nullable_fallback;
+select * from window_nullable order by y;
+➤ y[4,32,0]  ¦  lag_v[4,32,0]  ¦  lead_v[4,32,0]  ¦  nth_v[4,32,0]  ¦  first_v[4,32,0]  ¦  last_v[4,32,0]  𝄀
+0  ¦  null  ¦  1  ¦  1  ¦  null  ¦  1  𝄀
+1  ¦  0  ¦  null  ¦  1  ¦  0  ¦  null
+select * from window_nonnull order by rn;
+➤ lag_v[4,32,0]  ¦  lead_v[4,32,0]  ¦  rn[-5,64,0]  ¦  first_v[4,32,0]  ¦  last_v[4,32,0]  𝄀
+7  ¦  1  ¦  1  ¦  0  ¦  1  𝄀
+0  ¦  7  ¦  2  ¦  0  ¦  1
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('window_nullable','window_nonnull') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+window_nonnull  ¦  lag_v  ¦  NO  𝄀
+window_nonnull  ¦  lead_v  ¦  NO  𝄀
+window_nonnull  ¦  rn  ¦  NO  𝄀
+window_nonnull  ¦  first_v  ¦  NO  𝄀
+window_nonnull  ¦  last_v  ¦  NO  𝄀
+window_nullable  ¦  y  ¦  NO  𝄀
+window_nullable  ¦  lag_v  ¦  YES  𝄀
+window_nullable  ¦  lead_v  ¦  YES  𝄀
+window_nullable  ¦  nth_v  ¦  YES  𝄀
+window_nullable  ¦  first_v  ¦  YES  𝄀
+window_nullable  ¦  last_v  ¦  YES
+insert into window_nullable values(2,null,null,null,null,null);
+insert into window_nonnull values(null,0,1,0,0);
+constraint violation: Column 'lag_v' cannot be null
+insert into window_nonnull values(0,null,1,0,0);
+constraint violation: Column 'lead_v' cannot be null
+insert into window_nonnull values(0,0,null,0,0);
+constraint violation: Column 'rn' cannot be null
+insert into window_nonnull values(0,0,1,null,0);
+constraint violation: Column 'first_v' cannot be null
+insert into window_nonnull values(0,0,1,0,null);
+constraint violation: Column 'last_v' cannot be null
+select count(*),count(lag_v),count(lead_v),count(nth_v),count(first_v),count(last_v) from window_nullable;
+➤ count(*)[-5,64,0]  ¦  count(lag_v)[-5,64,0]  ¦  count(lead_v)[-5,64,0]  ¦  count(nth_v)[-5,64,0]  ¦  count(first_v)[-5,64,0]  ¦  count(last_v)[-5,64,0]  𝄀
+3  ¦  1  ¦  1  ¦  2  ¦  1  ¦  1
+select count(*) from window_nonnull;
+➤ count(*)[-5,64,0]  𝄀
+2
+update conditional_src set s='' where n=1;
+create table text_domain as select n,unhex(concat(s,'q')) as hex_v,regexp_substr(concat(s,'a'),'z') as regex_v,json_extract(concat('{"a":',n,'}'),'$.missing') as json_v,month(s) as month_v,cast(s as date) as date_v from conditional_src;
+select * from text_domain order by n;
+➤ n[4,32,0]  ¦  hex_v[12,0,0]  ¦  regex_v[12,-1,0]  ¦  json_v[-1,2147483647,0]  ¦  month_v[-6,8,0]  ¦  date_v[91,64,0]  𝄀
+0  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='text_domain' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+n  ¦  NO  𝄀
+hex_v  ¦  YES  𝄀
+regex_v  ¦  YES  𝄀
+json_v  ¦  YES  𝄀
+month_v  ¦  YES  𝄀
+date_v  ¦  YES
+insert into text_domain values(2,null,null,null,null,null);
+select count(*),count(hex_v),count(regex_v),count(json_v),count(month_v),count(date_v) from text_domain;
+➤ count(*)[-5,64,0]  ¦  count(hex_v)[-5,64,0]  ¦  count(regex_v)[-5,64,0]  ¦  count(json_v)[-5,64,0]  ¦  count(month_v)[-5,64,0]  ¦  count(date_v)[-5,64,0]  𝄀
+3  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+create table safe_functions as select n,replace(s,'a','x') as rep,md5(s) as digest,upper(s) as up,length(s) as len,abs(n) as magnitude,n+1 as plus_v,char(n+65) as char_v,format(n,1) as fmt,cast(s as double) as cast_v,date_format(cast('2026-01-01' as datetime),'%Y') as year_v from conditional_src;
+select * from safe_functions order by n;
+➤ n[4,32,0]  ¦  rep[12,-1,0]  ¦  digest[12,-1,0]  ¦  up[12,-1,0]  ¦  len[-5,64,0]  ¦  magnitude[-5,64,0]  ¦  plus_v[-5,64,0]  ¦  char_v[12,-1,0]  ¦  fmt[12,-1,0]  ¦  cast_v[8,54,0]  ¦  year_v[12,-1,0]  𝄀
+0  ¦  xbc  ¦  900150983cd24fb0d6963f7d28e17f72  ¦  ABC  ¦  3  ¦  0  ¦  1  ¦  A  ¦  0.0  ¦  0.0  ¦  2026  𝄀
+1  ¦    ¦  d41d8cd98f00b204e9800998ecf8427e  ¦    ¦  0  ¦  1  ¦  2  ¦  B  ¦  1.0  ¦  0.0  ¦  2026
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='safe_functions' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+n  ¦  NO  𝄀
+rep  ¦  NO  𝄀
+digest  ¦  NO  𝄀
+up  ¦  NO  𝄀
+len  ¦  NO  𝄀
+magnitude  ¦  NO  𝄀
+plus_v  ¦  NO  𝄀
+char_v  ¦  NO  𝄀
+fmt  ¦  NO  𝄀
+cast_v  ¦  NO  𝄀
+year_v  ¦  NO
+insert into safe_functions values(2,null,'x','x',1,1,1,'A','1.0',0,'2026');
+constraint violation: Column 'rep' cannot be null
+insert into safe_functions values(2,'x',null,'x',1,1,1,'A','1.0',0,'2026');
+constraint violation: Column 'digest' cannot be null
+insert into safe_functions values(2,'x','x','x',1,1,1,'A','1.0',null,'2026');
+constraint violation: Column 'cast_v' cannot be null
+insert into safe_functions values(2,'x','x','x',1,1,1,'A','1.0',0,null);
+constraint violation: Column 'year_v' cannot be null
+select count(*) from safe_functions;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table safe_outer as select l.id,replace(r.s,'a','x') as rep,md5(r.s) as digest from l left join r on l.id=r.id;
+select * from safe_outer order by id;
+➤ id[4,32,0]  ¦  rep[12,-1,0]  ¦  digest[12,-1,0]  𝄀
+1  ¦  x  ¦  0cc175b9c0f1b6a831c399e269772661  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  b  ¦  92eb5ffee6ae2fec3ad71c777531578f
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='safe_outer' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  NO  𝄀
+rep  ¦  YES  𝄀
+digest  ¦  YES
+insert into safe_outer values(4,null,null);
+select count(*),count(rep),count(digest) from safe_outer;
+➤ count(*)[-5,64,0]  ¦  count(rep)[-5,64,0]  ¦  count(digest)[-5,64,0]  𝄀
+4  ¦  2  ¦  2
+create table dynamic_safe as select coalesce(x,y) as co_v,ifnull(x,y) as if_v,coalesce(cast(x as char),md5(cast(y as char))) as nested_v from nullable_fallback;
+select * from dynamic_safe order by nested_v;
+➤ co_v[4,32,0]  ¦  if_v[4,32,0]  ¦  nested_v[12,-1,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  cfcd208495d565ef66e7dff9f98764da
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='dynamic_safe' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+co_v  ¦  NO  𝄀
+if_v  ¦  NO  𝄀
+nested_v  ¦  NO
+insert into dynamic_safe values(null,0,'x');
+constraint violation: Column 'co_v' cannot be null
+insert into dynamic_safe values(0,null,'x');
+constraint violation: Column 'if_v' cannot be null
+insert into dynamic_safe values(0,0,null);
+constraint violation: Column 'nested_v' cannot be null
+select count(*) from dynamic_safe;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table dynamic_join as select coalesce(r.v,l.id) as co_v,ifnull(r.v,l.id) as if_v from l left join r on l.id=r.id;
+select * from dynamic_join order by co_v;
+➤ co_v[4,32,0]  ¦  if_v[4,32,0]  𝄀
+0  ¦  0  𝄀
+2  ¦  2  𝄀
+2  ¦  2
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='dynamic_join' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+co_v  ¦  NO  𝄀
+if_v  ¦  NO
+insert into dynamic_join values(null,0);
+constraint violation: Column 'co_v' cannot be null
+insert into dynamic_join values(0,null);
+constraint violation: Column 'if_v' cannot be null
+select count(*) from dynamic_join;
+➤ count(*)[-5,64,0]  𝄀
+3
+select y from nullable_fallback where y not in (select 1/n from conditional_src) order by y;
+➤ y[4,32,0]
+select y from nullable_fallback where y not in (select 1/n from conditional_src where n<>0) order by y;
+➤ y[4,32,0]  𝄀
+0
+select y from nullable_fallback where y not in (select 1/n from conditional_src where false) order by y;
+➤ y[4,32,0]  𝄀
+0  𝄀
+1
+select y from nullable_fallback where y not in (select max(n) from conditional_src where false) order by y;
+➤ y[4,32,0]
+create table membership_probe(v int not null);
+create table membership_left(id int not null,x int);
+create table membership_right(id int not null,y int not null);
+insert into membership_probe values(42);
+insert into membership_left values(1,null);
+insert into membership_right values(2,9);
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+➤ v[4,32,0]  𝄀
+null
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+➤ v[4,32,0]
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_right r right join membership_left l on l.id=r.id);
+➤ v[4,32,0]
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l full join membership_right r on l.id=r.id);
+➤ v[4,32,0]
+select v from membership_probe where v not in (select coalesce(d.x,d.y) from (select l.x,r.y from membership_left l left join membership_right r on l.id=r.id) d);
+➤ v[4,32,0]
+select l.id from membership_left l left join membership_right r on l.id=r.id where coalesce(l.x,r.y) not in (select v from membership_probe);
+➤ id[4,32,0]
+select v from membership_probe where v not in (select coalesce(l.x,r.y,7) from membership_left l left join membership_right r on l.id=r.id);
+➤ v[4,32,0]  𝄀
+42
+select v from membership_probe where v not in (select coalesce(r.y,l.id) from membership_left l left join membership_right r on l.id=r.id);
+➤ v[4,32,0]  𝄀
+42
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l inner join membership_right r on l.id=r.id);
+➤ v[4,32,0]  𝄀
+42
+select coalesce(l.x,(select y from membership_right where id=0)) as v from membership_left l;
+➤ v[4,32,0]  𝄀
+null
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) as v from membership_left l;
+➤ v[4,32,0]  𝄀
+null
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0 limit 1)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select count(*) from membership_right having count(*)<0)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select coalesce(l.x,(select y from membership_right where id=0)) as probe from membership_left l) d where d.probe not in (select v from membership_probe);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0),7) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select 7)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from membership_probe where v not in (select coalesce(l.x,cast(exists(select y from membership_right where id=0) as signed)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into membership_right values(3,10);
+select coalesce(l.x,(select y from membership_right)) from membership_left l;
+internal error: scalar subquery returns more than 1 row
+delete from membership_right where id=3;
+update membership_right set id=1;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+➤ count(*)[-5,64,0]  𝄀
+1
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+➤ v[4,32,0]  𝄀
+9
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+➤ v[4,32,0]  𝄀
+42
+truncate membership_left;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+➤ v[4,32,0]  𝄀
+42
 drop database ctas_output_nullability;

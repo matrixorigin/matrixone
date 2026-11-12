@@ -135,29 +135,29 @@ REFERENCED_TABLE_SCHEMA    VARCHAR(64)    YES        null
 REFERENCED_TABLE_NAME    VARCHAR(64)    YES        null        
 REFERENCED_COLUMN_NAME    VARCHAR(64)    YES        null        
 show columns from `COLUMNS`;
-Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    NO        null        
-table_schema    VARCHAR(256)    YES        null        
-table_name    VARCHAR(256)    YES        null        
-column_name    VARCHAR(256)    YES        null        
-ordinal_position    INT(0)    YES        null        
-column_default    VARCHAR(65535)    YES        null        
-is_nullable    VARCHAR(3)    YES        null        
-data_type    VARCHAR(65535)    YES        null        
-character_maximum_length    BIGINT(0)    YES        null        
-character_octet_length    BIGINT(0)    YES        null        
-numeric_precision    BIGINT(0)    YES        null        
-numeric_scale    BIGINT(0)    YES        null        
-datetime_precision    BIGINT(0)    YES        null        
-character_set_name    VARCHAR(4)    YES        null        
-collation_name    VARCHAR(8)    YES        null        
-column_type    VARCHAR(65535)    YES        null        
-column_key    VARCHAR(3)    YES        null        
-extra    VARCHAR(24)    YES        null        
-privileges    VARCHAR(31)    NO        null        
-column_comment    VARCHAR(2048)    YES        null        
-generation_expression    VARCHAR(500)    YES        null        
-srs_id    BIGINT(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_default  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+is_nullable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+data_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_maximum_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_key  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+extra  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+privileges  ¦  VARCHAR(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+column_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+generation_expression  ¦  VARCHAR(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+srs_id  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PROFILING`;
 Field    Type    Null    Key    Default    Extra    Comment
 QUERY_ID    INT(32)    NO        0        
@@ -223,28 +223,28 @@ CHARACTER_SET_CLIENT    VARCHAR(64)    YES        null
 COLLATION_CONNECTION    VARCHAR(64)    YES        null        
 DATABASE_COLLATION    VARCHAR(64)    YES        null        
 show columns from `TABLES`;
-Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    NO        null        
-table_schema    VARCHAR(5000)    YES        null        
-table_name    VARCHAR(5000)    YES        null        
-table_type    VARCHAR(14)    YES        null        
-engine    VARCHAR(3)    YES        null        
-version    BIGINT(0)    YES        null        
-row_format    VARCHAR(10)    NO        null        
-table_rows    BIGINT(0)    YES        null        
-avg_row_length    BIGINT(0)    YES        null        
-data_length    BIGINT(0)    YES        null        
-max_data_length    BIGINT(0)    YES        null        
-index_length    BIGINT(0)    YES        null        
-data_free    BIGINT(0)    YES        null        
-auto_increment    BIGINT UNSIGNED(0)    YES        null        
-create_time    TIMESTAMP(0)    YES        null        
-update_time    TIMESTAMP(0)    YES        null        
-check_time    TIMESTAMP(0)    YES        null        
-table_collation    VARCHAR(18)    NO        null        
-checksum    BIGINT(0)    YES        null        
-create_options    VARCHAR(256)    YES        null        
-table_comment    TEXT(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_type  ¦  VARCHAR(14)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+engine  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+version  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+row_format  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_rows  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+avg_row_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+data_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+max_data_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+index_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+data_free  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+auto_increment  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+create_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+check_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_collation  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+checksum  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+create_options  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PARTITIONS`;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        

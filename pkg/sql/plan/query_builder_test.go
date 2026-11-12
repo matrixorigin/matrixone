@@ -1243,6 +1243,76 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestScalarSubqueryBindingNullability(t *testing.T) {
+	for _, tc := range []struct {
+		expr    string
+		nonNull bool
+	}{
+		{"(select r_regionkey from region where r_regionkey=0)", false},
+		{"(select r_regionkey from region limit 1)", false},
+		{"(select r_regionkey from region limit 0)", false},
+		{"(select r_regionkey from region where r_regionkey=l.n_nationkey)", false},
+		{"(select count(*) from region having count(*)<0)", false},
+		{"exists(select r_regionkey from region where r_regionkey=0)", true},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
+			bindCtx := NewBindContext(builder, nil)
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+				"select "+tc.expr+" from nation l", 1)
+			require.NoError(t, err)
+			clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+			_, err = builder.buildFrom(clause.From.Tables, bindCtx, true)
+			require.NoError(t, err)
+			binder := NewProjectionBinder(builder, bindCtx, nil)
+			bindCtx.binder = binder
+			expr, err := binder.BindExpr(clause.Exprs[0].Expr, 0, true)
+			require.NoError(t, err)
+			require.NotNil(t, expr.GetSub())
+			require.Equal(t, tc.nonNull, expr.Typ.NotNullable,
+				"scalar zero-row semantics must be visible before parent binding and optimization")
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+		})
+	}
+}
+
+func TestJoinBindingNullExtension(t *testing.T) {
+	for _, tc := range []struct {
+		join                      string
+		leftNonNull, rightNonNull bool
+	}{
+		{"inner join", true, true},
+		{"left join", true, false},
+		{"right join", false, true},
+		{"full join", false, false},
+	} {
+		for _, cond := range []string{"on l.n_nationkey=r.n_nationkey", "using(n_nationkey)"} {
+			t.Run(tc.join+"/"+cond, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+					"select * from nation l "+tc.join+" nation r "+cond, 1)
+				require.NoError(t, err)
+				from := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From
+				id, err := builder.buildFrom(from.Tables, bindCtx, true)
+				require.NoError(t, err)
+				require.Equal(t, tc.leftNonNull, bindCtx.bindingByTable["l"].types[0].NotNullable)
+				require.Equal(t, tc.rightNonNull, bindCtx.bindingByTable["r"].types[0].NotNullable)
+				// 当前连接的 ON/USING 在 NULL 扩展之前比较两个非空输入。
+				on := builder.qry.Nodes[id].OnList
+				require.Len(t, on, 1)
+				require.True(t, on[0].Typ.NotNullable)
+				for _, arg := range on[0].GetF().Args {
+					require.True(t, arg.Typ.NotNullable)
+				}
+				require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			})
+		}
+	}
+}
+
 func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)

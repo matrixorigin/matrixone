@@ -646,7 +646,6 @@ func TestCastPreservesNonNull(t *testing.T) {
 			want := !(from == types.T_bool && (to.IsFloat() || to.IsDecimal())) &&
 				!(from.IsDecimal() && to == types.T_bool)
 			require.Equal(t, want, castPreservesNonNull(expr), "%v to %v", from, to)
-			require.False(t, isNonNullLiteralFallback(expr), "nonliteral casts cannot prove a constant fallback")
 		}
 	}
 	for _, test := range []struct {
@@ -667,9 +666,9 @@ func TestCastPreservesNonNull(t *testing.T) {
 		{types.T_varchar, types.T_varchar, true},
 		{types.T_text, types.T_varchar, true},
 		{types.T_varchar, types.T_text, true},
-		{types.T_varchar, types.T_float64, false},
+		{types.T_varchar, types.T_float64, true},
 		{types.T_varchar, types.T_date, false},
-		{types.T_json, types.T_varchar, false},
+		{types.T_json, types.T_varchar, true},
 		{types.T_bit, types.T_timestamp, false},
 		{types.T_int64, types.T_timestamp, false},
 		{types.T_bool, types.T_date, false},
@@ -679,68 +678,21 @@ func TestCastPreservesNonNull(t *testing.T) {
 			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(test.from)}}, {Typ: plan.Type{Id: int32(test.to)}}},
 		}}}
 		require.Equal(t, test.want, castPreservesNonNull(expr), "%v to %v", test.from, test.to)
-		require.False(t, isNonNullLiteralFallback(expr), "conversion proof alone must not turn a nonliteral into a constant proof")
 	}
 }
 
-func TestNonNullLiteralFallback(t *testing.T) {
-	literal := func(typ types.T, null bool) *plan.Expr {
-		lit := &plan.Literal{Isnull: null, Value: &plan.Literal_I64Val{I64Val: 0}}
-		if typ == types.T_int32 {
-			lit.Value = &plan.Literal_I32Val{I32Val: 0}
-		} else if typ == types.T_uint64 {
-			lit.Value = &plan.Literal_U64Val{U64Val: 0}
-		} else if typ == types.T_float64 {
-			lit.Value = &plan.Literal_Dval{Dval: 0}
-		} else if typ == types.T_float32 {
-			lit.Value = &plan.Literal_Fval{Fval: 0}
-		} else if typ == types.T_varchar {
-			lit.Value = &plan.Literal_Sval{Sval: "0"}
+func TestRefreshLiteralNullability(t *testing.T) {
+	for _, initiallyNonNull := range []bool{false, true} {
+		for _, isNull := range []bool{false, true} {
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: initiallyNonNull},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: isNull, Value: &plan.Literal_I64Val{I64Val: 0}}}}
+			refreshExprNullabilityFromInput(expr, nil)
+			require.Equal(t, !isNull, expr.Typ.NotNullable)
 		}
-		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_Lit{Lit: lit}}
-	}
-	cast := func(input *plan.Expr, typ types.T) *plan.Expr {
-		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
-			Args: []*plan.Expr{input, {Typ: plan.Type{Id: int32(typ)}}},
-		}}}
-	}
-	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
-	fixedDouble := cast(literal(types.T_int64, false), types.T_float64)
-	fixedDouble.Typ.Width = 10
-	fixedDouble.GetF().Args[1].Typ.Width = 10
-	otherOverload := cast(literal(types.T_int64, false), types.T_float64)
-	otherOverload.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
-	missingTarget := cast(literal(types.T_int64, false), types.T_float64)
-	missingTarget.GetF().Args = missingTarget.GetF().Args[:1]
-	for _, test := range []struct {
-		name string
-		expr *plan.Expr
-		want bool
-	}{
-		{"literal", literal(types.T_int64, false), true},
-		{"null literal", literal(types.T_int64, true), false},
-		{"integer double", cast(literal(types.T_int64, false), types.T_float64), true},
-		{"unsigned double", cast(literal(types.T_uint64, false), types.T_float64), true},
-		{"same double", cast(literal(types.T_float64, false), types.T_float64), true},
-		{"float widening", cast(literal(types.T_float32, false), types.T_float64), true},
-		{"integer widening", cast(literal(types.T_int32, false), types.T_int64), true},
-		{"nested widening", cast(cast(literal(types.T_int32, false), types.T_int64), types.T_float64), true},
-		{"integer narrowing is nonnull or error", cast(literal(types.T_int64, false), types.T_int32), true},
-		{"sign change is nonnull or error", cast(literal(types.T_int64, false), types.T_uint64), true},
-		{"string conversion", cast(literal(types.T_varchar, false), types.T_float64), false},
-		{"null conversion", cast(literal(types.T_int64, true), types.T_float64), false},
-		{"column annotation", column, false},
-		{"converted column", cast(column, types.T_float64), false},
-		{"fixed double is nonnull or error", fixedDouble, true},
-		{"other cast overload", otherOverload, false},
-		{"missing cast target", missingTarget, false},
-	} {
-		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.want, isNonNullLiteralFallback(test.expr)) })
 	}
 }
 
-func TestRefreshConditionalNullabilityNeverStrengthens(t *testing.T) {
+func TestRefreshConditionalNullabilityUsesResultProofs(t *testing.T) {
 	for _, fid := range []int32{function.CASE, function.IFF} {
 		for _, initiallyNonNull := range []bool{false, true} {
 			for _, resultNonNull := range []bool{false, true} {
@@ -753,7 +705,7 @@ func TestRefreshConditionalNullabilityNeverStrengthens(t *testing.T) {
 					Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0)}, Args: args,
 				}}}
 				refreshExprNullabilityFromInput(expr, nil)
-				require.Equal(t, initiallyNonNull && resultNonNull, expr.Typ.NotNullable)
+				require.Equal(t, resultNonNull, expr.Typ.NotNullable)
 			}
 		}
 		for _, args := range [][]*plan.Expr{nil, {{Typ: plan.Type{NotNullable: true}}, {Typ: plan.Type{NotNullable: true}}}} {
@@ -784,6 +736,42 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"grouping indicator", "select n_nationkey as k,count(*) as c,grouping(n_nationkey) as flag from nation group by n_nationkey with rollup", []bool{true, false, true}},
 		{"pruned rollup keys", "select 1 as k from nation group by n_nationkey with rollup", []bool{false}},
 		{"duplicate grouping sets", "select n_nationkey as k,count(*) as c from nation group by grouping sets ((n_nationkey),(n_nationkey),())", []bool{true, false}},
+		{"division domain null", "select 1/n_nationkey as v from nation", []bool{true}},
+		{"division group null", "select 1/n_nationkey as v,count(*) as c from nation group by 1/n_nationkey", []bool{true, false}},
+		{"division distinct null", "select distinct 1/n_nationkey as v from nation", []bool{true}},
+		{"integer division domain null", "select 1 div n_nationkey as v from nation", []bool{true}},
+		{"modulo domain null", "select 1 % n_nationkey as v from nation", []bool{true}},
+		{"max empty input", "select max(n_nationkey) as v from nation where false", []bool{true}},
+		{"sum empty input", "select sum(n_nationkey) as v from nation where false", []bool{true}},
+		{"lag boundary", "select lag(n_nationkey) over(order by n_nationkey) as v from nation", []bool{true}},
+		{"lead boundary", "select lead(n_nationkey) over(order by n_nationkey) as v from nation", []bool{true}},
+		{"nth value boundary", "select nth_value(n_nationkey,2) over(order by n_nationkey) as v from nation", []bool{true}},
+		{"lag safe default", "select lag(n_nationkey,1,0) over(order by n_nationkey) as v from nation", []bool{false}},
+		{"lead safe default", "select lead(n_nationkey,1,0) over(order by n_nationkey) as v from nation", []bool{false}},
+		{"first value default frame", "select first_value(n_nationkey) over(order by n_nationkey) as v from nation", []bool{false}},
+		{"last value default frame", "select last_value(n_nationkey) over(order by n_nationkey) as v from nation", []bool{false}},
+		{"first value empty frame", "select first_value(n_nationkey) over(order by n_nationkey rows between 1 preceding and 1 preceding) as v from nation", []bool{true}},
+		{"last value empty frame", "select last_value(n_nationkey) over(order by n_nationkey rows between 1 following and 1 following) as v from nation", []bool{true}},
+		{"lag null extended source", "select lag(r.r_regionkey,1,0) over(order by n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"first value null extended source", "select first_value(r.r_regionkey) over(order by n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ranking control", "select row_number() over(order by n_nationkey) as v from nation", []bool{false}},
+		{"regex missing match", "select regexp_substr(n_name,'z') as v from nation", []bool{true}},
+		{"unhex invalid input", "select unhex(n_name) as v from nation", []bool{true}},
+		{"month invalid string", "select month(n_name) as v from nation", []bool{true}},
+		{"unsafe explicit date cast", "select cast(n_name as date) as v from nation", []bool{true}},
+		{"unsafe implicit date cast", "select day(n_name) as v from nation", []bool{true}},
+		{"safe string float cast", "select cast(n_name as double) as v from nation", []bool{false}},
+		{"safe literal datetime cast", "select date_format(cast('2026-01-01' as datetime),'%Y') as v from nation", []bool{false}},
+		{"empty literal date cast", "select cast('' as date) as v from nation", []bool{true}},
+		{"unsafe timestamp cast", "select cast(n_nationkey as timestamp) as v from nation", []bool{true}},
+		{"safe nested fallback", "select coalesce(n_comment,md5(n_name)) as v from nation", []bool{false}},
+		{"replace safe control", "select replace(n_name,'a','x') as v from nation", []bool{false}},
+		{"md5 safe control", "select md5(n_name) as v from nation", []bool{false}},
+		{"coalesce dynamic nonnull fallback", "select coalesce(n_comment,n_name) as v from nation", []bool{false}},
+		{"coalesce refreshed nonnull fallback", "select coalesce(r.r_regionkey,n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull refreshed nonnull fallback", "select ifnull(r.r_regionkey,n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"replace null extended", "select replace(r.r_name,'a','x') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"md5 null extended", "select md5(r.r_name) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
 		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
 		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
 		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},
