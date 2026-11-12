@@ -1659,9 +1659,9 @@ func initExecuteStmtParamWithResolverInSession(
 			plan2.PreparedJSONMemberOfParamPositions(executionPlan)
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
-		prepareStmt.refreshGenerateSeriesParamMetadata(newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.refreshGenerateSeriesParamMetadata(newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
 			newPreparePlan.Plan)
 		prepareStmt.inetNtoaParamPositions = plan2.PreparedPlanInetNtoaParamPositions(
@@ -2886,7 +2886,11 @@ func executeArgumentSourceType(typ plan.Type) types.Type {
 
 func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan) {
 	endpoints, _ := plan2.PreparedPlanGenerateSeriesParameterInfo(p)
-	positions := slices.Concat(prepareStmt.numericOverloadParamPositions, endpoints)
+	positions := slices.Concat(
+		prepareStmt.numericOverloadParamPositions,
+		prepareStmt.bitCountOverloadParamPositions,
+		endpoints,
+	)
 	slices.Sort(positions)
 	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)
 }

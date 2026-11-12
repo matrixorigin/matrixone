@@ -1104,6 +1104,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				nestedFn := nested.GetF()
+				if nestedFn != nil && nestedFn.Func != nil &&
+					strings.EqualFold(nestedFn.Func.GetObjName(), "bit_count") &&
+					len(nestedFn.Args) == 1 && isPreparedNumericFallbackExpr(nestedFn.Args[0]) {
+					// BIT_COUNT's dedicated collector owns this fallback marker.
+					// Other consumers of the marker are still visited separately.
+					return nil
+				}
 				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
 						query, int32(nodeID), source, positions,
