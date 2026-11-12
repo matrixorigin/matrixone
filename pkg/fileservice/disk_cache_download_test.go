@@ -338,7 +338,9 @@ func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
 	data := make([]byte, 4096)
 	_, err = pw.Write(data)
 	require.NoError(t, err)
-	require.True(t, waitVector(t, readRange(ctx, cache, 0, 4096)).Entries[0].done)
+	vec := waitVector(t, readRange(ctx, cache, 0, 4096))
+	defer vec.Release()
+	require.True(t, vec.Entries[0].done)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 
@@ -423,7 +425,9 @@ func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
 
 	w := blockingWriter{entered: make(chan struct{}), release: make(chan struct{})}
 	read, release := startTestBlockedRead(t, pw, w, func() error {
-		return cache.Read(ctx, &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 4096, WriterForRead: w}}})
+		vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 4096, WriterForRead: w}}}
+		defer vec.Release()
+		return cache.Read(ctx, vec)
 	})
 	select {
 	case <-w.entered:
