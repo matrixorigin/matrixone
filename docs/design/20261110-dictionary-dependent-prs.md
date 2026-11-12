@@ -872,3 +872,23 @@ width invalidation. Preserve callbacks, diagnostics, compaction, ownership and
 publication; add no cache, payload copy, retained source or public interface.
 No end-to-end gain is promised from a component result. Final all-query/resource
 qualification and #32492 publication remain gated as above; preserve C/D plans.
+
+### Full-domain diagnostic rejected; remaining integration gates — 2026-11-12
+
+The approved diagnostic's activation premise is impossible in the current loop:
+all-original-row survivors leave selected=false, while selected=true means a
+strict subset and later compaction cannot grow it. Thus the sole production
+predicateBatch call never receives a full original identity domain. Do not add
+a dead identity fast path or run a timing campaign to justify one.
+
+The retained Q1 stacks instead include ordinary unionT gathering, with no
+DictionarySelectionScope.Bind and no shared-frame materialization samples.
+#32627 changes that actual kernel, so evaluate the integrated source before
+another Q1 remedy. Earlier standalone main-plus-copy results are not proof of
+its effect inside the consumer PR. Keep all previous C/D content and scopes.
+
+Independent CI fixes and local per-probe binding are complete. Final measurement
+must use the already tested persistent memory.peak file descriptor, uncompressed
+owned disk clones with the unchanged CPU/spill/swap gates, and accounting scope
+that includes pkg/vectorize/shuffle on both sides. Preserve the old observations;
+old peak figures and incomplete copy counts are not new-head acceptance.
