@@ -558,6 +558,8 @@ func TestDiskCacheDownloadReadShareOnlyCountsSuccessfulReads(t *testing.T) {
 					cache.preloads.readDownload(diskPath, o, o.takeServed())
 				}
 				downloading, filled, err := cache.readFromDownload(ctx, diskPath, &entry)
+				vector := IOVector{Entries: []IOEntry{entry}}
+				defer vector.Release()
 				require.True(t, downloading)
 				wantShare := int64(0)
 				if scenario == "success" {
