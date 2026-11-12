@@ -105,13 +105,8 @@ func TestS3FSPrefetchRanges(t *testing.T) {
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(ctx, req))
 	require.False(t, fs.prefetcher.isQueued("object"), "its ranges are cached")
-	whole := ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Needs: req.Ranges}
-	require.NoError(t, fs.PrefetchObject(ctx, whole))
-	require.False(t, fs.prefetcher.isQueued("object"), "the ranges a whole request needs are cached")
-	whole.Needs = []PrefetchRange{{Offset: 1000, Size: 10}}
-	require.False(t, fs.haveObject(whole), "a range it needs is not cached")
-	whole.Needs = nil
-	require.False(t, fs.haveObject(whole), "a whole request without needs wants the object")
+	whole := ObjectPrefetch{FilePath: "object", Size: int64(len(data))}
+	require.False(t, fs.haveObject(whole), "a whole request wants the object whatever ranges are cached")
 	other := req
 	other.Ranges = []PrefetchRange{{Offset: 1000, Size: 10}}
 	require.NoError(t, fs.PrefetchObject(ctx, other))

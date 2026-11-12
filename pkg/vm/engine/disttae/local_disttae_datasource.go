@@ -1774,7 +1774,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 		}
 		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
-		var needs []fileservice.PrefetchRange
 		if policy.Any(fileservice.ColumnPrefetch) {
 			if !isPrefetcher {
 				continue
@@ -1788,8 +1787,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 				// The object stores none of the columns.
 				continue
 			}
-			// The columns are downloaded alone while under half of the object.
-			if recorded && (size <= 0 || bytes*2 < size) {
+			if recorded {
 				if ls.rc.prefetchScan == nil {
 					ls.rc.prefetchScan = new(fileservice.PrefetchScan)
 				}
@@ -1805,9 +1803,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			if size <= 0 {
 				continue
 			}
-			if recorded {
-				needs = ranges
-			}
 		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
@@ -1820,7 +1815,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Needs: needs, Scan: ls.rc.prefetchScan,
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
 			})
 		} else {
 			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())

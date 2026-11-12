@@ -32,8 +32,6 @@ import (
 // bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
 // it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
 // With Ranges, only those ranges of the object, of Size bytes in all, are downloaded.
-// A request of the whole object with Needs is not downloaded while cached ranges cover
-// Needs.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
@@ -41,7 +39,6 @@ type ObjectPrefetch struct {
 	Reads    int
 	Blocks   int
 	Ranges   []PrefetchRange
-	Needs    []PrefetchRange
 	Scan     *PrefetchScan
 	// deletes is the file service's count of deleted objects when the request was made.
 	deletes uint64
@@ -71,8 +68,7 @@ func (s *PrefetchScan) live() bool {
 
 // merge returns the prefetch of the object for both r and o: the sooner Due and the
 // larger share.
-// A request of the whole object takes over one of ranges, and ranges add up. The whole
-// object has Needs only when both requests are satisfied by cached ranges.
+// A request of the whole object takes over one of ranges, and ranges add up.
 func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
 	r.deletes = min(r.deletes, o.deletes)
@@ -83,14 +79,10 @@ func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 		r.Ranges, r.Size = unionRanges(r.Ranges, o.Ranges, r.Size)
 		return r
 	}
-	var needs []PrefetchRange
-	if rn, on := r.needed(), o.needed(); len(rn) > 0 && len(on) > 0 {
-		needs, _ = unionRanges(rn, on, 0)
-	}
 	if len(r.Ranges) > 0 {
 		r.Size = o.Size
 	}
-	r.Ranges, r.Needs = nil, needs
+	r.Ranges = nil
 	return r
 }
 
@@ -104,14 +96,6 @@ func unionRanges(a, b []PrefetchRange, size int64) ([]PrefetchRange, int64) {
 		}
 	}
 	return a, size
-}
-
-// needed returns the ranges that, cached, satisfy r.
-func (r ObjectPrefetch) needed() []PrefetchRange {
-	if len(r.Ranges) > 0 {
-		return r.Ranges
-	}
-	return r.Needs
 }
 
 // share returns, in tenths, the share of the object's blocks the read reads.
@@ -242,7 +226,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 			merged := e.req.merge(req)
 			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytes+grow > p.limit() {
 				// Past the queue's bytes, the queued download keeps what it downloads.
-				merged.Size, merged.Ranges, merged.Needs = e.req.Size, e.req.Ranges, e.req.Needs
+				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
 			}
 			p.queuedBytes += merged.Size - e.req.Size
@@ -416,19 +400,15 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	if s.diskCache.download(diskPath) != nil {
 		return true
 	}
-	if len(req.Ranges) > 0 {
-		if s.diskCache.cache.Contains(diskPath) {
-			return true
-		}
-	} else if _, ok := s.diskCache.cache.Get(context.Background(), diskPath); ok {
+	if len(req.Ranges) == 0 {
+		_, ok := s.diskCache.cache.Get(context.Background(), diskPath)
+		return ok
+	}
+	if s.diskCache.cache.Contains(diskPath) {
 		return true
 	}
-	needs := req.needed()
-	if len(needs) == 0 {
-		return false
-	}
 	key := s.diskCache.rangeObjectKey(path.File)
-	for _, r := range needs {
+	for _, r := range req.Ranges {
 		if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); !ok {
 			return false
 		}
