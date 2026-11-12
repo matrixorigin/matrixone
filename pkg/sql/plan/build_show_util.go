@@ -194,7 +194,16 @@ func constructCreateTableSQLWithFormat(
 			if !col.Default.NullAbility {
 				buf.WriteString(" NOT NULL")
 			}
-			buf.WriteString(" GENERATED ALWAYS AS (" + col.GeneratedCol.OriginString + ")")
+			generatedSQL := col.GeneratedCol.OriginString
+			if noBackslashEscapes && strings.Contains(generatedSQL, "\\") {
+				// Catalog origins use ordinary escaping; format the expression
+				// for the session parser without changing its stored AST.
+				generatedSQL, err = formatDefaultWithoutBackslashEscapes(generatedSQL)
+				if err != nil {
+					return "", nil, err
+				}
+			}
+			buf.WriteString(" GENERATED ALWAYS AS (" + generatedSQL + ")")
 			if col.GeneratedCol.IsStored {
 				buf.WriteString(" STORED")
 			} else {
@@ -792,9 +801,13 @@ func constructCreateTableSQLWithFormat(
 		if param.Tail != nil && param.Tail.Fields != nil {
 			if param.Tail.Fields.Terminated != nil {
 				if param.Tail.Fields.Terminated.Value == "" {
-					fields += " TERMINATED BY \"\""
+					fields += " TERMINATED BY ''"
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					if noBackslashEscapes {
+						fields += " TERMINATED BY " + formatDDLString(param.Tail.Fields.Terminated.Value, true)
+					} else {
+						fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					}
 				}
 			}
 
@@ -811,18 +824,28 @@ func constructCreateTableSQLWithFormat(
 					return fmt.Sprintf("%c", value)
 				}
 			}
+			formatFieldByte := func(value byte) string {
+				if noBackslashEscapes && value != 0 {
+					return formatDDLString(string(value), true)
+				}
+				return "'" + escape(value) + "'"
+			}
 			if param.Tail.Fields.EnclosedBy != nil {
-				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
+				fields += " ENCLOSED BY " + formatFieldByte(param.Tail.Fields.EnclosedBy.Value)
 			}
 			if param.Tail.Fields.EscapedBy != nil {
-				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+				fields += " ESCAPED BY " + formatFieldByte(param.Tail.Fields.EscapedBy.Value)
 			}
 		}
 
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				if noBackslashEscapes {
+					line += " STARTING BY " + formatDDLString(param.Tail.Lines.StartingBy, true)
+				} else {
+					line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				}
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
 				line += " TERMINATED BY " + formatDDLString(param.Tail.Lines.TerminatedBy.Value, noBackslashEscapes)
@@ -1165,7 +1188,7 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
-			if replayableEnum && types.T(colType.Id) == types.T_enum {
+			if replayableEnum {
 				elems = append(elems, formatDDLString(e, noBackslashEscapes))
 			} else {
 				// Preserve the legacy type spelling used by the 4.2 hash.
