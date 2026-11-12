@@ -103,9 +103,20 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 		close(started)
 	}()
 	require.Eventually(t, func() bool {
+		select {
+		case <-started:
+			return true
+		default:
+		}
 		n, _, ok := fault.TriggerFault(waiters)
 		return ok && n == 1
 	}, 30*time.Second, 10*time.Millisecond, "CN must reach its first catalog replay")
+	select {
+	case <-started:
+		require.NoError(t, startupErr, "cluster startup failed before first replay")
+		t.Fatal("cluster started without reaching the first replay fault")
+	default:
+	}
 	addFault(objectio.FJ_CNRecvErr, "echo", 100000, "")
 	require.Eventually(t, receiverPaused.Load, 15*time.Second, 10*time.Millisecond,
 		"receiver must pause before replay completes")

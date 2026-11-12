@@ -2423,6 +2423,7 @@ const (
 type privilegeItem struct {
 	privilegeTyp          PrivilegeType
 	objType               objectType
+	viewOnly              bool
 	originViews           []string
 	directView            string
 	scanSnapshot          *plan.Snapshot
@@ -2437,6 +2438,25 @@ type privilegeItem struct {
 // compoundEntry is the entry has multi privilege items
 type compoundEntry struct {
 	items []privilegeItem
+	// Plan requirements must all be met; ALL and ownership cover only the
+	// individual object on which they were granted.
+	perObjectCovers bool
+}
+
+// planPrivilegeCandidates keeps covering grants local to the item being
+// checked. Non-plan compounds retain their existing exact-privilege semantics.
+func planPrivilegeCandidates(entry privilegeEntry, perObjectCovers bool) ([3]PrivilegeType, int) {
+	types := [3]PrivilegeType{entry.privilegeId}
+	n := 1
+	if perObjectCovers && (entry.objType == objectTypeTable || entry.objType == objectTypeView) {
+		for _, typ := range [...]PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+			if typ != entry.privilegeId {
+				types[n] = typ
+				n++
+			}
+		}
+	}
+	return types, n
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
@@ -2590,11 +2610,13 @@ const (
 // privilegeCache cache privileges on table
 type privilegeCache struct {
 	// All retained grant facts belong to one reachable SQL role.
-	grantRoleID      int64
-	observedVersions [authorizationDependencyCount]engine.TableContentVersion
-	certificate      authorizationCertificate
-	scopeEntries     int
-	nameBytes        int
+	grantRoleID       int64
+	observedVersions  [authorizationDependencyCount]engine.TableContentVersion
+	certificate       authorizationCertificate
+	protectedPolicyMu sync.Mutex
+	protectedPolicy   protectedPolicyCertificate
+	scopeEntries      int
+	nameBytes         int
 	// For objectType table
 	// For objectType table *.*
 	storeForTable [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
@@ -5455,6 +5477,44 @@ func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbN
 	}, true, nil
 }
 
+func isViewAdmin(account uint32, role int64) bool {
+	return (account == sysAccountID && role == moAdminRoleID) ||
+		(account != sysAccountID && role == accountAdminRoleID)
+}
+
+func viewRoleExists(ctx context.Context, bh BackgroundExec, account uint32, role int64) (bool, error) {
+	roleCtx := defines.AttachAccountId(ctx, account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(roleCtx, fmt.Sprintf("select role_id from mo_catalog.mo_role where role_id = %d;", role)); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(roleCtx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(results), nil
+}
+
+func parseViewPrivilegeEdge(ctx context.Context, key string, legacySnapshot *plan.Snapshot) (string, string, *plan.Snapshot, uint32, bool, error) {
+	database, view, snapshot, account, qualified, err := plan2.ParseViewPrivilegeKey(key)
+	if err != nil || qualified {
+		return database, view, snapshot, account, qualified, err
+	}
+	if plan2.IsStructuredViewDependencyKey(key) {
+		database, view, snapshot, err = plan2.ParseViewDependencyKey(key)
+	} else {
+		database, view = parseViewKey(key)
+		snapshot = legacySnapshot
+	}
+	if err != nil {
+		return "", "", nil, 0, false, err
+	}
+	if view == "" {
+		return "", "", nil, 0, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", key)
+	}
+	return database, view, snapshot, 0, false, nil
+}
+
 // resolveViewChainPrivilegeContext verifies view privileges in order and returns
 // the effective role to use for underlying object checks.
 func resolveViewChainPrivilegeContext(
@@ -5467,14 +5527,15 @@ func resolveViewChainPrivilegeContext(
 	viewChain []string,
 	fallbackDb string,
 	snapshot *plan.Snapshot,
+	viewOnly bool,
 	enableCache bool,
 ) (int64, bool, bool, error) {
 	if len(viewChain) == 0 {
 		return roleId, true, false, nil
 	}
-	rootDb, rootView := parseViewKey(viewChain[0])
-	if rootView == "" {
-		return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewChain[0])
+	rootDb, _, _, _, _, err := parseViewPrivilegeEdge(ctx, viewChain[0], snapshot)
+	if err != nil {
+		return 0, false, false, err
 	}
 	if rootDb == "" {
 		rootDb = fallbackDb
@@ -5486,11 +5547,29 @@ func resolveViewChainPrivilegeContext(
 		return roleId, true, true, nil
 	}
 
+	account := ses.GetTenantInfo()
+	callerAccount := account.GetTenantID()
+	primaryRole := int64(account.GetDefaultRoleID())
 	currentRoleId := roleId
+	roleFromDefiner := false
 	for _, viewKey := range viewChain {
-		viewDb, viewName := parseViewKey(viewKey)
-		if viewName == "" {
-			return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewKey)
+		viewDb, viewName, viewSnapshot, viewAccount, qualified, err := parseViewPrivilegeEdge(ctx, viewKey, snapshot)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !qualified {
+			// Older snapshot keys do not identify the view's account; the
+			// final scan can use a different snapshot. Replan instead of
+			// guessing across account boundaries.
+			if plan2.IsSnapshotValid(viewSnapshot) || plan2.IsSnapshotValid(snapshot) {
+				return 0, false, false, moerr.NewInternalError(ctx, "snapshot view plan must be rebuilt")
+			}
+			viewAccount = callerAccount
+		}
+		foreignSnapshot := viewAccount != callerAccount
+		if foreignSnapshot && !(callerAccount == sysAccountID && roleId == moAdminRoleID &&
+			primaryRole == moAdminRoleID && currentRoleId == roleId && plan2.IsSnapshotValid(viewSnapshot)) {
+			return 0, false, false, nil
 		}
 		if viewDb == "" {
 			viewDb = fallbackDb
@@ -5499,7 +5578,7 @@ func resolveViewChainPrivilegeContext(
 			}
 		}
 
-		useCache := enableCache && cache != nil && currentRoleId == roleId
+		useCache := enableCache && cache != nil && currentRoleId == roleId && !foreignSnapshot
 		cacheToUse := cache
 		if !useCache {
 			cacheToUse = nil
@@ -5512,12 +5591,13 @@ func resolveViewChainPrivilegeContext(
 			return 0, false, false, nil
 		}
 
-		viewInfo, found, err := getViewSecurityInfoWithSnapshot(ctx, bh, viewDb, viewName, snapshot)
+		viewCtx := defines.AttachAccountId(ctx, viewAccount)
+		viewInfo, found, err := getViewSecurityInfoWithSnapshot(viewCtx, bh, viewDb, viewName, viewSnapshot)
 		if err != nil {
 			return 0, false, false, err
 		}
 		if !found {
-			if snapshot != nil && snapshot.TS != nil {
+			if viewSnapshot != nil && viewSnapshot.TS != nil {
 				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
 			}
 			if !ses.GetTxnHandler().InActiveTxn() {
@@ -5529,7 +5609,39 @@ func resolveViewChainPrivilegeContext(
 			}
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
+			if foreignSnapshot {
+				// The system administrator reads this foreign historical edge
+				// as itself. Underlying objects are still checked separately.
+				continue
+			}
+			if callerAccount != sysAccountID && viewInfo.definerRoleId == moAdminRoleID {
+				// Some cross-account clones retain the source sys owner, which
+				// does not exist in the destination. Only its own account admin
+				// can fall back to its own privileges in that case.
+				exists, err := viewRoleExists(ctx, bh, callerAccount, moAdminRoleID)
+				if err != nil {
+					return 0, false, false, err
+				}
+				if !exists {
+					if roleId == accountAdminRoleID && primaryRole == accountAdminRoleID && currentRoleId == roleId {
+						continue
+					}
+					return 0, false, false, nil
+				}
+			}
 			currentRoleId = viewInfo.definerRoleId
+			roleFromDefiner = true
+		}
+	}
+	if viewOnly && roleFromDefiner && !isViewAdmin(callerAccount, currentRoleId) {
+		// A view without a base object has no later grant lookup to reject a
+		// dropped definer. Verify that the effective role still exists.
+		exists, err := viewRoleExists(ctx, bh, callerAccount, currentRoleId)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !exists {
+			return 0, false, false, nil
 		}
 	}
 
@@ -6859,6 +6971,7 @@ func mergeActionPrivilegeTypes(stmt *tree.Merge) []PrivilegeType {
 type privilegeTips struct {
 	typ                   PrivilegeType
 	objType               objectType
+	viewOnly              bool
 	originViews           []string
 	directView            string
 	scanSnapshot          *plan.Snapshot
@@ -6881,6 +6994,30 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
+}
+
+func appendViewChainKey(key *strings.Builder, view string) {
+	key.WriteString(strconv.Itoa(len(view)))
+	key.WriteByte(':')
+	key.WriteString(view)
+}
+
+func viewChainKey(chain []string) string {
+	var key strings.Builder
+	for _, view := range chain {
+		appendViewChainKey(&key, view)
+	}
+	return key.String()
+}
+
+// markViewChain records every prefix because checking a nested chain also
+// checks each enclosing view. Length prefixes keep encoded keys unambiguous.
+func markViewChain(covered map[string]struct{}, chain []string) {
+	var key strings.Builder
+	for _, view := range chain {
+		appendViewChainKey(&key, view)
+		covered[key.String()] = struct{}{}
+	}
 }
 
 func (pota privilegeTipsArray) String() string {
@@ -7152,6 +7289,45 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			}
+		}
+
+		// Some views have no underlying table scan (for example SELECT 1).
+		// Every view chain still needs authorization, including chains in
+		// another branch of a plan that also has ordinary table requirements.
+		covered := make(map[string]struct{})
+		for _, tip := range pts {
+			chain := tip.originViews
+			if len(chain) == 0 && tip.directView != "" {
+				chain = []string{tip.directView}
+			}
+			markViewChain(covered, chain)
+		}
+		for _, node := range q.Nodes {
+			if node == nil {
+				continue
+			}
+			chain := node.GetOriginViews()
+			if len(chain) == 0 && node.GetDirectView() != "" {
+				chain = []string{node.GetDirectView()}
+			}
+			if len(chain) == 0 {
+				continue
+			}
+			// Build the key without modifying the covered set until after
+			// the full chain has been tested.
+			key := viewChainKey(chain)
+			if _, ok := covered[key]; ok {
+				continue
+			}
+			markViewChain(covered, chain)
+			appendPt(privilegeTips{
+				typ:          PrivilegeTypeSelect,
+				objType:      objectTypeTable,
+				viewOnly:     true,
+				originViews:  node.GetOriginViews(),
+				directView:   node.GetDirectView(),
+				scanSnapshot: node.GetScanSnapshot(),
+			})
 		}
 	} else if p.GetDdl() != nil {
 		if p.GetDdl().GetTruncateTable() != nil {
@@ -7441,20 +7617,13 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	// NOTE: when the arr is nil, it denotes that there is no operation on the table.
 
-	type pair struct {
-		databaseName string
-		tableName    string
-	}
-
-	dedup := make(map[pair]int8)
-
 	// multi privileges take effect together
-	entries := make([]privilegeEntry, 0, len(arr))
 	multiPrivs := make([]privilegeItem, 0, len(arr))
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
 			privilegeTyp:          tips.typ,
 			objType:               tips.objType,
+			viewOnly:              tips.viewOnly,
 			originViews:           tips.originViews,
 			directView:            tips.directView,
 			scanSnapshot:          tips.scanSnapshot,
@@ -7463,25 +7632,15 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 			isClusterTable:        tips.isClusterTable,
 			clusterTableOperation: tips.clusterTableOperation,
 		})
-
-		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
-
-	me := &compoundEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
-
-	// optional predefined privilege : tableAll, ownership
-	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
-	for _, p := range predefined {
-		for par := range dedup {
-			e := privilegeEntriesMap[p]
-			e.databaseName = par.databaseName
-			e.tableName = par.tableName
-			entries = append(entries, e)
-		}
+	if len(multiPrivs) == 0 {
+		priv.entries = nil
+		return
 	}
-
-	priv.entries = entries
+	priv.entries = []privilegeEntry{{
+		privilegeEntryTyp: privilegeEntryTypeCompound,
+		compound:          &compoundEntry{items: multiPrivs, perObjectCovers: true},
+	}}
 }
 
 // getSqlFromPrivilegeEntry generates the query sql for the privilege entry
@@ -7651,7 +7810,7 @@ func verifyViewPrivilegeForRole(
 	enableCache bool,
 ) (bool, error) {
 	// Admin roles bypass view privilege checks to keep grants output stable.
-	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+	if tenant := ses.GetTenantInfo(); tenant != nil && isViewAdmin(tenant.GetTenantID(), roleId) {
 		return true, nil
 	}
 	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -7689,6 +7848,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var pls []privilegeLevelType
 	var yes bool
 	var yes2 bool
+	var protectedDatabases map[string]struct{}
+	if priv.writeDatabaseAndTableDirectly {
+		protectedDatabases, err = protectedPolicyForStatement(ctx, ses)
+		if err != nil {
+			return false, 0, err
+		}
+	}
 
 	// there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
@@ -7711,7 +7877,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
 					priv.isClusterTable,
-					priv.clusterTableOperation)
+					priv.clusterTableOperation, protectedDatabases)
 
 				if yes2 {
 					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, usePrivilegeCache)
@@ -7774,7 +7940,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							tempEntry.databaseName,
 							writeDirectly,
 							mi.isClusterTable,
-							mi.clusterTableOperation)
+							mi.clusterTableOperation, protectedDatabases)
 						if yes2 {
 							viewChain := mi.originViews
 							directView := mi.directView
@@ -7792,6 +7958,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if len(viewChain) == 0 && directView != "" {
 								viewChain = []string{directView}
 							}
+							if mi.viewOnly && len(viewChain) == 0 {
+								return false, 0, moerr.NewInternalError(ctx, "view privilege requirement has no view chain")
+							}
 
 							checkRoleId := roleId
 							viewAllowed := true
@@ -7807,6 +7976,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									viewChain,
 									tempEntry.databaseName,
 									viewSnapshot,
+									mi.viewOnly,
 									usePrivilegeCache,
 								)
 								if err != nil {
@@ -7814,18 +7984,36 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								}
 							}
 
+							// A local DEFINER view must not turn an ordinary caller into
+							// a reader of another account's snapshot table.
+							if viewAllowed && !skipBaseCheck && len(viewChain) > 0 && mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil &&
+								mi.scanSnapshot.Tenant.TenantID != ses.GetTenantInfo().GetTenantID() {
+								tenant := ses.GetTenantInfo()
+								viewAllowed = tenant.GetTenantID() == sysAccountID && roleId == moAdminRoleID &&
+									int64(tenant.GetDefaultRoleID()) == moAdminRoleID && checkRoleId == roleId
+							}
 							if viewAllowed {
-								if skipBaseCheck {
+								if skipBaseCheck || mi.viewOnly {
 									yes = true
 								} else {
-									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
+									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId &&
+										(mi.scanSnapshot == nil || mi.scanSnapshot.Tenant == nil ||
+											mi.scanSnapshot.Tenant.TenantID == ses.GetTenantInfo().GetTenantID())
 									cacheToUse := cache
 									if !useCache {
 										cacheToUse = nil
 									}
-									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
-									if err != nil {
-										return false, 0, err
+									candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
+									for _, candidate := range candidates[:count] {
+										candidateEntry := tempEntry
+										candidateEntry.privilegeId = candidate
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, candidateEntry, pls, useCache)
+										if err != nil {
+											return false, 0, err
+										}
+										if yes {
+											break
+										}
 									}
 								}
 								if yes && matchedRoleID == 0 {
@@ -8415,8 +8603,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
-	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
-		return false, stats, nil
+	if allowed, err := checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv); !allowed || err != nil {
+		return false, stats, err
 	}
 	ok, delta, roleID, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
@@ -8826,8 +9014,12 @@ func authenticateStatementPlanPrivilege(ctx context.Context, ses *Session, stmt 
 	stats.Reset()
 
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
-		if !checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)) {
-			return false, stats, nil
+		targetDB := string(st.Table.SchemaName)
+		if target := p.GetDdl().GetCreateTable(); target != nil && target.GetDatabase() != "" {
+			targetDB = target.GetDatabase()
+		}
+		if allowed, err := checkProtectedDatabaseWrite(ctx, ses, targetDB); !allowed || err != nil {
+			return false, stats, err
 		}
 		// CTAS needs source-query SELECT privilege even when target-table CREATE
 		// is valid, so we check the source plan explicitly here.
@@ -8846,7 +9038,7 @@ func authenticateStatementPlanPrivilege(ctx context.Context, ses *Session, stmt 
 	return evaluatePlanAuthorization(ctx, ses, &requirement)
 }
 
-func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, bool) {
+func getInsertTargetTableName(stmt *tree.Insert, ses FeSession) (string, string, bool) {
 	if stmt == nil || stmt.Table == nil {
 		return "", "", false
 	}
@@ -8870,7 +9062,7 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 }
 
 func appendMergeActionPrivilegeTips(
-	ses *Session,
+	ses FeSession,
 	stmt *tree.Merge,
 	p *plan.Plan,
 	arr privilegeTipsArray,
@@ -8929,7 +9121,7 @@ func appendMergeActionPrivilegeTips(
 	return arr
 }
 
-func getMergeTargetTableName(stmt *tree.Merge, ses *Session) (string, string, bool) {
+func getMergeTargetTableName(stmt *tree.Merge, ses FeSession) (string, string, bool) {
 	if stmt == nil || stmt.Target == nil {
 		return "", "", false
 	}
@@ -9897,8 +10089,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 	}
 	tenant := ses.GetTenantInfo()
 
-	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
-		return false, stats, nil
+	if allowed, err := checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv); !allowed || err != nil {
+		return false, stats, err
 	}
 
 	if priv.privilegeKind() == privilegeKindNone {
@@ -11743,6 +11935,17 @@ func doInterpretCall(
 	interpreter.varScope = &varScope
 	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
+	if back, ok := bh.(*backExec); ok {
+		if caller, ok := ses.(*backSession); ok && caller.protectedPolicy != nil {
+			back.backSes.protectedPolicy = caller.protectedPolicy
+		} else if owner := upstreamUserSession(ses); owner != nil && owner.GetFromRealUser() {
+			raw, err := protectedPolicyValueForStatement(ctx, owner)
+			if err != nil {
+				return nil, err
+			}
+			back.backSes.protectedPolicy = &derivedProtectedPolicy{owner: owner, raw: raw}
+		}
+	}
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
@@ -11932,7 +12135,12 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
 	varName = strings.ToLower(varName)
-	bh := ses.GetBackgroundExec(ctx)
+	var bh BackgroundExec
+	if varName == ProtectedDatabases {
+		bh = ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -11941,6 +12149,11 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if varName == ProtectedDatabases {
+		if err = lockAndValidateProtectedPolicy(ctx, ses, bh, varValue); err != nil {
+			return err
+		}
+	}
 
 	// check if var exists
 	sql := getSqlForGetSysVarWithAccount(accountId, varName)
@@ -11954,7 +12167,14 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		return
 	}
 
-	if execResultArrayHasData(erArray) {
+	if varName == ProtectedDatabases {
+		value := quoteSQLStringLiteral(getVariableValue(varValue))
+		if execResultArrayHasData(erArray) {
+			sql = fmt.Sprintf("update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = 'protected_databases' and system_variables = true", value, accountId)
+		} else {
+			sql = fmt.Sprintf("insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, 'protected_databases', %s, true)", accountId, quoteSQLStringLiteral(accountName), value)
+		}
+	} else if execResultArrayHasData(erArray) {
 		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
 	} else {
 		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))

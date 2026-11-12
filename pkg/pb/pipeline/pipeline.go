@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -110,6 +111,11 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 	if err == nil {
 		return nil
 	}
+	// Dependency snapshots can be joined with cleanup errors before transport.
+	// Preserve a substantive typed sibling before using a cancellation code.
+	if converted := dependencyWireError(ctx, err); converted != nil {
+		err = converted
+	}
 	if me, ok := err.(*moerr.Error); ok {
 		if ed, err1 := me.MarshalBinary(); err1 == nil {
 			errData = ed
@@ -122,4 +128,75 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 		errData, _ = moerr.ConvertGoError(ctx, err).(*moerr.Error).MarshalBinary()
 	}
 	return errData
+}
+
+func dependencyWireError(ctx context.Context, err error) *moerr.Error {
+	var hasSnapshot, hasGeneric, canceled, deadline bool
+	var substantive *moerr.Error
+	var visit func(error)
+	visit = func(e error) {
+		if e == nil {
+			return
+		}
+		if snapshot, ok := e.(interface{ AsMoErr() *moerr.Error }); ok {
+			hasSnapshot = true
+			isCanceled := errors.Is(e, context.Canceled)
+			isDeadline := errors.Is(e, context.DeadlineExceeded)
+			if isCanceled || isDeadline {
+				canceled = canceled || isCanceled
+				deadline = deadline || isDeadline
+				return
+			}
+			visit(snapshot.AsMoErr())
+			return
+		}
+		if joined, ok := e.(interface{ Unwrap() []error }); ok {
+			for _, child := range joined.Unwrap() {
+				visit(child)
+			}
+			return
+		}
+		if wrapped, ok := e.(interface{ Unwrap() error }); ok {
+			if child := wrapped.Unwrap(); child != nil {
+				visit(child)
+				return
+			}
+		}
+		if me, ok := e.(*moerr.Error); ok {
+			switch me.ErrorCode() {
+			case moerr.ErrQueryInterrupted:
+				canceled = true
+			default:
+				if substantive == nil {
+					substantive = me
+				}
+			}
+			return
+		}
+		switch e {
+		case context.Canceled:
+			canceled = true
+		case context.DeadlineExceeded:
+			deadline = true
+		default:
+			hasGeneric = true
+		}
+	}
+	visit(err)
+	if !hasSnapshot {
+		return nil
+	}
+	if substantive != nil {
+		return substantive
+	}
+	if hasGeneric {
+		return moerr.ConvertGoError(ctx, err).(*moerr.Error)
+	}
+	if deadline {
+		return moerr.NewRPCTimeout(ctx)
+	}
+	if canceled {
+		return moerr.NewQueryInterrupted(ctx)
+	}
+	return nil
 }
