@@ -63,6 +63,8 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 				return 0, nil, err
 			}
 		}
+		// 参数可能已从 scalar 替换为 NULL 扩展列或确定的 literal，重新建立父函数证明。
+		expr.Typ.NotNullable = function.DeduceNotNullable(exprImpl.F.Func.Obj, exprImpl.F.Args)
 
 	case *plan.Expr_Sub:
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
@@ -184,6 +186,8 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 				},
 			},
 		}
+		// SINGLE/LEFT 的右侧在无匹配行时被 NULL 扩展，不能重新继承投影约束。
+		retExpr.Typ.NotNullable = false
 		if rewrite {
 			argsType := make([]types.Type, 1)
 			argsType[0] = makeTypeByPlan2Expr(retExpr)

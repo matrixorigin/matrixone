@@ -1638,4 +1638,130 @@ create table boolbit_nullable as select coalesce(r.b,cast(null as signed)) as b,
 select count(*),count(b),count(bi) from boolbit_nullable;
 insert into boolbit_nullable values(null,null);
 select count(*) from boolbit_nullable;
+-- 直接表达式的 NULL 必须保留在投影、分组、去重和 CTAS 中。
+select y,1/y as v,1 div y as d,1 % y as m from nullable_fallback order by y;
+select 1/y as v,count(*) as c from nullable_fallback group by 1/y order by v;
+select distinct 1/y as v from nullable_fallback order by v;
+select 1/y as v,count(*) as c from nullable_fallback where y=0 group by 1/y;
+select distinct 1/y as v from nullable_fallback where y=0;
+select 1/y as v,count(*) as c from nullable_fallback where false group by 1/y;
+create table direct_domain as select 1/y as v,1 div y as d,1 % y as m from nullable_fallback;
+create table grouped_domain as select 1/y as v,count(*) as c from nullable_fallback group by 1/y;
+create table distinct_domain as select distinct 1/y as v from nullable_fallback;
+select * from direct_domain order by v;
+select * from grouped_domain order by v;
+select * from distinct_domain order by v;
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('direct_domain','grouped_domain','distinct_domain') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+insert into direct_domain values(null,null,null);
+insert into grouped_domain values(null,1);
+insert into distinct_domain values(null);
+select count(*) as rows_count,count(v) as value_count from direct_domain;
+select v,sum(c) from grouped_domain group by v order by v;
+select count(*) as rows_count,count(v) as value_count from distinct_domain;
+
+-- 空聚合不继承输入列的非空性，COUNT 保持非空。
+create table empty_aggregate as select max(y) as mx,min(y) as mn,sum(y) as sm,avg(y) as av,count(y) as c from nullable_fallback where false;
+select * from empty_aggregate;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='empty_aggregate' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into empty_aggregate values(null,null,null,null,0);
+insert into empty_aggregate values(0,0,0,0,null);
+select count(*),count(mx),sum(c) from empty_aggregate;
+
+-- 窗口边界及空 frame 可产生 NULL；安全 default、排名和非空 frame 保留约束。
+create table window_nullable as select y,lag(y) over(order by y) as lag_v,lead(y) over(order by y) as lead_v,nth_value(y,2) over(order by y) as nth_v,first_value(y) over(order by y rows between 1 preceding and 1 preceding) as first_v,last_value(y) over(order by y rows between 1 following and 1 following) as last_v from nullable_fallback;
+create table window_nonnull as select lag(y,1,7) over(order by y) as lag_v,lead(y,1,7) over(order by y) as lead_v,row_number() over(order by y) as rn,first_value(y) over(order by y) as first_v,last_value(y) over(order by y) as last_v from nullable_fallback;
+select * from window_nullable order by y;
+select * from window_nonnull order by rn;
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('window_nullable','window_nonnull') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+insert into window_nullable values(2,null,null,null,null,null);
+insert into window_nonnull values(null,0,1,0,0);
+insert into window_nonnull values(0,null,1,0,0);
+insert into window_nonnull values(0,0,null,0,0);
+insert into window_nonnull values(0,0,1,null,0);
+insert into window_nonnull values(0,0,1,0,null);
+select count(*),count(lag_v),count(lead_v),count(nth_v),count(first_v),count(last_v) from window_nullable;
+select count(*) from window_nonnull;
+
+-- 非空文本的非法值、缺失 path 和无匹配也能生成 NULL。
+update conditional_src set s='' where n=1;
+create table text_domain as select n,unhex(concat(s,'q')) as hex_v,regexp_substr(concat(s,'a'),'z') as regex_v,json_extract(concat('{"a":',n,'}'),'$.missing') as json_v,month(s) as month_v,cast(s as date) as date_v from conditional_src;
+select * from text_domain order by n;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='text_domain' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into text_domain values(2,null,null,null,null,null);
+select count(*),count(hex_v),count(regex_v),count(json_v),count(month_v),count(date_v) from text_domain;
+
+-- 安全函数在普通值和空字符串上保留原有 NOT NULL 约束。
+create table safe_functions as select n,replace(s,'a','x') as rep,md5(s) as digest,upper(s) as up,length(s) as len,abs(n) as magnitude,n+1 as plus_v,char(n+65) as char_v,format(n,1) as fmt,cast(s as double) as cast_v,date_format(cast('2026-01-01' as datetime),'%Y') as year_v from conditional_src;
+select * from safe_functions order by n;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='safe_functions' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into safe_functions values(2,null,'x','x',1,1,1,'A','1.0',0,'2026');
+insert into safe_functions values(2,'x',null,'x',1,1,1,'A','1.0',0,'2026');
+insert into safe_functions values(2,'x','x','x',1,1,1,'A','1.0',null,'2026');
+insert into safe_functions values(2,'x','x','x',1,1,1,'A','1.0',0,null);
+select count(*) from safe_functions;
+create table safe_outer as select l.id,replace(r.s,'a','x') as rep,md5(r.s) as digest from l left join r on l.id=r.id;
+select * from safe_outer order by id;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='safe_outer' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into safe_outer values(4,null,null);
+select count(*),count(rep),count(digest) from safe_outer;
+
+-- 动态 fallback 必须使用刷新后的列及安全表达式证明，而不是旧类型标记。
+create table dynamic_safe as select coalesce(x,y) as co_v,ifnull(x,y) as if_v,coalesce(cast(x as char),md5(cast(y as char))) as nested_v from nullable_fallback;
+select * from dynamic_safe order by nested_v;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='dynamic_safe' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into dynamic_safe values(null,0,'x');
+insert into dynamic_safe values(0,null,'x');
+insert into dynamic_safe values(0,0,null);
+select count(*) from dynamic_safe;
+create table dynamic_join as select coalesce(r.v,l.id) as co_v,ifnull(r.v,l.id) as if_v from l left join r on l.id=r.id;
+select * from dynamic_join order by co_v;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='dynamic_join' and column_name <> '__mo_fake_pk_col' order by ordinal_position;
+insert into dynamic_join values(null,0);
+insert into dynamic_join values(0,null);
+select count(*) from dynamic_join;
+
+-- nullable 子查询必须保留 NOT IN 的三值逻辑，空输入则全部通过。
+select y from nullable_fallback where y not in (select 1/n from conditional_src) order by y;
+select y from nullable_fallback where y not in (select 1/n from conditional_src where n<>0) order by y;
+select y from nullable_fallback where y not in (select 1/n from conditional_src where false) order by y;
+select y from nullable_fallback where y not in (select max(n) from conditional_src where false) order by y;
+
+-- 外连接的 NULL 扩展必须在依赖非空性的成员关系优化之前可见。
+create table membership_probe(v int not null);
+create table membership_left(id int not null,x int);
+create table membership_right(id int not null,y int not null);
+insert into membership_probe values(42);
+insert into membership_left values(1,null);
+insert into membership_right values(2,9);
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_right r right join membership_left l on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l full join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(d.x,d.y) from (select l.x,r.y from membership_left l left join membership_right r on l.id=r.id) d);
+select l.id from membership_left l left join membership_right r on l.id=r.id where coalesce(l.x,r.y) not in (select v from membership_probe);
+-- 非空常量或保留侧 fallback 仍能证明非空；INNER 空结果不等于包含 NULL。
+select v from membership_probe where v not in (select coalesce(l.x,r.y,7) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(r.y,l.id) from membership_left l left join membership_right r on l.id=r.id);
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l inner join membership_right r on l.id=r.id);
+-- 标量子查询的投影非空不代表零行时非空；相关和非相关场景都必须保留 UNKNOWN。
+select coalesce(l.x,(select y from membership_right where id=0)) as v from membership_left l;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0)) from membership_left l);
+select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) as v from membership_left l;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0 limit 1)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select count(*) from membership_right having count(*)<0)) from membership_left l);
+select count(*) from (select coalesce(l.x,(select y from membership_right where id=0)) as probe from membership_left l) d where d.probe not in (select v from membership_probe);
+-- 真实非空 fallback、单行 literal 和 EXISTS 不受零行 scalar 规则影响。
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select y from membership_right where id=0),7) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select 7)) from membership_left l);
+select count(*) from membership_probe where v not in (select coalesce(l.x,cast(exists(select y from membership_right where id=0) as signed)) from membership_left l);
+insert into membership_right values(3,10);
+select coalesce(l.x,(select y from membership_right)) from membership_left l;
+delete from membership_right where id=3;
+update membership_right set id=1;
+select count(*) from membership_probe where v not in (select coalesce(l.x,(select r.y from membership_right r where r.id=l.id)) from membership_left l);
+select coalesce(l.x,r.y) as v from membership_left l left join membership_right r on l.id=r.id;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
+truncate membership_left;
+select v from membership_probe where v not in (select coalesce(l.x,r.y) from membership_left l left join membership_right r on l.id=r.id);
 drop database ctas_output_nullability;
