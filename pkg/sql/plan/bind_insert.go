@@ -405,22 +405,6 @@ func splitIrregularIndexesByUpdatedColumns(
 	}
 
 	affectedGroups := make(map[string]bool, len(indexes))
-	partitionChanged, err := partitionColumnsUpdated(tableDef, possiblyChangedCols)
-	if err != nil {
-		return nil, nil, err
-	}
-	pkChanged := false
-	if tableDef != nil && tableDef.Pkey != nil {
-		for _, pkName := range tableDef.Pkey.Names {
-			if _, ok := possiblyChangedCols[catalog.ResolveAlias(pkName)]; ok {
-				pkChanged = true
-				break
-			}
-		}
-		if !pkChanged && tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-			_, pkChanged = possiblyChangedCols[catalog.ResolveAlias(tableDef.Pkey.PkeyColName)]
-		}
-	}
 	asyncGroups := make(map[string]bool, len(indexes))
 	for _, indexdef := range indexes {
 		async, asyncErr := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
@@ -443,9 +427,6 @@ func splitIrregularIndexesByUpdatedColumns(
 			return nil, nil, affectedErr
 		}
 		if affected {
-			affectedGroups[key] = true
-		}
-		if (partitionChanged || pkChanged) && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 			affectedGroups[key] = true
 		}
 	}

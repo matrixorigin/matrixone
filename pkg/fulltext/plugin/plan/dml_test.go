@@ -19,9 +19,62 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFulltextUpdateRewriteDependencies(t *testing.T) {
+	hook, ok := any(Hooks{}).(planplugin.UpdateColumnRewriteHook)
+	require.True(t, ok, "FULLTEXT must implement the update-rewrite hook")
+
+	ref := func(pos int32, name string) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos, Name: name}}}
+	}
+	table := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "id"}, {Name: "tenant"}, {Name: "source"},
+			{Name: "route", GeneratedCol: &planpb.GeneratedCol{Expr: ref(2, "source")}},
+			{Name: "body"},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "tenant": 1, "source": 2, "route": 3, "body": 4},
+		Pkey:          &planpb.PrimaryKeyDef{Names: []string{"id", "tenant"}, PkeyColName: catalog.CPrimaryKeyColName},
+		Partition: &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{
+			Def: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{ref(3, "docs.route"), ref(1, "docs.tenant")}}}},
+		}}},
+	}
+	index := &planpb.IndexDef{Parts: []string{"body"}}
+	for _, tc := range []struct {
+		name    string
+		column  string
+		rewrite bool
+	}{
+		{"primary key component", catalog.CreateAlias("id"), true},
+		{"partition column", "route", true},
+		{"generated partition dependency", "source", true},
+		{"unrelated column", "body", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := hook.UpdateColumnRequiresIndexRewrite(table, index, tc.column)
+			require.NoError(t, err)
+			require.Equal(t, tc.rewrite, got)
+		})
+	}
+
+	broken := *table
+	broken.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: ref(99, "missing")}}}
+	_, err := hook.UpdateColumnRequiresIndexRewrite(&broken, index, "body")
+	require.Error(t, err, "invalid partition dependencies must not be silently ignored")
+}
+
+func TestFulltextPrimaryKeyUpdateCapability(t *testing.T) {
+	var hook planplugin.UpdatePrimaryKeyHook = Hooks{}
+	require.False(t, hook.SupportsPrimaryKeyUpdate(nil, false))
+	require.False(t, hook.SupportsPrimaryKeyUpdate(&planpb.TableDef{}, false))
+	require.True(t, hook.SupportsPrimaryKeyUpdate(&planpb.TableDef{FeatureFlag: features.Partitioned}, false))
+	require.False(t, hook.SupportsPrimaryKeyUpdate(&planpb.TableDef{FeatureFlag: features.Partitioned}, true))
+}
 
 func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 	tableDef := &planpb.TableDef{

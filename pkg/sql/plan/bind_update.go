@@ -534,6 +534,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 			return 0, err
 		}
+		// RETURNING retains its narrower synchronous-index contract even when
+		// partitioned FULLTEXT UPDATE can rebuild the hidden rows after a PK move.
+		if stmt.HasReturning() && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
+			for _, idxDef := range inlineIrregularIndexes[i] {
+				p, ok := indexplugin.Get(idxDef.IndexAlgo)
+				if !ok {
+					continue
+				}
+				hook, ok := p.Plan().(planplugin.UpdatePrimaryKeyHook)
+				if ok && !hook.SupportsPrimaryKeyUpdate(tableDef, true) {
+					return 0, returningNotSupported(builder, "primary-key UPDATE on synchronous full-text/vector index")
+				}
+			}
+		}
 		if unsupportedIrregularRoute {
 			return 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonIrregularIndex,
@@ -2517,33 +2531,65 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			updateCtx.ChangedRowsCol = &plan.ColRef{RelPos: finalProjTag, ColPos: changedRowsPos}
 		}
 		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
-			partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
-			if partitionColPos, ok := finalColName2Idx[alias+"."+partitionColName]; ok {
-				oldPartitionColPos := partitionColPos
-				if _, updated := newColName2Idx[alias+"."+partitionColName]; updated {
-					if partitionColName == tableDef.Pkey.PkeyColName {
-						oldPartitionColPos = oldPkPos
-					} else {
-						oldPartitionColPos = int32(len(finalProjList))
-						oldSelectPos := oldColName2Idx[alias+"."+partitionColName]
-						finalProjList = append(finalProjList, &plan.Expr{
-							Typ: selectNode.ProjectList[oldSelectPos].Typ,
-							Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: selectNodeTag,
-								ColPos: oldSelectPos,
-							}},
+			// For a partitioned FULLTEXT table, the old image already contains
+			// every partition-expression dependency. A compound key move must
+			// pass both complete images to the parent writer, in physical column
+			// order, just as ODKU and REPLACE do. Passing only the first old
+			// column would evaluate the others from the new row during deletion.
+			oldPartitionCols := oldPartitionColFinalPos[i]
+			if len(oldPartitionCols) > 1 {
+				oldRoute := make([]plan.ColRef, 0, len(oldPartitionCols))
+				newRoute := make([]plan.ColRef, 0, len(oldPartitionCols))
+				moved := false
+				for _, col := range tableDef.Cols {
+					oldPos, ok := oldPartitionCols[col.Name]
+					if !ok {
+						continue
+					}
+					newPos, ok := finalColName2Idx[alias+"."+col.Name]
+					if !ok {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find final partition column %s", col.Name)
+					}
+					oldRoute = append(oldRoute, plan.ColRef{RelPos: finalProjTag, ColPos: oldPos})
+					newRoute = append(newRoute, plan.ColRef{RelPos: finalProjTag, ColPos: newPos})
+					moved = moved || oldPos != newPos
+				}
+				if len(oldRoute) != len(oldPartitionCols) {
+					return 0, moerr.NewInternalError(builder.GetContext(), "bind update err, incomplete partition dependencies")
+				}
+				if moved {
+					updateCtx.PartitionCols = append(oldRoute, newRoute...)
+				}
+			}
+			if len(updateCtx.PartitionCols) == 0 {
+				partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+				if partitionColPos, ok := finalColName2Idx[alias+"."+partitionColName]; ok {
+					oldPartitionColPos := partitionColPos
+					if _, updated := newColName2Idx[alias+"."+partitionColName]; updated {
+						if partitionColName == tableDef.Pkey.PkeyColName {
+							oldPartitionColPos = oldPkPos
+						} else {
+							oldPartitionColPos = int32(len(finalProjList))
+							oldSelectPos := oldColName2Idx[alias+"."+partitionColName]
+							finalProjList = append(finalProjList, &plan.Expr{
+								Typ: selectNode.ProjectList[oldSelectPos].Typ,
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: selectNodeTag,
+									ColPos: oldSelectPos,
+								}},
+							})
+						}
+					}
+					updateCtx.PartitionCols = []plan.ColRef{{
+						RelPos: finalProjTag,
+						ColPos: oldPartitionColPos,
+					}}
+					if oldPartitionColPos != partitionColPos {
+						updateCtx.PartitionCols = append(updateCtx.PartitionCols, plan.ColRef{
+							RelPos: finalProjTag,
+							ColPos: partitionColPos,
 						})
 					}
-				}
-				updateCtx.PartitionCols = []plan.ColRef{{
-					RelPos: finalProjTag,
-					ColPos: oldPartitionColPos,
-				}}
-				if oldPartitionColPos != partitionColPos {
-					updateCtx.PartitionCols = append(updateCtx.PartitionCols, plan.ColRef{
-						RelPos: finalProjTag,
-						ColPos: partitionColPos,
-					})
 				}
 			}
 		}
@@ -5427,9 +5473,10 @@ func irregularIndexAffectedByUpdatedColumnNames(
 // The bool return reports an affected irregular algorithm that has not migrated
 // to either mechanism. MASTER indexes delete
 // by the old source PK and rebuild from the final row image, so changing the
-// base-table PK is handled by the same maintenance pipeline. Classic FULLTEXT
-// uses that same old/new-row path for partition and document-key changes;
-// other plugin-backed synchronous indexes retain their existing PK restriction.
+// base-table PK is handled by the same maintenance pipeline. Partitioned
+// classic FULLTEXT uses that old/new-row path for partition and document-key
+// changes; non-partitioned FULLTEXT and other synchronous plugin indexes
+// retain the target branch's primary-key restriction.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -5440,14 +5487,6 @@ func classifyIrregularIndexesForUpdate(
 	}
 
 	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
-	updatedCols := make(map[string]struct{}, len(updateCols))
-	for colName := range updateCols {
-		updatedCols[colName] = struct{}{}
-	}
-	partitionUpdated, err := partitionColumnsUpdated(tableDef, updatedCols)
-	if err != nil {
-		return nil, false, err
-	}
 	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
@@ -5456,9 +5495,6 @@ func classifyIrregularIndexesForUpdate(
 		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
 		if err != nil {
 			return nil, false, err
-		}
-		if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) && (partitionUpdated || pkUpdated) {
-			affected = true
 		}
 
 		p, ok := indexplugin.Get(idxDef.IndexAlgo)
@@ -5485,7 +5521,8 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated && !catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+		pkHook, supportsPKUpdate := p.Plan().(planplugin.UpdatePrimaryKeyHook)
+		if pkUpdated && (!supportsPKUpdate || !pkHook.SupportsPrimaryKeyUpdate(tableDef, false)) {
 			return nil, false, newUpdatePlannerRouteError(
 				updatePlannerRejected,
 				updateRouteReasonIrregularIndex,
