@@ -75,6 +75,9 @@ select count(null) as count_null from customer;
 select count(distinct c_balance) as count_distinct_nullable from customer;
 ➤ count_distinct_nullable[-5,64,0]  𝄀
 3
+select count(*) as m0_rows,min(c_id) as m0_min,max(c_id) as m0_max from customer;
+➤ m0_rows[-5,64,0]  ¦  m0_min[4,32,0]  ¦  m0_max[4,32,0]  𝄀
+4  ¦  1  ¦  4
 select count(c.c_id) as count_outer_nullable from m0_customer_parent.customer p left join customer c on p.c_id=c.c_id and c.c_id=1;
 ➤ count_outer_nullable[-5,64,0]  𝄀
 1
@@ -89,6 +92,9 @@ select count(*) as kept_comments from information_schema.columns where table_sch
 select count(*) as comment_control_rows from comment_control where a=1 and b=2 and g=3 and x is null;
 ➤ comment_control_rows[-5,64,0]  𝄀
 1
+select count(*) as ordinary_rows,min(a) as ordinary_min,max(a) as ordinary_max from comment_control;
+➤ ordinary_rows[-5,64,0]  ¦  ordinary_min[4,32,0]  ¦  ordinary_max[4,32,0]  𝄀
+1  ¦  1  ¦  1
 create table partition_default(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
 insert into partition_default values(1,1);
 alter table partition_default add column x int;

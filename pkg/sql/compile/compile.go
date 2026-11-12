@@ -11201,7 +11201,7 @@ func (c *Compile) handleDbRelContextWithBoundTxn(node *plan.Node, onRemoteCN boo
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
-	if activeM0DisableCountNotNullRewrite {
+	if !metadataAggregateAllowed(node) {
 		return nil, nil, nil
 	}
 	partialResults := make([]any, len(node.AggList))
@@ -11213,6 +11213,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 		args := agg.F.Args[0]
 		switch name {
 		case "starcount":
+			if !metadataStarCountAllowed(agg.F) {
+				return nil, nil, nil
+			}
 			partialResults[i] = int64(0)
 			partialResultTypes[i] = types.T_int64
 		case "count":
@@ -11242,7 +11245,7 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 					return nil, nil, nil
 				}
 				colPos := plan2.M0ResolveColumnPosition(node.TableDef, col.Col.Name, int(col.Col.ColPos))
-				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
+				if colPos < 0 || colPos >= len(node.TableDef.Cols) || node.TableDef.Cols[colPos] == nil {
 					return nil, nil, nil
 				}
 				// Check if column is NOT NULL
@@ -11252,7 +11255,11 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 				} else {
-					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
+					key, seq := int(col.Col.ColPos), int(node.TableDef.Cols[colPos].Seqnum)
+					if previous, exists := columnMap[key]; exists && previous != seq {
+						return nil, nil, nil
+					}
+					columnMap[key] = seq
 				}
 			}
 		case "min", "max":
@@ -11264,14 +11271,22 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			if node.TableDef == nil {
 				return nil, nil, nil
 			}
+			colPos := plan2.M0ResolveColumnPosition(node.TableDef, col.Col.Name, int(col.Col.ColPos))
+			if colPos < 0 || colPos >= len(node.TableDef.Cols) || node.TableDef.Cols[colPos] == nil {
+				return nil, nil, nil
+			}
 			// Zone-map metadata cannot replace scanning this block: tae zonemaps
 			// intentionally skip T_decimal256 maintenance (zm.go), so a
 			// decimal256 MIN/MAX would contribute a nil partial and drop the
 			// block's real rows. Decline the complete aggregate.
-			if types.T(node.TableDef.Cols[col.Col.ColPos].Typ.Id) == types.T_decimal256 {
+			if types.T(node.TableDef.Cols[colPos].Typ.Id) == types.T_decimal256 {
 				return nil, nil, nil
 			}
-			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+			key, seq := int(col.Col.ColPos), int(node.TableDef.Cols[colPos].Seqnum)
+			if previous, exists := columnMap[key]; exists && previous != seq {
+				return nil, nil, nil
+			}
+			columnMap[key] = seq
 		default:
 			return nil, nil, nil
 		}
@@ -11294,6 +11309,29 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 		return err
 	}
 	blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
+	if activeM0DisableCountNotNullRewrite {
+		// An unbound relation may still contain an old or malformed object.
+		// Do not use missing metadata as an aggregate result: fall back to
+		// the strict reader, which owns missing-column interpretation.
+		for _, expr := range node.AggList {
+			agg := expr.GetF()
+			if agg.Func.ObjName == "starcount" {
+				continue
+			}
+			col := agg.Args[0].GetCol()
+			if col == nil {
+				return m0read.ErrMissingColumnWithoutProof
+			}
+			pos := plan2.M0ResolveColumnPosition(node.TableDef, col.Name, int(col.ColPos))
+			seq, ok := columnMap[int(col.ColPos)]
+			if !ok || pos < 0 || pos >= len(node.TableDef.Cols) || node.TableDef.Cols[pos] == nil ||
+				seq < 0 || seq >= int(objectio.SEQNUM_UPPER) || seq > int(blkMeta.GetMaxSeqnum()) ||
+				seq >= int(blkMeta.GetMetaColumnCount()) || blkMeta.ColumnMeta(uint16(seq)).DataType() == 0 ||
+				int32(blkMeta.ColumnMeta(uint16(seq)).DataType()) != node.TableDef.Cols[pos].Typ.Id {
+				return m0read.ErrMissingColumnWithoutProof
+			}
+		}
+	}
 	for i := range node.AggList {
 		agg := node.AggList[i].Expr.(*plan.Expr_F)
 		name := agg.F.Func.ObjName

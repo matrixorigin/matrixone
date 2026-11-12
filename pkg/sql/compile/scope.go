@@ -1984,21 +1984,21 @@ const defaultStarCountTombstoneThreshold = 5000000
 
 // isSingleStarCountNoFilterNoGroupBy returns true if node has exactly one agg and it is starcount, with no filter and no groupby.
 func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
-	if activeM0DisableCountNotNullRewrite {
+	if !metadataAggregateAllowed(node) {
 		return false
 	}
 	if node == nil || len(node.AggList) != 1 || len(node.FilterList) != 0 || len(node.GroupBy) != 0 {
 		return false
 	}
 	agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
-	return ok && agg.F.Func.ObjName == "starcount"
+	return ok && agg.F.Func.ObjName == "starcount" && metadataStarCountAllowed(agg.F)
 }
 
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
-		if isSingleStarCountNoFilterNoGroupBy(node) {
+		if isSingleStarCountNoFilterNoGroupBy(node) && metadataAggregateRelationAllowed(rel) {
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
@@ -2036,6 +2036,9 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 		}
 
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
+		if partialResults != nil && !metadataAggregateRelationAllowed(rel) {
+			return nil
+		}
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)

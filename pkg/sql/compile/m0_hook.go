@@ -22,7 +22,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// An absent carrier permits consideration of ordinary metadata aggregates;
+// it does not authorize missing columns. The live relation is checked before
+// optimization and each referenced physical column is checked before use.
+func metadataAggregateAllowed(node *plan.Node) bool {
+	if !activeM0DisableCountNotNullRewrite {
+		return true
+	}
+	if node == nil || node.TableDef == nil {
+		return false
+	}
+	contract, err := m0read.PlanEvolution(node.TableDef)
+	return err == nil && contract == nil
+}
+
+// In an M0 build a starcount with a column argument could have come from a
+// non-null rewrite. Only a non-null literal can skip evaluating that column.
+func metadataStarCountAllowed(fn *plan.Function) bool {
+	if !activeM0DisableCountNotNullRewrite {
+		return true
+	}
+	if fn == nil || len(fn.Args) != 1 || fn.Args[0] == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	return lit != nil && !lit.Isnull && lit.Value != nil
+}
+
+// Ranges has checked the live relation. A stale plan must not conceal its
+// evolution carrier: leave that relation to the strict reader instead.
+func metadataAggregateRelationAllowed(rel engine.Relation) bool {
+	if !activeM0DisableCountNotNullRewrite {
+		return true
+	}
+	if rel == nil {
+		return false
+	}
+	extra := rel.GetExtraInfo()
+	return extra == nil || extra.M0Evolution == nil
+}
 
 var (
 	activeM0CaptureStatementView       = func(*Compile, *plan.Plan) (m0read.StatementReadView, error) { return nil, nil }

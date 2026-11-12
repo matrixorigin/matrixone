@@ -183,14 +183,12 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 			}
 
 			partialResults, partialResultTypes, columnMap := checkAggOptimize(tt.node)
-			if activeM0DisableCountNotNullRewrite {
-				require.Nil(t, partialResults)
-				require.Nil(t, partialResultTypes)
-				require.Nil(t, columnMap)
-				return
+			wantName, wantObj, wantMapSize := tt.wantObjName, tt.wantObj, tt.wantColumnMapSize
+			if activeM0DisableCountNotNullRewrite && tt.name == "COUNT(not_null_col) should rewrite to starcount and set Obj to CountStar" {
+				wantName, wantObj, wantMapSize = "count", 0, 1
 			}
 
-			if tt.wantObjName == "" {
+			if wantName == "" {
 				require.Nil(t, partialResults)
 				require.Nil(t, partialResultTypes)
 				require.Nil(t, columnMap)
@@ -200,12 +198,12 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 				require.NotNil(t, columnMap)
 
 				actualObjName := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName
-				require.Equal(t, tt.wantObjName, actualObjName)
-				if tt.wantObj != 0 {
+				require.Equal(t, wantName, actualObjName)
+				if wantObj != 0 {
 					actualObj := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj
-					require.Equal(t, tt.wantObj, actualObj, "Obj (overload id) must be CountStar so runtime uses countStarExec")
+					require.Equal(t, wantObj, actualObj, "Obj (overload id) must be CountStar so runtime uses countStarExec")
 				}
-				require.Equal(t, tt.wantColumnMapSize, len(columnMap))
+				require.Equal(t, wantMapSize, len(columnMap))
 			}
 		})
 	}
@@ -226,12 +224,8 @@ func TestCheckAggOptimizeNullableExpression(t *testing.T) {
 		}}}},
 	}
 	partial, _, columns := checkAggOptimize(node)
-	if activeM0DisableCountNotNullRewrite {
-		require.Nil(t, partial)
-		require.Nil(t, columns)
-	} else {
-		require.Equal(t, map[int]int{0: 0}, columns)
-	}
+	require.NotNil(t, partial)
+	require.Equal(t, map[int]int{0: 0}, columns)
 	require.Equal(t, "count", node.AggList[0].GetF().Func.ObjName)
 }
 
@@ -452,7 +446,13 @@ func TestCheckAggOptimize_ZmMinMaxEligibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			partialResults, partialResultTypes, columnMap := checkAggOptimize(tt.node)
 
-			if !tt.wantEligible || activeM0DisableCountNotNullRewrite {
+			wantColMap, wantStarAt := tt.wantColMap, tt.wantStarAt
+			if activeM0DisableCountNotNullRewrite && (tt.name == "count not-null column alone admits" || tt.name == "count not-null column rewritten beside max over decimal128 admits") {
+				wantColMap++
+				wantStarAt = -1
+				require.Equal(t, "count", tt.node.AggList[0].GetF().Func.ObjName)
+			}
+			if !tt.wantEligible {
 				require.Nil(t, partialResults)
 				require.Nil(t, partialResultTypes)
 				require.Nil(t, columnMap)
@@ -460,12 +460,12 @@ func TestCheckAggOptimize_ZmMinMaxEligibility(t *testing.T) {
 				require.NotNil(t, partialResults)
 				require.NotNil(t, partialResultTypes)
 				require.NotNil(t, columnMap)
-				require.Equal(t, tt.wantColMap, len(columnMap))
+				require.Equal(t, wantColMap, len(columnMap))
 				require.Len(t, partialResults, len(tt.node.AggList))
 			}
 
-			if tt.wantStarAt >= 0 && !activeM0DisableCountNotNullRewrite {
-				agg := tt.node.AggList[tt.wantStarAt].Expr.(*plan.Expr_F).F
+			if wantStarAt >= 0 {
+				agg := tt.node.AggList[wantStarAt].Expr.(*plan.Expr_F).F
 				require.Equal(t, "starcount", agg.Func.ObjName)
 				require.Equal(t, wantCountStarObj, agg.Func.Obj)
 			}
@@ -488,8 +488,7 @@ func TestForceSingleScan_ZmMinMaxEligibility(t *testing.T) {
 		zmAggFuncExpr("min", zmAggColExpr(0), 0),
 		zmAggFuncExpr("count", zmAggLitExpr(1), 0))))
 	// Supported column metadata keeps the fast path and its single scan.
-	require.Equal(t, !activeM0DisableCountNotNullRewrite,
-		forceSingleScan(zmAggNode(i64, zmAggFuncExpr("min", zmAggColExpr(0), 0))))
+	require.True(t, forceSingleScan(zmAggNode(i64, zmAggFuncExpr("min", zmAggColExpr(0), 0))))
 }
 
 // Actual Scope.aggOptimize consumer closure: a whole-node eligibility decline
@@ -598,12 +597,8 @@ func TestScopeAggOptimizeDeclinesWholeNode(t *testing.T) {
 
 			if tt.wantStarcountAt >= 0 {
 				fn := tt.aggs[tt.wantStarcountAt].Expr.(*plan.Expr_F).F
-				if activeM0DisableCountNotNullRewrite {
-					require.Equal(t, "count", fn.Func.ObjName)
-				} else {
-					require.Equal(t, "starcount", fn.Func.ObjName)
-					require.Equal(t, wantCountStarObj, fn.Func.Obj)
-				}
+				require.Equal(t, "starcount", fn.Func.ObjName)
+				require.Equal(t, wantCountStarObj, fn.Func.Obj)
 			}
 		})
 	}
