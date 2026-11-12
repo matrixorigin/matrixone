@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -99,6 +100,66 @@ func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
 		}
 	}
 	t.Fatal("CS test storage was not configured")
+}
+
+// prepareCITestStorage refuses a pre-existing fixture prefix and only cleans
+// objects underneath that exact run-specific prefix. Never operate on a bucket root.
+func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
+	t.Helper()
+	root := os.Getenv("MO_CI_S3_PREFIX")
+	if !validCITestS3Prefix(root) || !strings.HasPrefix(args.KeyPrefix, root+"/") {
+		t.Fatal("unsafe CS S3 fixture prefix")
+	}
+	prefix := args.KeyPrefix + "/"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sdk, err := NewMinioSDK(ctx, args, nil)
+	if err != nil {
+		cancel()
+		t.Fatal("cannot initialize CS S3 fixture")
+	}
+	for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		cancel()
+		if object.Err != nil {
+			t.Fatal("cannot inspect CS S3 fixture prefix")
+		}
+		t.Fatal("CS S3 fixture prefix is not empty")
+	}
+	if err := ctx.Err(); err != nil {
+		cancel()
+		t.Fatal("CS S3 fixture prefix inspection timed out")
+	}
+	cancel()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		var keys []string
+		for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+			if object.Err != nil || !strings.HasPrefix(object.Key, prefix) {
+				t.Error("cannot safely enumerate CS S3 fixture objects")
+				return
+			}
+			keys = append(keys, object.Key)
+			if len(keys) > 10000 {
+				t.Error("CS S3 fixture cleanup exceeded safety limit")
+				return
+			}
+		}
+		for _, key := range keys {
+			if err := sdk.client.RemoveObject(ctx, args.Bucket, key, minio.RemoveObjectOptions{}); err != nil {
+				t.Error("cannot remove CS S3 fixture object")
+				return
+			}
+		}
+		for object := range sdk.client.ListObjects(ctx, args.Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+			if object.Err != nil || object.Key != "" {
+				t.Error("CS S3 fixture prefix is not empty after cleanup")
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			t.Error("CS S3 fixture cleanup timed out")
+		}
+	})
 }
 
 func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []ObjectStorageArguments) {

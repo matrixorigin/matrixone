@@ -3164,6 +3164,9 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 		t.Run(args.Name, func(t *testing.T) {
 			csPrefix := args.Name == "cs-s3"
+			if csPrefix {
+				prepareCITestStorage(t, args)
+			}
 
 			testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 				args.Name = name
