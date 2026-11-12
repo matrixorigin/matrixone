@@ -25,7 +25,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -873,22 +872,6 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 	}
 	bat.Vecs = append([]*vector.Vector{bat.Vecs[0] /*rowid*/, tsvec}, bat.Vecs[1:]...)
 	return nil
-}
-
-func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
-	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
-	if len(bs) <= 1 {
-		return true
-	}
-	prevTableId := vector.GetFixedAtNoTypeCheck[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
-	for _, b := range bs[1:] {
-		firstId := vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], 0)
-		if firstId == prevTableId {
-			return false
-		}
-		prevTableId = vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], b.RowCount()-1)
-	}
-	return true
 }
 
 // shrinkBatchWithRowids shrinks the batch with rowids
