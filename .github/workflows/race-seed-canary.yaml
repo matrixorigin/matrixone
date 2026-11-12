@@ -1,17 +1,14 @@
 name: Race seed canary
-run-name: ${{ inputs.tke_skip_baseline && 'TKE skip baseline - PR 32590 - no COS OSS' || inputs.jed_s3_coverage && 'JED S3 UT Coverage - PR 32590' || 'Race seed canary' }}
+run-name: ${{ inputs.coverage_comparison == 'tke' && 'TKE skip baseline - PR 32590 - no COS OSS' || inputs.coverage_comparison == 'jed' && 'JED S3 UT Coverage - PR 32590' || 'Race seed canary' }}
 
 on:
   workflow_dispatch:
     inputs:
-      tke_skip_baseline:
-        description: Same-source TKE baseline to compare migration skips; no real cloud storage
-        type: boolean
-        default: false
-      jed_s3_coverage:
-        description: Run full UT Coverage on JED with the dedicated CI S3 bucket
-        type: boolean
-        default: false
+      coverage_comparison:
+        description: Same-source Coverage comparison; no real COS or OSS
+        type: choice
+        options: ['off', 'jed', 'tke']
+        default: 'off'
       jed_s3_smoke:
         description: Verify the dedicated JED CI bucket from a JED runner
         type: boolean
@@ -57,7 +54,7 @@ permissions:
 
 jobs:
   tke-skip-baseline:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.tke_skip_baseline && !inputs.jed_s3_coverage && !inputs.jed_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'tke' && !inputs.jed_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
       group: tke-skip-baseline-pr32590
       cancel-in-progress: false
@@ -68,7 +65,7 @@ jobs:
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
   jed-s3-coverage:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.tke_skip_baseline && inputs.jed_s3_coverage && !inputs.jed_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'jed' && !inputs.jed_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
       group: jed-dedicated-s3-coverage-canary
       cancel-in-progress: false
@@ -80,7 +77,7 @@ jobs:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
   cs-coverage-canary:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.tke_skip_baseline && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.jed_s3_smoke && !inputs.jed_s3_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && (inputs.coverage_comparison == 'off' || inputs.coverage_comparison == '') && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.jed_s3_smoke
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
     with:
       canary_pr_32523: true
