@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -618,6 +619,45 @@ func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, dt task.Daem
 		v, err = s.mu.store.AddCDCTask(ctx, dt, callback)
 	}
 	return v, lastAddress, err
+}
+
+func (s *refreshableTaskStorage) UpdateOwnedCDCTask(ctx context.Context, owner CDCTaskOwner, target CDCTaskTransition, mutate func(context.Context, SqlExecutor) error) error {
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	var err error
+	if s.mu.store == nil {
+		err = cdcTaskStorageError(ErrNotReady, false)
+	} else if err = s.mu.store.PingContext(ctx); err != nil {
+		err = cdcTaskStorageError(err, false)
+	} else {
+		err = s.mu.store.UpdateOwnedCDCTask(ctx, owner, target, mutate)
+	}
+	s.mu.RUnlock()
+	var storeErr *CDCTaskStorageError
+	if errors.As(err, &storeErr) && ctx.Err() == nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return err
+}
+
+func (s *refreshableTaskStorage) ClaimCDCRestart(ctx context.Context, task task.DaemonTask, previousRunner string, staleBefore time.Time) (bool, error) {
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	var claimed bool
+	var err error
+	if s.mu.store == nil {
+		err = cdcTaskStorageError(ErrNotReady, false)
+	} else if err = s.mu.store.PingContext(ctx); err != nil {
+		err = cdcTaskStorageError(err, false)
+	} else {
+		claimed, err = s.mu.store.ClaimCDCRestart(ctx, task, previousRunner, staleBefore)
+	}
+	s.mu.RUnlock()
+	var storeErr *CDCTaskStorageError
+	if errors.As(err, &storeErr) && ctx.Err() == nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return claimed, err
 }
 
 func (s *refreshableTaskStorage) UpdateCDCTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error), conditions ...Condition) (int, error) {

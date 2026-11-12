@@ -53,6 +53,7 @@ func ClassifyRetryableError(err error) (retryable, classified bool) {
 		1044, 1045, 1064, 1142, 1143, 1227, moerr.ErrNotSupported:
 		return false, true
 	case moerr.ErrDeadLockDetected, moerr.ErrLockTableBindChanged,
+		moerr.ErrTxnWriteConflict, moerr.ErrTxnRWConflict, moerr.ErrTxnWWConflict,
 		moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged,
 		moerr.ErrRPCTimeout, moerr.ErrServiceUnavailable, moerr.ErrConnectionReset,
 		moerr.ErrBackendClosed, moerr.ErrNoAvailableBackend, moerr.ErrBackendCannotConnect,
