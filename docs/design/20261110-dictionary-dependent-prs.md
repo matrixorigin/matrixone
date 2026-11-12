@@ -795,3 +795,27 @@ with the already tested per-query reader callback correction102af48112 and
 requalify using the same local six-suite/all-query/resource protocol. Continue
 investigating Q15 SELECT and other unresolved signals; GC settings, acceptance
 rules, other C/D follow-ups and the no-push condition remain unchanged.
+
+### Approved direct BETWEEN row selection — 2026-11-12
+
+The ordinary-reader Q7 admission candidate passed functional tests but failed
+its resource prerequisite: retained publication added allocation/selection-map
+costs. It was discarded without a full TPC-H run or push. Preserve the existing
+scoped-owned reader and publication paths.
+
+The requester approved direct DATE row selection and placed the kernel beside
+BETWEEN in the function package. `TrySelectBetweenRows` is an internal Go entry
+point; no SQL, RPC, reader or vector interface changes. Coexec proves the plain,
+single-executor shape after its existing beforeEval callback, and the function
+package admits flat non-NULL DATE input with fixed scalar DATE bounds. Known
+scalar literal provenance is safe; unknown metadata, diagnostics, memoized roots,
+dynamic bounds and other shapes keep ordinary Eval. Existing pooled selection
+scratch and its owner/lifetime remain unchanged. No Boolean intermediate,
+new publication headers, cache, pool or cached admission decision is introduced.
+
+Focused actual TableScan cost evidence shows 4 -> 3 Go objects/batch, unchanged
+reader value copies/off-heap requests, and 8192 fewer account-peak bytes for both
+borrowable and owned cache entries. This is a component prerequisite, not TPC-H
+acceptance. Confirm real Q7 activation and all22-query instruction/resource
+behavior before delivery. The requester permits demonstrated GC-only differences;
+other instruction/allocation/copy increases and missing coverage remain open.

@@ -218,32 +218,43 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 		if frame != nil {
 			frame.Bind(executors[i : i+1])
 		}
-		value, err := executors[i].Eval(proc, []*batch.Batch{current}, nil)
-		if err != nil {
-			return nil, false, err
-		}
-		if !value.GetType().IsBoolean() {
-			return nil, false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
-		}
-		if proc.OperatorOutofMemory(int64(value.Size())) {
-			return nil, false, moerr.NewOOM(proc.Ctx)
-		}
-		if analyzer != nil {
-			analyzer.Alloc(int64(value.Size()))
-		}
-		if value.IsConst() {
-			if *parameter == nil || !vector.ReuseFunctionFixedTypeParameter(value, *parameter) {
-				*parameter = vector.GenerateFunctionFixedTypeParameter[bool](value)
+		direct := false
+		if len(executors) == 1 {
+			rows, admitted, err := selectBetweenRows(proc, current, loaded, executors[i], *scratch)
+			if err != nil {
+				return nil, false, err
 			}
-			keep, isNull := (*parameter).GetValue(0)
-			if isNull || !keep {
-				*scratch = (*scratch)[:0]
-				return *scratch, false, nil
+			if admitted {
+				*scratch, direct = rows, true
 			}
-			continue
 		}
-
-		*scratch = compactPredicateRows(value, current.RowCount(), *scratch, selected)
+		if !direct {
+			value, err := executors[i].Eval(proc, []*batch.Batch{current}, nil)
+			if err != nil {
+				return nil, false, err
+			}
+			if !value.GetType().IsBoolean() {
+				return nil, false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			}
+			if proc.OperatorOutofMemory(int64(value.Size())) {
+				return nil, false, moerr.NewOOM(proc.Ctx)
+			}
+			if analyzer != nil {
+				analyzer.Alloc(int64(value.Size()))
+			}
+			if value.IsConst() {
+				if *parameter == nil || !vector.ReuseFunctionFixedTypeParameter(value, *parameter) {
+					*parameter = vector.GenerateFunctionFixedTypeParameter[bool](value)
+				}
+				keep, isNull := (*parameter).GetValue(0)
+				if isNull || !keep {
+					*scratch = (*scratch)[:0]
+					return *scratch, false, nil
+				}
+				continue
+			}
+			*scratch = compactPredicateRows(value, current.RowCount(), *scratch, selected)
+		}
 		if len(*scratch) == current.RowCount() {
 			if !selected {
 				*scratch = (*scratch)[:0]
@@ -257,6 +268,36 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 
 	}
 	return *scratch, !selected, nil
+}
+
+// selectBetweenRows proves executor identity, evaluation order and input scope.
+// Function-specific vector admission and comparison belong to the function
+// package; scratch retains this filter's existing owner and lifetime.
+func selectBetweenRows(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, scratch []int64) ([]int64, bool, error) {
+	expr, ok := executor.(*FunctionExpressionExecutor)
+	if !ok || expr.fid != function.BETWEEN || expr.resultType.Oid != types.T_bool ||
+		len(expr.parameterExecutor) != 3 || len(expr.parameterTypes) != 3 ||
+		expr.volatile || expr.timeDependent || expr.rowScopedDiagnostics || expr.rowScopedDecimalCast ||
+		expr.stringToNumericCast || expr.freeFn != nil || expr.resetFn != nil {
+		return scratch, false, nil
+	}
+	column, ok := expr.parameterExecutor[0].(*ColumnExpressionExecutor)
+	if !ok || column.colIndex < 0 || column.colIndex >= len(input.Vecs) ||
+		loaded != nil && !slices.Contains(loaded, column.colIndex) || input.RowCount() > DefaultBatchSize {
+		return scratch, false, nil
+	}
+	lower, lowerOK := expr.parameterExecutor[1].(*FixedVectorExpressionExecutor)
+	upper, upperOK := expr.parameterExecutor[2].(*FixedVectorExpressionExecutor)
+	if !lowerOK || !upperOK {
+		return scratch, false, nil
+	}
+	parameters := [3]*vector.Vector{input.Vecs[column.colIndex], lower.resultVector, upper.resultVector}
+	for i, value := range parameters {
+		if value == nil || value.GetType().Oid != expr.parameterTypes[i].Oid {
+			return scratch, false, nil
+		}
+	}
+	return function.TrySelectBetweenRows(parameters[:], proc, input.RowCount(), scratch)
 }
 
 // compactPredicateRows writes each surviving original position once. A selected

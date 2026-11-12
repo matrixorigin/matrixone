@@ -15,15 +15,71 @@
 package function
 
 import (
+	"slices"
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+// TrySelectBetweenRows evaluates an audited BETWEEN directly into caller-owned
+// row scratch. Unsupported vector shapes decline without changing scratch.
+// The caller proves the expression has no side effects and supplies a bounded
+// logical domain; this kernel initially supports flat, non-NULL DATE values and
+// scalar DATE bounds. It creates no Boolean result or publication state.
+func TrySelectBetweenRows(parameters []*vector.Vector, proc *process.Process, length int, scratch []int64) ([]int64, bool, error) {
+	if len(parameters) != 3 || length <= 0 {
+		return scratch, false, nil
+	}
+	source := parameters[0]
+	if !plainBetweenSelectionDate(source, false) || source.IsConst() ||
+		!source.CoversLogicalRows(0, length) || len(source.GetData())/source.GetType().TypeSize() < length {
+		return scratch, false, nil
+	}
+	var bounds [2]types.Date
+	for i := range bounds {
+		bound := parameters[i+1]
+		if !plainBetweenSelectionDate(bound, true) || !bound.IsConst() || !bound.CoversLogicalRows(0, 1) ||
+			len(bound.GetData()) < source.GetType().TypeSize() {
+			return scratch, false, nil
+		}
+		bounds[i] = vector.GetFixedAtNoTypeCheck[types.Date](bound, 0)
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return scratch, true, err
+	}
+	// Retain the ordinary pressure check without charging an uncreated Boolean
+	// intermediate. Scratch remains under its existing caller's ownership.
+	if proc.OperatorOutofMemory(0) {
+		return scratch, true, moerr.NewOOM(proc.Ctx)
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Date](source)[:length]
+	selected := slices.Grow(scratch[:0], length)[:0]
+	for row, value := range values {
+		if value >= bounds[0] && value <= bounds[1] {
+			selected = append(selected, int64(row))
+		}
+	}
+	return selected, true, nil
+}
+
+func plainBetweenSelectionDate(value *vector.Vector, literal bool) bool {
+	if value == nil || value.GetType().Oid != types.T_date || value.IsDictionary() ||
+		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() ||
+		value.GetPrepareParamKind() != vector.PrepareParamNone || len(value.GetPrepareParamKinds()) != 0 ||
+		value.GetPrepareParamType() != types.T_any || value.IsPreparedJSONComparisonParam() {
+		return false
+	}
+	// DATE literals carry scalar literal provenance. It has no effect on DATE
+	// comparison; dynamic/row string provenance still uses the ordinary kernel.
+	return !value.HasStringSourceMetadata() || literal &&
+		value.GetStringSource() == types.StringSourceLiteral && len(value.GetStringSources()) == 0
+}
 
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
