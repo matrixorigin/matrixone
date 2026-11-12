@@ -551,13 +551,13 @@ func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	source := &planpb.ColDef{Typ: typ, Default: &planpb.Default{NullAbility: true, OriginString: `(crc32(cast('{"t1":"a"}' as json)))`, Expr: legacyCRC32Expr()}}
-	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, preserved.Default)
 	require.False(t, preserved.Default.NullAbility)
 	require.True(t, source.Default.NullAbility)
 	source.Default.OriginString = "different expression"
-	preserved, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	preserved, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ, proc)
 	require.NoError(t, err)
 	require.Nil(t, preserved.Default)
 }
@@ -590,7 +590,7 @@ func TestCRC32FoldedDefaultModifyComparison(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+			preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ, proc)
 			require.NoError(t, err)
 			if !tc.preserve {
 				require.Nil(t, preserved.Default, "a changed JSON string must bind a new default")
@@ -600,6 +600,86 @@ func TestCRC32FoldedDefaultModifyComparison(t *testing.T) {
 			got, err := buildDefaultExprWithColumns(proc.Ctx, col, typ, proc, nil, preserved)
 			require.NoError(t, err)
 			require.Equal(t, uint64(3719146973), got.Expr.GetLit().GetU64Val())
+		})
+	}
+}
+
+// A type change must not silently rebind an unchanged folded legacy default.
+// An explicitly changed expression is still handled as a new default.
+func TestCRC32FoldedDefaultOutputTypeChange(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		preserve         bool
+	}{
+		{"unchanged", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, true},
+		{"changed_json", `(CRC32(CAST('{"t1":"A"}' AS JSON)))`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			oldType := planpb.Type{Id: int32(types.T_uint64)}
+			newType := planpb.Type{Id: int32(types.T_int64)}
+			source := &planpb.ColDef{Typ: oldType, Default: &planpb.Default{
+				OriginString: `(crc32(cast('{"t1":"a"}' as json)))`,
+				Expr: &planpb.Expr{Typ: oldType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 3719146973},
+				}}},
+			}}
+			stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint default `+tc.expression+`)`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, newType, proc)
+			require.NoError(t, err)
+			if !tc.preserve {
+				require.Nil(t, preserved.Default)
+			} else {
+				require.NotNil(t, preserved.Default)
+				require.Equal(t, int32(types.T_int64), preserved.Default.Expr.Typ.Id)
+				require.Equal(t, int64(3719146973), preserved.Default.Expr.GetLit().GetI64Val())
+				bound, err := buildDefaultExprWithColumns(proc.Ctx, col, newType, proc, nil, preserved)
+				require.NoError(t, err)
+				require.Equal(t, int64(3719146973), bound.Expr.GetLit().GetI64Val())
+			}
+			require.Equal(t, uint64(3719146973), source.Default.Expr.GetLit().GetU64Val())
+		})
+	}
+}
+
+func TestCRC32FoldedDefaultOutputTypeConversion(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		value        uint64
+		target       types.T
+		outOfRange   bool
+	}{
+		{"non_json", `(crc32('abc'))`, uint64(stdcrc32.ChecksumIEEE([]byte("abc"))), types.T_int64, false},
+		{"out_of_range", `(crc32(cast('{"t1":"a"}' as json)))`, 3719146973, types.T_int8, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			oldType := planpb.Type{Id: int32(types.T_uint64)}
+			newType := planpb.Type{Id: int32(tc.target)}
+			source := &planpb.ColDef{Typ: oldType, Default: &planpb.Default{
+				OriginString: tc.origin,
+				Expr: &planpb.Expr{Typ: oldType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: tc.value},
+				}}},
+			}}
+			stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint default `+tc.origin+`)`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, newType, proc)
+			if tc.outOfRange {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, preserved.Default)
+				require.Equal(t, int64(tc.value), preserved.Default.Expr.GetLit().GetI64Val())
+			}
+			require.Equal(t, tc.value, source.Default.Expr.GetLit().GetU64Val())
 		})
 	}
 }
@@ -623,7 +703,7 @@ func TestCRC32FoldedDefaultAmbiguousOriginRejected(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			_, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+			_, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ, proc)
 			require.ErrorContains(t, err, "legacy CRC32 JSON default requires an explicit table rebuild")
 			require.Equal(t, uint64(3719146973), source.Default.Expr.GetLit().GetU64Val())
 		})
@@ -644,9 +724,15 @@ func TestCRC32TextInOrdinaryDefaultDoesNotRejectAlter(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ, proc)
 	require.NoError(t, err)
 	require.Nil(t, preserved.Default, "ordinary strings follow the existing default binding path")
+
+	// A wider destination does not turn an ordinary string into a CRC32 call.
+	source.Default.OriginString = `'crc32'`
+	preserved, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, planpb.Type{Id: int32(types.T_varchar), Width: 40}, proc)
+	require.NoError(t, err)
+	require.Nil(t, preserved)
 }
 
 func TestCRC32OriginMayCallFunction(t *testing.T) {
@@ -670,12 +756,13 @@ func TestCRC32OriginMayCallFunction(t *testing.T) {
 // ALTER and the internal CREATE both use the normal planner and index path.
 func TestCRC32FoldedDefaultIndexedModifyCopy(t *testing.T) {
 	for _, tc := range []struct {
-		name, expression string
-		want             uint64
+		name, expression, columnType string
+		want                         uint64
 	}{
-		{"unchanged_lowercase", `(crc32(cast('{"t1":"a"}' as json)))`, 3719146973},
-		{"unchanged_uppercase", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, 3719146973},
-		{"changed_string", `(CRC32(CAST('{"t1":"A"}' AS JSON)))`, uint64(stdcrc32.ChecksumIEEE([]byte(`{"t1": "A"}`)))},
+		{"unchanged_lowercase", `(crc32(cast('{"t1":"a"}' as json)))`, "bigint unsigned", 3719146973},
+		{"unchanged_uppercase", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, "bigint unsigned", 3719146973},
+		{"changed_string", `(CRC32(CAST('{"t1":"A"}' AS JSON)))`, "bigint unsigned", uint64(stdcrc32.ChecksumIEEE([]byte(`{"t1": "A"}`)))},
+		{"changed_output_type", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, "bigint", 3719146973},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := newGeneratedIndexAlterMock(t)
@@ -705,7 +792,7 @@ func TestCRC32FoldedDefaultIndexedModifyCopy(t *testing.T) {
 				}
 			}
 			before := proto.Clone(base).(*planpb.TableDef)
-			built, err := runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen modify column g bigint unsigned default "+tc.expression+" first, algorithm=copy")
+			built, err := runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen modify column g "+tc.columnType+" default "+tc.expression+" first, algorithm=copy")
 			require.NoError(t, err)
 			alter := built.GetDdl().GetAlterTable()
 			require.NotNil(t, alter)
@@ -727,7 +814,11 @@ func TestCRC32FoldedDefaultIndexedModifyCopy(t *testing.T) {
 				defer exec.Free()
 				result, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 				require.NoError(t, err)
-				require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+				if tc.columnType == "bigint" {
+					require.Equal(t, int64(tc.want), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+				} else {
+					require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+				}
 			}
 			assertDefault(FindColumn(alter.CopyTableDef.Cols, "g"))
 			parent := mock.ctxt.GetContext()

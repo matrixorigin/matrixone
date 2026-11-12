@@ -20,12 +20,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // The scoped DDL replay identifies the schema used to preserve old expressions.
@@ -338,10 +340,8 @@ func crc32OriginMayCallFunction(origin string) bool {
 // position changes. Preserve an unchanged contract while allowing an explicitly
 // different definition to bind normally. If historical spelling is ambiguous,
 // do not silently replace a potentially unchanged legacy default.
-func unchangedCRC32ColumnClauses(ctx context.Context, old *planpb.ColDef, col *tree.ColumnTableDef, typ planpb.Type) (*planpb.ColDef, error) {
-	if old.Typ.Id != typ.Id || old.Typ.Width != typ.Width || old.Typ.Scale != typ.Scale {
-		return nil, nil
-	}
+func unchangedCRC32ColumnClauses(ctx context.Context, old *planpb.ColDef, col *tree.ColumnTableDef, typ planpb.Type, proc *process.Process) (*planpb.ColDef, error) {
+	sameType := old.Typ.Id == typ.Id && old.Typ.Width == typ.Width && old.Typ.Scale == typ.Scale
 	copy := &planpb.ColDef{}
 	for _, attr := range col.Attributes {
 		switch a := attr.(type) {
@@ -359,6 +359,27 @@ func unchangedCRC32ColumnClauses(ctx context.Context, old *planpb.ColDef, col *t
 				}
 				if same {
 					value := *old.Default
+					if !sameType {
+						if !containsLegacyCRC32(value.Expr) && !crc32OriginMayCallFunction(value.OriginString) {
+							return nil, nil
+						}
+						// Convert the stored default, not its SQL spelling. Folding an
+						// old literal also keeps it eligible for later COPY replay.
+						converted, err := convertedPersistedAssignment(ctx, value.Expr, typ)
+						if err != nil {
+							return nil, err
+						}
+						if value.Expr.GetLit() != nil {
+							converted, err = ConstantFold(batch.EmptyForConstFoldBatch, converted, proc, false, true)
+							if err != nil {
+								return nil, err
+							}
+						}
+						value.Expr = converted
+						if !preserveCRC32Default(&value) {
+							return nil, moerr.NewNotSupported(ctx, "changing a legacy CRC32 default column type requires an explicit table rebuild")
+						}
+					}
 					value.NullAbility = getColumnNullAbility(col)
 					copy.Default = &value
 				}

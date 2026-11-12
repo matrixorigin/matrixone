@@ -172,7 +172,7 @@ func buildColumnAndConstraint(
 		if preserved != nil && preserved.defaultExpr != nil {
 			return preserved.defaultExpr, nil
 		}
-		unchanged, err := unchangedCRC32ColumnClauses(ctx.GetContext(), oldCol, specNewColumn, colType)
+		unchanged, err := unchangedCRC32ColumnClauses(ctx.GetContext(), oldCol, specNewColumn, colType, ctx.GetProcess())
 		if err != nil {
 			return nil, err
 		}
