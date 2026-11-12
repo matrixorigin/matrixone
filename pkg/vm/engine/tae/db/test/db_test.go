@@ -10886,6 +10886,173 @@ func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
 	require.Equal(t, 1, deletes.Length())
 }
 
+func TestCollectDeletesInRangeWithUninitializedTombstoneZoneMap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	engine := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer engine.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	engine.BindSchema(schema)
+	rows := catalog.MockBatch(schema, 2)
+	defer rows.Close()
+	engine.CreateRelAndAppend(rows, true)
+
+	deleteTxn, deleteRel := engine.GetRelation()
+	dataObject := testutil.GetOneObject(deleteRel)
+	dataObjectID := *dataObject.GetID()
+	filter := handle.NewEQFilter(rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0))
+	require.NoError(t, deleteRel.DeleteByFilter(ctx, filter))
+	require.NoError(t, deleteTxn.Commit(ctx))
+	deleteTS := deleteTxn.GetCommitTS()
+
+	dropTxn, dropRel := engine.GetRelation()
+	tombstone := testutil.GetOneTombstoneMeta(dropRel)
+	// Simulate an unavailable object-level summary while preserving the real,
+	// nonempty in-memory tombstone history. The scanner must consult that
+	// history rather than infer that an unknown summary means no matching row.
+	missingZoneMap := make(objectio.ZoneMap, objectio.ZoneMapSize)
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(tombstone.GetObjectStats(), missingZoneMap))
+	require.False(t, tombstone.SortKeyZoneMap().IsInited())
+	require.Zero(t, tombstone.GetObjectStats().Rows())
+	require.Zero(t, tombstone.GetObjectStats().BlkCnt())
+	rowsInMemory, err := tombstone.GetObjectData().Rows()
+	require.NoError(t, err)
+	require.Positive(t, rowsInMemory)
+	tombstoneID := *tombstone.ID()
+	require.NoError(t, dropRel.SoftDeleteObject(&tombstoneID, true))
+	require.NoError(t, dropTxn.Commit(ctx))
+
+	readTxn, readRel := engine.GetRelation()
+	defer readTxn.Rollback(ctx)
+	table := readRel.GetMeta().(*catalog.TableEntry)
+	deletes, err := tables.TombstoneRangeScanByObject(
+		ctx, table, dataObjectID, types.TS{}, readTxn.GetStartTS(),
+		common.DefaultAllocator, engine.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, deletes)
+	defer deletes.Close()
+	require.Equal(t, 1, deletes.Length())
+	require.Equal(
+		t,
+		types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0),
+		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(0),
+	)
+	require.Equal(
+		t,
+		rows.Vecs[schema.GetPrimaryKey().Idx].Get(0),
+		deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0),
+	)
+	require.Equal(t, deleteTS, deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+
+	// Preserve the range and target filters: unknown metadata must not make an
+	// unrelated object or an out-of-range delete visible.
+	otherDeletes, err := tables.TombstoneRangeScanByObject(
+		ctx, table, objectio.NewObjectid(), types.TS{}, readTxn.GetStartTS(),
+		common.DefaultAllocator, engine.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	if otherDeletes != nil {
+		otherDeletes.Close()
+	}
+	require.Nil(t, otherDeletes)
+
+	outOfRangeDeletes, err := tables.TombstoneRangeScanByObject(
+		ctx, table, dataObjectID, deleteTS.Next(), readTxn.GetStartTS(),
+		common.DefaultAllocator, engine.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	if outOfRangeDeletes != nil {
+		outOfRangeDeletes.Close()
+	}
+	require.Nil(t, outOfRangeDeletes)
+}
+
+func TestCollectDeletesInRangeAfterEmptyTombstoneFlush(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	engine := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer engine.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	engine.BindSchema(schema)
+	rows := catalog.MockBatch(schema, 1)
+	defer rows.Close()
+	engine.CreateRelAndAppend(rows, true)
+
+	txn, rel := engine.GetRelation()
+	dataObjectID := *testutil.GetOneObject(rel).GetID()
+	empty, err := rel.CreateObject(true)
+	require.NoError(t, err)
+	tombstone := empty.GetMeta().(*catalog.ObjectEntry)
+	tombstoneID := *tombstone.ID()
+	require.NoError(t, empty.Close())
+	require.NoError(t, txn.Commit(ctx))
+	require.True(t, tombstone.GetObjectData().PrepareCompact())
+	require.False(t, tombstone.SortKeyZoneMap().IsInited())
+
+	flushTxn, _ := engine.GetRelation()
+	flushStart := flushTxn.GetStartTS()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, nil, []*catalog.ObjectEntry{tombstone}, engine.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+	flushTS := flushTxn.GetCommitTS()
+	rowsInMemory, err := tombstone.GetObjectData().Rows()
+	require.NoError(t, err)
+	require.Zero(t, rowsInMemory)
+
+	checkEmptyScan := func(table *catalog.TableEntry, start, end types.TS) {
+		deletes, err := tables.TombstoneRangeScanByObject(
+			ctx, table, dataObjectID, start, end,
+			common.DefaultAllocator, engine.Runtime.VectorPool.Small,
+		)
+		require.NoError(t, err)
+		if deletes != nil {
+			deletes.Close()
+		}
+		require.Nil(t, deletes)
+	}
+	assertDroppedEntry := func(table *catalog.TableEntry) *catalog.ObjectEntry {
+		dropped, err := table.GetObjectByID(&tombstoneID, true)
+		require.NoError(t, err)
+		require.True(t, dropped.IsDEntry())
+		require.True(t, dropped.HasDropCommitted())
+		require.Equal(t, tombstoneID, *dropped.ID())
+		created := dropped.GetPrevVersion()
+		require.NotNil(t, created)
+		require.True(t, created.IsCEntry())
+		require.Equal(t, tombstoneID, *created.ID())
+		require.Same(t, created.GetObjectData(), dropped.GetObjectData(), "C and D entries share one object-data owner")
+		require.False(t, dropped.SortKeyZoneMap().IsInited())
+		require.Zero(t, dropped.GetObjectStats().Extent().Length(), "empty flush must not invent a persisted extent")
+		return dropped
+	}
+	func() {
+		readTxn, readRel := engine.GetRelation()
+		defer readTxn.Rollback(ctx)
+		table := readRel.GetMeta().(*catalog.TableEntry)
+		dropped := assertDroppedEntry(table)
+		require.Same(t, tombstone.GetObjectData(), dropped.GetObjectData(), "the original C entry remains the shared data owner")
+		checkEmptyScan(table, types.TS{}, flushStart)
+		checkEmptyScan(table, types.TS{}, readTxn.GetStartTS())
+		checkEmptyScan(table, flushTS.Next(), readTxn.GetStartTS())
+	}()
+
+	// The catalog candidate can survive WAL replay even though the empty flush
+	// produced no object file. Keep the same range-scan contract after restart.
+	engine.Restart(ctx)
+	func() {
+		replayTxn, replayRel := engine.GetRelation()
+		defer replayTxn.Rollback(ctx)
+		table := replayRel.GetMeta().(*catalog.TableEntry)
+		replayed := assertDroppedEntry(table)
+		rowsInMemory, err := replayed.GetObjectData().Rows()
+		require.NoError(t, err)
+		require.Zero(t, rowsInMemory)
+		checkEmptyScan(table, types.TS{}, replayTxn.GetStartTS())
+	}()
+}
+
 func TestCollectDeletesInRange2(t *testing.T) {
 	ctx := context.Background()
 
@@ -10904,14 +11071,18 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	blk := testutil.GetOneObject(rel)
 	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	expectedRowIDs := make([]types.Rowid, 4)
 	for i := 0; i < 4; i++ {
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*blk.GetID(), 0, uint32(i))
+		expectedRowIDs[i] = rowID
 		rowidVec.Append(rowID, false)
 	}
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	expectedPKs := make([]any, 4)
 	for i := 0; i < 4; i++ {
 		pk, _, err := rel.GetValue(blk.Fingerprint(), uint32(i), uint16(schema.GetPrimaryKey().Idx), true)
 		require.NoError(t, err)
+		expectedPKs[i] = pk
 		pkVec.Append(pk, false)
 	}
 	stats, err := testutil.MockCNDeleteInS3(
@@ -10929,16 +11100,73 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+	persistedCommitTS := txn.GetCommitTS()
 
 	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
 	tableEntry := rel.GetMeta().(*catalog.TableEntry)
-	deletes, err := tables.TombstoneRangeScanByObject(
+	persistedID := stats.ObjectName().ObjectId()
+	persistedTombstone, err := tableEntry.GetObjectByID(persistedID, true)
+	require.NoError(t, err)
+	require.Equal(t, *persistedID, *persistedTombstone.ID())
+	require.Equal(t, persistedCommitTS, persistedTombstone.GetCreatedAt())
+	require.True(t, persistedTombstone.SortKeyZoneMap().IsInited())
+	expectedCommitTS := persistedTombstone.GetCreatedAt()
+	assertPersistedRows := func(deletes *containers.Batch) {
+		t.Helper()
+		require.NotNil(t, deletes)
+		defer deletes.Close()
+		require.Equal(t, 4, deletes.Length())
+		for i := range expectedRowIDs {
+			require.Equal(t, expectedRowIDs[i], deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i))
+			require.Equal(t, expectedPKs[i], deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(i))
+			require.Equal(t, expectedCommitTS, deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(i))
+		}
+	}
+	validDeletes, err := tables.TombstoneRangeScanByObject(
 		ctx, tableEntry, *blk.GetID(), types.TS{}, txn.GetStartTS(), common.DefaultAllocator, tae.Runtime.VectorPool.Small,
 	)
-	assert.NoError(t, err)
-	assert.Equal(t, 4, deletes.Length())
+	require.NoError(t, err)
+	assertPersistedRows(validDeletes)
+
+	// A real persisted CN tombstone still has valid block metadata and payload;
+	// remove only the catalog object's pruning summary to exercise the scanner's
+	// unknown-ZM fallback through the persisted-node/file reader path.
+	originalZoneMap := persistedTombstone.SortKeyZoneMap().Clone()
+	missingZoneMap := make(objectio.ZoneMap, objectio.ZoneMapSize)
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(persistedTombstone.GetObjectStats(), missingZoneMap))
+	require.False(t, persistedTombstone.SortKeyZoneMap().IsInited())
+	defer func() {
+		if !persistedTombstone.SortKeyZoneMap().IsInited() {
+			if err := objectio.SetObjectStatsSortKeyZoneMap(persistedTombstone.GetObjectStats(), originalZoneMap); err != nil {
+				t.Errorf("restore persisted tombstone ZM: %v", err)
+			}
+		}
+	}()
+	unknownDeletes, err := tables.TombstoneRangeScanByObject(
+		ctx, tableEntry, *blk.GetID(), types.TS{}, txn.GetStartTS(), common.DefaultAllocator, tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	assertPersistedRows(unknownDeletes)
+	unrelatedDeletes, err := tables.TombstoneRangeScanByObject(
+		ctx, tableEntry, objectio.NewObjectid(), types.TS{}, txn.GetStartTS(), common.DefaultAllocator, tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	if unrelatedDeletes != nil {
+		unrelatedDeletes.Close()
+	}
+	require.Nil(t, unrelatedDeletes)
+	outOfRangeDeletes, err := tables.TombstoneRangeScanByObject(
+		ctx, tableEntry, *blk.GetID(), persistedCommitTS.Next(), txn.GetStartTS(), common.DefaultAllocator, tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	if outOfRangeDeletes != nil {
+		outOfRangeDeletes.Close()
+	}
+	require.Nil(t, outOfRangeDeletes)
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(persistedTombstone.GetObjectStats(), originalZoneMap))
+	require.True(t, persistedTombstone.SortKeyZoneMap().IsInited())
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
@@ -10951,11 +11179,13 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
 	tableEntry = rel.GetMeta().(*catalog.TableEntry)
-	deletes, err = tables.TombstoneRangeScanByObject(
+	deletes, err := tables.TombstoneRangeScanByObject(
 		ctx, tableEntry, *blk.GetID(), types.TS{}, txn.GetStartTS(), common.DefaultAllocator, tae.Runtime.VectorPool.Small,
 	)
-	assert.NoError(t, err)
-	assert.Equal(t, 5, deletes.Length())
+	require.NoError(t, err)
+	require.NotNil(t, deletes)
+	defer deletes.Close()
+	require.Equal(t, 5, deletes.Length())
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
