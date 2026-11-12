@@ -250,6 +250,8 @@ func TestPrivilegeCacheCompoundDoesNotCarryAdmission(t *testing.T) {
 	defer ses.Close()
 	ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", TenantID: 3, UserID: 4, DefaultRoleID: 5})
 	ses.SetFromRealUser(true)
+	// This test isolates compound privilege evaluation after policy admission.
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: t.Context(), ses: ses, protectedPolicyLoaded: true})
 	cache := ses.GetPrivilegeCache()
 	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "source", PrivilegeTypeSelect)
 	cache.add(objectTypeTable, privilegeLevelDatabaseTable, moCatalog, "target", PrivilegeTypeInsert)

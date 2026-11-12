@@ -1657,6 +1657,14 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		}
 		csn++
 	}
+	if err == nil {
+		memo := tbl.store.txn.GetMemo()
+		if memo != nil && memo.Tree != nil && memo.HasTableDataChanges(tbl.entry.ID) {
+			// Normal user DML already records its prepare timestamp. Internal
+			// table writes must also contribute to the content visibility bound.
+			tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetCommitTS())
+		}
+	}
 	return
 }
 

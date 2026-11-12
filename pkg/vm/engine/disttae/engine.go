@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -1315,6 +1316,14 @@ func (e *Engine) AcquirePeerLogtailReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, bool, error) {
 	return e.pClient.AcquirePeerLogtailReadBarrier(ctx)
+}
+
+func (e *Engine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return e.pClient.WaitLogtailAppliedSnapshot(ctx, min)
+}
+
+func (e *Engine) AcquirePeerTableReadSnapshot(ctx context.Context, table api.TableID, min timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error) {
+	return e.pClient.AcquirePeerTableReadSnapshot(ctx, table, min)
 }
 
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals

@@ -618,6 +618,10 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			if !commitResultUnknown {
 				th.invalidateTxnUnsafe()
 			}
+		} else {
+			// Commit chooses the final timestamp; capture it before the operator
+			// is invalidated so later statements retain read-your-writes.
+			commitTs = th.txnOp.Txn().CommitTS
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
 		if commitResultUnknown {

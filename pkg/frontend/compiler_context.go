@@ -246,6 +246,36 @@ func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
 	tcc.execCtx.reqCtx = ctx
 }
 
+// ResolveViewPrivilegeSnapshot mirrors the logical-account and snapshot
+// selection in getRelation. Subscription physical-account switching is not
+// included: grants on a subscription are checked in the requesting account.
+func (tcc *TxnCompilerContext) ResolveViewPrivilegeSnapshot(snapshot *plan2.Snapshot) (uint32, *plan2.Snapshot, error) {
+	account, err := defines.GetAccountId(tcc.execCtx.reqCtx)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !plan2.IsSnapshotValid(snapshot) {
+		return account, nil, nil
+	}
+	txn := tcc.GetTxnHandler().GetTxn()
+	if txn == nil {
+		return 0, nil, moerr.NewInternalError(tcc.execCtx.reqCtx, "view resolution requires an active transaction")
+	}
+	if !snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		// A prepared plan can run after this timestamp becomes historical.
+		// A cross-account hint would then switch the resolved account, so
+		// require it to be historical when the view is bound.
+		if snapshot.Tenant != nil && snapshot.Tenant.TenantID != account {
+			return 0, nil, moerr.NewInternalError(tcc.execCtx.reqCtx, "cross-account view snapshot must precede the transaction snapshot")
+		}
+		return account, snapshot, nil
+	}
+	if snapshot.Tenant != nil {
+		account = snapshot.Tenant.TenantID
+	}
+	return account, snapshot, nil
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
 	var err error
 	tempCtx := tcc.execCtx.reqCtx
@@ -807,6 +837,18 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 
 	if isSystemVar {
+		if strings.EqualFold(varName, ProtectedDatabases) {
+			switch ses := tcc.GetSession().(type) {
+			case *Session:
+				if ses.GetFromRealUser() {
+					return protectedPolicyValueForStatement(ctx, ses)
+				}
+			case *backSession:
+				if ses.protectedPolicy != nil {
+					return ses.protectedPolicy.raw, nil
+				}
+			}
+		}
 		if isGlobalVar {
 			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
 				return
