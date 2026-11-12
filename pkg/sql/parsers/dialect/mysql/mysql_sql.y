@@ -1161,13 +1161,13 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
-%token <str> AUTO_ID_CACHE FLUSH
+%token <str> AUTO_ID_CACHE
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
-// MySQL SERIAL column-alias type. Declared last so every existing token
-// keeps its generated lexer constant number, per the append-to-end contract
-// above.
+// MySQL SERIAL column-alias type. Keep new tokens after this append-only
+// boundary so existing generated lexer constants remain stable.
 %token <str> SERIAL
+%token <str> FLUSH
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
