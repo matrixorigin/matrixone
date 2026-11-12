@@ -9024,33 +9024,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			// Cases are payload widths in bytes; len(sels) is the output row count.
-			// The profiled 4/8-byte paths copy the first row directly, then
-			// check the tail once. The 1/2-byte paths retain their scalar loops.
+			// Typed carriers copy physical bits without per-row byte offsets.
+			// Logical type and metadata remain owned by this append path.
 			switch tlen {
 			case 8:
-				dst := unsafe.Pointer(&v.data[oldLen*8])
-				src := unsafe.Pointer(&w.data[int(sels[0])*8])
-				*(*uint64)(dst) = *(*uint64)(src)
-				if len(sels) > 1 {
-					// The first store uses the original checked indexes.
-					// Admit the tail before deriving the remaining pointers.
-					_ = v.data[(oldLen+len(sels))*8-1]
-					for i := 1; i < len(sels); i++ {
-						src = unsafe.Pointer(&w.data[int(sels[i])*8])
-						*(*uint64)(unsafe.Add(dst, i*8)) = *(*uint64)(src)
-					}
-				}
+				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
 			case 4:
-				dst := unsafe.Pointer(&v.data[oldLen*4])
-				src := unsafe.Pointer(&w.data[int(sels[0])*4])
-				*(*uint32)(dst) = *(*uint32)(src)
-				if len(sels) > 1 {
-					_ = v.data[(oldLen+len(sels))*4-1]
-					for i := 1; i < len(sels); i++ {
-						src = unsafe.Pointer(&w.data[int(sels[i])*4])
-						*(*uint32)(unsafe.Add(dst, i*4)) = *(*uint32)(src)
-					}
-				}
+				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
 			case 2:
 				for i, sel := range sels {
 					p1 := unsafe.Pointer(&v.data[(oldLen+i)*2])
