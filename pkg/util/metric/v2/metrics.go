@@ -426,5 +426,13 @@ var (
 )
 
 func getDurationBuckets() []float64 {
-	return append(prometheus.ExponentialBucketsRange(minDuration, maxDuration, durationCount), math.MaxFloat64)
+	buckets := prometheus.ExponentialBucketsRange(minDuration, maxDuration, durationCount)
+	// Coarser buckets reduce per-scrape allocations without delaying observations.
+	// Retain every third legacy boundary so surviving le values stay unchanged,
+	// and always include the original range endpoint and maximum finite value.
+	compacted := buckets[:0]
+	for i := 0; i < len(buckets)-1; i += 3 {
+		compacted = append(compacted, buckets[i])
+	}
+	return append(compacted, buckets[len(buckets)-1], math.MaxFloat64)
 }
