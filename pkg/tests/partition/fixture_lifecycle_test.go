@@ -15,8 +15,13 @@
 package partition
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
@@ -67,4 +72,52 @@ func TestPartitionFixtureSuccessIsReused(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.Equal(t, 1, c.starts)
 	require.Zero(t, c.closes)
+}
+
+// Run the real TestMain in a subprocess: its cleanup runs after m.Run.
+func TestPartitionFixtureShutdown(t *testing.T) {
+	const childMode = "MO_PARTITION_FIXTURE_SHUTDOWN"
+	if mode := os.Getenv(childMode); mode != "" {
+		sharedPartitionCluster.cluster = fixtureShutdownCluster{mode: mode}
+		return
+	}
+	for _, mode := range []string{"success", "error", "blocked"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPartitionFixtureShutdown$", "-test.timeout=200ms")
+			cmd.Env = append(os.Environ(), childMode+"="+mode)
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, ctx.Err(), "%s", output)
+			require.Contains(t, string(output), "fixture shutdown: "+mode)
+			if mode == "success" {
+				require.NoError(t, err, "%s", output)
+			} else {
+				require.Error(t, err, "%s", output)
+				if mode == "blocked" {
+					require.Contains(t, string(output), "timed out closing shared partition cluster")
+					require.Contains(t, string(output), "fixtureShutdownCluster.Close")
+				} else {
+					require.Contains(t, string(output), "close shared partition cluster: injected close failure")
+				}
+			}
+		})
+	}
+}
+
+type fixtureShutdownCluster struct {
+	embed.Cluster
+	mode string
+}
+
+func (c fixtureShutdownCluster) Close() error {
+	fmt.Fprintln(os.Stderr, "fixture shutdown:", c.mode)
+	switch c.mode {
+	case "blocked":
+		select {}
+	case "error":
+		return errors.New("injected close failure")
+	default:
+		return nil
+	}
 }

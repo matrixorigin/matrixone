@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
@@ -235,20 +236,36 @@ func TestTruncate(t *testing.T) {
 // 8. append 2 entries for group GroupUserTxn
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
-	backend, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	backend, baseFactory := logservicedriver.NewMockServiceAndClientFactory()
+	requests := make(chan checkpointTruncateRequest, 2)
+	abort := make(chan struct{})
+	clientFactory := func() (logservice.Client, error) {
+		client, err := baseFactory()
+		return checkpointTruncateClient{Client: client, requests: requests, abort: abort}, err
+	}
 	wal := NewLogserviceHandle(clientFactory)
 	t.Cleanup(func() { assert.NoError(t, wal.Close()) })
-	// Each checkpoint is submitted only after the previous physical truncate
-	// completes, so the next advance corresponds to the current checkpoint.
+	// Release blocked remote calls before closing the WAL on a fatal assertion.
+	t.Cleanup(func() { close(abort) })
 	waitTruncate := func(previous uint64) uint64 {
 		t.Helper()
-		var truncated uint64
-		var pollErr error
+		var request checkpointTruncateRequest
+		select {
+		case request = <-requests:
+		case <-time.After(4 * time.Second):
+			t.Fatal("remote truncation was not requested")
+		}
+		// The intent is already visible, but the remote operation is held.
+		truncated, err := backend.GetTruncatedLsn(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, previous, truncated)
+		require.Greater(t, request.psn, previous)
+		close(request.release)
 		require.Eventually(t, func() bool {
-			truncated, pollErr = backend.GetTruncatedLsn(context.Background())
-			return pollErr != nil || truncated > previous
-		}, 4*time.Second, 10*time.Millisecond, "remote truncation did not advance")
-		require.NoError(t, pollErr)
+			truncated, err = backend.GetTruncatedLsn(context.Background())
+			return err != nil || truncated >= request.psn
+		}, 4*time.Second, 10*time.Millisecond, "remote truncation did not reach checkpoint PSN %d", request.psn)
+		require.NoError(t, err)
 		return truncated
 	}
 	replayHandle := func(
@@ -382,4 +399,36 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	assert.Equal(t, map[uint64]uint64{6: 9, 7: 13, 8: 14}, wal.lsn2dsn.mapping[11])
 	assert.Equal(t, map[uint64]uint64{3: 10, 4: 11}, wal.lsn2dsn.mapping[200000])
 
+}
+
+// Gate real mock-client Truncate calls so the replay precondition cannot pass
+// solely because truncation happens to finish before the intent is observed.
+type checkpointTruncateRequest struct {
+	psn     uint64
+	release chan struct{}
+}
+
+type checkpointTruncateClient struct {
+	logservice.Client
+	requests chan<- checkpointTruncateRequest
+	abort    <-chan struct{}
+}
+
+func (c checkpointTruncateClient) Truncate(ctx context.Context, psn uint64) error {
+	r := checkpointTruncateRequest{psn: psn, release: make(chan struct{})}
+	select {
+	case c.requests <- r:
+	case <-c.abort:
+		return context.Canceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-r.release:
+		return c.Client.Truncate(ctx, psn)
+	case <-c.abort:
+		return context.Canceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

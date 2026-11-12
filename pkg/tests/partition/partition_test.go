@@ -16,10 +16,13 @@ package partition
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -52,11 +55,6 @@ func (f *partitionClusterFixture) get(create func() (embed.Cluster, error)) (emb
 func startPartitionCluster(create func() (embed.Cluster, error)) (embed.Cluster, error) {
 	c, err := create()
 	if err != nil {
-		if c != nil {
-			if closeErr := c.Close(); closeErr != nil {
-				return c, errors.Join(err, closeErr)
-			}
-		}
 		return nil, err
 	}
 	if err = c.Start(); err != nil {
@@ -71,7 +69,20 @@ func startPartitionCluster(create func() (embed.Cluster, error)) (embed.Cluster,
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if sharedPartitionCluster.cluster != nil {
-		if err := sharedPartitionCluster.cluster.Close(); err != nil {
+		// m.Run has stopped the test alarm. Bound package-owned cleanup too.
+		timeout := time.Minute
+		if value := flag.Lookup("test.timeout"); value != nil {
+			if d, err := time.ParseDuration(value.Value.String()); err == nil && d > 0 && d < timeout {
+				timeout = d
+			}
+		}
+		watchdog := time.AfterFunc(timeout, func() {
+			debug.SetTraceback("all")
+			panic("timed out closing shared partition cluster")
+		})
+		err := sharedPartitionCluster.cluster.Close()
+		watchdog.Stop()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "close shared partition cluster: %v\n", err)
 			code = 1
 		}
@@ -193,43 +204,13 @@ func runPartitionTableCreateAndDeleteTestsWithPrepare(
 func runPartitionClusterTest(
 	t *testing.T,
 	fn func(embed.Cluster),
-	options ...embed.Option,
-) error {
-	return runPartitionClusterTestWithReuse(
-		t,
-		fn,
-		true,
-		options...,
-	)
-}
-
-func runPartitionClusterTestWithReuse(
-	t *testing.T,
-	fn func(embed.Cluster),
-	reuse bool,
-	options ...embed.Option,
-) error {
+) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	create := func() (embed.Cluster, error) {
-		opts := append([]embed.Option{embed.WithCNCount(3), embed.WithTesting()}, options...)
-		return embed.NewCluster(opts...)
-	}
-	var c embed.Cluster
-	var err error
-	if reuse {
-		c, err = sharedPartitionCluster.get(create)
-	} else {
-		c, err = startPartitionCluster(create)
-		if c != nil {
-			defer func() {
-				if closeErr := c.Close(); closeErr != nil {
-					t.Errorf("close partition cluster: %v", closeErr)
-				}
-			}()
-		}
-	}
+	c, err := sharedPartitionCluster.get(func() (embed.Cluster, error) {
+		return embed.NewCluster(embed.WithCNCount(3), embed.WithTesting())
+	})
 	require.NoError(t, err)
 
 	cn, err := c.GetCNService(0)
@@ -243,5 +224,4 @@ func runPartitionClusterTestWithReuse(
 		)
 	}
 	fn(c)
-	return nil
 }

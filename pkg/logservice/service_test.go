@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -106,45 +107,90 @@ func TestNewService(t *testing.T) {
 }
 
 func TestNewServiceRetry(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	cfg0 := getServiceTestConfig()
-	genCfg0 := func() Config {
-		return cfg0
+	for _, conflict := range []string{"rpc", "raft", "gossip-tcp", "gossip-udp"} {
+		t.Run(conflict, func(t *testing.T) {
+			t.Cleanup(leaktest.AfterTest(t))
+			cfg := getServiceTestConfig()
+			t.Cleanup(func() { vfs.ReportLeakedFD(cfg.FS, t) })
+			failedCfg := cfg
+			failedCfg.Fill()
+			addr := failedCfg.GossipListenAddr()
+			if conflict == "rpc" {
+				addr = failedCfg.LogServiceListenAddr()
+			} else if conflict == "raft" {
+				addr = failedCfg.RaftListenAddr()
+			}
+			var closeListener func() error
+			if conflict == "gossip-udp" {
+				listener, err := net.ListenPacket("udp", addr)
+				require.NoError(t, err)
+				closeListener = listener.Close
+			} else {
+				listener, err := net.Listen("tcp", addr)
+				require.NoError(t, err)
+				closeListener = listener.Close
+			}
+			t.Cleanup(func() { _ = closeListener() })
+			attempts := 0
+			genCfg := func() Config {
+				attempts++
+				if attempts > 1 {
+					cfg.LogServicePort = getAvailablePort()
+					cfg.RaftAddress = getTestRaftAddress()
+					cfg.GossipPort = getAvailablePort()
+					cfg.GossipSeedAddresses = []string{cfg.GossipServiceAddr()}
+				}
+				return cfg
+			}
+			fs := newFS()
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			service, err := NewServiceWithRetry(genCfg, fs, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, service.Close()) })
+			require.Equal(t, 2, attempts)
+			// Failure must release every listener it managed to acquire.
+			require.NoError(t, closeListener())
+			for _, addr := range []string{failedCfg.LogServiceListenAddr(), failedCfg.RaftListenAddr(), failedCfg.GossipListenAddr()} {
+				listener, err := net.Listen("tcp", addr)
+				require.NoError(t, err, "failed service retained %s", addr)
+				require.NoError(t, listener.Close())
+			}
+			listener, err := net.ListenPacket("udp", failedCfg.GossipListenAddr())
+			require.NoError(t, err)
+			require.NoError(t, listener.Close())
+		})
 	}
-	defer vfs.ReportLeakedFD(cfg0.FS, t)
-	service0, err := NewServiceWithRetry(genCfg0,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service0.Close())
-	}()
+}
 
-	var cfg Config
-	first := true
-	genCfg := func() Config {
-		if first {
-			first = false
-			return cfg0
-		} else {
-			cfg = getServiceTestConfig()
-			return cfg
-		}
+func TestNewServiceRetryStops(t *testing.T) {
+	for _, bindConflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bindConflict=%t", bindConflict), func(t *testing.T) {
+			defer leaktest.AfterTest(t)()
+			cfg := getServiceTestConfig()
+			defer vfs.ReportLeakedFD(cfg.FS, t)
+			if bindConflict {
+				listener, err := net.Listen("tcp", cfg.GossipListenAddr())
+				require.NoError(t, err)
+				defer listener.Close()
+			} else {
+				cfg.UUID = ""
+			}
+			attempts := 0
+			fs := newFS()
+			defer fs.Close(context.Background())
+			service, err := NewServiceWithRetry(func() Config { attempts++; return cfg }, fs, nil)
+			require.Nil(t, service)
+			require.Error(t, err)
+			if bindConflict {
+				require.Equal(t, serviceStartupAttempts, attempts)
+				require.Contains(t, err.Error(), "bind conflicts")
+				require.Contains(t, err.Error(), "address already in use")
+			} else {
+				require.Equal(t, 1, attempts)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			}
+		})
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewServiceWithRetry(genCfg,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	assert.NoError(t, service.Close())
 }
 
 func TestNotSupportCmd(t *testing.T) {
