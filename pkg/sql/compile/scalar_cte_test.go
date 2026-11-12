@@ -40,7 +40,7 @@ import (
 
 func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 	for _, count := range []int{4, 8} {
-		for _, mode := range []string{"end", "source_error", "cancel", "prepare_error", "partial_publication"} {
+		for _, mode := range []string{"end", "end_with_metadata", "source_error", "cancel", "prepare_error", "partial_publication"} {
 			t.Run(fmt.Sprintf("readers=%d/%s", count, mode), func(t *testing.T) {
 				ctx, cancel := context.WithCancelCause(context.Background())
 				mp := mpool.MustNewZeroNoFixed()
@@ -52,6 +52,11 @@ func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, mp))
 				input.SetRowCount(1)
+				var expectedExtra []byte
+				if mode == "end_with_metadata" {
+					expectedExtra = []byte("aggregate state")
+					input.ExtraBuf = append([]byte(nil), expectedExtra...)
+				}
 				t.Cleanup(func() {
 					cancel(context.Canceled)
 					proc.Base.ReleasePipelineCurrentsAfterReadersStopped()
@@ -83,21 +88,49 @@ func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, done)
 				copies := make([]*batch.Batch, count)
-				for i, edge := range edges {
+				active := count
+				if mode == "partial_publication" {
+					active = 1
+				}
+				for i, edge := range edges[:active] {
 					edge.Ch2 <- process.NewPipelineSignalToGetFromSpool(shared, i)
-					raw, reader := scopes[i].PreScopes[0], scopes[i]
-					_, err = raw.RootOp.Call(raw.Proc)
-					require.NoError(t, err)
-					out, callErr := reader.RootOp.Call(reader.Proc)
-					require.NoError(t, callErr)
-					require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](out.Batch.Vecs[0])[0])
-					copies[i] = out.Batch
-					if mode == "partial_publication" && i == 0 {
-						return // Includes a borrowed private row and unnotified shared readers.
-					}
+				}
+				// The actual connector copies, not only mutations of already-copied
+				// vectors, must run concurrently against the shared broadcast batch.
+				start := make(chan struct{})
+				copyErrors := make([]error, active)
+				var copiers sync.WaitGroup
+				for i, reader := range scopes[:active] {
+					copiers.Add(1)
+					go func() {
+						defer copiers.Done()
+						<-start
+						raw := reader.PreScopes[0]
+						if _, callErr := raw.RootOp.Call(raw.Proc); callErr != nil {
+							copyErrors[i] = callErr
+							return
+						}
+						out, callErr := reader.RootOp.Call(reader.Proc)
+						copyErrors[i], copies[i] = callErr, out.Batch
+					}()
+				}
+				close(start)
+				copiers.Wait()
+				require.Equal(t, expectedExtra, input.ExtraBuf, "broadcast copy must preserve its source")
+				for i := range active {
+					require.NoError(t, copyErrors[i])
+					require.NotNil(t, copies[i])
+					require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](copies[i].Vecs[0])[0])
+					require.Equal(t, expectedExtra, copies[i].ExtraBuf)
 					if i > 0 {
 						require.NotSame(t, copies[0].Vecs[0], copies[i].Vecs[0])
+						if len(expectedExtra) > 0 {
+							require.NotSame(t, &copies[0].ExtraBuf[0], &copies[i].ExtraBuf[0])
+						}
 					}
+				}
+				if mode == "partial_publication" {
+					return // Includes a borrowed private row and unnotified shared readers.
 				}
 				var writers sync.WaitGroup
 				for i, copy := range copies {
@@ -108,15 +141,21 @@ func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 						typ := *copy.Vecs[0].GetType()
 						typ.Width = int32(i)
 						copy.Vecs[0].SetType(typ)
+						if len(copy.ExtraBuf) > 0 {
+							copy.ExtraBuf[0] = byte(i)
+						}
 					}()
 				}
 				writers.Wait()
 				for i, copy := range copies {
 					require.Equal(t, int64(i), vector.MustFixedColNoTypeCheck[int64](copy.Vecs[0])[0])
+					if len(expectedExtra) > 0 {
+						require.Equal(t, byte(i), copy.ExtraBuf[0])
+					}
 				}
 				require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])[0])
 				var terminalErr error
-				if mode != "end" {
+				if mode != "end" && mode != "end_with_metadata" {
 					terminalErr = errors.New("scalar source stopped")
 				}
 				if mode == "cancel" {
@@ -129,7 +168,7 @@ func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 				for _, reader := range scopes {
 					raw := reader.PreScopes[0]
 					_, err := raw.RootOp.Call(raw.Proc)
-					if mode == "end" {
+					if mode == "end" || mode == "end_with_metadata" {
 						require.NoError(t, err)
 					} else {
 						require.Error(t, err)
@@ -137,7 +176,7 @@ func TestScalarCTEReaderCopiesAndTerminalCleanup(t *testing.T) {
 					raw.RootOp.Reset(raw.Proc, err != nil, err)
 					raw.RootOp.GetOperatorBase().GetChildren(0).Reset(raw.Proc, err != nil, err)
 					_, err = reader.RootOp.Call(reader.Proc)
-					if mode == "end" {
+					if mode == "end" || mode == "end_with_metadata" {
 						require.NoError(t, err)
 					} else {
 						require.Error(t, err)
