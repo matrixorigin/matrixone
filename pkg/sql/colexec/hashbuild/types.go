@@ -495,8 +495,9 @@ type HashBuild struct {
 	JoinMapRefCnt                 int32
 	ShuffleIdx                    int32
 	RuntimeFilterSpec             *plan.RuntimeFilterSpec
-	// OptionalRuntimeFilterMaxKeyBytes caps retained optional keys before copying.
-	// Zero leaves the ordinary runtime-filter behavior unchanged.
+	// OptionalRuntimeFilterMaxKeyBytes bounds each variable-length key component
+	// before copying. When positive, the optional filter's UpperLimit also bounds
+	// retained key count. Zero keeps ordinary runtime-filter collection unchanged.
 	OptionalRuntimeFilterMaxKeyBytes int
 	SpillThreshold                   int64
 
