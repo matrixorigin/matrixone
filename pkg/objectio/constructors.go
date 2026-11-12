@@ -165,32 +165,36 @@ func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return
-			}
-		}
-		if algo == compress.Lz4Chunked {
-			return decodeChunkedColumn(ctx, data, allocator)
-		}
+		return constructCacheData(ctx, reader, data, allocator, size, algo)
+	}
+}
 
-		// no compress
-		if algo == compress.None {
-			cacheData = allocator.CopyToCacheData(ctx, data)
-			return cacheData, nil
-		}
-
-		// lz4 compress
-		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
-		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+func constructCacheData(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator, size int64, algo uint8) (cacheData fscache.Data, err error) {
+	if len(data) == 0 {
+		data, err = io.ReadAll(reader)
 		if err != nil {
-			decompressedData.Release()
 			return
 		}
-		decompressedData = decompressedData.Slice(len(bs))
-		return decompressedData, nil
 	}
+	if algo == compress.Lz4Chunked {
+		return decodeChunkedColumn(ctx, data, allocator)
+	}
+
+	// no compress
+	if algo == compress.None {
+		cacheData = allocator.CopyToCacheData(ctx, data)
+		return cacheData, nil
+	}
+
+	// lz4 compress
+	decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+	bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+	if err != nil {
+		decompressedData.Release()
+		return
+	}
+	decompressedData = decompressedData.Slice(len(bs))
+	return decompressedData, nil
 }
 
 // DecompressColumnExtent materializes one serialized object column from its
@@ -224,14 +228,13 @@ func DecompressColumnExtent(
 // vectors stay unmarked because they do not perform the per-value scan, and
 // copying their payload would make the common empty-bitmap path O(bytes).
 func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
-	construct := constructorFactory(size, algo)
 	return func(
 		ctx context.Context,
 		reader io.Reader,
 		data []byte,
 		allocator fileservice.CacheDataAllocator,
 	) (fscache.Data, error) {
-		cacheData, err := construct(ctx, reader, data, allocator)
+		cacheData, err := constructCacheData(ctx, reader, data, allocator, size, algo)
 		if err != nil {
 			return nil, err
 		}

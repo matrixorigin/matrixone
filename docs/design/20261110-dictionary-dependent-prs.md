@@ -777,3 +777,21 @@ CHAR-padding mode belong to Prepare/Reset; dynamic column-use ownership remains
 checked at read entry. The existing scan owning tests cover those transitions.
 No cache, public interface, arithmetic or benchmark gate changed. A separate
 private cache-constructor closure simplification is proposed, not yet approved.
+
+
+### Approved cache constructor allocation cleanup — 2026-11-12
+
+The requester approved cache-constructor-allocation-design.md. Extract the
+existing decompression callback body into a private plain helper; keep ordinary
+and column constructors at one captured closure each. Column validation calls
+the helper directly instead of retaining an inner callback. Preserve every
+algorithm/size/context/error/Release path and the public factory signatures.
+Introduce no cache policy, state, pool, format or native-library change.
+
+The escaping-constructor allocation test now proves column creation=ordinary
+creation=1 allocation. Reuse constructor, chunked-input, V2-validation and
+release-on-error evidence, then affected object-I/O owning/static checks. Build
+with the already tested per-query reader callback correction102af48112 and
+requalify using the same local six-suite/all-query/resource protocol. Continue
+investigating Q15 SELECT and other unresolved signals; GC settings, acceptance
+rules, other C/D follow-ups and the no-push condition remain unchanged.
