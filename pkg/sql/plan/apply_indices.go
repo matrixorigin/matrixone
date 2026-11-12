@@ -1741,6 +1741,114 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 // does not publish a node; an exact, non-NULL IN vector must exist before its
 // deduplicated cardinality can justify admission or candidate ranking.
 func (builder *QueryBuilder) applyBoundedUniqueKeySet(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64) (int32, int32) {
+	if retID, scanID, ok := builder.applyBoundedUniqueKeySetRanked(indexes, node, snapshot, sortedSelectivity); ok {
+		return retID, scanID
+	}
+	return builder.applyBoundedUniqueKeySetExhaustive(indexes, node, snapshot, sortedSelectivity)
+}
+
+// Rank by the exact count of distinct serial encodings of the IN component,
+// then materialize candidates in score order until one succeeds. The input
+// count can be shared only by the same IN filter; prepared keys and filters
+// always belong to their own ordered index. Any unproved input or mismatch
+// returns to the exhaustive path before publishing a node.
+func (builder *QueryBuilder) applyBoundedUniqueKeySetRanked(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64) (int32, int32, bool) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1, true
+	}
+	type candidate struct {
+		index       *IndexDef
+		filters     []int32
+		count       int
+		selectivity float64
+	}
+	candidates := []candidate{}
+	counts := make(map[int32]int)
+	for _, idxDef := range indexes {
+		filters, ok := completeUniqueKeySetFilters(idxDef, node)
+		if !ok {
+			continue
+		}
+		inPos := int32(-1)
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filter := node.FilterList[pos]
+			fn := filter.GetF()
+			if fn.Func.ObjName == "in" {
+				inPos = pos
+			} else {
+				// A literal is invariant over every tuple. Dynamic or NULL
+				// equality expressions keep the exhaustive fallback semantics.
+				lit := fn.Args[1].GetLit()
+				if lit == nil || lit.Isnull || lit.Src != nil {
+					return -1, -1, false
+				}
+			}
+			filterSelectivity *= filter.Selectivity
+		}
+		if inPos < 0 {
+			return -1, -1, false
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		count, exists := counts[inPos]
+		if !exists {
+			count, ok = distinctKeySetComponentCount(node.FilterList[inPos])
+			if !ok {
+				return -1, -1, false
+			}
+			counts[inPos] = count
+		}
+		rows := float64(count)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		selectivity = min(filterSelectivity, selectivity)
+		if selectivity >= sortedSelectivity {
+			continue
+		}
+		if len(candidates) == 0 {
+			// Avoid allocating when no candidate is eligible.
+			candidates = make([]candidate, 0, len(indexes))
+		}
+		candidates = append(candidates, candidate{index: idxDef, filters: filters, count: count, selectivity: selectivity})
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.selectivity < b.selectivity {
+			return -1
+		}
+		if a.selectivity > b.selectivity {
+			return 1
+		}
+		return 0
+	})
+	for _, c := range candidates {
+		prepared, err := builder.prepareIndexJoin(c.index, node, KeySetIndexCondition, c.filters, snapshot)
+		if err != nil || prepared == nil {
+			continue
+		}
+		count, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		if count != c.count {
+			return -1, -1, false
+		}
+		retID, scanID := builder.publishIndexJoin(prepared, node)
+		builder.applyExtraFiltersOnIndex(c.index, node, builder.qry.Nodes[scanID], c.filters)
+		return retID, scanID, true
+	}
+	return -1, -1, true
+}
+
+func (builder *QueryBuilder) applyBoundedUniqueKeySetExhaustive(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64) (int32, int32) {
 	if !hasKnownScanCardinality(node.Stats) {
 		return -1, -1
 	}

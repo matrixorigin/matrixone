@@ -15,11 +15,15 @@
 package plan
 
 import (
+	"bytes"
+	"hash/maphash"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // indexKeySetFilter recognizes a constant, non-NULL IN list that can be one
@@ -63,6 +67,73 @@ func indexKeySetFilter(expr *plan.Expr) (int32, int, bool) {
 		return 0, 0, false
 	}
 	return col.ColPos, vec.Length(), true
+}
+
+// distinctKeySetComponentCount counts exact serial encodings of the one IN
+// component without constructing full composite keys. For a complete unique
+// key with all other parts fixed, serial concatenates self-delimiting component
+// encodings; therefore two tuples are equal exactly when their IN component
+// encodings are equal, independent of the component's position.
+//
+// The key-set classifier excludes floats and other domains whose SQL equality
+// does not match their serialized representation. For string-like values,
+// serial uses EncodeStringType, whose zero escaping and terminator make it
+// injective on the already-bound bytes. Hash collisions are resolved by a byte
+// comparison against the borrowed input, so no full values are copied. Fixed
+// types use the same component encoder as serial, including decimals and time.
+func distinctKeySetComponentCount(expr *plan.Expr) (int, bool) {
+	if _, _, ok := indexKeySetFilter(expr); !ok {
+		return 0, false
+	}
+	fn := expr.GetF()
+	vec := vector.NewVec(makeTypeByPlan2Type(fn.Args[0].Typ))
+	if err := vec.UnmarshalBinary(fn.Args[1].GetVec().Data); err != nil {
+		return 0, false
+	}
+	if vec.IsConst() {
+		return 1, true
+	}
+	switch vec.GetType().Oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
+		seed := maphash.MakeSeed()
+		seen := make(map[uint64]int, vec.Length())
+		next := make([]int, vec.Length())
+		distinct := 0
+		for row := 0; row < vec.Length(); row++ {
+			value := vec.GetBytesAt(row)
+			hash := maphash.Bytes(seed, value)
+			duplicate := false
+			for link := seen[hash]; link != 0; link = next[link-1] {
+				if bytes.Equal(value, vec.GetBytesAt(link-1)) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				next[row] = seen[hash]
+				seen[hash] = row + 1
+				distinct++
+			}
+		}
+		return distinct, true
+	default:
+		encode, err := function.NewSerialValueEncoder(vec)
+		if err != nil {
+			return 0, false
+		}
+		packer := types.NewPacker()
+		defer packer.Close()
+		seen := make(map[string]struct{}, vec.Length())
+		for row := 0; row < vec.Length(); row++ {
+			packer.Reset()
+			encode(vec, row, packer)
+			if packer.Err() != nil {
+				return 0, false
+			}
+			seen[string(packer.GetBuf())] = struct{}{}
+		}
+		return len(seen), true
+	}
 }
 
 // keySetIndexSupported rejects truncated index keys. Index writes serialize the

@@ -3,7 +3,7 @@
 drop database if exists unique_keyset_large;
 create database unique_keyset_large;
 use unique_keyset_large;
-create table gate (id int primary key, a int not null, b int, payload int, unique key uq_gate(a,b));
+create table gate (id int primary key, a int not null, b int, payload int, unique key uq_gate(a,b), unique key uq_gate_ba(b,a), unique key uq_gate_ab2(a,b));
 insert into gate select result, 1, null, result from generate_series(1,500) g;
 insert into gate select result, 1, null, result from generate_series(501,1000) g;
 insert into gate select result, 1, null, result from generate_series(1001,1500) g;
@@ -141,9 +141,9 @@ explain verbose select payload from gate;
 -- @regex("__mo_index_idx_col in",true)
 explain select payload from gate where a=1 and b in (1,2);
 select payload from gate where a=1 and b in (1,2) order by payload;
-select payload from gate ignore index(uq_gate) where a=1 and b in (1,2) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (1,2) order by payload;
 select payload from gate where a=1 and b in (1,null) order by payload;
-select payload from gate ignore index(uq_gate) where a=1 and b in (1,null) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (1,null) order by payload;
 
 -- An escaped NUL continues a serial key after a valid shorter key terminator.
 create table nulkeys (id int primary key, a int not null, b varchar(16) not null, payload int, unique key uq_ab(a,b));
@@ -154,4 +154,14 @@ insert into nulkeys values (1,1,'a',10),(2,1,concat('a',char(0)),20),(3,1,concat
 explain select id,hex(b),payload from nulkeys where a=1 and b in ('a','z','a');
 select id,hex(b),payload from nulkeys where a=1 and b in ('a','z','a') order by id;
 select id,hex(b),payload from nulkeys ignore index(uq_ab) where a=1 and b in ('a','z','a') order by id;
+-- Competing complete unique indexes with different key order preserve SQL
+-- semantics for duplicate, nullable and prepared IN predicates.
+select payload from gate where a=1 and b in (2,1,2) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (2,1,2) order by payload;
+select payload from gate where a=1 and b in (2,null,2) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (2,null,2) order by payload;
+prepare keyset_rank_stmt from 'select payload from gate where a=? and b in (2,1,2) order by payload';
+set @rank_a=1;
+execute keyset_rank_stmt using @rank_a;
+deallocate prepare keyset_rank_stmt;
 drop database unique_keyset_large;

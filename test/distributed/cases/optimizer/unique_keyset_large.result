@@ -1,7 +1,7 @@
 drop database if exists unique_keyset_large;
 create database unique_keyset_large;
 use unique_keyset_large;
-create table gate (id int primary key, a int not null, b int, payload int, unique key uq_gate(a,b));
+create table gate (id int primary key, a int not null, b int, payload int, unique key uq_gate(a,b), unique key uq_gate_ba(b,a), unique key uq_gate_ab2(a,b));
 insert into gate select result, 1, null, result from generate_series(1,500) g;
 insert into gate select result, 1, null, result from generate_series(501,1000) g;
 insert into gate select result, 1, null, result from generate_series(1001,1500) g;
@@ -181,14 +181,14 @@ select payload from gate where a=1 and b in (1,2) order by payload;
 ➤ payload[4,32,0]  𝄀
 59999  𝄀
 60000
-select payload from gate ignore index(uq_gate) where a=1 and b in (1,2) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (1,2) order by payload;
 ➤ payload[4,32,0]  𝄀
 59999  𝄀
 60000
 select payload from gate where a=1 and b in (1,null) order by payload;
 ➤ payload[4,32,0]  𝄀
 59999
-select payload from gate ignore index(uq_gate) where a=1 and b in (1,null) order by payload;
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (1,null) order by payload;
 ➤ payload[4,32,0]  𝄀
 59999
 create table nulkeys (id int primary key, a int not null, b varchar(16) not null, payload int, unique key uq_ab(a,b));
@@ -217,4 +217,25 @@ select id,hex(b),payload from nulkeys ignore index(uq_ab) where a=1 and b in ('a
 ➤ id[4,32,0]  ¦  hex(b)[12,-1,0]  ¦  payload[4,32,0]  𝄀
 1  ¦  61  ¦  10  𝄀
 4  ¦  7A  ¦  40
+select payload from gate where a=1 and b in (2,1,2) order by payload;
+➤ payload[4,32,0]  𝄀
+59999  𝄀
+60000
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (2,1,2) order by payload;
+➤ payload[4,32,0]  𝄀
+59999  𝄀
+60000
+select payload from gate where a=1 and b in (2,null,2) order by payload;
+➤ payload[4,32,0]  𝄀
+60000
+select payload from gate ignore index(uq_gate,uq_gate_ba,uq_gate_ab2) where a=1 and b in (2,null,2) order by payload;
+➤ payload[4,32,0]  𝄀
+60000
+prepare keyset_rank_stmt from 'select payload from gate where a=? and b in (2,1,2) order by payload';
+set @rank_a=1;
+execute keyset_rank_stmt using @rank_a;
+➤ payload[4,32,0]  𝄀
+59999  𝄀
+60000
+deallocate prepare keyset_rank_stmt;
 drop database unique_keyset_large;
