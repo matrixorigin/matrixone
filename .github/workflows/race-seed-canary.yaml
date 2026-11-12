@@ -71,7 +71,7 @@ jobs:
         with:
           token: ${{ secrets.TOKEN_ACTION }}
           repository: ${{ inputs.cs_s3_adaptation_smoke && 'Ariznawlll/matrixone' || 'iamlinjunhong/matrixone' }}
-          ref: ${{ inputs.cs_s3_adaptation_smoke && '0ca31a25c649dfbe04f2e3caf980bad6fd602c37' || 'b0641dbf3cb1ed67f90f9e4226f0585ba451abc0' }}
+          ref: ${{ inputs.cs_s3_adaptation_smoke && '67e3cf40c8445fb429a7a20c0a67b95dec065155' || 'b0641dbf3cb1ed67f90f9e4226f0585ba451abc0' }}
       - name: Set up Go
         uses: matrixorigin/CI/actions/setup-env@main
         with:
@@ -126,9 +126,35 @@ jobs:
           trap 'kill "$minio_pid" 2>/dev/null || true' EXIT
           curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin -X PUT http://127.0.0.1:9008/ci-test
           curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin -X PUT --data-binary sentinel http://127.0.0.1:9008/ci-test/unrelated-sentinel
-          go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^(TestValidCITestS3Prefix|TestCSStorageArgumentsPreservePrefix|TestObjectStorages|TestS3FSFromSpecs)$' -v -count=1 -timeout=20m
+          curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin -X PUT --data-binary sentinel http://127.0.0.1:9008/ci-test/ci-ut/other-run/unrelated-sentinel
+          go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^(TestValidCITestS3Prefix|TestCITestS3FixtureSafety|TestCSStorageArgumentsPreservePrefix|TestObjectStorages|TestS3FSFromSpecs)$' -json -count=1 -timeout=20m | tee "$RUNNER_TEMP/cs-s3-tests.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          events = [json.loads(line) for line in (Path(os.environ['RUNNER_TEMP']) / 'cs-s3-tests.json').read_text().splitlines()]
+          passed = {event.get('Test') for event in events if event.get('Action') == 'pass'}
+          required = {'TestObjectStorages/cs-s3/minio/basic', 'TestS3FSFromSpecs/cs-s3/streaming_write', 'TestCITestS3FixtureSafety', 'TestValidCITestS3Prefix', 'TestCSStorageArgumentsPreservePrefix'}
+          missing = required - passed
+          if missing:
+              raise SystemExit(f'Required tests did not pass: {sorted(missing)}')
+          print('CS S3 adaptation and fixture safety tests actually executed and passed.')
+          PY
           test "$(curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin http://127.0.0.1:9008/ci-test/unrelated-sentinel)" = sentinel
+          test "$(curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin http://127.0.0.1:9008/ci-test/ci-ut/other-run/unrelated-sentinel)" = sentinel
           curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin 'http://127.0.0.1:9008/ci-test?list-type=2&prefix=ci-ut%2Flocal-smoke%2F' | grep -q '<KeyCount>0</KeyCount>'
+          echo 'Local MinIO only: CS S3 tests passed, run prefix is empty, both unrelated sentinel objects are intact. No real CS buckets were used.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Checkout CS S3 CI contract tests
+        if: ${{ inputs.cs_s3_adaptation_smoke }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: a414b3e92c78924c771ce6fba605014da9d14165
+          token: ${{ secrets.TOKEN_ACTION }}
+          path: ci-contract
+      - name: Verify CS S3 and Linux coverage contracts
+        if: ${{ inputs.cs_s3_adaptation_smoke }}
+        working-directory: ci-contract
+        run: python3 -m unittest scripts.test_cs_s3_coverage scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
   coverage-contract-smoke:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     runs-on: cs-mnl2-large-7c14g
@@ -145,10 +171,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: b05be37d7d102fbf040ae45b72ff2c27ee48b720
+          ref: a414b3e92c78924c771ce6fba605014da9d14165
           token: ${{ secrets.TOKEN_ACTION }}
       - name: Run Linux coverage contract tests
-        run: python3 -m unittest scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
+        run: python3 -m unittest scripts.test_cs_s3_coverage scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
   cs-s3-readonly-probe:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.cs_s3_probe
     environment: ci
