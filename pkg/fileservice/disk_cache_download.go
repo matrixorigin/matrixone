@@ -515,16 +515,18 @@ func (d *DiskCache) downloading() int {
 
 // downloadConnLimit is the most object-storage connections whole-object downloads hold.
 func (d *DiskCache) downloadConnLimit() int64 {
-	if d.maxDownloadConns > 0 {
+	if d.maxDownloadConnsSet || d.maxDownloadConns > 0 {
 		return d.maxDownloadConns
 	}
 	return int64(maxConnsPerHost / 2)
 }
 
 // prefetchWorkers is the most prefetches run at once, a quarter of the connections
-// downloads may hold: past it more streams share the bandwidth without adding any.
+// downloads may hold: past it more streams share the bandwidth without adding any. It is
+// at least 4, or each connection downloads may hold when fewer, and at least 1.
 func (d *DiskCache) prefetchWorkers() int {
-	return int(max(d.downloadConnLimit()/4, 4))
+	limit := d.downloadConnLimit()
+	return int(max(limit/4, min(limit, 4), 1))
 }
 
 // reserveDownloadConns reserves n of the connections whole-object downloads may hold,

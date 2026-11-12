@@ -379,17 +379,9 @@ func (d *DiskCache) runAsyncUpdates() {
 					)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
-					written, _ := d.writeEntry(
-						d.async.ctx,
-						job.diskPath,
-						job.entry,
-						d.claimAsyncPublication,
-					)
-					if written {
-						if retracted, err := d.retractDeleted(d.async.ctx, job.filePath, job.diskPath, job.entry); retracted || err != nil {
-							written = false
-						}
-					}
+					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+						return d.writeEntry(d.async.ctx, job.diskPath, job.entry, claim)
+					})
 					retainForCallbacks = written && len(job.callbacks) > 0
 				}
 			}

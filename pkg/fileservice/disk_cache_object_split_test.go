@@ -283,3 +283,32 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
 	require.False(t, known, "a prefetch made before the delete does not store its size")
 }
+
+// Whole-object downloads hold at most half the configured connections per host: with one
+// connection they hold none, so a read reads its range; with two they hold one.
+func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
+	for _, tc := range []struct {
+		conns    int
+		limit    int64
+		download bool
+	}{{1, 0, false}, {2, 1, true}} {
+		ctx := context.Background()
+		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
+			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
+			MemoryCapacity: ptrTo[toml.ByteSize](0),
+		}, nil, false, false)
+		require.NoError(t, err)
+		fs.SetAsyncUpdate(false)
+		data := make([]byte, 300<<10)
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+		d := fs.diskCache
+		d.objectSplit = objectSplitConfig{parts: 1}
+		d.prefetched.store(d.pathForFile("object"), int64(len(data)))
+		require.Equal(t, tc.limit, d.downloadConnLimit(), "conns %d", tc.conns)
+		got, err := readFullObjectOf(fs, 100, 10)
+		require.NoError(t, err)
+		require.Equal(t, data[100:110], got)
+		require.Equal(t, tc.download, d.cache.Contains(d.pathForFile("object")), "conns %d", tc.conns)
+		fs.Close(ctx)
+	}
+}

@@ -413,18 +413,30 @@ func (d *DiskCache) readRanges(
 func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector, allocator CacheDataAllocator) error {
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchFlights
-	for i := range vector.Entries {
-		e := &vector.Entries[i]
-		if e.done || e.Size <= 0 {
-			continue
-		}
-		end := e.Offset + e.Size
-		f.mu.Lock()
-		fl, _ := f.fastestLocked(diskPath, e.Offset, end, time.Now())
+	f.mu.Lock()
+	if len(f.m[diskPath]) == 0 {
 		f.mu.Unlock()
+		return nil
+	}
+	flights := make([]*prefetchFlight, len(vector.Entries))
+	found := false
+	now := time.Now()
+	for i := range vector.Entries {
+		if e := &vector.Entries[i]; !e.done && e.Size > 0 {
+			flights[i], _ = f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now)
+			found = found || flights[i] != nil
+		}
+	}
+	f.mu.Unlock()
+	if !found {
+		return nil
+	}
+	for i, fl := range flights {
 		if fl == nil {
 			continue
 		}
+		e := &vector.Entries[i]
+		end := e.Offset + e.Size
 		content, ok := fl.waitFor(ctx, end)
 		if !ok {
 			if err := ctx.Err(); err != nil {

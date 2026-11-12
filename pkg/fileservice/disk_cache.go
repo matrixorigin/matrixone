@@ -69,10 +69,11 @@ type DiskCache struct {
 	objectSplit          objectSplitConfig
 	prefetched           prefetchedObjects
 	// downloadConns counts the object-storage connections whole-object downloads hold,
-	// at most maxDownloadConns, or half the default connection pool when that is 0.
-	downloadConns    atomic.Int64
-	maxDownloadConns int64
-	prefetchFlights  prefetchFlights
+	// at most maxDownloadConns when set, or else half the default connection pool.
+	downloadConns       atomic.Int64
+	maxDownloadConns    int64
+	maxDownloadConnsSet bool
+	prefetchFlights     prefetchFlights
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -97,6 +98,11 @@ type DiskCache struct {
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
+	// afterPublicationClaim is a test-only phase barrier between a file's publication
+	// claim and its caching.
+	afterPublicationClaim func()
+	// afterFilePublication is a test-only phase barrier after a file is cached.
+	afterFilePublication func()
 	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
 	beforeCacheDirFileOpen func()
 	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
@@ -797,11 +803,11 @@ func (d *DiskCache) updateEntry(
 	entry IOEntry,
 	onWritten []OnDiskCacheWrittenFunc,
 ) error {
-	written, err := d.writeEntry(ctx, diskPath, entry, nil)
+	live := func() bool { return ctx.Err() == nil }
+	written, err := d.publishUnlessDeleted(filePath, entry, live, func(claim func() bool) (bool, error) {
+		return d.writeEntry(ctx, diskPath, entry, claim)
+	})
 	if err != nil || !written {
-		return err
-	}
-	if retracted, err := d.retractDeleted(ctx, filePath, diskPath, entry); retracted || err != nil {
 		return err
 	}
 	for _, fn := range onWritten {
@@ -1145,6 +1151,9 @@ func (d *DiskCache) finalizeFile(
 	} else if err := ctx.Err(); err != nil {
 		return err
 	}
+	if d.afterPublicationClaim != nil {
+		d.afterPublicationClaim()
+	}
 	if err := os.Rename(tempPath, diskPath); err != nil {
 		return err
 	}
@@ -1159,6 +1168,9 @@ func (d *DiskCache) finalizeFile(
 		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+	}
+	if d.afterFilePublication != nil {
+		d.afterFilePublication()
 	}
 
 	return nil

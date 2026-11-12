@@ -15,13 +15,17 @@
 package fileservice
 
 import (
-	"context"
+	"hash/maphash"
 	"sync"
 	"sync/atomic"
 )
 
 // objectDeletesMax is the most deleted objects remembered; past it they are forgotten.
 const objectDeletesMax = 1 << 16
+
+// objectDeletesStripes is the number of locks the publications and deletes of objects
+// share by their disk paths.
+const objectDeletesStripes = 64
 
 // objectDeletes counts the deletes of objects, so an entry read before its object was
 // deleted is not cached after the delete.
@@ -32,14 +36,27 @@ type objectDeletes struct {
 	last map[string]uint64
 	// floor is the count when last was cleared: earlier deletes are forgotten.
 	floor uint64
+	// stripes are held shared by the publications of entries and exclusively by the
+	// counting of deletes, by object disk path.
+	stripes [objectDeletesStripes]sync.RWMutex
+}
+
+var objectDeletesSeed = maphash.MakeSeed()
+
+func (o *objectDeletes) stripe(diskPath string) *sync.RWMutex {
+	return &o.stripes[maphash.String(objectDeletesSeed, diskPath)%objectDeletesStripes]
 }
 
 func (o *objectDeletes) now() uint64 {
 	return o.count.Load()
 }
 
-// deleted counts a delete of the object at diskPath.
+// deleted counts a delete of the object at diskPath, after the publications of its
+// entries under way end.
 func (o *objectDeletes) deleted(diskPath string) {
+	stripe := o.stripe(diskPath)
+	stripe.Lock()
+	defer stripe.Unlock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if len(o.last) >= objectDeletesMax {
@@ -71,20 +88,40 @@ func (d *DiskCache) readDeletes() uint64 {
 	return d.deletes.now() + 1
 }
 
-// retractDeleted removes the entry just cached at diskPath, and reports so, when the
-// object at filePath was deleted after the entry was read. A delete counted before the
-// check removes the entry here; one counted after it finds the entry among the object's
-// cached files.
-func (d *DiskCache) retractDeleted(ctx context.Context, filePath, diskPath string, entry IOEntry) (bool, error) {
+// publishUnlessDeleted runs write, which caches entry once the claim it is given holds,
+// with a claim that also fails when the object at filePath was deleted after the entry
+// was read. A delete is counted after the publications claimed end, so its removal of the
+// object's cached files finds them.
+func (d *DiskCache) publishUnlessDeleted(
+	filePath string,
+	entry IOEntry,
+	claim func() bool,
+	write func(claim func() bool) (bool, error),
+) (bool, error) {
 	if entry.readDeletes == 0 {
-		return false, nil
+		return write(claim)
 	}
 	path, err := ParsePath(filePath)
 	if err != nil {
+		return write(claim)
+	}
+	objectPath := d.pathForFile(path.File)
+	stripe := d.deletes.stripe(objectPath)
+	locked, deleted := false, false
+	written, err := write(func() bool {
+		if claim != nil && !claim() {
+			return false
+		}
+		stripe.RLock()
+		locked = true
+		deleted = d.deletes.since(objectPath, entry.readDeletes-1)
+		return !deleted
+	})
+	if locked {
+		stripe.RUnlock()
+	}
+	if deleted {
 		return false, nil
 	}
-	if !d.deletes.since(d.pathForFile(path.File), entry.readDeletes-1) {
-		return false, nil
-	}
-	return true, d.removeRangeFile(ctx, diskPath)
+	return written, err
 }

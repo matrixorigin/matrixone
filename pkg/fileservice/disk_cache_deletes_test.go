@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -251,4 +252,55 @@ func TestColumnReadJoinsRangeDownload(t *testing.T) {
 	require.Equal(t, int64(1), storage.reads.Load(), "one read of object storage")
 	require.Equal(t, data[200:210], readRangeOf(t, fs, ColumnPrefetch, 200, 10))
 	require.Equal(t, int64(1), storage.reads.Load(), "served from the cached range")
+}
+
+// An entry read before a delete is never found by a read after the delete returns: a
+// delete before its publication is claimed refuses it, and one after waits for the
+// publication to end and removes the entry.
+func TestDeleteWaitsForPublicationOfEarlierRead(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		for _, claimed := range []bool{false, true} {
+			fs, _, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
+			d := fs.diskCache
+			ctx := context.Background()
+			key := d.rangeObjectKey("object")
+			entry := IOEntry{Offset: 100, Size: 10, Data: slices.Clone(data[100:110]), readDeletes: d.readDeletes()}
+
+			deleted := make(chan struct{})
+			var deleteErr error
+			deleteObject := func() { defer close(deleted); deleteErr = d.DeletePaths(ctx, []string{"object"}) }
+			var published, seenAfterDelete atomic.Bool
+			if claimed {
+				d.afterPublicationClaim = func() {
+					go deleteObject()
+					select {
+					case <-deleted:
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				d.afterFilePublication = func() {
+					published.Store(true)
+					select {
+					case <-deleted:
+						if _, cached := d.ranges.covering(key, 100, 10); cached {
+							seenAfterDelete.Store(true)
+						}
+					default:
+					}
+				}
+			} else {
+				d.beforeFilePublication = deleteObject
+				d.afterFilePublication = func() { published.Store(true) }
+			}
+			require.NoError(t, d.Update(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{entry}}, async))
+			d.flushAsyncUpdates(ctx)
+			<-deleted
+			require.NoError(t, deleteErr)
+
+			require.Equal(t, claimed, published.Load(), "async %v claimed %v", async, claimed)
+			require.False(t, seenAfterDelete.Load(), "a read after the delete found the entry, async %v", async)
+			_, cached := d.ranges.covering(key, 100, 10)
+			require.False(t, cached, "async %v claimed %v", async, claimed)
+		}
+	}
 }
