@@ -319,15 +319,18 @@ func TestDiskCacheReportsGroupThrashing(t *testing.T) {
 
 	content := bytes.Repeat([]byte("x"), fileSize)
 	for i := 0; i < 40 && !cache.preloads.narrowRead("probe", 1, roomFor); i++ {
-		name := fmt.Sprintf("obj%d", i)
-		cache.preloads.narrowRead(cache.pathForFile(name), 1, roomFor)
-		require.NoError(t, cache.SetFile(ctx, name, func(context.Context) (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(content)), nil
-		}))
-		vec := &IOVector{FilePath: name, Entries: []IOEntry{{Offset: 0, Size: 16}}}
-		require.NoError(t, cache.Read(ctx, vec))
-		require.True(t, vec.Entries[0].done)
-		cache.Evict(ctx, nil)
+		func() {
+			name := fmt.Sprintf("obj%d", i)
+			cache.preloads.narrowRead(cache.pathForFile(name), 1, roomFor)
+			require.NoError(t, cache.SetFile(ctx, name, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(content)), nil
+			}))
+			vec := &IOVector{FilePath: name, Entries: []IOEntry{{Offset: 0, Size: 16}}}
+			defer vec.Release()
+			require.NoError(t, cache.Read(ctx, vec))
+			require.True(t, vec.Entries[0].done)
+			cache.Evict(ctx, nil)
+		}()
 	}
 	require.True(t, cache.preloads.narrowRead("probe", 1, roomFor))
 	require.False(t, cache.preloads.narrowRead("probe", 2, roomFor))
