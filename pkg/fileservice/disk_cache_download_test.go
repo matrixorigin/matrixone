@@ -172,17 +172,17 @@ func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
 	rangeReadsCost(t, 20*time.Millisecond)
 	cache, pw, filled := downloading(t)
-	pending := readRange(context.Background(), cache, 1, 3)
+	pending := readRange(context.Background(), cache, 12, 3)
 	t0 := time.Now()
-	for _, b := range []byte("hello") {
-		time.Sleep(downloadStallMin * 9 / 10)
+	for _, b := range []byte("0123456789abcdef") {
+		time.Sleep(downloadStallMin / 4)
 		_, err := pw.Write([]byte{b})
 		require.NoError(t, err)
 	}
 	vec := waitVector(t, pending)
 	require.Greater(t, time.Since(t0), 20*time.Millisecond+cache.downloadMaxExtraWait, "past the budget")
 	require.True(t, vec.Entries[0].done)
-	require.Equal(t, []byte("ell"), vec.Entries[0].Data)
+	require.Equal(t, []byte("cde"), vec.Entries[0].Data)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 }
