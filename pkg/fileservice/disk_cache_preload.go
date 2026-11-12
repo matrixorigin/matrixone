@@ -38,7 +38,7 @@ const (
 	preloadUsageMoreSamples = 16
 	preloadUnusedShare      = 0.1
 	preloadThrashingShare   = 0.4
-	// preloadUsageWeight is the weight of the newest eviction in the moving average.
+	// preloadUsageWeight is the weight of the most recently completed sample.
 	preloadUsageWeight = 0.2
 	// A group's thrashing ends after its quiet period without an eviction of its
 	// whole-object files, once another whole object fits in the disk cache. The
@@ -74,6 +74,7 @@ func GetPreloadGroup(ctx context.Context) uint64 {
 type groupUsage struct {
 	average   float64
 	samples   int
+	epoch     uint64
 	thrashing bool
 	lastEvict time.Time     // last eviction of one of the group's whole-object files
 	ended     time.Time     // when thrashing last ended
@@ -83,12 +84,12 @@ type groupUsage struct {
 // preloadUsage records the share of each whole-object disk-cache file that is read
 // before the file is evicted, and reports per group whether that share is low.
 type pendingPreloadRemoval struct {
-	path     string
-	size     int64
-	served   int64
-	group    uint64
-	hasGroup bool
-	skip     bool
+	size      int64
+	served    int64
+	group     uint64
+	usage     *groupUsage
+	epoch     uint64
+	evictedAt time.Time
 }
 
 // preloadUsage records the share of each whole-object disk-cache file that is read
@@ -183,11 +184,6 @@ func (p *preloadUsage) deleted(diskPath string) {
 	delete(p.served, diskPath)
 	delete(p.objects, diskPath)
 	delete(p.downloads, diskPath)
-	for _, pending := range p.pending {
-		if pending.path == diskPath {
-			pending.skip = true
-		}
-	}
 	p.deleting[diskPath] = struct{}{}
 	p.mu.Unlock()
 }
@@ -223,17 +219,21 @@ func (p *preloadUsage) prepareRemoval(diskPath string, size int64) *objectDownlo
 	delete(p.objects, diskPath)
 	o := p.downloads[diskPath]
 	delete(p.downloads, diskPath)
-	if o == nil {
-		if hasGroup {
-			p.recordRemoval(served, size, group)
-		}
-		return nil
-	}
 	if !hasGroup || size <= 0 {
 		return nil
 	}
+	evictedAt := p.now()
+	usage := p.observeEviction(group, evictedAt)
+	if usage == nil {
+		return nil
+	}
+	if o == nil {
+		p.recordRemoval(usage, served, size, group, evictedAt)
+		return nil
+	}
 	p.pending[o] = &pendingPreloadRemoval{
-		path: diskPath, size: size, served: served, group: group, hasGroup: hasGroup,
+		size: size, served: served, group: group, usage: usage,
+		epoch: usage.epoch, evictedAt: evictedAt,
 	}
 	return o
 }
@@ -243,40 +243,45 @@ func (p *preloadUsage) finishRemoval(o *objectDownload) {
 	defer p.mu.Unlock()
 	pending := p.pending[o]
 	delete(p.pending, o)
-	if pending == nil || pending.skip || !pending.hasGroup {
+	if pending == nil || p.groups[pending.group] != pending.usage || pending.usage.epoch != pending.epoch {
 		return
 	}
-	p.recordRemoval(pending.served, pending.size, pending.group)
+	p.recordRemoval(pending.usage, pending.served, pending.size, pending.group, pending.evictedAt)
 }
 
-// recordRemoval records one final read-share sample; p.mu must be held.
-func (p *preloadUsage) recordRemoval(served, size int64, group uint64) {
-	if size <= 0 {
-		return
-	}
-	now := p.now()
-	share := min(float64(served)/float64(size), 1)
+// observeEviction records when the eviction happened, even if its sample must
+// wait for an admitted reader. p.mu must be held.
+func (p *preloadUsage) observeEviction(group uint64, at time.Time) *groupUsage {
 	g := p.groups[group]
 	if g == nil {
 		if len(p.groups) >= preloadGroupsMax {
-			p.forgetIdleGroups(now)
+			p.forgetIdleGroups(at)
 			if len(p.groups) >= preloadGroupsMax {
-				return
+				return nil
 			}
 		}
-		g = &groupUsage{average: share, quiet: preloadQuietPeriod}
+		g = &groupUsage{quiet: preloadQuietPeriod}
 		p.groups[group] = g
-	} else if g.samples == 0 {
+	}
+	if at.After(g.lastEvict) {
+		g.lastEvict = at
+	}
+	return g
+}
+
+// recordRemoval records one final read-share sample; p.mu must be held.
+func (p *preloadUsage) recordRemoval(g *groupUsage, served, size int64, group uint64, at time.Time) {
+	share := min(float64(served)/float64(size), 1)
+	if g.samples == 0 {
 		g.average = share
 	} else {
 		g.average = (1-preloadUsageWeight)*g.average + preloadUsageWeight*share
 	}
 	g.samples++
-	g.lastEvict = now
 	if !g.thrashing && (g.samples >= preloadUsageMinSamples && g.average < preloadUnusedShare ||
 		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) {
 		g.thrashing = true
-		if !g.ended.IsZero() && now.Sub(g.ended) < 2*g.quiet {
+		if !g.ended.IsZero() && at.Sub(g.ended) < 2*g.quiet {
 			g.quiet = min(2*g.quiet, preloadQuietPeriodMax)
 		} else {
 			g.quiet = preloadQuietPeriod
@@ -329,6 +334,7 @@ func (p *preloadUsage) narrowRead(diskPath string, group uint64, fits func() boo
 		g.thrashing = false
 		g.ended = now
 		g.samples = 0
+		g.epoch++
 		logutil.Info("disk cache: no eviction of a group's whole-object files for the quiet period and room for one, they fit again",
 			zap.Uint64("group", group),
 			zap.Duration("quiet-period", g.quiet),

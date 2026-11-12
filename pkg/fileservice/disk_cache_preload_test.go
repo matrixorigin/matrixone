@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,6 +209,98 @@ func TestPreloadUsageExplicitDeleteIsNotEviction(t *testing.T) {
 	clock.t = clock.t.Add(preloadQuietPeriod/2 + time.Second)
 	require.Equal(t, preloadQuietPeriod, p.groups[1].quiet)
 	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
+}
+
+func pendingPreloadSample(t *testing.T, p *preloadUsage, group uint64, path string) (*objectDownload, func()) {
+	t.Helper()
+	p.narrowRead(path, group, roomFor)
+	o := newPreloadGeneration(t, p, path, []byte("abc"))
+	p.readDownload(path, o, o.takeServed())
+	_, ok := o.acquire()
+	require.True(t, ok)
+	release := sync.OnceFunc(o.release)
+	t.Cleanup(release)
+	p.removed(path, 100)
+	return o, release
+}
+
+func TestPreloadUsageDeferredEvictionUsesEventTime(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	for i := 0; i < preloadUsageMinSamples-1; i++ {
+		evict(p, 7, i, 0, 100)
+	}
+	_, release := pendingPreloadSample(t, p, 7, "/cache/001/full-deferred.mofscache")
+	evictedAt := clock.t
+	clock.t = clock.t.Add(time.Hour)
+	release()
+	require.Equal(t, evictedAt, p.groups[7].lastEvict)
+	require.False(t, p.narrowRead("/cache/probe", 7, roomFor), "an old eviction must not start a fresh quiet period")
+}
+
+func TestPreloadUsagePendingEvictionSurvivesUntilQuietReset(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	for i := 0; i < preloadUsageMinSamples; i++ {
+		evict(p, 7, i, 0, 100)
+	}
+	start := clock.t
+	require.True(t, p.narrowRead("/cache/probe", 7, roomFor))
+	clock.t = clock.t.Add(preloadQuietPeriod / 2)
+	o, release := pendingPreloadSample(t, p, 7, "/cache/001/full-pending.mofscache")
+	evictedAt := clock.t
+	clock.t = start.Add(preloadQuietPeriod + time.Second)
+	require.True(t, p.narrowRead("/cache/probe", 7, roomFor), "the pending eviction extends the quiet period")
+	clock.t = evictedAt.Add(preloadQuietPeriod + time.Second)
+	require.False(t, p.narrowRead("/cache/probe", 7, roomFor))
+	o.serve(8)
+	release()
+	require.Zero(t, p.groups[7].samples, "an old sample must not seed a reset epoch")
+	require.Equal(t, evictedAt, p.groups[7].lastEvict)
+	require.Empty(t, p.pending)
+}
+
+func TestPreloadUsageDeferredSamplesCompleteOutOfOrder(t *testing.T) {
+	for _, sameTime := range []bool{false, true} {
+		name := "different times"
+		if sameTime {
+			name = "same time"
+		}
+		t.Run(name, func(t *testing.T) {
+			p, clock := newTestPreloadUsage()
+			_, releaseOld := pendingPreloadSample(t, p, 7, "/cache/001/full-old.mofscache")
+			if !sameTime {
+				clock.t = clock.t.Add(time.Second)
+			}
+			newer, releaseNew := pendingPreloadSample(t, p, 7, "/cache/001/full-new.mofscache")
+			newestEviction := clock.t
+			newer.serve(100)
+			releaseNew()
+			releaseOld()
+			require.Equal(t, 2, p.groups[7].samples)
+			require.InDelta(t, 1-preloadUsageWeight, p.groups[7].average, 1e-9)
+			require.Equal(t, newestEviction, p.groups[7].lastEvict)
+			require.Empty(t, p.pending)
+		})
+	}
+}
+
+func TestPreloadUsageDeferredSampleDoesNotReviveForgottenGroup(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	_, release := pendingPreloadSample(t, p, 7, "/cache/001/full-old.mofscache")
+	oldGroup := p.groups[7]
+	clock.t = clock.t.Add(2*preloadQuietPeriod + time.Second)
+	p.mu.Lock()
+	p.forgetIdleGroups(clock.t)
+	p.mu.Unlock()
+	require.NotContains(t, p.groups, uint64(7))
+	evict(p, 7, 1, 100, 100)
+	current := p.groups[7]
+	require.NotSame(t, oldGroup, current)
+	release()
+	require.Same(t, current, p.groups[7])
+	require.Equal(t, 1, current.samples)
+	require.Equal(t, 1.0, current.average)
+	require.Equal(t, clock.t, current.lastEvict)
+	require.Empty(t, p.pending)
 }
 
 func TestPreloadUsageNoGroup(t *testing.T) {
