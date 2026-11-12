@@ -19,8 +19,10 @@ import (
 	"math/rand"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -233,8 +236,38 @@ func TestTruncate(t *testing.T) {
 // 8. append 2 entries for group GroupUserTxn
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
-	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	backend, baseFactory := logservicedriver.NewMockServiceAndClientFactory()
+	requests := make(chan checkpointTruncateRequest, 2)
+	abort := make(chan struct{})
+	clientFactory := func() (logservice.Client, error) {
+		client, err := baseFactory()
+		return checkpointTruncateClient{Client: client, requests: requests, abort: abort}, err
+	}
 	wal := NewLogserviceHandle(clientFactory)
+	t.Cleanup(func() { assert.NoError(t, wal.Close()) })
+	// Release blocked remote calls before closing the WAL on a fatal assertion.
+	t.Cleanup(func() { close(abort) })
+	waitTruncate := func(previous uint64) uint64 {
+		t.Helper()
+		var request checkpointTruncateRequest
+		select {
+		case request = <-requests:
+		case <-time.After(4 * time.Second):
+			t.Fatal("remote truncation was not requested")
+		}
+		// The intent is already visible, but the remote operation is held.
+		truncated, err := backend.GetTruncatedLsn(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, previous, truncated)
+		require.Greater(t, request.psn, previous)
+		close(request.release)
+		require.Eventually(t, func() bool {
+			truncated, err = backend.GetTruncatedLsn(context.Background())
+			return err != nil || truncated >= request.psn
+		}, 4*time.Second, 10*time.Millisecond, "remote truncation did not reach checkpoint PSN %d", request.psn)
+		require.NoError(t, err)
+		return truncated
+	}
 	replayHandle := func(
 		group uint32,
 		commitId uint64,
@@ -296,6 +329,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 		return wal.GetTruncated() == uint64(5)
 	})
 	assert.Equal(t, uint64(5), wal.GetTruncated())
+	firstTruncate := waitTruncate(0)
 
 	for _, group := range groups[:2] {
 		for i := 0; i < 2; i++ {
@@ -328,6 +362,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 		return wal.GetTruncated() == uint64(8)
 	})
 	assert.Equal(t, uint64(8), wal.GetTruncated())
+	waitTruncate(firstTruncate)
 
 	for _, group := range groups[:1] {
 		for i := 0; i < 2; i++ {
@@ -351,10 +386,9 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	_, err = wal.RangeCheckpoint(0, 3)
 	assert.ErrorIs(t, err, ErrStaleCheckpointIntent)
 
-	wal.Close()
+	require.NoError(t, wal.Close())
 
 	wal = NewLogserviceHandle(clientFactory)
-	defer wal.Close()
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)
 	assert.NoError(t, err)
@@ -365,4 +399,36 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	assert.Equal(t, map[uint64]uint64{6: 9, 7: 13, 8: 14}, wal.lsn2dsn.mapping[11])
 	assert.Equal(t, map[uint64]uint64{3: 10, 4: 11}, wal.lsn2dsn.mapping[200000])
 
+}
+
+// Gate real mock-client Truncate calls so the replay precondition cannot pass
+// solely because truncation happens to finish before the intent is observed.
+type checkpointTruncateRequest struct {
+	psn     uint64
+	release chan struct{}
+}
+
+type checkpointTruncateClient struct {
+	logservice.Client
+	requests chan<- checkpointTruncateRequest
+	abort    <-chan struct{}
+}
+
+func (c checkpointTruncateClient) Truncate(ctx context.Context, psn uint64) error {
+	r := checkpointTruncateRequest{psn: psn, release: make(chan struct{})}
+	select {
+	case c.requests <- r:
+	case <-c.abort:
+		return context.Canceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-r.release:
+		return c.Client.Truncate(ctx, psn)
+	case <-c.abort:
+		return context.Canceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

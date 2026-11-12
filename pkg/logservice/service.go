@@ -19,6 +19,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,7 +45,8 @@ import (
 )
 
 const (
-	LogServiceRPCName = "logservice-server"
+	LogServiceRPCName      = "logservice-server"
+	serviceStartupAttempts = 8
 )
 
 type Lsn = uint64
@@ -222,24 +224,27 @@ func NewService(
 }
 
 // NewServiceWithRetry mainly used in tests which create new service.
-// If an error occurred and the error is syscall.EADDRINUSE, retry to
-// create a new service instance.
+// It retries bind conflicts with a fresh configuration, up to eight attempts.
+// Other startup errors are returned immediately.
 func NewServiceWithRetry(
 	genCfg func() Config,
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
 	opts ...Option,
 ) (*Service, error) {
-	for {
-		s, err := NewService(genCfg(), fileService, shutdownC, opts...)
-		if err != nil {
-			if strings.Contains(err.Error(), "address already in use") {
-				continue
-			}
+	var err error
+	for attempt := 0; attempt < serviceStartupAttempts; attempt++ {
+		var s *Service
+		s, err = NewService(genCfg(), fileService, shutdownC, opts...)
+		if err == nil {
+			return s, nil
+		}
+		// Memberlist wraps its bind errors as text, without an Unwrap method.
+		if !strings.Contains(err.Error(), "address already in use") {
 			return nil, err
 		}
-		return s, nil
 	}
+	return nil, errors.Join(moerr.NewInternalErrorNoCtxf("log service startup failed after %d bind conflicts", serviceStartupAttempts), err)
 }
 
 func (s *Service) Start() error {

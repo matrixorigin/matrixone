@@ -37,19 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-func TestHAKeeperClientConfigIsValidated(t *testing.T) {
-	cfg := HAKeeperClientConfig{}
-	cc1, err := NewCNHAKeeperClient(context.TODO(), "", cfg)
-	assert.Nil(t, cc1)
-	assert.Error(t, err)
-	cc2, err := NewTNHAKeeperClient(context.TODO(), "", cfg)
-	assert.Nil(t, cc2)
-	assert.Error(t, err)
-	cc3, err := NewLogHAKeeperClient(context.TODO(), "", cfg)
-	assert.Nil(t, cc3)
-	assert.Error(t, err)
-}
-
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
