@@ -538,7 +538,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		// partitioned FULLTEXT UPDATE can rebuild the hidden rows after a PK move.
 		if stmt.HasReturning() && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
 			for _, idxDef := range inlineIrregularIndexes[i] {
-				if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+				p, ok := indexplugin.Get(idxDef.IndexAlgo)
+				if !ok {
+					continue
+				}
+				hook, ok := p.Plan().(planplugin.UpdatePrimaryKeyHook)
+				if ok && !hook.SupportsPrimaryKeyUpdate(tableDef, true) {
 					return 0, returningNotSupported(builder, "primary-key UPDATE on synchronous full-text/vector index")
 				}
 			}
@@ -5090,14 +5095,6 @@ func classifyIrregularIndexesForUpdate(
 	}
 
 	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
-	updatedCols := make(map[string]struct{}, len(updateCols))
-	for colName := range updateCols {
-		updatedCols[colName] = struct{}{}
-	}
-	partitionUpdated, err := partitionColumnsUpdated(tableDef, updatedCols)
-	if err != nil {
-		return nil, false, err
-	}
 	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
@@ -5106,9 +5103,6 @@ func classifyIrregularIndexesForUpdate(
 		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
 		if err != nil {
 			return nil, false, err
-		}
-		if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) && (partitionUpdated || pkUpdated) {
-			affected = true
 		}
 
 		p, ok := indexplugin.Get(idxDef.IndexAlgo)
@@ -5135,7 +5129,8 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated && (!catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) || !features.IsPartitioned(tableDef.FeatureFlag)) {
+		pkHook, supportsPKUpdate := p.Plan().(planplugin.UpdatePrimaryKeyHook)
+		if pkUpdated && (!supportsPKUpdate || !pkHook.SupportsPrimaryKeyUpdate(tableDef, false)) {
 			return nil, false, newUpdatePlannerRouteError(
 				updatePlannerRejected,
 				updateRouteReasonIrregularIndex,

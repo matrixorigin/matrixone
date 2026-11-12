@@ -30,15 +30,105 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // Compile-time interface check.
 var _ planplugin.Hooks = Hooks{}
 var _ planplugin.DMLMaintenanceNoOpHook = Hooks{}
+var _ planplugin.UpdateColumnRewriteHook = Hooks{}
+var _ planplugin.UpdatePrimaryKeyHook = Hooks{}
 
 // Hooks implements plugin/plan.Hooks for fulltext indexes.
 type Hooks struct{}
+
+// UpdateColumnRequiresIndexRewrite declares the source identity and parent
+// partition dependencies of the posting rows. Indexed text columns are
+// handled by the shared index-part dependency check.
+func (Hooks) UpdateColumnRequiresIndexRewrite(tableDef *plan.TableDef, _ *plan.IndexDef, colName string) (bool, error) {
+	if tableDef == nil {
+		return false, nil
+	}
+	columnName := func(name string) string {
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[dot+1:]
+		}
+		return strings.ToLower(catalog.ResolveAlias(name))
+	}
+	changed := columnName(colName)
+	if changed == "" {
+		return false, nil
+	}
+	if pk := tableDef.Pkey; pk != nil {
+		for _, name := range pk.Names {
+			if columnName(name) == changed {
+				return true, nil
+			}
+		}
+		if pk.PkeyColName != "" && pk.PkeyColName != catalog.CPrimaryKeyColName && columnName(pk.PkeyColName) == changed {
+			return true, nil
+		}
+	}
+	if tableDef.Partition == nil {
+		return false, nil
+	}
+
+	matched := false
+	visited := make(map[int32]bool)
+	var visit func(*plan.Expr) error
+	visit = func(expr *plan.Expr) error {
+		return plan.VisitExprTree(expr, func(current *plan.Expr) error {
+			if matched {
+				return nil
+			}
+			ref := current.GetCol()
+			if ref == nil {
+				return nil
+			}
+			name := columnName(ref.Name)
+			if name != "" && name == changed {
+				matched = true
+				return nil
+			}
+			pos, ok := tableDef.Name2ColIndex[name]
+			if !ok {
+				pos = ref.ColPos
+			}
+			if pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+				return moerr.NewInternalErrorNoCtxf("invalid fulltext partition dependency %q at position %d", ref.Name, ref.ColPos)
+			}
+			col := tableDef.Cols[pos]
+			if columnName(col.Name) == changed {
+				matched = true
+				return nil
+			}
+			if col.GeneratedCol != nil && !visited[pos] {
+				visited[pos] = true
+				return visit(col.GeneratedCol.Expr)
+			}
+			return nil
+		})
+	}
+	for _, partition := range tableDef.Partition.PartitionDefs {
+		if partition == nil {
+			continue
+		}
+		if err := visit(partition.Def); err != nil {
+			return false, err
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// The existing inline route can move a fulltext document key only for a
+// partitioned table; non-partitioned and RETURNING updates remain rejected.
+func (Hooks) SupportsPrimaryKeyUpdate(tableDef *plan.TableDef, returning bool) bool {
+	return tableDef != nil && features.IsPartitioned(tableDef.FeatureFlag) && !returning
+}
 
 // DMLMaintenanceNoOpColumns declares when an old fulltext posting set is
 // provably identical to the final one. FULLTEXT input includes the row
