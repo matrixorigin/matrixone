@@ -70,6 +70,17 @@ func replayKeyEqual(a, b replayColumnKey) bool {
 // consumeReplayColumns owns every batch in bs, including on error. Windows borrow
 // from a source batch and never survive its cleanup; carry owns only one table.
 func consumeReplayColumns(ctx context.Context, bs []*batch.Batch, mp *mpool.MPool, ts types.TS, insert func(*batch.Batch)) error {
+	return consumeReplayColumnsWithFaults(ctx, bs, mp, ts, insert, nil, nil)
+}
+
+// copyWindow is scoped to one invocation and permits testing a partially copied carry.
+func consumeReplayColumnsWithFaults(ctx context.Context, bs []*batch.Batch, mp *mpool.MPool, ts types.TS, insert func(*batch.Batch), copyWindow func(*batch.Batch, *batch.Batch, int, int, *mpool.MPool) error, appendTS func(*vector.Vector, types.TS, *mpool.MPool) error) error {
+	copyCarry := func(dst, src *batch.Batch, offset, count int) error {
+		if copyWindow != nil {
+			return copyWindow(dst, src, offset, count, mp)
+		}
+		return dst.UnionWindow(src, offset, count, mp)
+	}
 	next := 0
 	defer func() {
 		for _, b := range bs[next:] {
@@ -126,7 +137,7 @@ func consumeReplayColumns(ctx context.Context, bs []*batch.Batch, mp *mpool.MPoo
 			next = i + 1
 			continue
 		}
-		if err := fillTsVecForSysTableQueryBatch(b, ts, mp); err != nil {
+		if err := fillTsVecForSysTableQueryBatchWithAppend(b, ts, mp, appendTS); err != nil {
 			return err
 		}
 		rows := b.RowCount()
@@ -142,7 +153,7 @@ func consumeReplayColumns(ctx context.Context, bs []*batch.Batch, mp *mpool.MPoo
 					}
 				}
 			}
-			if err := carry.UnionWindow(b, 0, end, mp); err != nil {
+			if err := copyCarry(carry, b, 0, end); err != nil {
 				return err
 			}
 			start = end
@@ -199,7 +210,7 @@ func consumeReplayColumns(ctx context.Context, bs []*batch.Batch, mp *mpool.MPoo
 					carry.Vecs[j] = vector.NewVec(*v.GetType())
 				}
 			}
-			if err := carry.UnionWindow(b, tail, rows-tail, mp); err != nil {
+			if err := copyCarry(carry, b, tail, rows-tail); err != nil {
 				return err
 			}
 		} else if carry != nil {

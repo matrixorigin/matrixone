@@ -15,6 +15,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -230,4 +231,48 @@ func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 2, 2, 3}, inserted)
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestReplayPartialCopyFailure verifies the cleanup owners after a failure has
+// already allocated data, rather than relying on a pool limit for heap vectors.
+func TestReplayPartialCopyFailure(t *testing.T) {
+	injected := errors.New("injected allocation failure")
+	t.Run("timestamp", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 1), replayTestBatch(t, mp, 2)}
+		beforeHeap := mp.OnHeapCurrNB()
+		calls := 0
+		err := consumeReplayColumnsWithFaults(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) {
+			t.Fatal("incomplete timestamp was inserted")
+		}, nil, func(v *vector.Vector, ts types.TS, mp *mpool.MPool) error {
+			calls++
+			if calls == 2 {
+				require.Greater(t, mp.OnHeapCurrNB(), beforeHeap)
+				return injected
+			}
+			return vector.AppendFixed(v, ts, false, mp)
+		})
+		require.ErrorIs(t, err, injected)
+		require.Equal(t, 2, calls)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
+	t.Run("carry", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		bs := []*batch.Batch{replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)}
+		called := false
+		err := consumeReplayColumnsWithFaults(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) {
+			t.Fatal("partial carry was inserted")
+		}, func(dst, src *batch.Batch, offset, count int, mp *mpool.MPool) error {
+			called = true
+			before := mp.OnHeapCurrNB()
+			require.NoError(t, dst.Vecs[0].UnionBatch(src.Vecs[0], int64(offset), count, nil, mp))
+			require.Greater(t, mp.OnHeapCurrNB(), before)
+			return injected
+		}, nil)
+		require.ErrorIs(t, err, injected)
+		require.True(t, called)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
 }
