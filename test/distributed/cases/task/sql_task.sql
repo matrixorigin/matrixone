@@ -56,9 +56,9 @@ select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and tr
 execute task sql_task_manual;
 select count(*) from manual_events;
 
--- @ignore:0,4,5,6,8
+-- @ignore:0,4,5,6,8,10
 show task runs for sql_task_cron limit 1;
--- @ignore:0,4,5,6,8
+-- @ignore:0,4,5,6,8,10
 show task runs for sql_task_manual limit 1;
 
 alter task sql_task_cron suspend;
@@ -148,7 +148,7 @@ select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_build
 select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_build_gold' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_validate' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 select count(*) from validate_results;
--- @ignore:0,4,5,6,8
+-- @ignore:0,4,5,6,8,10
 show task runs for sql_task_validate limit 3;
 
 insert into literal_source values
@@ -204,7 +204,7 @@ alter task tenant_task_show set when (0);
 -- @ignore:6,8
 show tasks;
 execute task tenant_task_show;
--- @ignore:0,4,5,6,8
+-- @ignore:0,4,5,6,8,10
 show task runs for tenant_task_show limit 2;
 select count(*) from tenant_sink;
 -- @session

@@ -107,6 +107,7 @@ func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
 	registry.MustRegister(taskCheckpointRetryCounter)
+	registry.MustRegister(sqlTaskControlFailureCounter, sqlTaskPendingGauge)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
