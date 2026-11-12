@@ -102,10 +102,13 @@ func (builder *QueryBuilder) pushGroupedSumSide(
 	if !ok || len(join.OnList) != len(pk) {
 		return 0, false
 	}
-	for _, pred := range dim.FilterList {
-		if !isTruncationSafePredicateExpr(pred) {
-			return 0, false
-		}
+	// A blocking partial aggregate can change which join input is built first.
+	// Prove both complete inputs total: an empty build used to skip the other
+	// input's predicates/projections, not just the SUM argument. Statistics may
+	// choose profitability but cannot prove those evaluations safe.
+	if !builder.scalarRuntimeFilterSiblingIsSafeToSkip(fact.NodeId) ||
+		!builder.scalarRuntimeFilterSiblingIsSafeToSkip(dim.NodeId) {
+		return 0, false
 	}
 	factTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(fact.NodeId) {

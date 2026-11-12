@@ -86,7 +86,7 @@ func TestGroupedSumPushdown(t *testing.T) {
 }
 
 func TestGroupedSumPushdownRejections(t *testing.T) {
-	for _, scenario := range []string{"outer", "residual", "nonunique", "distinct", "fallible", "floating", "rollup", "no-benefit", "disabled", "shared", "shared-step"} {
+	for _, scenario := range []string{"outer", "residual", "nonunique", "distinct", "fallible", "fact-filter", "nested-fact-filter", "dimension-block-filter", "floating", "rollup", "no-benefit", "disabled", "shared", "shared-step"} {
 		t.Run(scenario, func(t *testing.T) {
 			b, root := groupedSumTestBuilder(t)
 			agg, join := b.qry.Nodes[3], b.qry.Nodes[2]
@@ -108,6 +108,28 @@ func TestGroupedSumPushdownRejections(t *testing.T) {
 				require.NoError(t, err)
 				agg.AggList[0], err = BindFuncExprImplByPlanExpr(b.GetContext(), "sum", []*plan.Expr{division})
 				require.NoError(t, err)
+			case "fact-filter", "nested-fact-filter", "dimension-block-filter":
+				scan := b.qry.Nodes[0]
+				if scenario == "dimension-block-filter" {
+					scan = b.qry.Nodes[1]
+				}
+				text := plan.Type{Id: int32(types.T_varchar), Width: 20}
+				scan.TableDef.Cols = append(scan.TableDef.Cols, &plan.ColDef{Name: "s", Typ: text})
+				cast, err := appendCastBeforeExpr(b.GetContext(), GetColExpr(text, scan.BindingTags[0], 2), plan.Type{Id: int32(types.T_int64)})
+				require.NoError(t, err)
+				predicate, err := BindFuncExprImplByPlanExpr(b.GetContext(), ">", []*plan.Expr{cast, makePlan2Int64ConstExprWithType(0)})
+				require.NoError(t, err)
+				if scenario == "dimension-block-filter" {
+					scan.BlockFilterList = []*plan.Expr{predicate}
+				} else {
+					scan.FilterList = []*plan.Expr{predicate}
+					if scenario == "nested-fact-filter" {
+						join.Children[0] = b.appendNode(&plan.Node{NodeType: plan.Node_FILTER,
+							Children: []int32{scan.NodeId}, Stats: DeepCopyStats(scan.Stats)}, nil)
+					}
+				}
+				// This error is independent of the total DECIMAL SUM argument:
+				// changing the build input must not make it newly observable.
 			case "floating":
 				var err error
 				agg.AggList[0], err = BindFuncExprImplByPlanExpr(b.GetContext(), "sum", []*plan.Expr{
