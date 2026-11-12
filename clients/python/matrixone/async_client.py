@@ -713,7 +713,7 @@ class AsyncClient(BaseMatrixOneClient):
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="rollback",  # Never commit an abandoned borrower
             connect_args={
-                'autocommit': self._connection_params['autocommit'],
+                'autocommit': self._connection_params.get('autocommit', self.auto_commit),
                 'connect_timeout': self._connection_params['connect_timeout'],
                 **connection_options(self._connection_params.get('local_infile')),
             },
