@@ -1,0 +1,137 @@
+drop database if exists vec_search_target;
+create database vec_search_target;
+use vec_search_target;
+set experimental_ivf_index = 1;
+set experimental_hnsw_index = 1;
+create table t_ivf (id bigint primary key, v vecf32(3));
+insert into t_ivf values (1, '[1,1,1]'), (2, '[2,2,2]'), (3, '[3,3,3]');
+create index iv using ivfflat on t_ivf(v) lists = 1 op_type 'vector_l2_ops';
+create table t_hnsw (id bigint primary key, v vecf32(3));
+insert into t_hnsw select * from t_ivf;
+create index hv using hnsw on t_hnsw(v) m = 8 ef_construction = 16 op_type 'vector_l2_ops';
+explain select id, l2_distance(v, '[1,1,1]') d from t_ivf order by d limit 1;
+-- @regex("Vector Index Scan on iv", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Vector Index Scan on iv [l2_distance]  𝄀
+              Vector Index: iv, Metric: l2_distance, Candidate Limit: 1, NProbe: 5
+explain select id, l2_distance(v, '[1,1,1]') d from t_hnsw order by d limit 1;
+-- @regex("Vector Index Scan on hv", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_hnsw.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_search_target.t_hnsw  𝄀
+                    Runtime Filter Probe: t_hnsw.id  𝄀
+              ->  Vector Index Scan on hv [l2_distance]  𝄀
+                    Vector Index: hv, Metric: l2_distance, Candidate Limit: 1
+explain select id, l2_distance(v, '[1,1,1]') d from t_ivf order by d, id limit 1;
+-- @regex("Vector Index Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(t_ivf.v, [1,1,1]) INTERNAL, t_ivf.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on vec_search_target.t_ivf
+prepare p_ivf from 'select id, l2_distance(v, ?) d from t_ivf order by d limit 1';
+prepare p_hnsw from 'select id, l2_distance(v, ?) d from t_hnsw order by d limit 1';
+prepare p_scan from 'select id, l2_distance(v, ?) d from t_ivf order by d, id limit 1';
+set @q = '[1,1,1]';
+execute p_ivf using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0
+execute p_hnsw using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0
+execute p_scan using @q;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0
+set @q = '';
+execute p_ivf using @q;
+invalid input: malformed vector input: 
+execute p_hnsw using @q;
+invalid input: malformed vector input: 
+execute p_scan using @q;
+invalid input: malformed vector input: 
+set @q = 'abc';
+execute p_ivf using @q;
+invalid input: malformed vector input: abc
+execute p_hnsw using @q;
+invalid input: malformed vector input: abc
+execute p_scan using @q;
+invalid input: malformed vector input: abc
+set @q = '[1,1';
+execute p_ivf using @q;
+invalid input: malformed vector input: [1,1
+execute p_hnsw using @q;
+invalid input: malformed vector input: [1,1
+execute p_scan using @q;
+invalid input: malformed vector input: [1,1
+set @q = '[1,a,1]';
+execute p_ivf using @q;
+invalid input: error while casting a to FLOAT
+execute p_hnsw using @q;
+invalid input: error while casting a to FLOAT
+execute p_scan using @q;
+invalid input: error while casting a to FLOAT
+set @q = '[1,0]';
+execute p_ivf using @q;
+invalid input: expected vector dimension 3 != actual dimension 2.
+execute p_hnsw using @q;
+invalid input: expected vector dimension 3 != actual dimension 2.
+execute p_scan using @q;
+invalid input: vector ops between different dimensions (3, 2) is not permitted.
+set @q = '[3,3,3]';
+execute p_ivf using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+3  ¦  0.0
+execute p_hnsw using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+3  ¦  0.0
+execute p_scan using @q;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+3  ¦  0.0
+set @q = null;
+execute p_ivf using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]
+execute p_hnsw using @q;
+➤ id[-5,64,0]  ¦  d[8,9,0]
+execute p_scan using @q;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  null
+deallocate prepare p_ivf;
+deallocate prepare p_hnsw;
+deallocate prepare p_scan;
+select id from t_ivf order by l2_distance(v, cast('abc' as varchar(10))) limit 1;
+invalid input: malformed vector input: abc
+select id from t_hnsw order by l2_distance(v, cast('abc' as varchar(10))) limit 1;
+invalid input: malformed vector input: abc
+select id from t_ivf order by l2_distance(v, cast('' as varchar(10))) limit 1;
+invalid input: malformed vector input: 
+select id from t_hnsw order by l2_distance(v, cast('' as varchar(10))) limit 1;
+invalid input: malformed vector input: 
+select cast(cast('' as varchar(10)) as vecf32(3));
+invalid input: malformed vector input: 
+select cast('[1,2' as vecf64(3));
+invalid input: malformed vector input: [1,2
+select cast('[1,a,3]' as vecbf16(3));
+invalid input: error while casting a to VECBF16
+select cast('[1,2,nan]' as vecf32(3));
+invalid input: vector element cannot be NaN or Inf: NaN
+insert into t_ivf values (4, 'abc');
+invalid input: malformed vector input: abc
+insert into t_ivf values (5, '[1,2');
+invalid input: malformed vector input: [1,2
+select count(*) from t_ivf;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop database vec_search_target;
