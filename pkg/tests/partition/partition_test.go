@@ -15,7 +15,9 @@
 package partition
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 
@@ -29,10 +31,53 @@ import (
 )
 
 var (
-	once         sync.Once
-	shareCluster embed.Cluster
-	mu           sync.Mutex
+	sharedPartitionCluster partitionClusterFixture
+	mu                     sync.Mutex
 )
+
+type partitionClusterFixture struct {
+	once    sync.Once
+	cluster embed.Cluster
+	err     error
+}
+
+func (f *partitionClusterFixture) get(create func() (embed.Cluster, error)) (embed.Cluster, error) {
+	f.once.Do(func() { f.cluster, f.err = startPartitionCluster(create) })
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.cluster, nil
+}
+
+func startPartitionCluster(create func() (embed.Cluster, error)) (embed.Cluster, error) {
+	c, err := create()
+	if err != nil {
+		if c != nil {
+			if closeErr := c.Close(); closeErr != nil {
+				return c, errors.Join(err, closeErr)
+			}
+		}
+		return nil, err
+	}
+	if err = c.Start(); err != nil {
+		if closeErr := c.Close(); closeErr != nil {
+			return c, errors.Join(err, closeErr)
+		}
+		return nil, err
+	}
+	return c, nil
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedPartitionCluster.cluster != nil {
+		if err := sharedPartitionCluster.cluster.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close shared partition cluster: %v\n", err)
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
 
 func runPartitionTableCreateAndDeleteTestsWithAware(
 	t *testing.T,
@@ -167,33 +212,25 @@ func runPartitionClusterTestWithReuse(
 	mu.Lock()
 	defer mu.Unlock()
 
+	create := func() (embed.Cluster, error) {
+		opts := append([]embed.Option{embed.WithCNCount(3), embed.WithTesting()}, options...)
+		return embed.NewCluster(opts...)
+	}
 	var c embed.Cluster
-	createFunc := func() embed.Cluster {
-		options = append(
-			[]embed.Option{
-				embed.WithCNCount(3),
-				embed.WithTesting(),
-			},
-			options...,
-		)
-
-		new, err := embed.NewCluster(options...)
-		require.NoError(t, err)
-		require.NoError(t, new.Start())
-		return new
-	}
-
+	var err error
 	if reuse {
-		once.Do(
-			func() {
-				c = createFunc()
-				shareCluster = c
-			},
-		)
-		c = shareCluster
+		c, err = sharedPartitionCluster.get(create)
 	} else {
-		c = createFunc()
+		c, err = startPartitionCluster(create)
+		if c != nil {
+			defer func() {
+				if closeErr := c.Close(); closeErr != nil {
+					t.Errorf("close partition cluster: %v", closeErr)
+				}
+			}()
+		}
 	}
+	require.NoError(t, err)
 
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)

@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -233,8 +235,22 @@ func TestTruncate(t *testing.T) {
 // 8. append 2 entries for group GroupUserTxn
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
-	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	backend, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
 	wal := NewLogserviceHandle(clientFactory)
+	t.Cleanup(func() { assert.NoError(t, wal.Close()) })
+	// Each checkpoint is submitted only after the previous physical truncate
+	// completes, so the next advance corresponds to the current checkpoint.
+	waitTruncate := func(previous uint64) uint64 {
+		t.Helper()
+		var truncated uint64
+		var pollErr error
+		require.Eventually(t, func() bool {
+			truncated, pollErr = backend.GetTruncatedLsn(context.Background())
+			return pollErr != nil || truncated > previous
+		}, 4*time.Second, 10*time.Millisecond, "remote truncation did not advance")
+		require.NoError(t, pollErr)
+		return truncated
+	}
 	replayHandle := func(
 		group uint32,
 		commitId uint64,
@@ -296,6 +312,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 		return wal.GetTruncated() == uint64(5)
 	})
 	assert.Equal(t, uint64(5), wal.GetTruncated())
+	firstTruncate := waitTruncate(0)
 
 	for _, group := range groups[:2] {
 		for i := 0; i < 2; i++ {
@@ -328,6 +345,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 		return wal.GetTruncated() == uint64(8)
 	})
 	assert.Equal(t, uint64(8), wal.GetTruncated())
+	waitTruncate(firstTruncate)
 
 	for _, group := range groups[:1] {
 		for i := 0; i < 2; i++ {
@@ -351,10 +369,9 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	_, err = wal.RangeCheckpoint(0, 3)
 	assert.ErrorIs(t, err, ErrStaleCheckpointIntent)
 
-	wal.Close()
+	require.NoError(t, wal.Close())
 
 	wal = NewLogserviceHandle(clientFactory)
-	defer wal.Close()
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)
 	assert.NoError(t, err)
