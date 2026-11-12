@@ -603,10 +603,13 @@ func TestAcquirePeerTableReadSnapshotWaitsForActualApply(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("table target request was not sent")
 	}
+	require.Eventually(t, func() bool {
+		return client.receivedLogTailTime.progressWaiters.Load() > 0
+	}, 5*time.Second, time.Millisecond)
 	select {
 	case got := <-done:
 		t.Fatalf("returned before target logtail was applied: %+v", got)
-	case <-time.After(10 * time.Millisecond):
+	default:
 	}
 	for i := range client.receivedLogTailTime.tList {
 		client.receivedLogTailTime.updateTimestamp(i, frontier, time.Now())

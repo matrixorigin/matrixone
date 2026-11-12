@@ -2423,6 +2423,7 @@ const (
 type privilegeItem struct {
 	privilegeTyp          PrivilegeType
 	objType               objectType
+	viewOnly              bool
 	originViews           []string
 	directView            string
 	scanSnapshot          *plan.Snapshot
@@ -5476,6 +5477,44 @@ func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbN
 	}, true, nil
 }
 
+func isViewAdmin(account uint32, role int64) bool {
+	return (account == sysAccountID && role == moAdminRoleID) ||
+		(account != sysAccountID && role == accountAdminRoleID)
+}
+
+func viewRoleExists(ctx context.Context, bh BackgroundExec, account uint32, role int64) (bool, error) {
+	roleCtx := defines.AttachAccountId(ctx, account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(roleCtx, fmt.Sprintf("select role_id from mo_catalog.mo_role where role_id = %d;", role)); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(roleCtx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(results), nil
+}
+
+func parseViewPrivilegeEdge(ctx context.Context, key string, legacySnapshot *plan.Snapshot) (string, string, *plan.Snapshot, uint32, bool, error) {
+	database, view, snapshot, account, qualified, err := plan2.ParseViewPrivilegeKey(key)
+	if err != nil || qualified {
+		return database, view, snapshot, account, qualified, err
+	}
+	if plan2.IsStructuredViewDependencyKey(key) {
+		database, view, snapshot, err = plan2.ParseViewDependencyKey(key)
+	} else {
+		database, view = parseViewKey(key)
+		snapshot = legacySnapshot
+	}
+	if err != nil {
+		return "", "", nil, 0, false, err
+	}
+	if view == "" {
+		return "", "", nil, 0, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", key)
+	}
+	return database, view, snapshot, 0, false, nil
+}
+
 // resolveViewChainPrivilegeContext verifies view privileges in order and returns
 // the effective role to use for underlying object checks.
 func resolveViewChainPrivilegeContext(
@@ -5488,14 +5527,15 @@ func resolveViewChainPrivilegeContext(
 	viewChain []string,
 	fallbackDb string,
 	snapshot *plan.Snapshot,
+	viewOnly bool,
 	enableCache bool,
 ) (int64, bool, bool, error) {
 	if len(viewChain) == 0 {
 		return roleId, true, false, nil
 	}
-	rootDb, rootView := parseViewKey(viewChain[0])
-	if rootView == "" {
-		return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewChain[0])
+	rootDb, _, _, _, _, err := parseViewPrivilegeEdge(ctx, viewChain[0], snapshot)
+	if err != nil {
+		return 0, false, false, err
 	}
 	if rootDb == "" {
 		rootDb = fallbackDb
@@ -5507,11 +5547,29 @@ func resolveViewChainPrivilegeContext(
 		return roleId, true, true, nil
 	}
 
+	account := ses.GetTenantInfo()
+	callerAccount := account.GetTenantID()
+	primaryRole := int64(account.GetDefaultRoleID())
 	currentRoleId := roleId
+	roleFromDefiner := false
 	for _, viewKey := range viewChain {
-		viewDb, viewName := parseViewKey(viewKey)
-		if viewName == "" {
-			return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewKey)
+		viewDb, viewName, viewSnapshot, viewAccount, qualified, err := parseViewPrivilegeEdge(ctx, viewKey, snapshot)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !qualified {
+			// Older snapshot keys do not identify the view's account; the
+			// final scan can use a different snapshot. Replan instead of
+			// guessing across account boundaries.
+			if plan2.IsSnapshotValid(viewSnapshot) || plan2.IsSnapshotValid(snapshot) {
+				return 0, false, false, moerr.NewInternalError(ctx, "snapshot view plan must be rebuilt")
+			}
+			viewAccount = callerAccount
+		}
+		foreignSnapshot := viewAccount != callerAccount
+		if foreignSnapshot && !(callerAccount == sysAccountID && roleId == moAdminRoleID &&
+			primaryRole == moAdminRoleID && currentRoleId == roleId && plan2.IsSnapshotValid(viewSnapshot)) {
+			return 0, false, false, nil
 		}
 		if viewDb == "" {
 			viewDb = fallbackDb
@@ -5520,7 +5578,7 @@ func resolveViewChainPrivilegeContext(
 			}
 		}
 
-		useCache := enableCache && cache != nil && currentRoleId == roleId
+		useCache := enableCache && cache != nil && currentRoleId == roleId && !foreignSnapshot
 		cacheToUse := cache
 		if !useCache {
 			cacheToUse = nil
@@ -5533,12 +5591,13 @@ func resolveViewChainPrivilegeContext(
 			return 0, false, false, nil
 		}
 
-		viewInfo, found, err := getViewSecurityInfoWithSnapshot(ctx, bh, viewDb, viewName, snapshot)
+		viewCtx := defines.AttachAccountId(ctx, viewAccount)
+		viewInfo, found, err := getViewSecurityInfoWithSnapshot(viewCtx, bh, viewDb, viewName, viewSnapshot)
 		if err != nil {
 			return 0, false, false, err
 		}
 		if !found {
-			if snapshot != nil && snapshot.TS != nil {
+			if viewSnapshot != nil && viewSnapshot.TS != nil {
 				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
 			}
 			if !ses.GetTxnHandler().InActiveTxn() {
@@ -5550,7 +5609,39 @@ func resolveViewChainPrivilegeContext(
 			}
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
+			if foreignSnapshot {
+				// The system administrator reads this foreign historical edge
+				// as itself. Underlying objects are still checked separately.
+				continue
+			}
+			if callerAccount != sysAccountID && viewInfo.definerRoleId == moAdminRoleID {
+				// Some cross-account clones retain the source sys owner, which
+				// does not exist in the destination. Only its own account admin
+				// can fall back to its own privileges in that case.
+				exists, err := viewRoleExists(ctx, bh, callerAccount, moAdminRoleID)
+				if err != nil {
+					return 0, false, false, err
+				}
+				if !exists {
+					if roleId == accountAdminRoleID && primaryRole == accountAdminRoleID && currentRoleId == roleId {
+						continue
+					}
+					return 0, false, false, nil
+				}
+			}
 			currentRoleId = viewInfo.definerRoleId
+			roleFromDefiner = true
+		}
+	}
+	if viewOnly && roleFromDefiner && !isViewAdmin(callerAccount, currentRoleId) {
+		// A view without a base object has no later grant lookup to reject a
+		// dropped definer. Verify that the effective role still exists.
+		exists, err := viewRoleExists(ctx, bh, callerAccount, currentRoleId)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !exists {
+			return 0, false, false, nil
 		}
 	}
 
@@ -6880,6 +6971,7 @@ func mergeActionPrivilegeTypes(stmt *tree.Merge) []PrivilegeType {
 type privilegeTips struct {
 	typ                   PrivilegeType
 	objType               objectType
+	viewOnly              bool
 	originViews           []string
 	directView            string
 	scanSnapshot          *plan.Snapshot
@@ -6902,6 +6994,30 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
+}
+
+func appendViewChainKey(key *strings.Builder, view string) {
+	key.WriteString(strconv.Itoa(len(view)))
+	key.WriteByte(':')
+	key.WriteString(view)
+}
+
+func viewChainKey(chain []string) string {
+	var key strings.Builder
+	for _, view := range chain {
+		appendViewChainKey(&key, view)
+	}
+	return key.String()
+}
+
+// markViewChain records every prefix because checking a nested chain also
+// checks each enclosing view. Length prefixes keep encoded keys unambiguous.
+func markViewChain(covered map[string]struct{}, chain []string) {
+	var key strings.Builder
+	for _, view := range chain {
+		appendViewChainKey(&key, view)
+		covered[key.String()] = struct{}{}
+	}
 }
 
 func (pota privilegeTipsArray) String() string {
@@ -7173,6 +7289,45 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			}
+		}
+
+		// Some views have no underlying table scan (for example SELECT 1).
+		// Every view chain still needs authorization, including chains in
+		// another branch of a plan that also has ordinary table requirements.
+		covered := make(map[string]struct{})
+		for _, tip := range pts {
+			chain := tip.originViews
+			if len(chain) == 0 && tip.directView != "" {
+				chain = []string{tip.directView}
+			}
+			markViewChain(covered, chain)
+		}
+		for _, node := range q.Nodes {
+			if node == nil {
+				continue
+			}
+			chain := node.GetOriginViews()
+			if len(chain) == 0 && node.GetDirectView() != "" {
+				chain = []string{node.GetDirectView()}
+			}
+			if len(chain) == 0 {
+				continue
+			}
+			// Build the key without modifying the covered set until after
+			// the full chain has been tested.
+			key := viewChainKey(chain)
+			if _, ok := covered[key]; ok {
+				continue
+			}
+			markViewChain(covered, chain)
+			appendPt(privilegeTips{
+				typ:          PrivilegeTypeSelect,
+				objType:      objectTypeTable,
+				viewOnly:     true,
+				originViews:  node.GetOriginViews(),
+				directView:   node.GetDirectView(),
+				scanSnapshot: node.GetScanSnapshot(),
+			})
 		}
 	} else if p.GetDdl() != nil {
 		if p.GetDdl().GetTruncateTable() != nil {
@@ -7468,6 +7623,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 		multiPrivs = append(multiPrivs, privilegeItem{
 			privilegeTyp:          tips.typ,
 			objType:               tips.objType,
+			viewOnly:              tips.viewOnly,
 			originViews:           tips.originViews,
 			directView:            tips.directView,
 			scanSnapshot:          tips.scanSnapshot,
@@ -7654,7 +7810,7 @@ func verifyViewPrivilegeForRole(
 	enableCache bool,
 ) (bool, error) {
 	// Admin roles bypass view privilege checks to keep grants output stable.
-	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+	if tenant := ses.GetTenantInfo(); tenant != nil && isViewAdmin(tenant.GetTenantID(), roleId) {
 		return true, nil
 	}
 	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -7802,6 +7958,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if len(viewChain) == 0 && directView != "" {
 								viewChain = []string{directView}
 							}
+							if mi.viewOnly && len(viewChain) == 0 {
+								return false, 0, moerr.NewInternalError(ctx, "view privilege requirement has no view chain")
+							}
 
 							checkRoleId := roleId
 							viewAllowed := true
@@ -7817,6 +7976,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									viewChain,
 									tempEntry.databaseName,
 									viewSnapshot,
+									mi.viewOnly,
 									usePrivilegeCache,
 								)
 								if err != nil {
@@ -7824,11 +7984,21 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								}
 							}
 
+							// A local DEFINER view must not turn an ordinary caller into
+							// a reader of another account's snapshot table.
+							if viewAllowed && !skipBaseCheck && len(viewChain) > 0 && mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil &&
+								mi.scanSnapshot.Tenant.TenantID != ses.GetTenantInfo().GetTenantID() {
+								tenant := ses.GetTenantInfo()
+								viewAllowed = tenant.GetTenantID() == sysAccountID && roleId == moAdminRoleID &&
+									int64(tenant.GetDefaultRoleID()) == moAdminRoleID && checkRoleId == roleId
+							}
 							if viewAllowed {
-								if skipBaseCheck {
+								if skipBaseCheck || mi.viewOnly {
 									yes = true
 								} else {
-									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
+									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId &&
+										(mi.scanSnapshot == nil || mi.scanSnapshot.Tenant == nil ||
+											mi.scanSnapshot.Tenant.TenantID == ses.GetTenantInfo().GetTenantID())
 									cacheToUse := cache
 									if !useCache {
 										cacheToUse = nil

@@ -167,7 +167,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							// Role grants require the SQL evaluator.
 							yes = false
 						} else {
-							if len(mi.originViews) > 0 || mi.directView != "" {
+							if mi.viewOnly || len(mi.originViews) > 0 || mi.directView != "" {
 								// View chains require metadata checks; skip cache-only evaluation.
 								return false, nil
 							}

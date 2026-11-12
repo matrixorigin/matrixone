@@ -50,8 +50,17 @@ func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, a
 		arr = appendMergeActionPrivilegeTips(ses, merge, p, arr)
 		result.dynamic = true
 	}
-	if len(arr) == 0 {
-		if ins, ok := stmt.(*tree.Insert); ok {
+	if ins, ok := stmt.(*tree.Insert); ok {
+		// Preserve the existing fallback when the plan has no concrete
+		// object requirements; view-only requirements are not targets.
+		hasConcreteRequirement := false
+		for _, tip := range arr {
+			if !tip.viewOnly {
+				hasConcreteRequirement = true
+				break
+			}
+		}
+		if !hasConcreteRequirement {
 			result.dynamic = true
 			if db, table, ok := getInsertTargetTableName(ins, ses); ok {
 				arr = append(arr, privilegeTips{typ: PrivilegeTypeInsert, objType: objectTypeTable, databaseName: db, tableName: table, isClusterTable: isClusterTable(db, table), clusterTableOperation: clusterTableModify})
