@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -99,11 +100,25 @@ func TestCatalogReplayReconnect(t *testing.T) {
 	require.Equal(t, 7, extra)
 	require.NoError(t, db.QueryRowContext(ctx, "select new_value from replay_reconnect.replaced").Scan(&value))
 	require.Equal(t, 9, value)
+	var replayedID uint64
+	require.NoError(t, db.QueryRowContext(ctx, idQuery).Scan(&replayedID))
+	require.Equal(t, newID, replayedID)
 	execSQLRequire(t, ctx, db, "insert into replay_reconnect.events(id,parent_id,u) values(2,1,102)")
 	require.NoError(t, db.QueryRowContext(ctx, "select payload,extra from replay_reconnect.events where id=2").Scan(&payload, &extra))
 	require.Equal(t, "default-value", payload)
 	require.Equal(t, 7, extra)
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from replay_reconnect.events force index(idx_parent) where parent_id=1").Scan(&count))
+	require.Equal(t, 2, count)
 	_, err = db.ExecContext(ctx, "insert into replay_reconnect.events(id,parent_id,u) values(3,999,103)")
-	require.Error(t, err, "the replayed foreign key must reject a missing parent")
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &mysqlErr)
+	require.EqualValues(t, 1452, mysqlErr.Number, "the replayed foreign key must reject a missing parent")
+	_, err = db.ExecContext(ctx, "insert into replay_reconnect.events(id,parent_id,u) values(3,1,101)")
+	mysqlErr = nil
+	require.ErrorAs(t, err, &mysqlErr)
+	require.EqualValues(t, 1062, mysqlErr.Number, "the replayed unique key must reject duplicates")
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from replay_reconnect.events").Scan(&count))
+	require.Equal(t, 2, count)
 	execSQLRequire(t, ctx, db, "drop database replay_reconnect")
 }
