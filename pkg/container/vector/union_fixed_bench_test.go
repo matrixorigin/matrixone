@@ -72,3 +72,46 @@ func BenchmarkUnionFixedSelection(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkUnionFixedSelectionDensity(b *testing.B) {
+	for _, width := range []int{4, 8} {
+		for _, dense := range []bool{false, true} {
+			shape := "sparse"
+			if dense {
+				shape = "dense"
+			}
+			b.Run(fmt.Sprintf("width%d/%s", width, shape), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
+				typ := types.T_uint32.ToType()
+				if width == 8 {
+					typ = types.T_uint64.ToType()
+				}
+				src, dst := NewOffHeapVecWithType(typ), NewOffHeapVecWithType(typ)
+				b.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+				require.NoError(b, src.PreExtend(8192, mp))
+				src.SetLength(8192)
+				for i := range src.data {
+					src.data[i] = byte(i)
+				}
+				rows := make([]int64, 0, 8192)
+				for row := range 8192 {
+					if dense && row%20 != 0 || !dense && row%20 == 0 {
+						rows = append(rows, int64(row))
+					}
+				}
+				require.NoError(b, dst.Union(src, rows, mp))
+				b.SetBytes(int64(len(rows) * width))
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					dst.CleanOnlyData()
+					if err := dst.Union(src, rows, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+			})
+		}
+	}
+}

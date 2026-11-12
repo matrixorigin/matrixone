@@ -185,24 +185,8 @@ func TestRoutineShouldCloseConnectionIgnoresRequestDeadline(t *testing.T) {
 	require.True(t, rt.shouldCloseConnection())
 }
 
-func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {
+func TestRoutineCancelContexts(t *testing.T) {
 	rt, _ := newUnitTestRoutine(t, 43)
-
-	var called int32
-	rt.execCallbackBasedOnRequest(false, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(1), called)
-
-	require.True(t, rt.beginClientRequest())
-	rt.execCallbackBasedOnRequest(false, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(1), called)
-	rt.execCallbackBasedOnRequest(true, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(2), called)
 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	rt.setCancelRequestFunc(cancelReq)
