@@ -30,6 +30,14 @@ func TestTestClient(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
+	// Another live service must use independent listeners and storage.
+	other, otherCfg, err := NewTestService(vfs.NewStrictMem())
+	require.NoError(t, err)
+	defer other.Close()
+	require.NotEqual(t, service.cfg.LogServiceServiceAddr(), other.cfg.LogServiceServiceAddr())
+	require.NotEqual(t, service.cfg.RaftServiceAddr(), other.cfg.RaftServiceAddr())
+	require.NotEqual(t, service.cfg.GossipServiceAddr(), other.cfg.GossipServiceAddr())
+
 	// you need to decision what timeout value to use
 	// you also need to retry requests on timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -56,6 +64,14 @@ func TestTestClient(t *testing.T) {
 	lsn2, err := client2.Append(ctx, rec2)
 	require.NoError(t, err)
 	assert.Equal(t, lsn1+1, lsn2)
+
+	otherClient, err := NewClient(ctx, "", otherCfg)
+	require.NoError(t, err)
+	defer otherClient.Close()
+	otherRecord := otherClient.GetLogRecord(5)
+	copy(otherRecord.Payload(), []byte("other"))
+	_, err = otherClient.Append(ctx, otherRecord)
+	require.NoError(t, err)
 
 	// read them back and check whether the returned data is expected
 	recs, lsn, err := client1.Read(ctx, lsn1, 1024)

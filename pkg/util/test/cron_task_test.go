@@ -125,6 +125,7 @@ func TestGetTenantInfo(t *testing.T) {
 func TestCalculateObjectCount(t *testing.T) {
 	c, err := embed.NewCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	require.NoError(t, c.Start())
 
 	svc, err := c.GetCNService(0)
@@ -170,5 +171,4 @@ func TestCalculateObjectCount(t *testing.T) {
 		require.False(t, ok)
 	}
 
-	svc.Close()
 }

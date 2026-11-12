@@ -25,19 +25,23 @@ import (
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
-	addr := []string{"localhost:9000"}
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipSeedAddresses = []string{DefaultGossipServiceAddress}
 	cfg.DeploymentID = 1
 	cfg.FS = fs
-	cfg.LogServicePort = 9000
 	cfg.DisableWorkers = true
 
 	runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
 
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(func() Config {
+		cfg.ServiceHost = "127.0.0.1"
+		cfg.LogServicePort = getAvailablePort()
+		cfg.RaftPort = getAvailablePort()
+		cfg.GossipPort = getAvailablePort()
+		cfg.GossipSeedAddresses = []string{cfg.GossipServiceAddr()}
+		return cfg
+	},
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -63,7 +67,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	ccfg := ClientConfig{
 		LogShardID:       1,
 		TNReplicaID:      10,
-		ServiceAddresses: addr,
+		ServiceAddresses: []string{cfg.LogServiceServiceAddr()},
 	}
 	return service, ccfg, nil
 }

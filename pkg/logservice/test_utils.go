@@ -44,7 +44,6 @@ var randomPorts = allocatedPorts{
 
 func getAvailablePort() int {
 	genPort := func() int {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
 		return rand.Intn(65535-21024) + 21024
 	}
 	checkPort := func(p int) bool {

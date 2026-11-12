@@ -65,6 +65,7 @@ Project  𝄀
               Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
               ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
                     Filter Cond: (test_vector_edge_cases.score >= 4)  𝄀
+                    Block Filter Cond: (test_vector_edge_cases.score >= 4)  𝄀
               ->  Table Function on ivf_search  𝄀
                     Index Reader Param:  Limit: 15
 EXPLAIN WITH t AS (

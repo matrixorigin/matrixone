@@ -16,6 +16,7 @@ package pSpool
 
 import (
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -153,8 +154,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 	}
 
-	dst.ExtraBuf = src.ExtraBuf
-	src.ExtraBuf = nil
+	// Several reader spools may copy the same borrowed broadcast batch.
+	// Metadata, like vectors, must be copied without transferring ownership
+	// from or otherwise modifying that shared source, even when it is nil.
+	dst.ExtraBuf = slices.Clone(src.ExtraBuf)
 
 	// set row count.
 	dst.SetRowCount(src.RowCount())

@@ -201,34 +201,56 @@ func TestClientConfigValidate(t *testing.T) {
 	}
 }
 
-func TestHAKeeperClientConfigValidate(t *testing.T) {
+func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	tests := []struct {
-		cfg HAKeeperClientConfig
-		ok  bool
+		name string
+		cfg  HAKeeperClientConfig
+		want HAKeeperClientConfig
 	}{
 		{
-			HAKeeperClientConfig{}, true,
+			name: "empty configuration uses defaults",
+			want: HAKeeperClientConfig{ServiceAddresses: []string{DefaultLogServiceServiceAddress}, AllocateIDBatch: 100},
 		},
 		{
-			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+			name: "empty address list uses defaults",
+			cfg:  HAKeeperClientConfig{ServiceAddresses: []string{}},
+			want: HAKeeperClientConfig{ServiceAddresses: []string{DefaultLogServiceServiceAddress}, AllocateIDBatch: 100},
 		},
 		{
-			HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+			name: "discovery address is preserved",
+			cfg:  HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"},
+			want: HAKeeperClientConfig{DiscoveryAddress: "localhost:9090", AllocateIDBatch: 100},
 		},
 		{
-			HAKeeperClientConfig{
+			name: "service addresses and explicit settings are preserved",
+			cfg: HAKeeperClientConfig{
+				ServiceAddresses: []string{"localhost:9090", "localhost:9091"},
+				AllocateIDBatch:  37,
+				EnableCompress:   true,
+			},
+			want: HAKeeperClientConfig{
+				ServiceAddresses: []string{"localhost:9090", "localhost:9091"},
+				AllocateIDBatch:  37,
+				EnableCompress:   true,
+			},
+		},
+		{
+			name: "discovery and service addresses are preserved",
+			cfg: HAKeeperClientConfig{
 				DiscoveryAddress: "localhost:9091",
 				ServiceAddresses: []string{"localhost:9090"},
-			}, true,
+			},
+			want: HAKeeperClientConfig{
+				DiscoveryAddress: "localhost:9091",
+				ServiceAddresses: []string{"localhost:9090"},
+				AllocateIDBatch:  100,
+			},
 		},
 	}
-
 	for _, tt := range tests {
-		err := tt.cfg.Validate()
-		if tt.ok {
-			assert.NoError(t, err)
-		} else {
-			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, tt.cfg.Validate())
+			require.Equal(t, tt.want, tt.cfg)
+		})
 	}
 }

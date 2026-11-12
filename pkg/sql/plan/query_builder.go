@@ -1590,6 +1590,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 		}
+		if len(newProjList) == 0 && node.ExtraOptions == ScalarCTESinkOption && len(node.ProjectList) > 0 {
+			// Count-only readers still need a row carrier. Publish its dependency
+			// before the source is compacted, just like an explicit column read.
+			newProjList = []*Expr{GetColExpr(node.ProjectList[0].Typ, 0, 0)}
+			remapping.addColRef([2]int32{tag, 0})
+			colRefBool[[2]int32{node.SourceStep[0], 0}] = true
+		}
 		node.ProjectList = newProjList
 
 	case plan.Node_SINK:
@@ -2205,6 +2212,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	builder.parseOptimizeHints()
+	builder.reuseScalarCTEs()
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
@@ -2315,6 +2323,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	// after createQuery can translate pre-prune positions into the materialized
 	// sink's post-prune layout.
 	builder.sinkColRef = sinkColRef
+	if err = builder.remapScalarCTEReaders(sinkColRef); err != nil {
+		return nil, err
+	}
 
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
@@ -2779,6 +2790,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
+	builder.recordScalarCTE(cteRef, nodeID)
 	return nodeID, nil
 }
 

@@ -1114,6 +1114,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.determineShuffle = value
 	case "blockFilter":
 		builder.optimizerHints.blockFilter = value
+	case "scalarCTEReuse":
+		builder.optimizerHints.scalarCTEReuse = value
 	case "applyIndices":
 		builder.optimizerHints.applyIndices = value
 	case "runtimeFilter":
