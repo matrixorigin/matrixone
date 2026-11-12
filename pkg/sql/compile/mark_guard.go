@@ -74,8 +74,8 @@ func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
 	}
 	candidate.root.DataSource.markGuard = &markScanGuard{probe: consumer, alternative: candidate.alternative, producer: candidate.producer}
 	candidate.build.RuntimeFilterSpec = producer
-	// One VARCHAR key, at most 128 distinct values, each at most 512 actual
-	// bytes: optional-key data stays below 64 KiB plus bounded vector metadata.
+	// At most 128 keys of 512 bytes bound live key bytes to 64 KiB. Vector
+	// capacity, metadata and serialization add bounded overhead.
 	candidate.build.OptionalRuntimeFilterMaxKeyBytes = 4 * markGuardMaxWidth
 }
 
