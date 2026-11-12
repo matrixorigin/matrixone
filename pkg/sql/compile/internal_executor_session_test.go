@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 type testInternalExecutorSession struct{}
@@ -51,6 +54,27 @@ func TestAttachInternalExecutorSessionWithNil(t *testing.T) {
 	attached := attachInternalExecutorSession(ctx, nil)
 	if got := getInternalExecutorSession(attached); got != nil {
 		t.Fatalf("expected nil session, got %v", got)
+	}
+}
+
+func TestAttachInternalExecutorRewriteOption(t *testing.T) {
+	ctx := context.Background()
+	option := &tree.RewriteOption{}
+	attached := attachInternalExecutorRewriteOption(ctx, option)
+	require.Same(t, option, getInternalExecutorRewriteOption(attached))
+	require.Nil(t, getInternalExecutorRewriteOption(nil))
+	require.Nil(t, getInternalExecutorRewriteOption(ctx))
+	require.Nil(t, getInternalExecutorRewriteOption(attachInternalExecutorRewriteOption(ctx, nil)))
+
+	inner := &tree.Select{}
+	insert := &tree.Insert{Rows: &tree.Select{Select: &tree.ParenSelect{Select: inner}}}
+	attachRewriteOptionToStatement(insert, option)
+	require.Same(t, option, insert.Rows.RewriteOption)
+	require.Same(t, option, inner.RewriteOption)
+	attachRewriteOptionToStatement(insert, nil)
+	require.Same(t, option, insert.Rows.RewriteOption)
+	for _, stmt := range []tree.Statement{nil, (*tree.Insert)(nil), &tree.Insert{}, &tree.Select{}} {
+		attachRewriteOptionToStatement(stmt, option)
 	}
 }
 
