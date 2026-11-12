@@ -2117,7 +2117,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if canPreserveParallelUnionAllBranches(childNode) &&
+		preserveDistinctOwners := canPreserveParallelUnionDistinctOwners(node, childNode) &&
+			c.canCompileParallelUnionAllAggregate(node) && !c.canCompileShuffleGroup(node)
+		if preserveDistinctOwners {
+			ss, err = c.compileUnionInput(step, childNodeID, nodes, true)
+		} else if canPreserveParallelUnionAllBranches(childNode) &&
 			c.canCompileParallelUnionAllAggregate(node) {
 			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
 		} else if isLocalPreAggregationGroup(node, childNode) &&
@@ -2135,6 +2139,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if preserveDistinctOwners && len(ss) > 1 && node.SpillMem > 0 {
+			// Preserve the explicit stage threshold rather than multiplying it by
+			// the number of DISTINCT owners. The logical node remains unchanged.
+			localNode := *node
+			localNode.SpillMem /= int64(len(ss))
+			node = &localNode
+		}
 		if plan2.IsSortRollupOption(node.ExtraOptions) {
 			// The child SORT performs the global k-way merge when the input is
 			// distributed, so the ordered rollup aggregate must run once on the
@@ -2265,21 +2276,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-		right, err = c.compilePlanScope(step, node.Children[1], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileUnion(node, left, right)
-		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-		ss = c.compileSort(node, ss)
-		return ss, nil
+		return c.compileUnionInput(step, curNodeIdx, nodes, false)
 	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -6430,13 +6427,35 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
+func (c *Compile) compileUnion(node *plan.Node, left, right []*Scope, preserveOwners bool) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
 	if keys, dop := c.parallelUnionDistinct(node, left, right); dop > 1 {
-		return c.compileParallelUnionDistinct(node, left, right, keys, dop)
+		owners := c.compileParallelUnionDistinctOwners(node, left, right, keys, dop)
+		if preserveOwners {
+			return owners
+		}
+		return []*Scope{c.newMergeScope(owners)}
 	}
 	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
+}
+
+func (c *Compile) compileUnionInput(step, nodeID int32, nodes []*plan.Node, preserveOwners bool) ([]*Scope, error) {
+	node := nodes[nodeID]
+	left, err := c.compilePlanScope(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compilePlanScope(step, node.Children[1], nodes)
+	if err != nil {
+		ReleaseScopes(left)
+		return nil, err
+	}
+	c.setAnalyzeCurrent(left, int(nodeID))
+	c.setAnalyzeCurrent(right, int(nodeID))
+	ss := c.compileUnion(node, left, right, preserveOwners)
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	return c.compileSort(node, ss), nil
 }
 
 // mergeDistinctSetScopes applies the global distinct phase required after a
