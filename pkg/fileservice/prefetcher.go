@@ -439,9 +439,7 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 		return
 	}
 	// A size told before an object was deleted may be another object's at that path.
-	if req.deletes == s.diskCache.prefetched.deletes.Load() {
-		s.diskCache.prefetched.store(s.diskCache.pathForFile(path.File), req.Size)
-	}
+	s.diskCache.prefetched.storeCurrent(s.diskCache.pathForFile(path.File), req.Size, req.deletes)
 	if err := s.PrefetchFile(ctx, req.FilePath); err != nil {
 		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))

@@ -187,6 +187,10 @@ type IOEntry struct {
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
 
+	// readDeletes is 1 plus the disk cache's delete count when the entry's read began,
+	// or 0 when the entry is cached whatever deletes follow.
+	readDeletes uint64
+
 	// inPrefetchRange marks an entry read within a prefetch range the disk cache
 	// stores in its place.
 	inPrefetchRange bool

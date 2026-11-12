@@ -102,6 +102,10 @@ type DiskCache struct {
 	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
 	// eviction starting.
 	beforeEvictionStart func(path string)
+	// deletes counts the deletes of objects; see objectDeletes.
+	deletes objectDeletes
+	// prefetchFlightBytes, when positive, is the limit instead of prefetchFlightBytesMax.
+	prefetchFlightBytes int64
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -795,6 +799,9 @@ func (d *DiskCache) updateEntry(
 ) error {
 	written, err := d.writeEntry(ctx, diskPath, entry, nil)
 	if err != nil || !written {
+		return err
+	}
+	if retracted, err := d.retractDeleted(ctx, filePath, diskPath, entry); retracted || err != nil {
 		return err
 	}
 	for _, fn := range onWritten {
@@ -1645,6 +1652,8 @@ func (d *DiskCache) DeletePaths(
 		return err
 	}
 	for _, path := range canonical {
+		// Counted first: an entry read before it and cached after it is retracted.
+		d.deletes.deleted(d.pathForFile(path))
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return
 		}

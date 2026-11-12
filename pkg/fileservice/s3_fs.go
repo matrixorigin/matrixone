@@ -735,10 +735,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	// Every read of a column-prefetch scan, its metadata and bloom filters too, reads
-	// exactly its entries and never the whole object.
-	if GetFileServicePolicy(ctx).Any(ColumnPrefetch) {
-		vector.Policy |= ExactRead | SkipFullFilePreloads
+	if s.diskCache != nil {
+		mark := s.diskCache.readDeletes()
+		for i := range vector.Entries {
+			vector.Entries[i].readDeletes = mark
+		}
 	}
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {

@@ -208,24 +208,6 @@ func TestS3FSColumnReadOfSparseEntriesReadsThemApart(t *testing.T) {
 	require.Equal(t, int64(30), storage.bytes.Load())
 }
 
-// Under a column-prefetch scan's context, a read made with its own policy, as of a bloom
-// filter, reads exactly its entry; elsewhere it reads the prefetch range around it.
-func TestS3FSReadUnderColumnPrefetchContextIsExact(t *testing.T) {
-	read := func(ctx context.Context, fs *S3FS) {
-		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 200 << 10, Size: 10}}}
-		require.NoError(t, fs.Read(ctx, vec))
-		fs.diskCache.prefetchFlights.reads.Wait()
-		vec.Release()
-	}
-	fs, storage, _ := newPrefetchRangeFS(t, 64<<10, 300<<10)
-	read(WithFileServicePolicy(context.Background(), ColumnPrefetch), fs)
-	require.Equal(t, int64(10), storage.bytes.Load())
-
-	fs, storage, _ = newPrefetchRangeFS(t, 64<<10, 300<<10)
-	read(context.Background(), fs)
-	require.Equal(t, int64(64<<10), storage.bytes.Load(), "the prefetch range around it")
-}
-
 // An exact read reads only its entry, and leaves a queued download of the object's column
 // ranges to the prefetcher.
 func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {

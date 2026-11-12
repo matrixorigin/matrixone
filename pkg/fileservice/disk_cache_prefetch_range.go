@@ -68,7 +68,7 @@ func autoPrefetchUnit(bdp int64) int64 {
 // no separator in their path, read through prefetch ranges.
 func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 	unit := d.prefetchRange.unit()
-	if unit <= 0 || vector.Policy.Any(SkipDiskCacheWrites, ColumnPrefetch, ExactRead) || !vector.Policy.CacheIOEntry() {
+	if unit <= 0 || vector.Policy.Any(SkipDiskCacheReads, SkipDiskCacheWrites, ColumnPrefetch, ExactRead) || !vector.Policy.CacheIOEntry() {
 		return 0, false
 	}
 	if path, err := ParsePath(vector.FilePath); err != nil || strings.Contains(pathpkg.Clean(path.File), "/") {
@@ -96,7 +96,16 @@ const (
 	prefetchWindowBlocks = 4096
 	// prefetchChunk is the most bytes of a prefetch range read at a time.
 	prefetchChunk = 64 << 10
+	// prefetchFlightBytesMax is the most bytes of prefetch range runs under way.
+	prefetchFlightBytesMax = 256 << 20
 )
+
+func (d *DiskCache) prefetchFlightBytesLimit() int64 {
+	if d.prefetchFlightBytes > 0 {
+		return d.prefetchFlightBytes
+	}
+	return prefetchFlightBytesMax
+}
 
 type blockState int
 
@@ -198,7 +207,9 @@ func (d *DiskCache) prefetchRead(
 	addRun := func(first, last int, now time.Time) {
 		start := windowStart + int64(first)*block
 		end := windowStart + int64(last+1)*block
+		f.bytes += end - start
 		fl := newPrefetchFlight(start, end, now)
+		fl.readDeletes = d.readDeletes()
 		// The read outlives the read that starts it, not the cache or a delete of the
 		// object.
 		fl.ctx, fl.cancel = context.WithCancel(context.WithoutCancel(ctx))
@@ -219,6 +230,7 @@ func (d *DiskCache) prefetchRead(
 			b.state, b.flight = blockInFlight, fl
 		}
 	}
+	var pending [][2]int
 	for i := 0; i < len(blocks); {
 		if blocks[i].state != blockMissing || !blocks[i].wanted {
 			i++
@@ -232,12 +244,24 @@ func (d *DiskCache) prefetchRead(
 			j++
 		}
 		if first >= 0 {
-			addRun(first, j-1, now)
+			pending = append(pending, [2]int{first, j - 1})
 			if first > i {
-				addRun(i, first-1, now)
+				pending = append(pending, [2]int{i, first - 1})
 			}
 		}
 		i = j
+	}
+	var need int64
+	for _, p := range pending {
+		need += int64(p[1]-p[0]+1) * block
+	}
+	if need > 0 && f.bytes+need > d.prefetchFlightBytesLimit() {
+		// Past the bytes of the runs under way, the read reads its own entries.
+		f.mu.Unlock()
+		return nil, 0, false
+	}
+	for _, p := range pending {
+		addRun(p[0], p[1], now)
 	}
 	f.mu.Unlock()
 
@@ -259,7 +283,7 @@ func (d *DiskCache) prefetchRead(
 				_ = d.Update(context.WithoutCancel(ctx), &IOVector{
 					FilePath: filePath,
 					Policy:   policy,
-					Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content}},
+					Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content, readDeletes: fl.readDeletes}},
 				}, false)
 			}
 			d.endPrefetch(diskPath, fl)
@@ -341,6 +365,8 @@ type prefetchFlight struct {
 	n        int64         // bytes of buf read
 	finished bool          // no more bytes arrive
 	progress chan struct{} // closed when n grows or the flight finishes
+	// readDeletes marks the range's cache entry; see IOEntry.readDeletes.
+	readDeletes uint64
 }
 
 func newPrefetchFlight(start, end int64, now time.Time) *prefetchFlight {
@@ -454,8 +480,10 @@ func (f *prefetchFlight) waitFor(ctx context.Context, end int64) ([]byte, bool) 
 // prefetchFlights indexes the prefetch ranges being read by the disk path of their
 // object.
 type prefetchFlights struct {
-	mu     sync.Mutex
-	m      map[string][]*prefetchFlight
+	mu sync.Mutex
+	m  map[string][]*prefetchFlight
+	// bytes is the size of the runs under way.
+	bytes  int64
 	closed bool
 	reads  sync.WaitGroup // reads of runs and their cache writes
 	// closing is canceled when the cache closes; it cancels the reads of runs.
@@ -527,6 +555,7 @@ func (d *DiskCache) endPrefetch(diskPath string, fl *prefetchFlight) {
 	} else {
 		f.m[diskPath] = flights
 	}
+	f.bytes -= fl.end - fl.start
 	f.mu.Unlock()
 	fl.finish()
 	close(fl.ended)

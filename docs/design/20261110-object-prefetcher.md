@@ -203,7 +203,9 @@ way each time.
 | Queued downloads | the prefetcher | the queue bound above; at most one entry per object |
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
-| Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full |
+| Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
+| Prefetch range runs under way | the disk cache | 256 MiB of buffers in all; past it a read reads its own entries |
+| Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by whole-object downloads | the disk cache | half the host's connections |
 
 ## Alternatives
