@@ -171,3 +171,23 @@ func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	defer f.mu.Unlock()
 	require.Zero(t, f.bytes)
 }
+
+// A probe of a few columns reads exactly their entries, never the whole object, even when
+// the entries lie far apart; policy 0 downloads the whole object.
+func TestExactColumnsReadNeverDownloadsTheObject(t *testing.T) {
+	for _, policy := range []Policy{ExactColumnsRead, 0} {
+		fs, storage, data := newPrefetchRangeFS(t, 4096, 300<<10)
+		vec := &IOVector{FilePath: "object", Policy: policy | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 10}}}
+		require.NoError(t, fs.Read(context.Background(), vec))
+		require.Equal(t, data[100:110], vec.Entries[0].Data)
+		require.Equal(t, data[200<<10:200<<10+10], vec.Entries[1].Data)
+		vec.Release()
+		if policy == ExactColumnsRead {
+			require.Equal(t, int64(2), storage.reads.Load())
+			require.Equal(t, int64(20), storage.bytes.Load(), "only the entries")
+		} else {
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "policy 0 caches the whole object")
+		}
+	}
+}

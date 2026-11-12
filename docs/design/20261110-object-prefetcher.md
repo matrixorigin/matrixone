@@ -153,7 +153,9 @@ A row fetch never downloads a whole object on a read. Ahead of the scan, for eac
 Every read made under a row fetch's context, including the block pruning's reads, reads
 exactly its entries and never a whole object. Object metadata and bloom filter loads read
 exactly their extents in every scan: a prefetch range around them would hold the last
-columns of the object. A
+columns of the object. Probes that read a few columns of an object to check keys or
+visibility, as the CN's insert and upsert dedup, the TN's precommit dedup and MVCC loads,
+read exactly their entries and never the whole object. A
 row fetch never reads the bytes of a column it does not read, such as the vector column
 (decision 2026-11-12). A read made inside another read, as the take-over's downloads are,
 logs its slow events apart from the outer read.

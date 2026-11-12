@@ -963,8 +963,8 @@ read_disk_cache:
 			forceMinimalRangeRead = true
 		}
 	}
-	// A column read reads its entries apart when one range around them holds other bytes.
-	if vector.Policy.Any(ColumnPrefetch) && !forcePerEntryRangeRead && vector.sparse() {
+	// An exact read reads its entries apart when one range around them holds other bytes.
+	if vector.Policy.Any(ColumnPrefetch, ExactRead) && !forcePerEntryRangeRead && vector.sparse() {
 		forcePerEntryRangeRead = true
 	}
 	if forcePerEntryRangeRead || forceMinimalRangeRead {

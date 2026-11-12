@@ -284,7 +284,7 @@ func (obj *baseObject) loadPersistedMVCC(
 		[]types.Type{types.T_TS.ToType(), types.T_bool.ToType()},
 		obj.rt.Fs,
 		location,
-		fileservice.Policy(0),
+		fileservice.ExactColumnsRead,
 		true,
 		obj.rt.VectorPool.Transient,
 	)
