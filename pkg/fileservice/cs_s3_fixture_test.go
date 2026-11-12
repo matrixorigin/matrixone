@@ -21,7 +21,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,11 +58,12 @@ func listCITestPrefix(ctx context.Context, client *minio.Client, bucket, prefix 
 	if !strings.HasSuffix(prefix, "/") || !validCITestS3Prefix(strings.TrimSuffix(prefix, "/")) {
 		return nil, errors.New("unsafe CS S3 fixture prefix")
 	}
-	// Cancel even on early return so the SDK listing goroutine cannot leak.
+	// The channel-based ListObjects requires draining after cancellation. Use
+	// the iterator so rejecting an unsafe result cannot strand its worker.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var keys []string
-	for object := range client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+	for object := range client.ListObjectsIter(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
 		if object.Err != nil {
 			return nil, ciTestS3Error("list fixture prefix", object.Err)
 		}
@@ -250,5 +253,85 @@ func TestCITestS3FixtureSafety(t *testing.T) {
 				t.Fatal("unsafe prefix must not issue a request")
 			}
 		})
+	}
+}
+
+func TestCITestS3FixtureEarlyRejectionReleasesListingWorker(t *testing.T) {
+	const prefix = "ci-ut/run-123/fixture/"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/ci-test/" || r.URL.Query().Get("prefix") != prefix {
+			t.Errorf("unexpected list request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>outside-prefix</Key><Size>1</Size></Contents>`)
+		for i := 0; i < 8; i++ {
+			fmt.Fprintf(w, `<Contents><Key>%spending-%d</Key><Size>1</Size></Contents>`, prefix, i)
+		}
+		fmt.Fprint(w, `</ListBucketResult>`)
+	}))
+	defer server.Close()
+	client, err := minio.New(strings.TrimPrefix(server.URL, "http://"), &minio.Options{Region: "us-east-1", BucketLookup: minio.BucketLookupPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listWorkers := func() int {
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		return strings.Count(string(buf[:n]), "minio-go/v7.(*Client).ListObjects.func1")
+	}
+	before := listWorkers()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := 0; i < 32; i++ {
+		_, err := listCITestPrefix(ctx, client, "ci-test", prefix)
+		if err == nil || !strings.Contains(err.Error(), "cannot safely enumerate") {
+			t.Fatalf("early rejection %d: got %v", i, err)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && listWorkers() > before {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := listWorkers(); got > before {
+		t.Fatalf("early rejection left %d MinIO listing workers blocked", got-before)
+	}
+}
+
+func TestCITestS3FixtureLimitRejectsBeforeCleanup(t *testing.T) {
+	const prefix = "ci-ut/run-123/fixture/"
+	var deleted atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleted.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/ci-test/" || r.URL.Query().Get("prefix") != prefix {
+			t.Errorf("unexpected list request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
+		for i := 0; i < 10002; i++ {
+			fmt.Fprintf(w, `<Contents><Key>%sitem-%05d</Key><Size>1</Size></Contents>`, prefix, i)
+		}
+		fmt.Fprint(w, `</ListBucketResult>`)
+	}))
+	defer server.Close()
+	client, err := minio.New(strings.TrimPrefix(server.URL, "http://"), &minio.Options{Region: "us-east-1", BucketLookup: minio.BucketLookupPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = cleanupCITestPrefix(ctx, client, "ci-test", prefix)
+	if err == nil || !strings.Contains(err.Error(), "exceeded safety limit") {
+		t.Fatalf("expected safety limit, got %v", err)
+	}
+	if deleted.Load() {
+		t.Fatal("limit rejection must not delete any object")
 	}
 }
