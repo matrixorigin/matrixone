@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -156,6 +157,30 @@ func TestMarkGuardMessagesAreRowOnly(t *testing.T) {
 	}
 }
 
+func TestMarkGuardRejectsConflictingMessages(t *testing.T) {
+	for _, order := range [][2]int32{
+		{message.RuntimeFilter_DROP, message.RuntimeFilter_IN},
+		{message.RuntimeFilter_IN, message.RuntimeFilter_DROP},
+	} {
+		t.Run(fmt.Sprintf("%d_then_%d", order[0], order[1]), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			typ := plan.Type{Id: int32(types.T_varchar), Width: 64}
+			guard := &markScanGuard{
+				probe:       plan2.MakeRuntimeFilter(101, false, 0, markGuardTestCol(typ, 0), true),
+				alternative: markGuardTestEquality(typ, 1),
+			}
+			for _, kind := range order {
+				message.SendMessage(message.RuntimeFilterMessage{Tag: 101, Typ: kind, Card: 1}, board)
+			}
+			s := &Scope{Proc: proc}
+			require.Nil(t, s.receiveMarkScanGuard(&Compile{proc: proc}, guard))
+		})
+	}
+}
+
 func TestMarkGuardClearsPriorReaderGeneration(t *testing.T) {
 	scan := table_scan.NewArgument()
 	defer scan.Release()
@@ -223,6 +248,14 @@ func TestMarkGuardRequiresLivePhysicalFilter(t *testing.T) {
 	require.Nil(t, build.RuntimeFilterSpec)
 	// A live physical OR authorizes the optimization; the old node is irrelevant.
 	physical.FilterExprs = []*plan.Expr{orExpr}
+	candidate := c.findMarkGuardCandidate(q, []*Scope{root})
+	require.NotNil(t, candidate)
+	require.Nil(t, root.DataSource.markGuard)
+	require.Nil(t, build.RuntimeFilterSpec)
+	require.Zero(t, build.OptionalRuntimeFilterMaxKeyBytes)
+	require.Equal(t, int32(2), candidate.alternative.GetF().Args[0].GetCol().ColPos)
+	require.Equal(t, int32(1), orExpr.GetF().Args[1].GetF().Args[0].GetCol().ColPos)
+	require.Zero(t, join.EqConds[0][0].GetCol().ColPos)
 	c.installMarkScanGuard(q, []*Scope{root})
 	require.NotNil(t, root.DataSource.markGuard)
 	require.NotNil(t, build.RuntimeFilterSpec)
@@ -253,6 +286,7 @@ func TestMarkGuardRequiresLivePhysicalFilter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root.DataSource.markGuard = nil
 			build.RuntimeFilterSpec = nil
+			build.OptionalRuntimeFilterMaxKeyBytes = 0
 			scanNode.ProjectList = []*plan.Expr{markGuardTestCol(typ, 0), markGuardTestCol(typ, 2), markGuardTestCol(wide, 3)}
 			scanNode.RuntimeFilterProbeList = nil
 			producer.NodeInfo.Addr = c.addr
@@ -262,9 +296,14 @@ func TestMarkGuardRequiresLivePhysicalFilter(t *testing.T) {
 			producer.DataSource.node.RuntimeFilterProbeList = nil
 			producer.DataSource.node.RecvMsgList = nil
 			tc.modify()
+			require.Nil(t, c.findMarkGuardCandidate(q, []*Scope{root}))
+			require.Nil(t, root.DataSource.markGuard)
+			require.Nil(t, build.RuntimeFilterSpec)
+			require.Zero(t, build.OptionalRuntimeFilterMaxKeyBytes)
 			c.installMarkScanGuard(q, []*Scope{root})
 			require.Nil(t, root.DataSource.markGuard)
 			require.Nil(t, build.RuntimeFilterSpec)
+			require.Zero(t, build.OptionalRuntimeFilterMaxKeyBytes)
 		})
 	}
 }
