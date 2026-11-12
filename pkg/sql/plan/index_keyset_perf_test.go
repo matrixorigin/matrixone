@@ -32,11 +32,20 @@ func BenchmarkIndexKeySetCandidates(b *testing.B) {
 	cases := []struct {
 		name                     string
 		candidates, count, width int
+		duplicate                bool
 	}{
-		{"small_one", 1, 2, 12},
-		{"small_eight", 8, 2, 12},
-		{"large_one", 1, 128, 65535},
-		{"large_eight", 8, 128, 65535},
+		{"small_one_unique", 1, 2, 12, false},
+		{"small_one_duplicate", 1, 2, 12, true},
+		{"small_eight_unique", 8, 2, 12, false},
+		{"small_eight_duplicate", 8, 2, 12, true},
+		{"threshold_eight_unique", 1, 8, 12, false},
+		{"threshold_eight_duplicate", 1, 8, 12, true},
+		{"threshold_sixteen_unique", 1, 16, 12, false},
+		{"threshold_sixteen_duplicate", 1, 16, 12, true},
+		{"large_one_unique", 1, 128, 65535, false},
+		{"large_one_duplicate", 1, 128, 65535, true},
+		{"large_eight_unique", 8, 128, 65535, false},
+		{"large_eight_duplicate", 8, 128, 65535, true},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
@@ -79,7 +88,11 @@ func BenchmarkIndexKeySetCandidates(b *testing.B) {
 			}
 			values := vector.NewVec(types.T_varchar.ToType())
 			for i := 0; i < tc.count; i++ {
-				value := fmt.Sprintf("%04d", i) + strings.Repeat("x", tc.width-4)
+				index := i
+				if tc.duplicate {
+					index = 0
+				}
+				value := fmt.Sprintf("%04d", index) + strings.Repeat("x", tc.width-4)
 				if err := vector.AppendBytes(values, []byte(value), false, proc.Mp()); err != nil {
 					b.Fatal(err)
 				}

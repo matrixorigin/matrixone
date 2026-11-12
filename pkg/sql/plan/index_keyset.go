@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -226,6 +227,215 @@ func marshalKeySetElement(src, scratch *vector.Vector, row int, mp *mpool.MPool)
 	return scratch.MarshalBinary()
 }
 
+// foldKeySetTuple retains the original per-row bind and constant-fold path.
+func (builder *QueryBuilder) foldKeySetTuple(
+	idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32,
+	inVec, rowVec *vector.Vector, row int, mp *mpool.MPool,
+) *plan.Expr {
+	data, err := marshalKeySetElement(inVec, rowVec, row, mp)
+	if err != nil {
+		return nil
+	}
+	serialArgs := make([]*plan.Expr, len(filterPos))
+	for i, pos := range filterPos {
+		fn := filterList[pos].GetF()
+		if fn.Func.ObjName == "in" {
+			serialArgs[i] = &plan.Expr{
+				Typ: fn.Args[0].Typ,
+				Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+					Len: int32(len(data)), Data: data,
+				}},
+			}
+		} else {
+			serialArgs[i] = DeepCopyExpr(fn.Args[1])
+		}
+	}
+	tuple, err := bindFuncExprAndConstFold(
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		indexTableLookupSerialFunc(idxDef), serialArgs,
+	)
+	if err != nil {
+		return nil
+	}
+	return tuple
+}
+
+// addKeySetBytes enforces the pre-compaction wire-size budget without integer
+// overflow. The budget counts every input tuple, including duplicates.
+func addKeySetBytes(total, size int) (int, bool) {
+	if total < 0 || size < 0 || total > maxCompositePointBytes || size > maxCompositePointBytes-total {
+		return 0, false
+	}
+	return total + size, true
+}
+
+// fastExactKeySet constructs complete unique keys using the same component
+// encoders as serial. It first folds the original first tuple and checks both
+// its bytes and its serialized vector size against the direct path. Literal
+// equality operands are evaluated to their actual runtime vector types, not
+// their declared column types. Unproved inputs or errors return false so the
+// original per-row folding path remains authoritative.
+//
+// A true result transfers a non-nil vector to the caller, or a nil vector when
+// the original raw per-tuple wire budget is exceeded. The returned vector and
+// all temporary vectors are owned by this call until that transfer.
+func (builder *QueryBuilder) fastExactKeySet(
+	idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32,
+	inVec, rowVec *vector.Vector, leadingType types.Type, mp *mpool.MPool,
+) (*vector.Vector, bool) {
+	for _, pos := range filterPos {
+		fn := filterList[pos].GetF()
+		if fn.Func.ObjName != "=" {
+			continue
+		}
+		rhs := fn.Args[1]
+		lit := rhs.GetLit()
+		if lit == nil || lit.Isnull || lit.Src != nil || !compositePointType(rhs.Typ) {
+			return nil, false
+		}
+	}
+	first := builder.foldKeySetTuple(idxDef, filterList, filterPos, inVec, rowVec, 0, mp)
+	if first == nil || first.GetVec() == nil {
+		return nil, false
+	}
+	firstData := first.GetVec().GetData()
+	if _, ok := addKeySetBytes(0, len(firstData)); !ok {
+		return nil, true
+	}
+	firstVec := vector.NewVec(types.T_any.ToType())
+	if err := firstVec.UnmarshalBinary(firstData); err != nil ||
+		firstVec.GetType().Oid != types.T_varchar || firstVec.Length() != 1 || firstVec.IsNull(0) {
+		return nil, false
+	}
+	firstKey := firstVec.GetBytesAt(0)
+	if len(firstKey) == 0 {
+		return nil, false
+	}
+
+	vecs := make([]*vector.Vector, len(filterPos))
+	encoders := make([]function.SerialValueEncoder, len(filterPos))
+	freeFns := make([]func(), 0, len(filterPos)-1)
+	defer func() {
+		for _, free := range freeFns {
+			free()
+		}
+	}()
+	for i, pos := range filterPos {
+		fn := filterList[pos].GetF()
+		if fn.Func.ObjName == "in" {
+			vecs[i] = inVec
+		} else {
+			var err error
+			var free func()
+			vecs[i], free, err = colexec.GetReadonlyResultFromNoColumnExpression(builder.compCtx.GetProcess(), fn.Args[1])
+			if err != nil {
+				return nil, false
+			}
+			freeFns = append(freeFns, free)
+			if vecs[i] == nil || vecs[i].Length() != 1 || vecs[i].IsNull(0) {
+				return nil, false
+			}
+		}
+		var err error
+		encoders[i], err = function.NewSerialValueEncoder(vecs[i])
+		if err != nil {
+			return nil, false
+		}
+	}
+
+	keys := vector.NewVec(leadingType)
+	transfer := false
+	defer func() {
+		if !transfer {
+			keys.Free(mp)
+		}
+	}()
+	wire := vector.NewVec(*firstVec.GetType())
+	defer wire.Free(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	// Byte equality is exactly serial equality for these types: serial's
+	// escaped, terminated encoding is injective. Hash collisions are checked
+	// against the immutable borrowed input. Fixed types use the encoders for
+	// every row instead of relying on their in-memory representations.
+	var seen map[uint64]int
+	var next, sizes []int
+	var seed maphash.Seed
+	switch inVec.GetType().Oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
+		seed = maphash.MakeSeed()
+		seen = make(map[uint64]int, inVec.Length())
+		next = make([]int, inVec.Length())
+		sizes = make([]int, inVec.Length())
+	}
+	serialized := 0
+	for row := 0; row < inVec.Length(); row++ {
+		var hash uint64
+		if seen != nil {
+			value := inVec.GetBytesAt(row)
+			hash = maphash.Bytes(seed, value)
+			duplicate := false
+			for link := seen[hash]; link != 0; link = next[link-1] {
+				if bytes.Equal(value, inVec.GetBytesAt(link-1)) {
+					var ok bool
+					serialized, ok = addKeySetBytes(serialized, sizes[link-1])
+					if !ok {
+						return nil, true
+					}
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+		}
+		packer.Reset()
+		for i, vec := range vecs {
+			encodeRow := 0
+			if vec == inVec {
+				encodeRow = row
+			}
+			encoders[i](vec, encodeRow, packer)
+		}
+		if packer.Err() != nil {
+			return nil, false
+		}
+		value := packer.GetBuf()
+		if len(value) == 0 || (row == 0 && !bytes.Equal(value, firstKey)) {
+			return nil, false
+		}
+		// No single tuple with a key larger than the remaining budget can fit.
+		if len(value) > maxCompositePointBytes-serialized {
+			return nil, true
+		}
+		wire.ResetWithSameType()
+		if err := vector.AppendBytes(wire, value, false, mp); err != nil {
+			return nil, false
+		}
+		size, err := wire.MarshalBinarySize()
+		if err != nil || (row == 0 && size != len(firstData)) {
+			return nil, false
+		}
+		var ok bool
+		serialized, ok = addKeySetBytes(serialized, size)
+		if !ok {
+			return nil, true
+		}
+		if err := vector.AppendBytes(keys, value, false, mp); err != nil {
+			return nil, false
+		}
+		if seen != nil {
+			sizes[row] = size
+			next[row] = seen[hash]
+			seen[hash] = row + 1
+		}
+	}
+	transfer = true
+	return keys, true
+}
+
 // replaceKeySetCondition lowers equality-bound key parts plus one IN dimension
 // to the existing serialized PREFIX_IN access primitive. Each tuple is folded
 // separately: serializing a scalar equality vector together with an N-element
@@ -280,48 +490,39 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 	exact := idxDef.Unique && len(filterPos) == len(idxDef.Parts)
 	var exactKeys *vector.Vector
 	var tuples []*plan.Expr
+	prefilled := false
 	if exact {
 		if types.T(leadingColExpr.Typ.Id) != types.T_varchar {
 			return nil
 		}
-		exactKeys = vector.NewVec(makeTypeByPlan2Type(leadingColExpr.Typ))
+		keyType := makeTypeByPlan2Type(leadingColExpr.Typ)
+		if inVec.Length() >= 8 {
+			var handled bool
+			exactKeys, handled = builder.fastExactKeySet(idxDef, filterList, filterPos, inVec, rowVec, keyType, mp)
+			if handled {
+				if exactKeys == nil {
+					return nil
+				}
+				prefilled = true
+			}
+		}
+		if exactKeys == nil {
+			exactKeys = vector.NewVec(keyType)
+		}
 		defer exactKeys.Free(mp)
 	} else {
 		tuples = make([]*plan.Expr, inVec.Length())
 	}
 	serializedKeyBytes := 0
-	for row := 0; row < inVec.Length(); row++ {
-		data, err := marshalKeySetElement(inVec, rowVec, row, mp)
-		if err != nil {
-			return nil
-		}
-		serialArgs := make([]*plan.Expr, len(filterPos))
-		for i, pos := range filterPos {
-			fn := filterList[pos].GetF()
-			if fn.Func.ObjName == "in" {
-				serialArgs[i] = &plan.Expr{
-					Typ: fn.Args[0].Typ,
-					Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-						Len: int32(len(data)), Data: data,
-					}},
-				}
-			} else {
-				serialArgs[i] = DeepCopyExpr(fn.Args[1])
-			}
-		}
-		tuple, err := bindFuncExprAndConstFold(
-			builder.GetContext(), builder.compCtx.GetProcess(),
-			indexTableLookupSerialFunc(idxDef), serialArgs,
-		)
-		if err != nil || tuple == nil {
+	for row := 0; !prefilled && row < inVec.Length(); row++ {
+		tuple := builder.foldKeySetTuple(idxDef, filterList, filterPos, inVec, rowVec, row, mp)
+		if tuple == nil || tuple.GetVec() == nil {
 			return nil
 		}
 		tupleVec := tuple.GetVec()
-		if tupleVec == nil {
-			return nil
-		}
-		serializedKeyBytes += len(tupleVec.GetData())
-		if serializedKeyBytes > maxCompositePointBytes {
+		var ok bool
+		serializedKeyBytes, ok = addKeySetBytes(serializedKeyBytes, len(tupleVec.GetData()))
+		if !ok {
 			return nil
 		}
 		if exact {

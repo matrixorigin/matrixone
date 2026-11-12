@@ -127,7 +127,10 @@ func TestKeySetComponentCountMatchesFullSerializedTuples(t *testing.T) {
 			addIndexHintChoiceTableForTest(mock)
 			v := vector.NewVec(tc.typ)
 			defer v.Free(proc.Mp())
-			tc.append(t, v, proc.Mp())
+			// Nine or more rows exercise direct lowering as well as repeated values.
+			for repeat := 0; repeat < 3; repeat++ {
+				tc.append(t, v, proc.Mp())
+			}
 			data, err := v.MarshalBinary()
 			require.NoError(t, err)
 			typ := makePlan2Type(&tc.typ)
@@ -145,6 +148,27 @@ func TestKeySetComponentCountMatchesFullSerializedTuples(t *testing.T) {
 				}
 				b := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
 				idx := &IndexDef{Unique: true, Parts: []string{"left", "right"}}
+				rowVec := vector.NewVec(tc.typ)
+				fast, handled := b.fastExactKeySet(idx, filters, []int32{0, 1}, v, rowVec, types.T_varchar.ToType(), proc.Mp())
+				require.True(t, handled, "direct path must cover type and position")
+				require.NotNil(t, fast)
+				original := make(map[string]struct{})
+				for row := 0; row < v.Length(); row++ {
+					tuple := b.foldKeySetTuple(idx, filters, []int32{0, 1}, v, rowVec, row, proc.Mp())
+					require.NotNil(t, tuple)
+					require.NotNil(t, tuple.GetVec())
+					full := vector.NewVec(types.T_any.ToType())
+					require.NoError(t, full.UnmarshalBinary(tuple.GetVec().Data))
+					original[string(full.GetBytesAt(0))] = struct{}{}
+				}
+				fast.InplaceSortAndCompact()
+				require.Equal(t, len(original), fast.Length())
+				for row := 0; row < fast.Length(); row++ {
+					_, ok := original[string(fast.GetBytesAt(row))]
+					require.True(t, ok)
+				}
+				fast.Free(proc.Mp())
+				rowVec.Free(proc.Mp())
 				got := b.replaceKeySetCondition(idx, filters, []int32{0, 1}, 7, mock.ctxt.tables["uk_hint_ab"])
 				require.NotNil(t, got, "inFirst=%v", inFirst)
 				actualCount, ok := exactUniqueKeySetSize(got)
@@ -408,16 +432,16 @@ func TestDistinctKeySetConstantVectors(t *testing.T) {
 			var v *vector.Vector
 			var err error
 			if oid == types.T_int32 {
-				v, err = vector.NewConstFixed(typ, int32(2), 4, mp)
+				v, err = vector.NewConstFixed(typ, int32(2), 12, mp)
 			} else {
-				v, err = vector.NewConstBytes(typ, []byte{'a', 0, 255}, 4, mp)
+				v, err = vector.NewConstBytes(typ, []byte{'a', 0, 255}, 12, mp)
 			}
 			require.NoError(t, err)
 			defer v.Free(mp)
 			data, err := v.MarshalBinary()
 			require.NoError(t, err)
 			pTyp := makePlan2Type(&typ)
-			in := &planpb.Expr{Selectivity: .5, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "in"}, Args: []*planpb.Expr{GetColExpr(pTyp, 1, 1), {Typ: pTyp, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 4, Data: data}}}}}}}
+			in := &planpb.Expr{Selectivity: .5, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "in"}, Args: []*planpb.Expr{GetColExpr(pTyp, 1, 1), {Typ: pTyp, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 12, Data: data}}}}}}}
 			count, ok := distinctKeySetComponentCount(in)
 			require.True(t, ok)
 			require.Equal(t, 1, count)
@@ -432,7 +456,7 @@ func TestDistinctKeySetConstantVectors(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, count, actual)
 			}
-			vnull := vector.NewConstNull(typ, 4, mp)
+			vnull := vector.NewConstNull(typ, 12, mp)
 			defer vnull.Free(mp)
 			nullData, err := vnull.MarshalBinary()
 			require.NoError(t, err)
