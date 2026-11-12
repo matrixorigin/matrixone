@@ -235,6 +235,65 @@ func (c *PushClient) AcquireLogtailReadBarrier(
 	)
 }
 
+// AcquirePeerLogtailReadBarrier negotiates on the stream used for the barrier.
+// False means the peer did not advertise the capability; errors are returned
+// without selecting a fallback.
+func (c *PushClient) AcquirePeerLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, bool, error) {
+	if c.subscriber == nil {
+		return timestamp.Timestamp{}, false, moerr.NewInternalError(
+			ctx, "logtail subscriber is not initialized")
+	}
+	peer, err := c.subscriber.waitReadyClient(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, false, err
+	}
+	supported, err := peer.PeerSupportsReadBarrier(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, false, err
+	}
+	var frontier timestamp.Timestamp
+	if supported {
+		frontier, err = acquireAppliedLogtailReadBarrier(ctx, c.timestampWaiter, peer.ReadBarrier)
+		if err != nil {
+			return timestamp.Timestamp{}, true, err
+		}
+	}
+	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
+		return timestamp.Timestamp{}, supported, err
+	}
+	return frontier, supported, nil
+}
+
+// checkPeerReadBarrierReady is a point-in-time check, not a connection lease.
+// The pause owner takes c.mu before accessing the subscriber.
+func (c *PushClient) checkPeerReadBarrierReady(ctx context.Context, peer *service.LogtailClient) error {
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+	c.mu.Lock()
+	c.subscriber.mu.RLock()
+	current := !c.mu.paused && c.subscriber.mu.ready &&
+		c.subscriber.logTailClient == peer && c.receivedLogTailTime.ready.Load()
+	c.subscriber.mu.RUnlock()
+	c.mu.Unlock()
+	if !current {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+	select {
+	case <-peer.Done():
+		return moerr.NewStreamClosedNoCtx()
+	case <-peer.Broken():
+		return moerr.NewStreamClosedNoCtx()
+	default:
+		return nil
+	}
+}
+
 func acquireAppliedLogtailReadBarrier(
 	ctx context.Context,
 	timestampWaiter client.TimestampWaiter,

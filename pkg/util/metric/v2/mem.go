@@ -18,6 +18,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// MemObjectIOPooledSerialBytesGauge records Go-heap serialization capacity
+// owned by parked object-writing arenas, excluding active writers.
+var MemObjectIOPooledSerialBytesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "mo",
+	Subsystem: "mem",
+	Name:      "objectio_pooled_serial_bytes",
+	Help:      "Retained Go-heap serialization-buffer capacity in pooled object writers.",
+})
+
 var (
 	memMPoolAllocatedSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

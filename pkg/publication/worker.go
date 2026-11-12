@@ -258,6 +258,8 @@ type Worker interface {
 	UnregisterSyncProtection(jobID string)
 	// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
 	GetSyncProtectionTTL(jobID string) int64
+	// WatchSyncProtection returns one atomic TTL snapshot and its change notification.
+	WatchSyncProtection(jobID string) (int64, <-chan struct{})
 }
 
 // FilterObjectWorker is the interface for filter object worker pool
@@ -297,6 +299,7 @@ type WriteObjectJobInfo interface {
 type syncProtectionEntry struct {
 	jobID       string
 	ttlExpireTS atomic.Int64
+	changed     chan struct{} // protected by syncProtectionMu
 }
 
 type worker struct {
@@ -624,11 +627,12 @@ func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
 		return
 	}
 
-	entry := &syncProtectionEntry{
-		jobID: jobID,
+	entry := w.syncProtectionJobs[jobID]
+	if entry == nil {
+		entry = &syncProtectionEntry{jobID: jobID}
+		w.syncProtectionJobs[jobID] = entry
 	}
-	entry.ttlExpireTS.Store(ttlExpireTS)
-	w.syncProtectionJobs[jobID] = entry
+	entry.setTTL(ttlExpireTS)
 
 	logutil.Info("ccpr-worker registered sync protection",
 		zap.String("job_id", jobID),
@@ -641,6 +645,9 @@ func (w *worker) UnregisterSyncProtection(jobID string) {
 	w.syncProtectionMu.Lock()
 	defer w.syncProtectionMu.Unlock()
 
+	if entry := w.syncProtectionJobs[jobID]; entry != nil && entry.changed != nil {
+		close(entry.changed)
+	}
 	delete(w.syncProtectionJobs, jobID)
 
 	logutil.Info("ccpr-worker unregistered sync protection",
@@ -650,13 +657,35 @@ func (w *worker) UnregisterSyncProtection(jobID string) {
 
 // GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
 func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
+	ttl, _ := w.WatchSyncProtection(jobID)
+	return ttl
+}
+
+func (w *worker) WatchSyncProtection(jobID string) (int64, <-chan struct{}) {
 	w.syncProtectionMu.RLock()
 	defer w.syncProtectionMu.RUnlock()
-
-	if entry, exists := w.syncProtectionJobs[jobID]; exists {
-		return entry.ttlExpireTS.Load()
+	if entry := w.syncProtectionJobs[jobID]; entry != nil {
+		return entry.ttlExpireTS.Load(), entry.changed
 	}
-	return 0
+	return 0, nil
+}
+
+// The worker lock serializes the value and notification, including registration
+// updates and renewal replies. A snapshot cannot miss a deadline change.
+func (entry *syncProtectionEntry) setTTL(ttl int64) {
+	entry.ttlExpireTS.Store(ttl)
+	if entry.changed != nil {
+		close(entry.changed)
+	}
+	entry.changed = make(chan struct{})
+}
+
+func (w *worker) updateSyncProtectionTTL(jobID string, entry *syncProtectionEntry, ttl int64) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+	if w.syncProtectionJobs[jobID] == entry {
+		entry.setTTL(ttl)
+	}
 }
 
 // RunSyncProtectionKeepAlive runs a background goroutine that periodically renews
@@ -735,7 +764,7 @@ func (w *worker) renewAllSyncProtections() {
 		}
 
 		// Update the TTL in our tracking
-		entry.ttlExpireTS.Store(newTTLExpireTS)
+		w.updateSyncProtectionTTL(jobID, entry, newTTLExpireTS)
 		logutil.Debug("ccpr-worker renewed sync protection",
 			zap.String("job_id", jobID),
 			zap.Int64("new_ttl_expire_ts", newTTLExpireTS),

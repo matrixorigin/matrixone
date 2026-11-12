@@ -105,48 +105,92 @@ func (builder *QueryBuilder) flattenSubquery(
 	var scalarOuterResult *plan.Expr
 	var scalarExistential bool
 
+	rootLimitIsZero := builder.subqueryRootLimitIsZero(subID)
+	if rootLimitIsZero && (subquery.Typ == plan.SubqueryRef_IN || subquery.Typ == plan.SubqueryRef_NOT_IN ||
+		subquery.Typ == plan.SubqueryRef_ANY || subquery.Typ == plan.SubqueryRef_ALL) &&
+		!paginationExpressionSafe(subquery.Child) {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "empty quantified subquery with an unsafe left operand")
+	}
+	if rootLimitIsZero && builder.isPrepareStatement && subCtx.isCorrelated {
+		// Pulling predicates out of an empty input can remove their parameters
+		// from the reachable plan used for prepared-statement metadata.
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "prepared correlated subquery with LIMIT 0")
+	}
+
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
 	if subNode.NodeType == plan.Node_PROJECT &&
 		builder.qry.Nodes[subNode.Children[0]].NodeType == plan.Node_VALUE_SCAN &&
-		builder.qry.Nodes[subNode.Children[0]].TableDef == nil {
-		switch subquery.Typ {
-		case plan.SubqueryRef_SCALAR:
-			newProj, _ := decreaseDepth(subNode.ProjectList[0])
-			return nodeID, newProj, nil
-
-		case plan.SubqueryRef_EXISTS:
-			return nodeID, constTrue, nil
-
-		case plan.SubqueryRef_NOT_EXISTS:
-			return nodeID, constFalse, nil
-
-		case plan.SubqueryRef_IN:
-			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true)
-			if err != nil {
-				return 0, nil, err
+		builder.qry.Nodes[subNode.Children[0]].TableDef == nil && subNode.RankOption == nil {
+		// A SELECT without FROM produces one row before pagination. Do not
+		// replace it with that row when LIMIT/OFFSET make the result empty.
+		empty, knownBounds := false, true
+		if subNode.Limit != nil {
+			limit, ok := getLiteralUint64(subNode.Limit)
+			if !ok {
+				knownBounds = false
+			} else {
+				empty = limit == 0
 			}
-
-			return nodeID, newExpr, nil
-
-		case plan.SubqueryRef_NOT_IN:
-			newExpr, err := builder.generateRowComparison("<>", subquery.Child, subCtx, true)
-			if err != nil {
-				return 0, nil, err
+		}
+		if empty && subNode.Offset != nil {
+			if _, ok := getLiteralUint64(subNode.Offset); !ok {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), "empty subquery with a dynamic OFFSET")
 			}
-
-			return nodeID, newExpr, nil
-
-		case plan.SubqueryRef_ANY, plan.SubqueryRef_ALL:
-			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true)
-			if err != nil {
-				return 0, nil, err
+		}
+		if !empty && subNode.Offset != nil {
+			offset, ok := getLiteralUint64(subNode.Offset)
+			if !ok {
+				knownBounds = false
+			} else {
+				empty = offset > 0
 			}
+		}
+		if empty {
+			if builder.isPrepareStatement {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), "prepared empty subquery without FROM")
+			}
+			return builder.emptySubqueryResult(nodeID, subCtx, subquery)
+		}
+		if knownBounds {
+			switch subquery.Typ {
+			case plan.SubqueryRef_SCALAR:
+				newProj, _ := decreaseDepth(subNode.ProjectList[0])
+				return nodeID, newProj, nil
 
-			return nodeID, newExpr, nil
+			case plan.SubqueryRef_EXISTS:
+				return nodeID, constTrue, nil
 
-		default:
-			return 0, nil, moerr.NewNotSupportedf(builder.GetContext(), "%s subquery not supported", subquery.Typ.String())
+			case plan.SubqueryRef_NOT_EXISTS:
+				return nodeID, constFalse, nil
+
+			case plan.SubqueryRef_IN:
+				newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true)
+				if err != nil {
+					return 0, nil, err
+				}
+
+				return nodeID, newExpr, nil
+
+			case plan.SubqueryRef_NOT_IN:
+				newExpr, err := builder.generateRowComparison("<>", subquery.Child, subCtx, true)
+				if err != nil {
+					return 0, nil, err
+				}
+
+				return nodeID, newExpr, nil
+
+			case plan.SubqueryRef_ANY, plan.SubqueryRef_ALL:
+				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true)
+				if err != nil {
+					return 0, nil, err
+				}
+
+				return nodeID, newExpr, nil
+
+			default:
+				return 0, nil, moerr.NewNotSupportedf(builder.GetContext(), "%s subquery not supported", subquery.Typ.String())
+			}
 		}
 	}
 
@@ -155,16 +199,54 @@ func (builder *QueryBuilder) flattenSubquery(
 			builder.normalizeDirectCorrelatedScalarProjection(subID, subCtx)
 	}
 
-	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
+	var emptyScalarMarker *plan.Expr
+	if rootLimitIsZero && subquery.Typ == plan.SubqueryRef_SCALAR {
+		// A computed right-hand projection may be inlined above the join. Keep
+		// an actual right-side column so NULL extension cannot turn an empty
+		// subquery into a non-NULL scalar result.
+		if builder.paginationSubtreeExpressionsSafe(subID, true) {
+			emptyScalarMarker = builder.scalarSubqueryMarker(subID, subCtx, false)
+		}
+		if emptyScalarMarker == nil && subCtx.isCorrelated {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "empty scalar subquery without a right-side marker")
+		}
+	}
+
+	mayDiscardScalarRow, hasScalarPagination := false, false
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+		mayDiscardScalarRow, hasScalarPagination = builder.scalarPaginationProperties(subID)
+	}
+	pagination, byteKeyBoundary, preserveBoundary, err := builder.prepareCorrelatedPagination(nodeID, subID, subCtx, subquery.Typ)
 	if err != nil {
 		return 0, nil, err
+	}
+	if subquery.Typ == plan.SubqueryRef_SCALAR && byteKeyBoundary < 0 && preserveBoundary < 0 {
+		rewritten, err := builder.rewriteScalarPaginationExtremum(nodeID, subID, ctx, subCtx, pagination != nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		if rewritten {
+			pagination = nil
+		}
+	}
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, pagination, byteKeyBoundary, preserveBoundary)
+	if err != nil {
+		return 0, nil, err
+	}
+	if pagination != nil {
+		return builder.flattenPostJoinPagination(nodeID, subID, subCtx, preds, ctx, pagination)
 	}
 
 	// When a scalar aggregate subquery has non-equality correlated predicates,
 	// pullupThroughAgg forces inner expressions into GROUP BY, producing
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
 	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
-	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+	if subquery.Typ == plan.SubqueryRef_SCALAR && !rootLimitIsZero && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		// This owner bypasses the original AGG and its ancestors. It cannot
+		// preserve pagination that may remove the scalar aggregate row.
+		if mayDiscardScalarRow {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "non-equality scalar aggregate with row-discarding pagination")
+		}
 		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx)
 	}
 
@@ -194,11 +276,23 @@ func (builder *QueryBuilder) flattenSubquery(
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
 		var rewriteCount bool
+		var groupedMarker *plan.Expr
 
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
-		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
+		if len(joinPreds) > 0 && (!hasScalarPagination || len(subCtx.groups) == 0) &&
+			!mayDiscardScalarRow && builder.findAggrCount(subCtx.aggregates) {
 			rewriteCount = true
+		}
+		if hasScalarPagination && emptyScalarMarker == nil && len(joinPreds) > 0 && len(subCtx.groups) > 0 &&
+			builder.findAggrCount(subCtx.aggregates) && len(subCtx.projects) > 0 &&
+			!nullPropagatesFromAggregate(subCtx.projects[0], subCtx.aggregateTag) {
+			if paginationExpressionSafe(subCtx.projects[0]) {
+				groupedMarker = builder.scalarSubqueryMarker(subID, subCtx, true)
+			}
+			if groupedMarker == nil {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), "grouped scalar aggregate without a safe row marker")
+			}
 		}
 
 		if scalarExistential {
@@ -311,6 +405,15 @@ func (builder *QueryBuilder) flattenSubquery(
 					},
 				},
 				Typ: makePlan2Type(&returnType),
+			}
+		}
+		if groupedMarker != nil {
+			emptyScalarMarker = groupedMarker
+		}
+		if emptyScalarMarker != nil {
+			retExpr, err = builder.nullExtendScalarValue(emptyScalarMarker, retExpr)
+			if err != nil {
+				return 0, nil, err
 			}
 		}
 		return nodeID, retExpr, nil
@@ -432,12 +535,14 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 
 	nodeID := subID
 	existential := false
+	removesBoundary := false
 	for {
 		node := builder.qry.Nodes[nodeID]
 		if node.Offset != nil || node.RankOption != nil {
 			return subID, nil, nil, false
 		}
 		if node.Limit != nil {
+			removesBoundary = true
 			limit, ok := getLiteralUint64(node.Limit)
 			if !ok || limit == 0 {
 				return subID, nil, nil, false
@@ -448,6 +553,11 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 		}
 
 		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
+			// An aggregate may produce a row for empty input; do not turn
+			// such a subtree into an ordinary inner-row existence check.
+			if removesBoundary && !builder.paginationSubtreeExpressionsSafe(subID, false) {
+				return subID, nil, nil, false
+			}
 			if len(node.ProjectList) == 0 {
 				return subID, nil, nil, false
 			}
@@ -468,9 +578,12 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 			return subID, nil, nil, false
 		}
 		switch node.NodeType {
-		case plan.Node_PROJECT, plan.Node_SORT:
+		case plan.Node_PROJECT:
+		case plan.Node_SORT:
+			removesBoundary = true
 		case plan.Node_DISTINCT:
 			existential = true
+			removesBoundary = true
 		default:
 			return subID, nil, nil, false
 		}
@@ -1063,7 +1176,7 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 	outerTags := map[int32]bool{outerTag: true}
 	domainFilters := make([]*plan.Expr, 0, len(ctx.whereFilters))
 	for _, filter := range splitPlanConjunctions(ctx.whereFilters) {
-		if !hasSubquery(filter) && !scalarAggregateDomainContainsVolatile(filter) &&
+		if !hasSubquery(filter) && !exprMayChangeWhenRepeated(filter) &&
 			containsTag(filter, outerTag) && containsOnlyTags(filter, outerTags) {
 			domainFilters = append(domainFilters, DeepCopyExpr(filter))
 		}
@@ -1366,11 +1479,9 @@ func (builder *QueryBuilder) scalarAggregateGroupPos(
 	return ref.ColPos, true
 }
 
-// scalarAggregateDomainContainsVolatile reports whether evaluating expr more than once can
-// change its value. A copied predicate is evaluated by both the original
-// outer scan and the aggregate-domain scan, so volatile or unknown functions
-// must never be copied into the latter.
-func scalarAggregateDomainContainsVolatile(expr *plan.Expr) bool {
+// exprMayChangeWhenRepeated conservatively identifies expressions that cannot
+// be copied or shared between independent evaluations.
+func exprMayChangeWhenRepeated(expr *plan.Expr) bool {
 	if expr == nil {
 		return true
 	}
@@ -1387,7 +1498,7 @@ func scalarAggregateDomainContainsVolatile(expr *plan.Expr) bool {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if scalarAggregateDomainContainsVolatile(arg) {
+			if exprMayChangeWhenRepeated(arg) {
 				return true
 			}
 		}
@@ -1396,7 +1507,7 @@ func scalarAggregateDomainContainsVolatile(expr *plan.Expr) bool {
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if scalarAggregateDomainContainsVolatile(item) {
+			if exprMayChangeWhenRepeated(item) {
 				return true
 			}
 		}
@@ -1423,10 +1534,40 @@ func containsNonEqComparison(expr *plan.Expr) bool {
 			}
 		}
 		return false
+	}
+	return isNonEqComparison(name)
+}
+
+func isNonEqComparison(name string) bool {
+	switch name {
 	case "<", "<=", ">", ">=", "<>", "!=":
 		return true
+	default:
+		return false
 	}
-	return false
+}
+
+// A correlated comparison remains visible through logical ancestors during
+// pull-up; an uncorrelated subtree can instead be materialized as a column.
+func containsCorrelatedNonEqComparison(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	switch f.Func.ObjName {
+	case "and", "or", "not":
+		for _, arg := range f.Args {
+			if containsCorrelatedNonEqComparison(arg) {
+				return true
+			}
+		}
+		return false
+	default:
+		return isNonEqComparison(f.Func.ObjName) && hasCorrCol(expr)
+	}
 }
 
 // flattenScalarSubqueryWithNonEqAgg handles scalar subqueries that have
@@ -1732,7 +1873,10 @@ func replaceGroupTagRefs(expr *plan.Expr, groupTag int32, groupBy []*plan.Expr) 
 	return expr
 }
 
-func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
+func (builder *QueryBuilder) pullupCorrelatedPredicates(
+	nodeID int32, ctx *BindContext, subqueryType plan.SubqueryRef_Type, isSubqueryRoot bool, pagination *postJoinPagination, byteKeyBoundary, preserveBoundary int32,
+) (int32, []*plan.Expr, error) {
+	currentID := nodeID
 	node := builder.qry.Nodes[nodeID]
 
 	var preds []*plan.Expr
@@ -1740,7 +1884,10 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 
 	var subPreds []*plan.Expr
 	for i, childID := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx)
+		childIsSubqueryRoot := isSubqueryRoot && len(node.Children) == 1 &&
+			node.Limit == nil && node.Offset == nil &&
+			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx, subqueryType, childIsSubqueryRoot, pagination, byteKeyBoundary, preserveBoundary)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1759,6 +1906,16 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 		projectTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
+		}
+		if pagination != nil {
+			if pagination.marker != nil {
+				pagination.marker = builder.pullupThroughProj(ctx, node, projectTag, pagination.marker)
+			}
+			if pagination.crossed {
+				for _, order := range pagination.orderBy {
+					order.Expr = builder.pullupThroughProj(ctx, node, projectTag, order.Expr)
+				}
+			}
 		}
 
 	case plan.Node_FILTER:
@@ -1779,6 +1936,20 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 			nodeID = node.Children[0]
 		} else {
 			node.FilterList = newFilterList
+		}
+	}
+
+	if pagination != nil && currentID == pagination.boundary {
+		pagination.orderBy = DeepCopyOrderBySpecList(node.OrderBy)
+		pagination.crossed = true
+		node.Limit, node.Offset = nil, nil
+		if node.NodeType == plan.Node_SORT {
+			nodeID = node.Children[0]
+		}
+	} else if currentID != preserveBoundary && len(preds) > 0 && (node.Limit != nil || node.Offset != nil) {
+		nodeID, err = builder.rewriteCorrelatedPagination(nodeID, node, preds, ctx, subqueryType, isSubqueryRoot, currentID == byteKeyBoundary)
+		if err != nil {
+			return 0, nil, err
 		}
 	}
 

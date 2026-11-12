@@ -284,6 +284,7 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
+	defer c.endImportMemory()
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -345,6 +346,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.importMemoryPrepared = false
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -610,6 +612,9 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (err error) {
+	if err = c.beginImportMemory(); err != nil {
+		return err
+	}
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return err

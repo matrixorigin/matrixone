@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +236,220 @@ func encodeBarrierTestResponse(
 		MaxSequence: 1,
 		Payload:     payload,
 	}}, nil
+}
+
+type observedCapabilityContext struct {
+	context.Context
+	waiting chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (c *observedCapabilityContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.waiting)
+		if c.release != nil {
+			<-c.release
+		}
+	})
+	return c.Context.Done()
+}
+
+func TestLogtailClientPeerReadBarrierCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		advertised, explicitFalse bool
+	}{
+		{name: "true", advertised: true},
+		{name: "absent"},
+		{name: "explicit false", explicitFalse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			recvC := make(chan morpc.Message, 4)
+			stream.EXPECT().Receive().Return(recvC, nil)
+			stream.EXPECT().Close(true).AnyTimes().Return(nil)
+			peer, err := NewLogtailClient(t.Context(), stream)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			type result struct {
+				value bool
+				err   error
+			}
+			results := make(chan result, 3)
+			for range 3 {
+				waiting := &observedCapabilityContext{Context: ctx, waiting: make(chan struct{})}
+				go func() { value, e := peer.PeerSupportsReadBarrier(waiting); results <- result{value, e} }()
+				select {
+				case <-waiting.waiting:
+				case <-ctx.Done():
+					t.Fatal("capability wait did not start")
+				}
+			}
+			select {
+			case got := <-results:
+				t.Fatalf("unknown capability returned: %+v", got)
+			default:
+			}
+			sendSubscription := func(advertised, explicitFalse bool) {
+				sub := &logtail.SubscribeResponse{SupportsReadBarrier: advertised}
+				if explicitFalse {
+					sub.XXX_unrecognized = []byte{0x10, 0x00}
+				}
+				resp := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: sub}}}
+				segment, e := encodeBarrierTestResponse(resp)
+				require.NoError(t, e)
+				recvC <- segment
+			}
+			sendSubscription(tc.advertised, tc.explicitFalse)
+			received := make(chan error, 1)
+			ownerRelease := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseOwner := func() { releaseOnce.Do(func() { close(ownerRelease) }) }
+			defer releaseOwner()
+			go func() { _, e := peer.Receive(ctx); received <- e; <-ownerRelease }()
+			for range 3 {
+				select {
+				case got := <-results:
+					require.NoError(t, got.err)
+					require.Equal(t, tc.advertised, got.value)
+				case <-ctx.Done():
+					t.Fatal("capability wait did not finish")
+				}
+			}
+			require.NoError(t, <-received)
+			// The owner has not dispatched the response, but the decoded capability
+			// is already published to all waiters.
+			releaseOwner()
+			sendSubscription(tc.advertised, tc.explicitFalse)
+			_, err = peer.Receive(ctx)
+			require.NoError(t, err)
+			sendSubscription(!tc.advertised, false)
+			_, err = peer.Receive(ctx)
+			require.ErrorContains(t, err, "inconsistent")
+			_, err = peer.PeerSupportsReadBarrier(ctx)
+			require.Error(t, err, "a broken peer must not select a fallback")
+		})
+	}
+}
+
+func TestLogtailClientPeerCapabilityWaitStops(t *testing.T) {
+	for _, how := range []string{"caller canceled", "peer closed", "peer broken", "malformed response", "error response"} {
+		t.Run(how, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			recvC := make(chan morpc.Message, 1)
+			stream.EXPECT().Receive().Return(recvC, nil)
+			stream.EXPECT().Close(true).AnyTimes().Return(nil)
+			peer, err := NewLogtailClient(t.Context(), stream)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			waiting := &observedCapabilityContext{Context: ctx, waiting: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() { _, e := peer.PeerSupportsReadBarrier(waiting); done <- e }()
+			select {
+			case <-waiting.waiting:
+			case <-ctx.Done():
+				t.Fatal("capability wait did not start")
+			}
+			switch how {
+			case "caller canceled":
+				cancel()
+			case "peer closed":
+				require.NoError(t, peer.Close())
+			case "peer broken":
+				peer.markStreamBroken()
+			case "malformed response":
+				recvC <- &LogtailResponseSegment{MessageSegment: logtail.MessageSegment{MessageSize: 1, Sequence: 1, MaxSequence: 1, Payload: []byte{0xff}}}
+				_, err = peer.Receive(ctx)
+				require.Error(t, err)
+			case "error response":
+				segment, e := encodeBarrierTestResponse(&LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+					Response: &logtail.LogtailResponse_Error{Error: &logtail.ErrorResponse{}},
+				}})
+				require.NoError(t, e)
+				recvC <- segment
+				response, e := peer.Receive(ctx)
+				require.NoError(t, e)
+				require.NotNil(t, response.GetError())
+			}
+			if how == "malformed response" || how == "error response" {
+				select {
+				case <-peer.capabilityReady:
+					t.Fatalf("%s published a capability", how)
+				default:
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("%s resolved capability: %v", how, err)
+				default:
+				}
+				cancel()
+			}
+			select {
+			case err := <-done:
+				require.Error(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("capability wait did not stop")
+			}
+		})
+	}
+}
+
+func TestLogtailClientPeerCapabilityStopWinsReady(t *testing.T) {
+	for _, how := range []string{"caller canceled", "peer closed", "peer broken"} {
+		t.Run(how, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			recvC := make(chan morpc.Message, 1)
+			stream.EXPECT().Receive().Return(recvC, nil)
+			stream.EXPECT().Close(true).AnyTimes().Return(nil)
+			peer, err := NewLogtailClient(t.Context(), stream)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			waiting := &observedCapabilityContext{Context: ctx, waiting: make(chan struct{}), release: release}
+			done := make(chan error, 1)
+			go func() { _, e := peer.PeerSupportsReadBarrier(waiting); done <- e }()
+			select {
+			case <-waiting.waiting:
+			case <-ctx.Done():
+				t.Fatal("capability wait did not start")
+			}
+			segment, err := encodeBarrierTestResponse(&LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+				Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{}},
+			}})
+			require.NoError(t, err)
+			recvC <- segment
+			_, err = peer.Receive(ctx)
+			require.NoError(t, err)
+			switch how {
+			case "caller canceled":
+				cancel()
+			case "peer closed":
+				require.NoError(t, peer.Close())
+			case "peer broken":
+				peer.markStreamBroken()
+			}
+			unblock()
+			select {
+			case err := <-done:
+				require.Error(t, err, "a stopped peer must not select legacy fallback")
+			case <-time.After(5 * time.Second):
+				t.Fatal("capability wait did not stop")
+			}
+		})
+	}
 }
 
 func TestLogtailClientReadBarrierCancellationRemovesPendingRequest(t *testing.T) {

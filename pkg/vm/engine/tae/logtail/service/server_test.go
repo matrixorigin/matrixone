@@ -86,6 +86,7 @@ func TestService(t *testing.T) {
 		resp, err := logtailClient.Receive(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, resp.GetSubscribeResponse())
+		require.True(t, resp.GetSubscribeResponse().GetSupportsReadBarrier())
 		require.Equal(t, tableA.String(), resp.GetSubscribeResponse().Logtail.Table.String())
 	}
 

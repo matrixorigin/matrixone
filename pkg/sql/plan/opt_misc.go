@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1230,12 +1229,14 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
+	// Session variables include the global default inherited at connection
+	// creation. CN runtime variables are shared by unrelated sessions.
+	v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false)
+	if err != nil {
 		return
 	}
-	str := v.(string)
-	if len(str) == 0 {
+	str, ok := v.(string)
+	if !ok || len(str) == 0 {
 		return
 	}
 	kvs := strings.Split(str, ",")

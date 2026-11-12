@@ -729,6 +729,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
+	// ADD INDEX reads the base relation just like CREATE INDEX. Once the
+	// existing ALTER locks are held, advance an RC snapshot before any index
+	// backfill when the TN supports the ordered barrier.
+	if !isTemp {
+		for _, action := range qry.Actions {
+			if action.GetAddIndex() != nil {
+				if err = c.advanceIndexDDLSnapshot(); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+
 	var hasUpdateConstraints bool
 	var hasDefReplace bool
 
@@ -2559,20 +2573,23 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			tempTableSession.AddTempTable(qry.Database, alias, realName)
 		}
 	}
-	{
-		// lockMoTable will lock Table  mo_catalog.mo_tables
-		// for the row with db_name=dbName & table_name = tblName。
-		dbName := c.db
-		if qry.GetDatabase() != "" {
-			dbName = qry.GetDatabase()
+	// Serialize the logical catalog owner first. A waiter may have planned
+	// against the definition held by the preceding transaction, so every retry
+	// at this boundary must rebuild the CREATE INDEX plan.
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	tblName := qry.GetTableDef().GetName()
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
-		tblName := qry.GetTableDef().GetName()
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
-		}
-		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			return err
-		}
+		return err
 	}
 
 	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
@@ -2583,6 +2600,18 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	r, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
 		return err
+	}
+	// CREATE INDEX reads the complete base relation and then publishes a new
+	// write target. For pessimistic RC transactions that participate in these
+	// locks, the definition-change fence makes later stale DML plans rebuild
+	// with the new index target. A supported barrier also includes prior commits.
+	if err = lockTable(c.proc.Ctx, c.e, c.proc, r, dbName, true); err != nil {
+		return err
+	}
+	if !qry.GetTableDef().GetIsTemporary() {
+		if err = c.advanceIndexDDLSnapshot(); err != nil {
+			return err
+		}
 	}
 
 	ps := c.proc.GetPartitionService()
@@ -2617,6 +2646,54 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 	registerTempIndexAliases()
+	return nil
+}
+
+// advanceIndexDDLSnapshot closes the gap between index DDL planning and its
+// base-table scan for pessimistic RC transactions when the TN advertises the
+// ordered barrier. Old peers retain the previous snapshot behavior during a
+// rolling upgrade. The caller holds the catalog-owner and definition locks.
+func (c *Compile) advanceIndexDDLSnapshot() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
+		return nil
+	}
+	if err := c.proc.Ctx.Err(); err != nil {
+		return context.Cause(c.proc.Ctx)
+	}
+	if !supportsLogtailReadBarrier(c.proc.GetService()) {
+		return nil
+	}
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"index DDL logtail read barrier is unavailable")
+	}
+	peerBarrier, ok := barrier.(engine.PeerLogtailReadBarrier)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"index DDL peer logtail read barrier is unavailable")
+	}
+	frontier, supported, err := peerBarrier.AcquirePeerLogtailReadBarrier(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return nil
+	}
+
+	workspace := txnOp.GetWorkspace()
+	if workspace == nil {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"missing workspace for index DDL snapshot refresh")
+	}
+	if err = workspace.AdvanceSnapshot(c.proc.Ctx, frontier); err != nil {
+		return err
+	}
+	if !txnOp.SnapshotTS().Greater(frontier) {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"index DDL transaction snapshot did not advance past the logtail frontier")
+	}
 	return nil
 }
 

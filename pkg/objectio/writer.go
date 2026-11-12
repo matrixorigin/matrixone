@@ -36,6 +36,10 @@ import (
 // for unusually large block write cycles.
 const arenaMaxSize = 128 * 1024 * 1024
 
+// Large serialization buffers are useful within a write cycle but should not
+// remain in the arena pool after the writer returns its arena.
+const arenaSerialRetainLimit = 16 << 20
+
 // arenaMPool is a dedicated off-heap allocator for WriteArena buffers.
 // Using mpool with offHeap=true routes through C.calloc/C.free, keeping
 // the backing arrays out of Go's heap and invisible to pprof inuse_space.
@@ -46,6 +50,7 @@ type WriteArena struct {
 	usedOffset     int
 	compressBuf    []byte
 	serialBuf      bytes.Buffer // reused for column serialization across write cycles
+	serialPeak     int          // largest serialized column in the current write cycle
 	totalRequested int          // sum of all Alloc sizes in the current cycle
 	sizeLimit      int          // max data growth; 0 means arenaMaxSize
 }
@@ -81,9 +86,15 @@ func (a *WriteArena) Alloc(size int) []byte {
 // power-of-two capacity large enough to hold an equivalent cycle
 // without any fallback allocations.
 func (a *WriteArena) Reset() {
+	// Keep a large buffer while this owner still writes similarly sized
+	// columns, but release an old peak after a smaller write cycle.
+	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit &&
+		a.serialPeak <= (a.serialBuf.Cap()-1)/2)
 	limit := a.sizeLimit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = arenaMaxSize
+	} else if limit < 0 {
+		limit = 0
 	}
 	if needed := a.totalRequested; needed > len(a.data) && needed <= limit {
 		newCap := arenaNextPow2(needed)
@@ -100,6 +111,15 @@ func (a *WriteArena) Reset() {
 	}
 	a.usedOffset = 0
 	a.totalRequested = 0
+}
+
+func (a *WriteArena) resetSerialBuf(drop bool) {
+	if drop {
+		a.serialBuf = bytes.Buffer{}
+	} else {
+		a.serialBuf.Reset()
+	}
+	a.serialPeak = 0
 }
 
 func arenaNextPow2(n int) int {
@@ -144,9 +164,15 @@ func arenaCompressBufSize(minSize int) int {
 	return size
 }
 
-// FreeBuffers releases the off-heap data and compressBuf allocations.
+// Allocated counts the complete retained capacity, including Go serialization.
+func (a *WriteArena) Allocated() int {
+	return cap(a.data) + cap(a.compressBuf) + a.serialBuf.Cap()
+}
+
+// FreeBuffers releases the off-heap allocations and serialization scratch.
 // Call this before dropping an arena that won't be returned to the pool.
 func (a *WriteArena) FreeBuffers() {
+	a.resetSerialBuf(true)
 	if a.data != nil {
 		arenaMPool.Free(a.data)
 		a.data = nil
@@ -816,6 +842,9 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		sbuf.Write(EncodeIOEntryHeader(&h))
 		if err := vec.MarshalBinaryWithBuffer(sbuf); err != nil {
 			return 0, err
+		}
+		if w.arena != nil && sbuf.Len() > w.arena.serialPeak {
+			w.arena.serialPeak = sbuf.Len()
 		}
 		var ext Extent
 		var err error

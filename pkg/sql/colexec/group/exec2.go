@@ -85,18 +85,25 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
+		compactHashKey := true
 		for _, expr := range group.GroupBy {
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
 			}
+			if types.T(expr.Typ.Id).FixedLength() < 0 {
+				// Declared character widths do not bound UTF-8 byte lengths, and
+				// H8 cannot preserve variable-length field boundaries. Use HStr's
+				// length-delimited full keys even for narrow declarations.
+				compactHashKey = false
+			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
 			group.ctr.keyWidth += int32(width)
 		}
 
-		if group.ctr.keyWidth == 0 {
+		if len(group.GroupBy) == 0 {
 			group.ctr.mtyp = H0
-		} else if group.ctr.keyWidth <= 8 {
+		} else if compactHashKey && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
 		} else {
 			group.ctr.mtyp = HStr

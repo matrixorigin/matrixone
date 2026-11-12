@@ -1512,59 +1512,98 @@ func TestLastActiveWithStream(t *testing.T) {
 	)
 }
 
-// TestReadLoopInternalMessageDoesNotUpdateLastActive covers the fix: readLoop must only call
-// active() for non-internal messages. Heartbeat (ping/pong) is internal and must not update
-// LastActiveTime, so idle timeout can still collect backends that only receive heartbeats.
+// Internal responses must not keep an otherwise idle backend active, while a
+// user response must update its activity time.
 func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
-	// Event-driven: wait for server to send pong (pongSent), then assert lastActive unchanged (no Sleep ordering).
-	pongSent := make(chan struct{}, 1)
-	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			request := msg.(RPCMessage)
-			if request.InternalMessage() {
-				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
-					select {
-					case pongSent <- struct{}{}:
-					default:
-					}
-					return conn.Write(RPCMessage{
-						Ctx:      request.Ctx,
-						internal: true,
-						Message:  &flagOnlyMessage{flag: flagPong, id: m.id},
-					}, goetty.WriteOptions{Flush: true})
-				}
-			}
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
-		},
-		func(b *remoteBackend) {
-			t0 := b.LastActiveTime()
-			select {
-			case <-pongSent:
-			case <-time.After(10 * time.Second):
-				t.Fatal("timeout waiting for pong (heartbeat may not have fired or readLoop stalled)")
-			}
-			deadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(deadline) {
-				runtime.Gosched()
-				if b.LastActiveTime().Equal(t0) {
-					break
-				}
-			}
-			require.True(t, b.LastActiveTime().Equal(t0), "internal (pong) message must not call active(); lastActive changed")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
-			defer f.Close()
-			_, err = f.Get()
-			assert.NoError(t, err)
-			t2 := b.LastActiveTime()
-			assert.True(t, t2.After(t0), "user response must call active() and update lastActive")
-		},
-		WithBackendReadTimeout(30*time.Millisecond),
-	)
+	// Keep this test independent of other processes using the shared test socket.
+	socketDir, err := os.MkdirTemp("", "mo-morpc-active-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	unixFile := filepath.Join(socketDir, "rpc.sock")
+	addr := "unix://" + unixFile
+
+	received := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	app := newTestAppWithAddr(t, addr, unixFile, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		request := msg.(RPCMessage)
+		response := msg
+		if request.InternalMessage() {
+			ping, ok := request.Message.(*flagOnlyMessage)
+			if !ok || ping.flag != flagPing {
+				return fmt.Errorf("unexpected internal request: %T", request.Message)
+			}
+			response = RPCMessage{
+				Ctx:      request.Ctx,
+				internal: true,
+				Message:  &flagOnlyMessage{flag: flagPong, id: ping.id},
+			}
+		}
+		select {
+		case received <- struct{}{}:
+		case <-done:
+			return context.Canceled
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case <-release:
+			return conn.Write(response, goetty.WriteOptions{Flush: true})
+		case <-done:
+			return context.Canceled
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+
+	testBackendSendWithoutServer(t, addr, func(b *remoteBackend) {
+		defer close(done)
+		waitForRequest := func() {
+			t.Helper()
+			select {
+			case <-received:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+		releaseResponse := func() {
+			t.Helper()
+			select {
+			case release <- struct{}{}:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+		sentinel := time.Unix(1, 0)
+
+		ping, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+		require.NoError(t, err)
+		defer ping.Close()
+		waitForRequest()
+		b.atomic.lastActiveTime.Store(sentinel)
+		releaseResponse()
+		response, err := ping.Get()
+		require.NoError(t, err)
+		pong, ok := response.(*flagOnlyMessage)
+		require.True(t, ok, "unexpected pong type %T", response)
+		require.Equal(t, flagPong, pong.flag)
+		require.True(t, b.LastActiveTime().Equal(sentinel), "internal response must not update lastActive")
+
+		user, err := b.Send(ctx, newTestMessage(1))
+		require.NoError(t, err)
+		defer user.Close()
+		waitForRequest()
+		b.atomic.lastActiveTime.Store(sentinel)
+		releaseResponse()
+		_, err = user.Get()
+		require.NoError(t, err)
+		require.True(t, b.LastActiveTime().After(sentinel), "user response must update lastActive")
+	}, WithBackendRequestRelease(func(Message) {}))
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
