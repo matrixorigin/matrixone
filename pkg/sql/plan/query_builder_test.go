@@ -9704,6 +9704,30 @@ func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
 	}
 }
 
+func TestBindVectorBetween(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		query string
+		want  bool
+	}{
+		{"select cast('[1,2,3]' as vecf32(3)) between cast('[0,0,0]' as vecf32(3)) and cast('[9,9,9]' as vecf32(3))", true},
+		{"select cast('[1,2,3]' as vecbf16(3)) between '[0,0,0]' and '[9,9,9]'", true},
+		{"select cast('[1,2,3]' as vecf32(3)) between cast('[0,0,0]' as vecf64(3)) and cast('[0,0,1]' as vecf8(3))", false},
+		{"select cast('[1,2,3]' as vecint8(3)) between cast('[0,0,0]' as vecf16(3)) and cast('[9,9,9]' as vecf4(3))", true},
+	} {
+		p, err := runOneStmt(mock, t, tc.query)
+		require.NoError(t, err, tc.query)
+		root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+		expr := root.ProjectList[0]
+		require.NotContains(t, expr.String(), `obj_name:"between"`, tc.query)
+		if lit := expr.GetLit(); lit != nil {
+			require.Equal(t, tc.want, lit.GetBval(), tc.query)
+		} else {
+			require.Equal(t, "and", expr.GetF().Func.ObjName, tc.query)
+		}
+	}
+}
+
 func TestIffVectorCommonType(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, query := range []string{
@@ -9732,6 +9756,8 @@ func TestIffVectorCommonType(t *testing.T) {
 		{name: "vecf16", literal: "[1,2]"},
 		{name: "vecint8", literal: "[-128,127]"},
 		{name: "vecuint8", literal: "[0,255]"},
+		{name: "vecf8", literal: "[1,2]"},
+		{name: "vecf4", literal: "[1,2]"},
 	}
 	for i := 0; i < len(vectorTypes); i++ {
 		for j := i + 1; j < len(vectorTypes); j++ {
@@ -9740,15 +9766,14 @@ func TestIffVectorCommonType(t *testing.T) {
 				p, err := runOneStmt(mock, t,
 					fmt.Sprintf("select if(false, cast('%s' as %s(2)), cast('%s' as %s(2)))",
 						left.literal, left.name, right.literal, right.name))
-				if (left.name == "vecf32" && right.name == "vecf64") ||
-					(left.name == "vecf64" && right.name == "vecf32") {
-					require.NoError(t, err)
-					root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
-					require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
-					continue
+				require.NoError(t, err, "%s, %s", left.name, right.name)
+				want := types.T_array_float32
+				if left.name == "vecf64" || right.name == "vecf64" {
+					want = types.T_array_float64
 				}
-				require.Error(t, err)
-				require.Contains(t, err.Error(), "invalid argument function if")
+				root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+				require.Equal(t, int32(want), root.ProjectList[0].Typ.Id, "%s, %s", left.name, right.name)
+				require.Equal(t, int32(2), root.ProjectList[0].Typ.Width)
 			}
 		}
 	}

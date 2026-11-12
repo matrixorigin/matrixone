@@ -147,7 +147,7 @@ func (txn *Transaction) transferWorkspaceWritesForAlterLocked(
 			var err error
 			transferred := cur
 			transferred.tableName = tableName // in case renaming
-			transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+			transferred.bat, err = txn.copyWorkspaceBatch(cur.bat)
 			transferred.accountedSize = 0
 			// Ownership of the key index and its budget bytes stays with the
 			// original entry until its rows are shrunk away: the duplicate
@@ -629,20 +629,21 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			return nil, err
 		}
 
-		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVec)
-
-		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < ll; i++ {
-			if err := vector.AppendFixed(
-				genRowidVec,
-				rowIds[i],
-				false,
-				txn.proc.Mp(),
-			); err != nil {
+		// A normal INSERT already owns both vectors through this workspace.
+		// Adopt the generated buffer instead of charging and copying it twice.
+		if vector.AllocationAccountSelectionsEqual(bat.AllocationAccountSelection(), rowIdVec.AllocationAccountSelection()) {
+			genRowidVec = rowIdVec
+			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+			rowIdVec = nil // the batch is now the sole release owner
+		} else {
+			// Raw WriteBatch callers retain their destination provenance. Their
+			// rowids cross an ownership boundary, so an independent copy is needed.
+			genRowidVec, err = rowIdVec.CloneToFlatCompactWithAllocation(txn.proc.Mp(), bat.AllocationAccountSelection())
+			if err != nil {
 				return nil, err
 			}
+			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 		}
-		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 
 	}
 
@@ -3652,7 +3653,7 @@ func (txn *Transaction) stageWorkspaceRecordLocked(
 	// as before.
 	txn.hasS3Op.Store(true)
 
-	copied, err := inputBat.Dup(txn.proc.Mp())
+	copied, err := txn.copyWorkspaceBatch(inputBat)
 	if err != nil {
 		txn.retainFreshRecordPreparationFailureLocked(typ, inputBat,
 			"record preparation failed at its own batch copy: the recording side fail-open-retains the reservation-less names so a remote fragment's persisted files keep their cleanup owner (issue #25590 round-22 review)")
@@ -4589,47 +4590,36 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 // in these rowIds, every objectio.BlockMaxRows rowIds share one blockId
 // and the row offsets always start from 0.
 // the users need to free the returned vector by themselves.
-func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
-
-	var (
-		ptr = 0
-		ret *vector.Vector
-	)
-
-	for ptr < count {
-		if err := txn.currentRowId.IncrBlk(); err != nil {
-			return nil, err
+func (txn *Transaction) batchAllocNewRowIds(count int) (ret *vector.Vector, err error) {
+	if count == 0 {
+		return nil, nil
+	}
+	ret, err = txn.newWorkspaceVector(types.T_Rowid.ToType())
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			ret.Free(txn.proc.Mp())
+			ret = nil
 		}
-
-		ll := options.DefaultBlockMaxRows
-		if ptr+ll > count {
-			ll = count - ptr
+	}()
+	if err = ret.PreExtend(count, txn.proc.Mp()); err != nil {
+		return ret, err
+	}
+	for ptr := 0; ptr < count; {
+		if err = txn.currentRowId.IncrBlk(); err != nil {
+			return ret, err
 		}
-
-		if vec, err := objectio.ConstructRowidColumn(
-			txn.currentRowId.BorrowBlockID(),
-			0,
-			uint32(ll),
-			txn.proc.Mp()); err != nil {
-			return nil, err
-		} else if ret == nil {
-			ret = vec
-		} else {
-			if err = ret.UnionBatch(
-				vec,
-				0,
-				vec.Length(),
-				nil,
-				txn.proc.Mp()); err != nil {
-				vec.Free(txn.proc.Mp())
-				return nil, err
+		ll := min(options.DefaultBlockMaxRows, count-ptr)
+		for i := 0; i < ll; i++ {
+			rid := objectio.NewRowid(txn.currentRowId.BorrowBlockID(), uint32(i))
+			if err = vector.AppendFixed(ret, rid, false, txn.proc.Mp()); err != nil {
+				return ret, err
 			}
-			vec.Free(txn.proc.Mp())
 		}
-
 		ptr += ll
 	}
-
 	return ret, nil
 }
 
@@ -4766,10 +4756,17 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 			}
 
-			// Stage the merged batch: the anchor's full copy carries the
-			// rows of every source and the regenerated rowids. None of
-			// the workspace entries is touched before this completes.
-			staged, dupErr := a.bat.Dup(mp)
+			// Stage only columns whose values survive publication. INSERT rowids
+			// have already been regenerated, so copying old ones wastes budget.
+			firstColumn := 0
+			if rowIdVector != nil {
+				firstColumn = 1
+			}
+			payload := batch.NewWithSize(0)
+			payload.Vecs, payload.Attrs = a.bat.Vecs[firstColumn:], a.bat.Attrs[firstColumn:]
+			payload.SetRowCount(a.bat.RowCount())
+			payload.Recursive, payload.ShuffleIDX = a.bat.Recursive, a.bat.ShuffleIDX
+			staged, dupErr := txn.copyWorkspaceBatch(payload)
 			if dupErr != nil {
 				if rowIdVector != nil {
 					rowIdVector.Free(mp)
@@ -4777,7 +4774,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				return dupErr
 			}
 			for _, j := range sources {
-				if _, aerr := staged.Append(ctx, mp, txn.writes[j].bat); aerr != nil {
+				source := txn.writes[j].bat
+				payload.Vecs, payload.Attrs = source.Vecs[firstColumn:], source.Attrs[firstColumn:]
+				payload.SetRowCount(source.RowCount())
+				if _, aerr := staged.Append(ctx, mp, payload); aerr != nil {
 					staged.Clean(mp)
 					if rowIdVector != nil {
 						rowIdVector.Free(mp)
@@ -4786,17 +4786,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 			}
 			if rowIdVector != nil {
-				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVector)
-				for x := range staged.RowCount() {
-					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](
-						staged.Vecs[0], x, rowIds[x],
-					); err != nil {
-						staged.Clean(mp)
-						rowIdVector.Free(mp)
-						return err
-					}
-				}
-				rowIdVector.Free(mp)
+				// All fallible work is complete. The staged batch becomes the
+				// sole owner; no old rowid was copied, appended or overwritten.
+				staged.InsertVector(0, objectio.PhysicalAddr_Attr, rowIdVector)
+				staged.SetRowCount(rowCount) // also handles a rowid-only batch
+				rowIdVector = nil
 			}
 
 			// Every fallible step succeeded: publish the merged batch and
@@ -5215,7 +5209,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				// last allocation of the fallible prefix. The staged copy
 				// transfers to the workspace entry in the publication loop
 				// below, whose steps cannot fail anymore.
-				entryBat, err := bat.Dup(txn.proc.Mp())
+				entryBat, err := txn.copyWorkspaceBatch(bat)
 				bat.Clean(txn.proc.Mp())
 				if err != nil {
 					cleanStagedRepubs()
@@ -6209,6 +6203,7 @@ func (txn *Transaction) delTransaction() {
 	txn.loadFiles = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
+	txn.closeWorkspaceAllocation()
 
 	//txn.transfer.workerPool.Release()
 	txn.transfer.statements = nil
