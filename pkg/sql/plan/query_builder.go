@@ -2402,7 +2402,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
 		if grouping {
-			subCtx.groupingStage = &groupingStage{orderBy: astOrderBy}
+			subCtx.groupingStage = &groupingStage{orderBy: astOrderBy, distinct: distinct}
 		}
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
@@ -3974,6 +3974,15 @@ func (builder *QueryBuilder) bindOrderBy(
 		return
 	}
 
+	if ctx.groupingStage != nil && ctx.groupingStage.distinct {
+		projectionBinder.orderByProjects = make(map[string]*plan.Expr, len(ctx.aliasMap))
+		for name, alias := range ctx.aliasMap {
+			if alias.astExpr != nil {
+				projectionBinder.orderByProjects[name] = ctx.projects[alias.idx]
+			}
+		}
+		defer func() { projectionBinder.orderByProjects = nil }()
+	}
 	orderBinder := NewOrderBinder(projectionBinder, selectList)
 	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 	for _, order := range astOrderBy {

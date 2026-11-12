@@ -543,8 +543,11 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	case *tree.UnresolvedName:
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
-			if expandAlias == AliasBeforeColumn {
+			if expandAlias == AliasBeforeColumn || expandAlias == AliasAsOutput {
 				if selectItem, ok := bc.aliasMap[col]; ok {
+					if expandAlias == AliasAsOutput {
+						return astExpr, nil
+					}
 					if selectItem.astExpr != nil {
 						return selectItem.astExpr, nil
 					}

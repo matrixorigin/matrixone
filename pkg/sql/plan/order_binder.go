@@ -119,7 +119,11 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 	}
 
-	astExpr, err := b.ctx.qualifyColumnNames(astExpr, AliasBeforeColumn)
+	aliasMode := AliasBeforeColumn
+	if len(b.orderByProjects) > 0 {
+		aliasMode = AliasAsOutput
+	}
+	astExpr, err := b.ctx.qualifyColumnNames(astExpr, aliasMode)
 	if err != nil {
 		return nil, err
 	}

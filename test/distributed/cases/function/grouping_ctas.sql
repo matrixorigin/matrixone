@@ -354,4 +354,30 @@ order by chosen+0,flag desc limit 3;
 select distinct grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
 order by chosen+0,flag desc limit 3;
 
+-- 复合子查询左值必须继承 subtotal 的 nullable，不能把 UNKNOWN 当作 ANTI 的不匹配。
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+create table compound_operand_filtered as
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+select * from compound_operand_filtered;
+select count(*) from compound_operand_filtered;
+select g from (select g,g+0 not in(select id from pk_src) flag from src group by g with rollup) t where flag;
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where flag is null;
+select g from (select g,coalesce(g,0) in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+select g from (select g,g+0 in(select id from pk_src where id<0) flag from src group by g with rollup) t where not flag order by g;
+
+-- DISTINCT 排序依赖选出的子查询别名，不重复绑定/展开同一个 alias；CTAS 保留原别名。
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+create table scalar_alias_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+select * from scalar_alias_order;
+select distinct coalesce((select max(id) from pk_src),0) k from src group by g with rollup order by k+1;
+select distinct (select count(*) from pk_src) k from src group by g with rollup order by abs(k) desc limit 1;
+select distinct (select id from pk_src where id<0) k from src group by g with rollup order by k+1;
+select distinct (select max(id) from pk_src) a,(select min(id) from pk_src) b
+from src group by g with rollup order by a+1,b+1;
+create table rejected_scalar_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by g+1;
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_scalar_order';
+
 drop database grouping_ctas_test;

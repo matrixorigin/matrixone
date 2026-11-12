@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // Grouping sets merge branch-owned grouped or sampled values before global
@@ -34,6 +35,7 @@ type groupingStage struct {
 	having       []*plan.Expr
 	resultLen    int
 	notCacheable bool
+	distinct     bool
 
 	// SAMPLE also carries arbitrary input columns through its output. Its
 	// complete post-sample projection is transported, rather than a key list.
@@ -48,7 +50,6 @@ type groupingStage struct {
 // Walk only this expression's scope. Subquery plans keep their own bindings;
 // the quantified operand belongs to the outer scope. Frame bounds are constants.
 func walkGroupingExpr(expr *plan.Expr, visit func(*plan.Expr)) {
-	visit(expr)
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
 			walkGroupingExpr(arg, visit)
@@ -71,6 +72,9 @@ func walkGroupingExpr(expr *plan.Expr, visit func(*plan.Expr)) {
 	if sub := expr.GetSub(); sub != nil && sub.Child != nil {
 		walkGroupingExpr(sub.Child, visit)
 	}
+	// Rebinding can weaken a child proof. Consumers must see the new child
+	// state before recomputing their own proof (notably quantified operands).
+	visit(expr)
 }
 
 func (builder *QueryBuilder) appendGroupingStage(
@@ -169,6 +173,12 @@ func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *pla
 	walkGroupingExpr(expr, func(e *plan.Expr) {
 		col := e.GetCol()
 		if col == nil {
+			if fn := e.GetF(); fn != nil {
+				e.Typ.NotNullable = function.DeduceNotNullable(fn.Func.Obj, fn.Args)
+			} else if w := e.GetW(); w != nil {
+				e.Typ.NotNullable = function.DeduceWindowNotNullable(w)
+				w.WindowFunc.Typ.NotNullable = e.Typ.NotNullable
+			}
 			return
 		}
 		if tag := branch.groupingStage.projectionInputTag; tag != 0 && col.RelPos == tag {
@@ -266,16 +276,27 @@ func (builder *QueryBuilder) finishGroupingStage(
 	}
 
 	if distinct {
+		distinctTag := builder.genNewBindTag()
+		// Resolve selected-expression dependencies before flattening replaces
+		// subquery identities with fresh join output references.
+		resolved := make(map[int]*plan.Expr)
+		for i := stage.resultLen; i < len(ctx.projects); i++ {
+			if expr, ok := groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), ctx.projects[:stage.resultLen], distinctTag); ok {
+				resolved[i] = expr
+			}
+		}
 		// This projection is an expression consumer just like the ordinary
 		// final projection: flatten subqueries before it becomes DISTINCT keys.
 		for i, project := range ctx.projects {
+			if _, ok := resolved[i]; ok {
+				continue
+			}
 			nodeID, ctx.projects[i], err = builder.flattenSubqueries(nodeID, project, ctx)
 			if err != nil {
 				return 0, err
 			}
 		}
 		selected := ctx.projects[:stage.resultLen]
-		distinctTag := builder.genNewBindTag()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, ProjectList: selected,
 			Children: []int32{nodeID}, BindingTags: []int32{distinctTag},
@@ -286,6 +307,8 @@ func (builder *QueryBuilder) finishGroupingStage(
 			if i < stage.resultLen {
 				projects[i] = &plan.Expr{Typ: selected[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: distinctTag, ColPos: int32(i)}}}
 				builder.nameByColRef[[2]int32{distinctTag, int32(i)}] = ctx.headings[i]
+			} else if expr, ok := resolved[i]; ok {
+				projects[i] = expr
 			} else {
 				var ok bool
 				projects[i], ok = groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), selected, distinctTag)

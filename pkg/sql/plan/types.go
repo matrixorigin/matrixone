@@ -43,6 +43,8 @@ const (
 	NoAlias ExpandAliasMode = iota
 	AliasBeforeColumn
 	AliasAfterColumn
+	// Preserve the alias AST for consumers that bind selected-output dependencies.
+	AliasAsOutput
 )
 
 type TableDefType = plan.TableDef_DefType
@@ -494,6 +496,11 @@ type HavingBinder struct {
 type ProjectionBinder struct {
 	baseBinder
 	havingBinder *HavingBinder
+
+	// Set only while binding grouping ORDER BY. Reuse an alias's bound
+	// projection, not a new subquery, and keep alias names in the source AST
+	// for CTAS/rebinding. Independent selected expressions stay independent.
+	orderByProjects map[string]*plan.Expr
 }
 
 type OrderBinder struct {

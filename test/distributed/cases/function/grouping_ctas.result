@@ -986,4 +986,54 @@ order by chosen+0,flag desc limit 3;
 1  ¦  5  𝄀
 0  ¦  5  𝄀
 1  ¦  7
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+➤ g[4,32,0]
+create table compound_operand_filtered as
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+select * from compound_operand_filtered;
+➤ g[4,32,0]
+select count(*) from compound_operand_filtered;
+➤ count(*)[-5,64,0]  𝄀
+0
+select g from (select g,g+0 not in(select id from pk_src) flag from src group by g with rollup) t where flag;
+➤ g[4,32,0]
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where flag is null;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g,coalesce(g,0) in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g,g+0 in(select id from pk_src where id<0) flag from src group by g with rollup) t where not flag order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+➤ k[4,32,0]  𝄀
+2
+create table scalar_alias_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+select * from scalar_alias_order;
+➤ k[4,32,0]  𝄀
+2
+select distinct coalesce((select max(id) from pk_src),0) k from src group by g with rollup order by k+1;
+➤ k[-5,64,0]  𝄀
+2
+select distinct (select count(*) from pk_src) k from src group by g with rollup order by abs(k) desc limit 1;
+➤ k[-5,64,0]  𝄀
+2
+select distinct (select id from pk_src where id<0) k from src group by g with rollup order by k+1;
+➤ k[4,32,0]  𝄀
+null
+select distinct (select max(id) from pk_src) a,(select min(id) from pk_src) b
+from src group by g with rollup order by a+1,b+1;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  1
+create table rejected_scalar_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by g+1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_scalar_order';
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database grouping_ctas_test;
