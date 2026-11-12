@@ -158,7 +158,7 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
-	width := int32(0)
+	bound := stringResultBound{}
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
@@ -174,30 +174,17 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_varbinary:
 			hasBinary = true
 			sameFixedBinary = false
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
-			// Character widths count runes, while VARBINARY widths count bytes.
-			// Reserve the maximum utf8mb4 encoding size without exceeding the
-			// largest representable VARBINARY width.
-			byteWidth := int32(types.MaxVarBinaryLen)
-			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
-				byteWidth = typ.Width * utf8.UTFMax
-			}
-			if byteWidth > width {
-				width = byteWidth
-			}
 		default:
 			return types.Type{}, false
 		}
+		inputBound := declaredStringByteBound(typ)
+		bound.unknown = bound.unknown || inputBound.unknown
+		bound.bytes = max(bound.bytes, inputBound.bytes)
 	}
 	if !hasBinary {
 		return types.Type{}, false
@@ -205,7 +192,11 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
 	}
-	return types.New(types.T_varbinary, width, 0), true
+	// This is an expression bound, not a storage assignment capacity. Capping
+	// UTF-8 bytes at MaxVarBinaryLen would make the implicit branch CAST discard
+	// selected bytes before the real assignment owner can check them. Promote
+	// large/unknown bounds to BLOB; keep finite small results indexable.
+	return binaryStringResultType(bound), true
 }
 
 // MixedTextBinaryCommonType returns a binary common type only when a set
@@ -362,35 +353,6 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
-// caseVectorCommonType returns the complete vector result type when at least
-// one CASE value branch is a vector. Vector CASE branches deliberately use a
-// stricter contract than IF: every concrete value branch must have the same
-// vector OID and declared dimension. Untyped NULL branches are cast to the
-// selected vector type.
-func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
-	for i := range source {
-		if source[i].Oid.IsArray() {
-			retType = source[i]
-			hasVector = true
-			break
-		}
-	}
-	if !hasVector {
-		return types.Type{}, false, false
-	}
-
-	for i := range source {
-		if source[i].Oid == types.T_any {
-			continue
-		}
-		if !source[i].Oid.IsArray() ||
-			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
-			return types.Type{}, true, false
-		}
-	}
-	return retType, true, true
-}
-
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 // caseConditionFinalType returns the execution type for a searched CASE
 // condition slot. MySQL evaluates a JSON condition with conditional numeric
@@ -420,8 +382,8 @@ func isEnumToBoolCastFunctionId(id int32) bool {
 // legacyConditionalBooleanCheck reproduces the pre-contract IF/CASE condition
 // admission for native-mode statements (D11): JSON conditions reject, and an
 // ENUM/SET operand keeps the ordinary string/numeric typing base produced.
-// The bodies are byte-for-byte the pre-contract checkers; only their names
-// differ, so native-mode parity is constructional.
+// The condition admission is byte-for-byte the pre-contract checkers'; vector
+// value branches resolve through commonVectorType in both modes.
 func legacyConditionalBooleanCheck(id int32, _ []overload, inputs []types.Type) (checkResult, bool) {
 	switch id {
 	case IFF:
@@ -491,7 +453,7 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -680,7 +642,7 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -923,7 +885,7 @@ func caseCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -1392,7 +1354,7 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}

@@ -62,6 +62,12 @@ func integerComparisonDomain(inputs []types.Type) (types.Type, bool) {
 }
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if left.Oid.IsArray() && right.Oid.IsArray() && left.Oid != right.Oid {
+		if target, _, ok := commonVectorType([]types.Type{left, right}); ok {
+			return true, target, target
+		}
+		return false, left, right
+	}
 	if target, ok := integerComparisonDomain([]types.Type{left, right}); ok {
 		return left.Oid != target.Oid || right.Oid != target.Oid, target, target
 	}
