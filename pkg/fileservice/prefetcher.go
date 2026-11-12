@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"container/heap"
 	"context"
+	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -451,7 +452,19 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 // prefetchRanges reads into the disk cache the ranges of req not cached, those that are
 // adjacent in one read each, so the bytes between them are not read.
 func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
-	for _, r := range s.rangesToDownload(req) {
+	ranges := s.rangesToDownload(req)
+	if path, err := parseFilePathAtService(req.FilePath, s.name); err == nil && len(ranges) > 0 {
+		key := s.pathToKey(path.File)
+		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+			return s.storage.Read(ctx, key, &start, &end)
+		}
+		// Reads of the ranges join their flights instead of reading their bytes again.
+		if s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open) {
+			metric.FSPrefetchDownloadedCounter.Inc()
+			return
+		}
+	}
+	for _, r := range ranges {
 		vector := &IOVector{
 			FilePath: req.FilePath,
 			Entries:  []IOEntry{{Offset: r.Offset, Size: r.Size}},

@@ -956,6 +956,23 @@ read_disk_cache:
 		}
 	}
 
+	// An exact read of bytes a flight is reading waits for them instead of reading them.
+	if s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads) {
+		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
+			var allocator CacheDataAllocator
+			if s.memCache != nil {
+				allocator = s.memCache
+			}
+			if err := s.diskCache.readFromFlights(ctx, path.File, vector, allocator); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+		}
+	}
+
 	if vector.downloadDeclined && !forcePerEntryRangeRead && !forceMinimalRangeRead {
 		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
 			forcePerEntryRangeRead = true

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -107,16 +108,27 @@ func (h *heldStorage) Read(ctx context.Context, key string, min, max *int64) (io
 		return nil, err
 	}
 	close(h.read)
-	<-h.released
+	select {
+	case <-h.released:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 // A column range download that read an object before it was deleted and recreated does
-// not cache the old bytes after the delete: a later read returns the new object.
+// not cache the old bytes after the delete: a later read returns the new object. As a
+// flight the delete cancels it; read past the flights' bytes, its cache write is retracted.
 func TestColumnRangeReadBeforeDeleteIsNotCached(t *testing.T) {
-	for _, async := range []bool{false, true} {
+	for _, mode := range []struct {
+		async, flight bool
+	}{{false, true}, {false, false}, {true, false}} {
+		async := mode.async
 		fs, _, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
 		fs.SetAsyncUpdate(async)
+		if !mode.flight {
+			fs.diskCache.prefetchFlightBytes = 1
+		}
 		ctx := context.Background()
 		held := &heldStorage{ObjectStorage: fs.storage, read: make(chan struct{}), released: make(chan struct{})}
 		fs.storage = held
@@ -190,4 +202,53 @@ func TestExactColumnsReadNeverDownloadsTheObject(t *testing.T) {
 			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "policy 0 caches the whole object")
 		}
 	}
+}
+
+// firstReadGate holds the first read until released; later reads pass.
+type firstReadGate struct {
+	ObjectStorage
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *firstReadGate) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	first := false
+	g.once.Do(func() { first = true })
+	if first {
+		close(g.started)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.ObjectStorage.Read(ctx, key, min, max)
+}
+
+// A column read of bytes a column range download is reading waits for the download
+// instead of reading them from object storage again, and so do further downloads of them.
+func TestColumnReadJoinsRangeDownload(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
+	gate := &firstReadGate{ObjectStorage: fs.storage, started: make(chan struct{}), release: make(chan struct{})}
+	fs.storage = gate
+	ctx := context.Background()
+	req := ObjectPrefetch{FilePath: "object", Size: 64 << 10, Ranges: []PrefetchRange{{Offset: 0, Size: 64 << 10}}}
+	downloaded := make(chan struct{})
+	go func() { defer close(downloaded); fs.prefetchObject(ctx, req) }()
+	<-gate.started
+
+	read := make(chan []byte, 1)
+	go func() { read <- readRangeOf(t, fs, ColumnPrefetch, 100, 10) }()
+	again := make(chan struct{})
+	go func() { defer close(again); fs.prefetchObject(ctx, req) }()
+	require.Never(t, func() bool { return len(read) > 0 }, 100*time.Millisecond, 5*time.Millisecond,
+		"the read waits for the download")
+	close(gate.release)
+	require.Equal(t, data[100:110], <-read)
+	<-downloaded
+	<-again
+	require.Equal(t, int64(1), storage.reads.Load(), "one read of object storage")
+	require.Equal(t, data[200:210], readRangeOf(t, fs, ColumnPrefetch, 200, 10))
+	require.Equal(t, int64(1), storage.reads.Load(), "served from the cached range")
 }

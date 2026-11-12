@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"math/bits"
@@ -269,25 +270,7 @@ func (d *DiskCache) prefetchRead(
 	// registered until its range file is cached, so no read reads it again. A run
 	// outlives the read that starts it, which may return before its last bytes arrive.
 	for i, r := range runs {
-		go func(fl *prefetchFlight) {
-			defer f.reads.Done()
-			defer fl.cancel()
-			defer context.AfterFunc(closing, fl.cancel)()
-			err := fl.read(fl.ctx, open)
-			content := fl.content()
-			if err == nil && len(content) == 0 {
-				err = io.ErrUnexpectedEOF
-			}
-			fl.finish()
-			if err == nil {
-				_ = d.Update(context.WithoutCancel(ctx), &IOVector{
-					FilePath: filePath,
-					Policy:   policy,
-					Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content, readDeletes: fl.readDeletes}},
-				}, false)
-			}
-			d.endPrefetch(diskPath, fl)
-		}(r.flight)
+		go d.runFlight(ctx, filePath, diskPath, policy, r.flight, open, closing)
 		for j := r.first; j <= r.last; j++ {
 			if blocks[j].needed {
 				blocks[j].state, blocks[j].flight = blockInFlight, runs[i].flight
@@ -327,6 +310,135 @@ func (d *DiskCache) prefetchRead(
 		}
 	}
 	return out, len(runs), true
+}
+
+// runFlight reads the flight fl of the object at filePath through open, caches the range
+// it read, and forgets the flight. The flight outlives the read that registered it, and is
+// canceled by a delete of the object or the closing of the cache.
+func (d *DiskCache) runFlight(
+	ctx context.Context,
+	filePath, diskPath string,
+	policy Policy,
+	fl *prefetchFlight,
+	open func(ctx context.Context, start, end int64) (io.ReadCloser, error),
+	closing context.Context,
+) {
+	defer d.prefetchFlights.reads.Done()
+	defer fl.cancel()
+	defer context.AfterFunc(closing, fl.cancel)()
+	err := fl.read(fl.ctx, open)
+	content := fl.content()
+	if err == nil && len(content) == 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	fl.finish()
+	if err == nil {
+		_ = d.Update(context.WithoutCancel(ctx), &IOVector{
+			FilePath: filePath,
+			Policy:   policy,
+			Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content, readDeletes: fl.readDeletes}},
+		}, false)
+	}
+	d.endPrefetch(diskPath, fl)
+}
+
+// readRanges reads the ranges of the object at filePath through open as flights, which
+// reads of their bytes join, caches each, and returns once they end or ctx is done. A range
+// a flight already reads is waited for, not read again. It reports false, reading nothing,
+// when the cache is closed or the ranges would pass the bytes of the flights under way.
+func (d *DiskCache) readRanges(
+	ctx context.Context,
+	filePath string,
+	policy Policy,
+	ranges []PrefetchRange,
+	open func(ctx context.Context, start, end int64) (io.ReadCloser, error),
+) bool {
+	diskPath := d.pathForFile(filePath)
+	f := &d.prefetchFlights
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return false
+	}
+	if f.closing == nil {
+		f.closing, f.cancelReads = context.WithCancel(context.Background())
+	}
+	closing := f.closing
+	now := time.Now()
+	var missing []PrefetchRange
+	var waits []*prefetchFlight
+	var need int64
+	for _, r := range ranges {
+		if fl, _ := f.fastestLocked(diskPath, r.Offset, r.Offset+r.Size, now); fl != nil {
+			waits = append(waits, fl)
+			continue
+		}
+		missing = append(missing, r)
+		need += r.Size
+	}
+	if need > 0 && f.bytes+need > d.prefetchFlightBytesLimit() {
+		f.mu.Unlock()
+		return false
+	}
+	started := make([]*prefetchFlight, 0, len(missing))
+	for _, r := range missing {
+		f.bytes += r.Size
+		fl := newPrefetchFlight(r.Offset, r.Offset+r.Size, now)
+		fl.readDeletes = d.readDeletes()
+		fl.ctx, fl.cancel = context.WithCancel(context.WithoutCancel(ctx))
+		if f.m == nil {
+			f.m = make(map[string][]*prefetchFlight)
+		}
+		f.m[diskPath] = append(f.m[diskPath], fl)
+		f.reads.Add(1)
+		started = append(started, fl)
+	}
+	f.mu.Unlock()
+	for _, fl := range started {
+		go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing)
+	}
+	for _, fl := range append(waits, started...) {
+		select {
+		case <-fl.ended:
+		case <-ctx.Done():
+			return true
+		}
+	}
+	return true
+}
+
+// readFromFlights fills the entries of vector not done, of the object at filePath, from the
+// flights reading their bytes, waiting for the bytes to arrive. An entry no flight holds,
+// or whose flight ends without its bytes, is left to the caller.
+func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector, allocator CacheDataAllocator) error {
+	diskPath := d.pathForFile(filePath)
+	f := &d.prefetchFlights
+	for i := range vector.Entries {
+		e := &vector.Entries[i]
+		if e.done || e.Size <= 0 {
+			continue
+		}
+		end := e.Offset + e.Size
+		f.mu.Lock()
+		fl, _ := f.fastestLocked(diskPath, e.Offset, end, time.Now())
+		f.mu.Unlock()
+		if fl == nil {
+			continue
+		}
+		content, ok := fl.waitFor(ctx, end)
+		if !ok {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := e.readFrom(ctx, bytes.NewReader(content[e.Offset-fl.start:end-fl.start]), allocator); err != nil {
+			return err
+		}
+		e.done = true
+		e.fromCache = d
+	}
+	return nil
 }
 
 // readCachedRange reads len(dst) bytes at offset of the object from the cached range r.
