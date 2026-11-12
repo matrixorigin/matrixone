@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -1549,6 +1550,117 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	timeCmd := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
 	require.NoError(t, timeCmd.action(ctx, e, recRoutines[0]))
 	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[0].Load().(timestamp.Timestamp))
+}
+
+func TestAppliedSnapshotWaitsForReplayDuringSubscription(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	stream.EXPECT().Receive().Return(make(chan morpc.Message), nil)
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	peer, err := service.NewLogtailClient(ctx, stream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+
+	replayed := timestamp.Timestamp{PhysicalTime: 100}
+	update := timestamp.Timestamp{PhysicalTime: 150}
+	oldWatermark := timestamp.Timestamp{PhysicalTime: 200}
+	waiter := client.NewTimestampWaiter(runtime.GetLogger(""))
+	defer waiter.Close()
+	waiter.NotifyLatestCommitTS(oldWatermark)
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		skipConsume: true,
+	}
+	c := &e.pClient
+	c.eng = e
+	c.subscriber = newLogTailSubscriber()
+	c.subscriber.swapClient(peer)
+	c.subscriber.setReady()
+	c.subscribed = subscribedTable{eng: e, m: make(map[uint64]*subEntry)}
+	c.receivedLogTailTime.initLogTailTimestamp(waiter)
+	for i := range c.receivedLogTailTime.tList {
+		c.receivedLogTailTime.tList[i].Store(replayed)
+	}
+	c.replayVersion.Store(nextReplayVersion.Add(1))
+	c.receivedLogTailTime.ready.Store(true)
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, publish := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	state.UpdateAppliedTo(types.TimestampToTS(replayed))
+	state.RecordContentChange(types.TimestampToTS(replayed))
+	publish()
+	c.subscribed.setTableSubRspReceived(10, 42)
+	routines := newTestRoutineControllers(4)
+	table := &api.TableID{DbId: 10, TbId: 42, DbName: "db", TbName: "policy"}
+	require.NoError(t, dispatchUpdateResponse(ctx, e, &logtail.UpdateResponse{
+		To: &update,
+		LogtailList: []logtail.TableLogtail{{
+			Table: table, Commands: []api.Entry{{}},
+		}},
+	}, routines, time.Now()))
+	// Subscription completion can occur after dispatch but before the queued
+	// update is applied. The old transaction waiter is already ahead of both.
+	c.subscribed.setTableSubscribed(10, 42)
+	oldSnapshot, err := waiter.GetTimestamp(ctx, update)
+	require.NoError(t, err)
+	require.Equal(t, oldWatermark.Next(), oldSnapshot)
+	dependencies := []engine.TableContentDependency{{DatabaseID: 10, TableID: 42}}
+	var before, after [1]engine.TableContentVersion
+	require.True(t, e.ReadTableContentVersions(ctx, replayed.Next(), dependencies, before[:]))
+
+	done := make(chan struct {
+		snapshot timestamp.Timestamp
+		err      error
+	}, 1)
+	go func() {
+		snapshot, waitErr := c.WaitLogtailAppliedSnapshot(ctx, oldWatermark)
+		done <- struct {
+			snapshot timestamp.Timestamp
+			err      error
+		}{snapshot, waitErr}
+	}()
+	require.Eventually(t, func() bool { return c.receivedLogTailTime.progressWaiters.Load() > 0 }, 5*time.Second, time.Millisecond)
+	select {
+	case result := <-done:
+		t.Fatalf("returned before current replay applied the update: %+v", result)
+	default:
+	}
+	require.NoError(t, dispatchUpdateResponse(ctx, e, &logtail.UpdateResponse{To: &oldWatermark}, routines, time.Now()))
+	for _, routine := range routines {
+		for len(routine.signalChan) > 0 {
+			require.NoError(t, (<-routine.signalChan).action(ctx, e, routine))
+		}
+	}
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+		require.Equal(t, oldWatermark.Next(), result.snapshot)
+		require.True(t, e.ReadTableContentVersions(ctx, result.snapshot, dependencies, after[:]))
+		require.NotEqual(t, before[0].Revision, after[0].Revision)
+	case <-time.After(5 * time.Second):
+		t.Fatal("snapshot did not observe applied replay")
+	}
+
+	go func() {
+		snapshot, waitErr := c.WaitLogtailAppliedSnapshot(ctx, oldWatermark.Next())
+		done <- struct {
+			snapshot timestamp.Timestamp
+			err      error
+		}{snapshot, waitErr}
+	}()
+	require.Eventually(t, func() bool { return c.receivedLogTailTime.progressWaiters.Load() > 0 }, 5*time.Second, time.Millisecond)
+	c.invalidateReadContinuity()
+	select {
+	case result := <-done:
+		require.Error(t, result.err, "a reset must invalidate the in-flight snapshot")
+		require.True(t, result.snapshot.IsEmpty())
+	case <-time.After(5 * time.Second):
+		t.Fatal("snapshot wait did not observe replay reset")
+	}
 }
 
 func TestCanServeTableSnapshotBlocksPendingUpdate(t *testing.T) {

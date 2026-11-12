@@ -1311,6 +1311,10 @@ func (e *Engine) AcquirePeerLogtailReadBarrier(
 	return e.pClient.AcquirePeerLogtailReadBarrier(ctx)
 }
 
+func (e *Engine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return e.pClient.WaitLogtailAppliedSnapshot(ctx, min)
+}
+
 func (e *Engine) AcquirePeerTableReadSnapshot(ctx context.Context, table api.TableID, min timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error) {
 	return e.pClient.AcquirePeerTableReadSnapshot(ctx, table, min)
 }

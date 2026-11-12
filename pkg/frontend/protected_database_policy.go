@@ -110,6 +110,19 @@ func prepareProtectedPolicyCertificate(ctx context.Context, ses *Session, bh Bac
 	return proof, true
 }
 
+func protectedPolicyEngine(storage engine.Engine) engine.Engine {
+	for {
+		entire, ok := storage.(*engine.EntireEngine)
+		if !ok {
+			return storage
+		}
+		if entire == nil {
+			return nil
+		}
+		storage = entire.Engine
+	}
+}
+
 // protectedPolicyFrontier orders authorization after completed policy updates.
 // The HLC upper-bound fallback is the same rolling-upgrade mechanism used for
 // the role-grant graph when a TN does not support an ordered logtail barrier.
@@ -121,16 +134,9 @@ func protectedPolicyFrontier(ctx context.Context, ses *Session) (timestamp.Times
 	if pu == nil || pu.StorageEngine == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "missing storage engine for protected database policy")
 	}
-	eng := pu.StorageEngine
+	eng := protectedPolicyEngine(pu.StorageEngine)
 	peerAvailable := false
-	for eng != nil {
-		if entire, ok := eng.(*engine.EntireEngine); ok {
-			if entire == nil {
-				break
-			}
-			eng = entire.Engine
-			continue
-		}
+	if eng != nil {
 		if barrier, ok := eng.(engine.PeerLogtailReadBarrier); ok {
 			peerAvailable = true
 			frontier, supported, err := barrier.AcquirePeerLogtailReadBarrier(ctx)
@@ -144,7 +150,6 @@ func protectedPolicyFrontier(ctx context.Context, ses *Session) (timestamp.Times
 				return frontier, nil
 			}
 		}
-		break
 	}
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	if rt == nil || rt.Clock() == nil || rt.Clock().MaxOffset() < 0 {
@@ -164,20 +169,28 @@ func protectedPolicyFrontier(ctx context.Context, ses *Session) (timestamp.Times
 	return timestamp.Timestamp{PhysicalTime: upper.PhysicalTime + 1}, nil
 }
 
-func protectedPolicyReadSnapshot(ctx context.Context, ses *Session) (timestamp.Timestamp, error) {
+func protectedPolicyReadSnapshot(ctx context.Context, ses *Session, min timestamp.Timestamp) (timestamp.Timestamp, error) {
 	frontier, err := protectedPolicyFrontier(ctx, ses)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	client := getPu(ses.GetService()).TxnClient
-	if client == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "missing transaction client for protected database policy")
+	if min.Greater(frontier) {
+		frontier = min
 	}
-	snapshot, err := client.WaitLogTailAppliedAt(ctx, frontier)
+	return waitProtectedPolicySnapshot(ctx, ses, frontier)
+}
+
+func waitProtectedPolicySnapshot(ctx context.Context, ses *Session, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	storage := protectedPolicyEngine(getPu(ses.GetService()).StorageEngine)
+	waiter, ok := storage.(engine.LogtailAppliedSnapshot)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "current logtail snapshot is unavailable for protected database policy")
+	}
+	snapshot, err := waiter.WaitLogtailAppliedSnapshot(ctx, min)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	if !snapshot.Greater(frontier) {
+	if !snapshot.Greater(min) {
 		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "protected database policy snapshot did not advance")
 	}
 	return snapshot, nil
@@ -187,19 +200,12 @@ func protectedPolicyReadSnapshot(ctx context.Context, ses *Session) (timestamp.T
 // when a cached certificate can prove both the row and its catalog bindings
 // unchanged on the target replay generation. A cold or stale certificate
 // uses the existing ordered logtail barrier below.
-func protectedPolicyCachedSnapshot(ctx context.Context, ses *Session, cached protectedPolicyCertificate) (timestamp.Timestamp, bool, error) {
+func protectedPolicyCachedSnapshot(ctx context.Context, ses *Session, cached protectedPolicyCertificate, min timestamp.Timestamp) (timestamp.Timestamp, bool, error) {
 	if cached.account != ses.GetTenantInfo().GetTenantID() || cached.reusableFrom.IsEmpty() ||
 		cached.dependency[0].DatabaseID != catalog.MO_CATALOG_ID || cached.dependency[0].TableID == 0 {
 		return timestamp.Timestamp{}, false, nil
 	}
-	storage := getPu(ses.GetService()).StorageEngine
-	for {
-		entire, ok := storage.(*engine.EntireEngine)
-		if !ok || entire == nil {
-			break
-		}
-		storage = entire.Engine
-	}
+	storage := protectedPolicyEngine(getPu(ses.GetService()).StorageEngine)
 	reader, ok := storage.(engine.PeerTableReadSnapshot)
 	if !ok {
 		return timestamp.Timestamp{}, false, nil
@@ -211,9 +217,12 @@ func protectedPolicyCachedSnapshot(ctx context.Context, ses *Session, cached pro
 		DbName: catalog.MO_CATALOG,
 		TbName: "mo_mysql_compatibility_mode",
 	}
-	snapshot, generation, supported, err := reader.AcquirePeerTableReadSnapshot(ctx, table, ses.getLastCommitTS())
+	snapshot, generation, supported, err := reader.AcquirePeerTableReadSnapshot(ctx, table, min)
 	if err != nil || !supported {
 		return timestamp.Timestamp{}, supported, err
+	}
+	if !snapshot.Greater(min) {
+		return timestamp.Timestamp{}, true, moerr.NewInternalError(ctx, "protected database policy snapshot did not advance")
 	}
 	if generation == 0 || !cached.valid(ctx, ses, snapshot) {
 		return timestamp.Timestamp{}, true, nil
@@ -254,8 +263,24 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 		execution.authorizationMu.Lock()
 		defer execution.authorizationMu.Unlock()
 	}
+	if err := ctx.Err(); err != nil {
+		return "", context.Cause(ctx)
+	}
 	if execution != nil && execution.protectedPolicyLoaded {
 		return execution.protectedPolicyRaw, nil
+	}
+	// The table-local target only orders policy changes. It cannot establish
+	// visibility for grants or other authorization dependencies by itself.
+	general, err := authorizationReadSnapshotLocked(ctx, ses, execution)
+	if err != nil {
+		return "", err
+	}
+	if general.IsEmpty() {
+		return "", moerr.NewInternalError(ctx, "authorization snapshot is unavailable for protected database policy")
+	}
+	min := ses.getLastCommitTS()
+	if previous := general.Prev(); previous.Greater(min) {
+		min = previous
 	}
 	cache := ses.GetPrivilegeCache()
 	var cached protectedPolicyCertificate
@@ -265,7 +290,7 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 		cache.protectedPolicyMu.Unlock()
 	}
 	if cache != nil {
-		snapshot, supported, snapshotErr := protectedPolicyCachedSnapshot(ctx, ses, cached)
+		snapshot, supported, snapshotErr := protectedPolicyCachedSnapshot(ctx, ses, cached, min)
 		if snapshotErr != nil {
 			return "", snapshotErr
 		}
@@ -281,7 +306,7 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 			return cached.value, nil
 		}
 	}
-	snapshot, err := protectedPolicyReadSnapshot(ctx, ses)
+	snapshot, err := protectedPolicyReadSnapshot(ctx, ses, min)
 	if err != nil {
 		return "", err
 	}
@@ -454,6 +479,9 @@ func lockAndValidateProtectedPolicy(ctx context.Context, ses *Session, bh Backgr
 	if !txn.SnapshotTS().Greater(frontier) {
 		return moerr.NewInternalError(ctx, "protected database policy setter snapshot did not advance")
 	}
+	if _, err = waitProtectedPolicySnapshot(ctx, ses, txn.SnapshotTS().Prev()); err != nil {
+		return err
+	}
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(sysCtx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", account)); err != nil {
@@ -479,6 +507,9 @@ func lockAndValidateProtectedPolicy(ctx context.Context, ses *Session, bh Backgr
 	}
 	if !txn.SnapshotTS().Greater(frontier) {
 		return moerr.NewInternalError(ctx, "protected database policy setter snapshot did not advance")
+	}
+	if _, err = waitProtectedPolicySnapshot(ctx, ses, txn.SnapshotTS().Prev()); err != nil {
+		return err
 	}
 	previous, err := readProtectedPolicy(ctx, ses, bh)
 	if err != nil {

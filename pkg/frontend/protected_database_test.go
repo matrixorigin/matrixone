@@ -278,11 +278,22 @@ func TestProtectedPolicyCertificateInvalidation(t *testing.T) {
 type protectedPolicyTargetEngine struct {
 	engine.Engine
 	snapshot   timestamp.Timestamp
+	frontier   timestamp.Timestamp
 	generation uint64
 	supported  bool
 	table      api.TableID
 	min        timestamp.Timestamp
+	waited     timestamp.Timestamp
 	versions   [4]engine.TableContentVersion
+}
+
+func (e *protectedPolicyTargetEngine) AcquirePeerLogtailReadBarrier(ctx context.Context) (timestamp.Timestamp, bool, error) {
+	return e.frontier, true, ctx.Err()
+}
+
+func (e *protectedPolicyTargetEngine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	e.waited = min
+	return min.Next(), ctx.Err()
 }
 
 func (e *protectedPolicyTargetEngine) AcquirePeerTableReadSnapshot(_ context.Context, table api.TableID, min timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error) {
@@ -326,7 +337,7 @@ func TestProtectedPolicyCachedSnapshotRequiresSameReplayGeneration(t *testing.T)
 		version: versions, reusableFrom: min, value: "guarded",
 	}
 
-	got, supported, err := protectedPolicyCachedSnapshot(t.Context(), ses, proof)
+	got, supported, err := protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Equal(t, snapshot, got)
@@ -334,15 +345,158 @@ func TestProtectedPolicyCachedSnapshotRequiresSameReplayGeneration(t *testing.T)
 	require.Equal(t, ses.getLastCommitTS(), eng.min)
 
 	eng.generation++
-	got, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof)
+	got, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
 	require.NoError(t, err)
 	require.True(t, supported, "a supported but stale generation must use the stronger fallback")
 	require.True(t, got.IsEmpty())
 
 	eng.supported = false
-	_, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof)
+	_, supported, err = protectedPolicyCachedSnapshot(t.Context(), ses, proof, ses.getLastCommitTS())
 	require.NoError(t, err)
 	require.False(t, supported, "an older TN must select the existing ordered barrier")
+}
+
+type policySnapshotClient struct {
+	client.TxnClient
+	snapshot timestamp.Timestamp
+	err      error
+}
+
+func (c *policySnapshotClient) ReadSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return c.snapshot, c.err
+}
+
+func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
+	readErr := errors.New("authorization snapshot unavailable")
+	for _, tc := range []struct {
+		name      string
+		prior     bool
+		supported bool
+		commit    int64
+		target    int64
+		readErr   error
+		wantErr   bool
+	}{
+		{name: "fresh authorization", supported: true, target: 200},
+		{name: "prior authorization", prior: true, supported: true, target: 200},
+		{name: "session commit floor", supported: true, commit: 175, target: 200},
+		{name: "ordered fallback", supported: false},
+		{name: "authorization read fails", supported: true, readErr: readErr, wantErr: true},
+		{name: "target below floor fails closed", supported: true, target: 140, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{Tenant: "a", User: "u", DefaultRole: "r", TenantID: 3})
+
+			general := timestamp.Timestamp{PhysicalTime: 150}
+			versions := [4]engine.TableContentVersion{{Replay: 7}, {Replay: 7}, {Replay: 7}, {Replay: 7}}
+			eng := &protectedPolicyTargetEngine{snapshot: timestamp.Timestamp{PhysicalTime: tc.target}, frontier: timestamp.Timestamp{PhysicalTime: 120}, generation: 7, supported: tc.supported, versions: versions}
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, nil, nil)
+			pu.SV.SetDefaultValues()
+			txnClient := &policySnapshotClient{snapshot: general, err: tc.readErr}
+			pu.TxnClient = txnClient
+			setPu("", pu)
+
+			ctx := t.Context()
+			execution := &ExecCtx{reqCtx: ctx, ses: ses}
+			if tc.prior {
+				general.PhysicalTime = 170
+				execution.authorizationSnapshot = general
+			}
+			if tc.commit != 0 {
+				ses.updateLastCommitTS(timestamp.Timestamp{PhysicalTime: tc.commit})
+			}
+			ses.GetTxnCompileCtx().SetExecCtx(execution)
+			ses.GetPrivilegeCache().protectedPolicy = protectedPolicyCertificate{
+				account: 3,
+				dependency: [4]engine.TableContentDependency{
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: 400},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_DATABASE_ID},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_TABLES_ID},
+					{DatabaseID: catalog.MO_CATALOG_ID, TableID: catalog.MO_COLUMNS_ID},
+				},
+				version: versions, reusableFrom: timestamp.Timestamp{PhysicalTime: 100}, value: "guarded",
+			}
+
+			value, err := protectedPolicyValueForStatement(ctx, ses)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.readErr != nil {
+					require.ErrorIs(t, err, tc.readErr)
+				}
+				require.False(t, execution.protectedPolicyLoaded)
+				require.True(t, execution.authorizationSnapshot.IsEmpty())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "guarded", value)
+			min := general.Prev()
+			if commit := ses.getLastCommitTS(); commit.Greater(min) {
+				min = commit
+			}
+			if tc.supported {
+				require.Equal(t, min, eng.min, "policy snapshot must include authorization visibility")
+				require.Equal(t, eng.snapshot, execution.authorizationSnapshot)
+			} else {
+				require.Equal(t, min, eng.waited, "fallback must retain authorization visibility")
+				require.Equal(t, min.Next(), execution.authorizationSnapshot)
+			}
+		})
+	}
+}
+
+type observedCancelContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *observedCancelContext) Err() error {
+	c.once.Do(func() { close(c.checked) })
+	return c.Context.Err()
+}
+
+func TestAuthorizationWaitHonorsCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		read func(context.Context, *Session) error
+	}{
+		{name: "policy", read: func(ctx context.Context, ses *Session) error {
+			_, err := protectedPolicyValueForStatement(ctx, ses)
+			return err
+		}},
+		{name: "authorization", read: func(ctx context.Context, ses *Session) error {
+			_, err := authorizationReadSnapshot(ctx, ses)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.TxnClient = &authorizationSnapshotReader{snapshot: timestamp.Timestamp{PhysicalTime: 100}}
+			setPu("", pu)
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &observedCancelContext{Context: base, checked: make(chan struct{})}
+			execution := &ExecCtx{
+				reqCtx: ctx, ses: ses, authorizationSnapshot: timestamp.Timestamp{PhysicalTime: 100},
+				protectedPolicyLoaded: true, protectedPolicyRaw: "guarded",
+			}
+			ses.GetTxnCompileCtx().SetExecCtx(execution)
+			execution.authorizationMu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- tc.read(ctx, ses) }()
+			<-ctx.checked
+			cancel()
+			execution.authorizationMu.Unlock()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
 }
 
 type policyConcurrentEngine struct {
@@ -364,6 +518,10 @@ func (e *policyConcurrentEngine) AcquirePeerLogtailReadBarrier(ctx context.Conte
 	}
 }
 
+func (*policyConcurrentEngine) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return min.Next(), ctx.Err()
+}
+
 func (*policyConcurrentEngine) ReadTableContentVersions(ctx context.Context, _ timestamp.Timestamp, _ []engine.TableContentDependency, out []engine.TableContentVersion) bool {
 	out[0] = engine.TableContentVersion{}
 	return ctx.Err() == nil
@@ -371,8 +529,8 @@ func (*policyConcurrentEngine) ReadTableContentVersions(ctx context.Context, _ t
 
 type policyConcurrentTxnClient struct{ client.TxnClient }
 
-func (*policyConcurrentTxnClient) WaitLogTailAppliedAt(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
-	return timestamp.Timestamp{PhysicalTime: 101}, ctx.Err()
+func (*policyConcurrentTxnClient) ReadSnapshot(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{PhysicalTime: 100}, ctx.Err()
 }
 
 func TestProtectedPolicyConcurrentStatementReads(t *testing.T) {

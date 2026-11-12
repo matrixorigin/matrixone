@@ -307,17 +307,50 @@ func (c *PushClient) AcquirePeerTableReadSnapshot(ctx context.Context, table api
 	if min.Greater(target) {
 		target = min
 	}
-	applied, err := c.receivedLogTailTime.waitForApplied(ctx, target, peer, &c.replayVersion, generation)
+	snapshot, err := c.waitPeerAppliedSnapshot(ctx, target, peer, generation)
 	if err != nil {
 		return timestamp.Timestamp{}, 0, true, err
 	}
-	if c.replayVersion.Load() != generation {
-		return timestamp.Timestamp{}, 0, true, moerr.NewStreamClosedNoCtx()
+	return snapshot, generation, true, nil
+}
+
+// WaitLogtailAppliedSnapshot is independent of the peer's optional table
+// target capability. The transaction waiter alone may retain a watermark
+// from an earlier replay generation.
+func (c *PushClient) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if c.subscriber == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "logtail subscriber is not initialized")
+	}
+	peer, err := c.subscriber.waitReadyClient(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	generation := c.replayVersion.Load()
+	if generation == 0 {
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
 	}
 	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
-		return timestamp.Timestamp{}, 0, true, err
+		return timestamp.Timestamp{}, err
 	}
-	return applied.Next(), generation, true, nil
+	return c.waitPeerAppliedSnapshot(ctx, min, peer, generation)
+}
+
+func (c *PushClient) waitPeerAppliedSnapshot(ctx context.Context, target timestamp.Timestamp, peer *service.LogtailClient, generation uint64) (timestamp.Timestamp, error) {
+	applied, err := c.receivedLogTailTime.waitForApplied(ctx, target, peer, &c.replayVersion, generation)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if c.replayVersion.Load() != generation {
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+	}
+	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	snapshot := applied.Next()
+	if !snapshot.Greater(applied) {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "logtail applied snapshot overflow")
+	}
+	return snapshot, nil
 }
 
 // checkPeerReadBarrierReady is a point-in-time check, not a connection lease.

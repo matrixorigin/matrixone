@@ -1342,6 +1342,12 @@ type PeerLogtailReadBarrier interface {
 	AcquirePeerLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, supported bool, err error)
 }
 
+// LogtailAppliedSnapshot waits for the current replay generation to apply an
+// inclusive timestamp and returns a snapshot beyond that applied watermark.
+type LogtailAppliedSnapshot interface {
+	WaitLogtailAppliedSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+}
+
 // PeerTableReadSnapshot acquires a current-stream snapshot at or after an
 // identified table's content and catalog target. False means the peer does not
 // support this operation and the caller must use another visibility barrier.
