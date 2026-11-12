@@ -562,6 +562,18 @@ func (s *S3FS) readQueuedObject(vector *IOVector) {
 	}
 }
 
+// readQueuedColumns downloads now the queued column ranges of the object of vector, which
+// the read reached first, so the read is served from them. A queued download of the whole
+// object stays queued.
+func (s *S3FS) readQueuedColumns(ctx context.Context, vector *IOVector) {
+	req, ok := s.prefetcher.take(vector.FilePath, func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	if !ok {
+		return
+	}
+	metric.FSPrefetchMissedCounter.Inc()
+	s.prefetchObject(withoutEventLogger(ctx), req)
+}
+
 // firstNeeded returns the least offset of the entries of vector not done.
 func firstNeeded(vector *IOVector) int64 {
 	first := int64(-1)
@@ -723,6 +735,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Every read of a column-prefetch scan, its metadata and bloom filters too, reads
+	// exactly its entries and never the whole object.
+	if GetFileServicePolicy(ctx).Any(ColumnPrefetch) {
+		vector.Policy |= ExactRead | SkipFullFilePreloads
+	}
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
@@ -871,6 +888,9 @@ read_disk_cache:
 			}
 		}
 	}
+	if vector.Policy.Any(ColumnPrefetch) && s.prefetcher != nil {
+		s.readQueuedColumns(ctx, vector)
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -941,6 +961,10 @@ read_disk_cache:
 		} else {
 			forceMinimalRangeRead = true
 		}
+	}
+	// A column read reads its entries apart when one range around them holds other bytes.
+	if vector.Policy.Any(ColumnPrefetch) && !forcePerEntryRangeRead && vector.sparse() {
+		forcePerEntryRangeRead = true
 	}
 	if forcePerEntryRangeRead || forceMinimalRangeRead {
 		goto read_s3

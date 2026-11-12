@@ -156,3 +156,86 @@ func TestPrefetchedObjectsBound(t *testing.T) {
 	_, ok = o.size("a")
 	require.False(t, ok)
 }
+
+// A column read of an object whose column ranges are queued downloads those ranges and is
+// served from them; a queued download of the whole object stays queued.
+func TestS3FSColumnReadTakesQueuedColumns(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	ctx := context.Background()
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	req := ObjectPrefetch{
+		FilePath: "object",
+		Size:     30,
+		Due:      1 << 62,
+		Ranges:   []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}},
+	}
+	require.NoError(t, fs.PrefetchObject(ctx, req))
+	require.True(t, fs.prefetcher.isQueued("object"))
+
+	require.Equal(t, data[200<<10+5:200<<10+15], readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10))
+	require.False(t, fs.prefetcher.isQueued("object"), "the read took the queued columns")
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.Equal(t, int64(30), storage.bytes.Load(), "the column ranges, not the bytes around them")
+	require.Equal(t, data[102:107], readRangeOf(t, fs, ColumnPrefetch, 102, 5))
+	require.Equal(t, int64(2), storage.reads.Load(), "served from the column ranges")
+
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
+	readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10)
+	require.True(t, fs.prefetcher.isQueued("object"), "a whole-object download is not taken")
+}
+
+// A column read whose entries have bytes between them reads each one, however close, and
+// never the bytes between; entries that touch are read as one range.
+func TestS3FSColumnReadOfSparseEntriesReadsThemApart(t *testing.T) {
+	read := func(fs *S3FS, entries ...IOEntry) *IOVector {
+		vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
+		require.NoError(t, fs.Read(context.Background(), vec))
+		t.Cleanup(vec.Release)
+		return vec
+	}
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	vec := read(fs, IOEntry{Offset: 100, Size: 10}, IOEntry{Offset: 200 << 10, Size: 10})
+	require.Equal(t, data[100:110], vec.Entries[0].Data)
+	require.Equal(t, data[200<<10:200<<10+10], vec.Entries[1].Data)
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.Equal(t, int64(20), storage.bytes.Load(), "not the bytes between the entries")
+
+	fs, storage, data = newPrefetchRangeFS(t, 256<<10, 300<<10)
+	vec = read(fs, IOEntry{Offset: 1000, Size: 10}, IOEntry{Offset: 1010, Size: 20})
+	require.Equal(t, data[1010:1030], vec.Entries[1].Data)
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Equal(t, int64(30), storage.bytes.Load())
+}
+
+// Under a column-prefetch scan's context, a read made with its own policy, as of a bloom
+// filter, reads exactly its entry; elsewhere it reads the prefetch range around it.
+func TestS3FSReadUnderColumnPrefetchContextIsExact(t *testing.T) {
+	read := func(ctx context.Context, fs *S3FS) {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 200 << 10, Size: 10}}}
+		require.NoError(t, fs.Read(ctx, vec))
+		fs.diskCache.prefetchFlights.reads.Wait()
+		vec.Release()
+	}
+	fs, storage, _ := newPrefetchRangeFS(t, 64<<10, 300<<10)
+	read(WithFileServicePolicy(context.Background(), ColumnPrefetch), fs)
+	require.Equal(t, int64(10), storage.bytes.Load())
+
+	fs, storage, _ = newPrefetchRangeFS(t, 64<<10, 300<<10)
+	read(context.Background(), fs)
+	require.Equal(t, int64(64<<10), storage.bytes.Load(), "the prefetch range around it")
+}
+
+// An exact read reads only its entry, and leaves a queued download of the object's column
+// ranges to the prefetcher.
+func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
+	ctx := context.Background()
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
+		FilePath: "object", Size: 10, Due: 1 << 62, Ranges: []PrefetchRange{{Offset: 0, Size: 10}},
+	}))
+	require.Equal(t, data[200<<10:200<<10+10], readRangeOf(t, fs, ExactRead, 200<<10, 10))
+	require.Equal(t, int64(10), storage.bytes.Load())
+	require.True(t, fs.prefetcher.isQueued("object"), "the column ranges stay queued")
+}

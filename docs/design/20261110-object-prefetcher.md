@@ -143,10 +143,20 @@ plans, are not marked. Master and regular secondary indexes are out of scope.
 A row fetch never downloads a whole object on a read. Ahead of the scan, for each object:
 - It prefetches the ranges of the columns it reads, across all the object's blocks,
   whatever share of the object they are.
-- When the object records no column ranges, it prefetches the whole object as other
-  scans do.
-- When the object stores none of the columns, as for columns added after it was
-  written, it prefetches nothing.
+- When the object records no column ranges, or stores none of the columns, as for
+  columns added after it was written, it prefetches nothing.
+- A read that reaches an object before its column ranges are downloaded takes their
+  queued request and downloads them first, as a read of a queued whole object takes it
+  over. A read that misses otherwise reads each of its entries apart when the range
+  around them holds other bytes.
+
+Every read made under a row fetch's context, including the block pruning's reads, reads
+exactly its entries and never a whole object. Object metadata and bloom filter loads read
+exactly their extents in every scan: a prefetch range around them would hold the last
+columns of the object. A
+row fetch never reads the bytes of a column it does not read, such as the vector column
+(decision 2026-11-12). A read made inside another read, as the take-over's downloads are,
+logs its slow events apart from the outer read.
 
 A row fetch exists to skip the columns it does not read, chiefly the vector column. With
 a share rule, a table whose scalar columns read outweigh its vector column would download

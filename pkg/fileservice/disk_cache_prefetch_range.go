@@ -68,7 +68,7 @@ func autoPrefetchUnit(bdp int64) int64 {
 // no separator in their path, read through prefetch ranges.
 func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 	unit := d.prefetchRange.unit()
-	if unit <= 0 || vector.Policy.Any(SkipDiskCacheWrites, ColumnPrefetch) || !vector.Policy.CacheIOEntry() {
+	if unit <= 0 || vector.Policy.Any(SkipDiskCacheWrites, ColumnPrefetch, ExactRead) || !vector.Policy.CacheIOEntry() {
 		return 0, false
 	}
 	if path, err := ParsePath(vector.FilePath); err != nil || strings.Contains(pathpkg.Clean(path.File), "/") {

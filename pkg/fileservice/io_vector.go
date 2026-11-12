@@ -14,7 +14,11 @@
 
 package fileservice
 
-import "math"
+import (
+	"cmp"
+	"math"
+	"slices"
+)
 
 const (
 	minExpensiveRangeReadSpan        = int64(8 << 20)
@@ -127,6 +131,29 @@ func (i *IOVector) readMinimalRange() (min *int64, max *int64) {
 		}
 	}
 	return
+}
+
+// sparse reports whether the range from the least offset to the greatest end of the
+// entries not done holds bytes no such entry covers.
+func (i *IOVector) sparse() bool {
+	var spans []PrefetchRange
+	for _, e := range i.Entries {
+		if !e.done && e.Size > 0 {
+			spans = append(spans, PrefetchRange{Offset: e.Offset, Size: e.Size})
+		}
+	}
+	if len(spans) < 2 {
+		return false
+	}
+	slices.SortFunc(spans, func(a, b PrefetchRange) int { return cmp.Compare(a.Offset, b.Offset) })
+	end := spans[0].Offset + spans[0].Size
+	for _, r := range spans[1:] {
+		if r.Offset > end {
+			return true
+		}
+		end = max(end, r.Offset+r.Size)
+	}
+	return false
 }
 
 // expensiveMinimalRangeRead reports whether collapsing the unfinished entries

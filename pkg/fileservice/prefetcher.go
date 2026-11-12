@@ -332,20 +332,26 @@ func (p *prefetcher) isQueued(filePath string) bool {
 // remove drops the queued download of filePath, as a read reached the object before it,
 // and reports whether it was queued.
 func (p *prefetcher) remove(filePath string) bool {
+	_, ok := p.take(filePath, func(ObjectPrefetch) bool { return true })
+	return ok
+}
+
+// take drops and returns the queued download of filePath when want accepts its request.
+func (p *prefetcher) take(filePath string, want func(ObjectPrefetch) bool) (ObjectPrefetch, bool) {
 	if p.queued.Load() == 0 {
-		return false
+		return ObjectPrefetch{}, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
-	if !ok || e.index < 0 {
-		return false
+	if !ok || e.index < 0 || !want(e.req) {
+		return ObjectPrefetch{}, false
 	}
 	heap.Remove(&p.queue, e.index)
 	delete(p.entries, filePath)
 	p.queuedBytes -= e.req.Size
 	p.queued.Add(-1)
-	return true
+	return e.req, true
 }
 
 // close drops the queued downloads, cancels the running ones and waits for them, or ctx.

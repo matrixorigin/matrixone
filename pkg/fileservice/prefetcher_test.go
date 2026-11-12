@@ -301,3 +301,22 @@ func TestPrefetcherOversizedRequestDropsNothing(t *testing.T) {
 	require.True(t, p.isQueued("b"))
 	p.close(context.Background())
 }
+
+// take drops a queued download only when its request is wanted.
+func TestPrefetcherTake(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(0, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
+	defer p.close(context.Background())
+	whole := func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 }
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+	_, ok := p.take("a", whole)
+	require.False(t, ok)
+	require.True(t, p.isQueued("a"))
+	got, ok := p.take("a", func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	require.True(t, ok)
+	require.Equal(t, []PrefetchRange{{Offset: 0, Size: 10}}, got.Ranges)
+	require.False(t, p.isQueued("a"))
+	require.Zero(t, p.queuedBytes)
+	_, ok = p.take("a", whole)
+	require.False(t, ok, "nothing queued")
+}

@@ -1250,6 +1250,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	if err != nil {
 		return err
 	}
+	// The block pruning reads, of object metadata and bloom filters, take the scan's
+	// read policy too.
+	if policy := scanReadPolicy(s.DataSource.node); policy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|policy)
+	}
 
 	if s.NodeInfo.CNCNT == 1 {
 		rsp := &engine.RangesShuffleParam{

@@ -76,6 +76,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -3832,4 +3833,57 @@ func TestRetainedExternalSourceRechecksRole(t *testing.T) {
 	c.proc.Base.SessionInfo.Role = "public"
 	_, err = c.getExternParam(c.proc, scan, string(encoded))
 	require.ErrorContains(t, err, "only the sys account moadmin role")
+}
+
+// rangesPolicyRelation records the read policy of the context its Ranges runs under.
+type rangesPolicyRelation struct {
+	*stubRelation
+	policy fileservice.Policy
+}
+
+func (r *rangesPolicyRelation) Ranges(ctx context.Context, _ engine.RangesParam) (engine.RelData, error) {
+	r.policy = fileservice.GetFileServicePolicy(ctx)
+	return nil, moerr.NewInternalErrorNoCtx("ranges recorded")
+}
+
+// The block pruning of a narrow scan, which reads object metadata and bloom filters,
+// runs under the scan's read policy.
+func TestScopeGetRelDataAppliesScanReadPolicy(t *testing.T) {
+	catalog.SetupDefines("")
+	for _, narrow := range []bool{false, true} {
+		rel := &rangesPolicyRelation{stubRelation: newStubRelation("t")}
+		e := newStubEngine()
+		db := newStubDatabase("db")
+		e.databaseFn = func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+			return &rangesPolicyDatabase{stubDatabase: db, rel: rel}, nil
+		}
+		s := newScope(Normal)
+		s.Proc = testutil.NewProcess(t)
+		s.NodeInfo = engine.Node{Mcpu: 1, CNCNT: 1}
+		s.DataSource = &Source{node: &plan.Node{
+			NodeType:   plan.Node_TABLE_SCAN,
+			NarrowScan: narrow,
+			Stats:      &plan.Stats{},
+			ObjRef:     &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef:   &plan.TableDef{Name: "t"},
+		}}
+		c := NewMockCompile(t)
+		c.proc = s.Proc
+		c.e = e
+		require.ErrorContains(t, s.getRelData(c, nil), "ranges recorded")
+		want := fileservice.Policy(0)
+		if narrow {
+			want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+		}
+		require.Equal(t, want, rel.policy)
+	}
+}
+
+type rangesPolicyDatabase struct {
+	*stubDatabase
+	rel engine.Relation
+}
+
+func (db *rangesPolicyDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
+	return db.rel, nil
 }

@@ -96,8 +96,7 @@ func newColumnPrefetchSource(t *testing.T, recordColumns bool) (*LocalDisttaeDat
 }
 
 // A column-prefetch scan downloads the ranges of the columns it reads, however much of the
-// object they are, and the whole object only when the object records no column ranges;
-// other scans keep whole objects.
+// object they are, and never the whole object; other scans keep whole objects.
 func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -111,7 +110,7 @@ func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 		{name: "column over half of the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{1}, ranges: 1, overHalf: true},
 		{name: "all columns", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0, 1}, ranges: 2},
 		{name: "columns not in the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{7}, ranges: -2},
-		{name: "column ranges not recorded", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: -1, bare: true},
+		{name: "column ranges not recorded", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: -2, bare: true},
 		{name: "scan", seqNums: []uint16{0}, ranges: -1},
 		{name: "whole preloads skipped", policy: fileservice.SkipFullFilePreloads, seqNums: []uint16{0}, ranges: -2},
 	} {

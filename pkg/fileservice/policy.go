@@ -35,6 +35,9 @@ const (
 	// ColumnPrefetch marks a read whose prefetches download only the columns it reads,
 	// and which reads exactly its entries, not prefetch ranges around them.
 	ColumnPrefetch
+	// ExactRead marks a read that reads exactly its entries, not prefetch ranges around
+	// them.
+	ExactRead
 )
 
 const (
