@@ -25,13 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// objectParts is how many ranges of an object of at least objectPartMin bytes its
-	// download reads at once.
-	objectParts   = 4
-	objectPartMin = 16 << 20
-)
-
 // OpenObject returns the object file of fs at object, of size bytes or 0 when unknown:
 // from the index-file cache when present, otherwise read whole from fs and cached. The
 // entry is evicted by the cache like any index file; the returned File holds it until
@@ -114,18 +107,21 @@ func openObjectCached(ctx context.Context, cache *fileservice.IndexFileCache, na
 }
 
 // readObject writes the size bytes of the object of fs at object to dst, reading the
-// ranges of a large object at once.
-func readObject(ctx context.Context, fs fileservice.FileService, object string, size int64, dst io.WriterAt) error {
+// ranges fileservice.IndexObjectDownload splits it into at once.
+func readObject(ctx context.Context, fs fileservice.FileService, object string, size int64, dst io.WriterAt) (err error) {
+	bounds, end := fileservice.IndexObjectDownload(fs, size)
+	defer func() { end(err == nil) }()
+	if bounds == nil {
+		bounds = []int64{0, size}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	parts := int64(1)
-	if size >= objectPartMin {
-		parts = objectParts
-	}
-	part := (size + parts - 1) / parts
-	errs := make(chan error, parts)
+	errs := make(chan error, len(bounds)-1)
 	n := 0
-	for start := int64(0); start < size; start += part {
+	for i := 0; i+1 < len(bounds); i++ {
+		if bounds[i] >= bounds[i+1] {
+			continue
+		}
 		n++
 		go func(start, end int64) {
 			err := readObjectRange(ctx, fs, object, start, end, dst)
@@ -133,9 +129,8 @@ func readObject(ctx context.Context, fs fileservice.FileService, object string, 
 				cancel()
 			}
 			errs <- err
-		}(start, min(start+part, size))
+		}(bounds[i], bounds[i+1])
 	}
-	var err error
 	for range n {
 		err = errors.Join(err, <-errs)
 	}

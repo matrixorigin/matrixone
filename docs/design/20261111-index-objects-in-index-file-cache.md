@@ -9,13 +9,14 @@ other workload's objects then miss.
 
 ## Decision
 
-With `[fileservice.cache] index-file-cache-objects = true` (default false), a CN keeps the
-objects of IVF-Flat entries tables whole in its index-file cache, as index files beside
-HNSW and fulltext ones, apart from the shared disk cache.
+A CN with an index-file cache keeps the objects of IVF-Flat entries tables whole in it,
+as index files beside HNSW and fulltext ones, apart from the shared disk cache.
 
 - **Loading.** `indexfile.OpenObject` opens an object's entry, or reads the object whole
   into the cache and opens it, as `indexfile.Open` does for an index file: one read per
-  entry at a time, an object of 16 MiB or more read as four ranges at once. The IVF-Flat
+  entry at a time, an object of 16 MiB or more read as two ranges at once while fewer than
+  four whole-object downloads, of index objects and of the disk cache, are in flight; each
+  complete download is a sample of the download rate the prefetcher sizes its queue by. The IVF-Flat
   search's scan of the entries table opens the objects of its blocks before reading them,
   eight at once, and holds them until the scan ends. A distributed search assigns whole
   objects to CNs by object id, so each CN loads its share. An object that cannot be loaded
@@ -35,7 +36,7 @@ HNSW and fulltext ones, apart from the shared disk cache.
 - **Restart.** After a restart the entries on disk serve reads while the cache loads them.
 - **Delete.** Deleting an object through the CN's file service deletes its entry. Objects
   deleted elsewhere, as by TN garbage collection, are no longer read, and their entries
-  age out.
+  are evicted.
 
 ## Alternatives
 

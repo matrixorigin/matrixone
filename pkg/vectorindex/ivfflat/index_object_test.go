@@ -48,7 +48,7 @@ func TestOpenIndexObjectsOfScan(t *testing.T) {
 		Name: defines.SharedFileServiceName, Endpoint: "disk", Bucket: filepath.Join(dir, "bucket"),
 	}, fileservice.CacheConfig{
 		DiskPath: &diskPath, DiskCapacity: &capacity, IndexFileDiskCapacity: &capacity,
-		IndexFileCacheEnabled: true, IndexFileCacheObjects: true,
+		IndexFileCacheEnabled: true,
 	}, nil, false, false)
 	require.NoError(t, err)
 	defer fs.Close(ctx)

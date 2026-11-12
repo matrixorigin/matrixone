@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,11 +37,42 @@ const (
 	indexObjectTouch = time.Minute
 	// indexObjectsTouchedMax is the most index objects remembered as marked used.
 	indexObjectsTouchedMax = 1 << 14
+	// indexObjectSplitParts is how many ranges the download of an index object reads at
+	// once.
+	indexObjectSplitParts = 2
 )
+
+// indexObjectDownloads is the number of index-object downloads in flight.
+var indexObjectDownloads atomic.Int64
+
+// IndexObjectDownload starts the download of an index object of fs of size bytes. It
+// returns the 64KiB-aligned bounds of the ranges to read at once, or nil to read it as one
+// range, and end, to call once when the download ends. The object is split while fewer
+// than objectSplitMaxDownloads whole-object downloads, of index objects and of fs's disk
+// cache, are in flight. A complete download is a sample of the download rate.
+func IndexObjectDownload(fs FileService, size int64) (bounds []int64, end func(complete bool)) {
+	inFlight := indexObjectDownloads.Add(1) - 1
+	if s, ok := fs.(*S3FS); ok && s.diskCache != nil {
+		inFlight += int64(s.diskCache.downloading())
+	}
+	if inFlight < objectSplitMaxDownloads {
+		bounds = objectSplitConfig{parts: indexObjectSplitParts, min: DefaultDiskPrefetchObjectSplitMin}.bounds(size, 0)
+	}
+	parts := int64(max(len(bounds)-1, 1))
+	start := time.Now()
+	var once sync.Once
+	return bounds, func(complete bool) {
+		once.Do(func() {
+			indexObjectDownloads.Add(-1)
+			if complete {
+				downloadRates.observe(size/parts, time.Since(start))
+			}
+		})
+	}
+}
 
 // indexObjects is the state of the index objects an S3FS reads from its index-file cache.
 type indexObjects struct {
-	on      bool
 	mu      sync.Mutex
 	touched map[string]time.Time // entries by when they were last marked used
 }
@@ -52,8 +84,8 @@ func IndexObjectEntry(file string) string {
 }
 
 // IndexObjectCache returns fs's SHARED file service, which reads the objects of tables,
-// and its index-file cache when it keeps index objects, those its IndexFileObject reads
-// ask for; or nil, nil.
+// and its index-file cache, which keeps the objects its IndexFileObject reads ask for;
+// or nil, nil when it has none.
 func IndexObjectCache(fs FileService) (*IndexFileCache, FileService) {
 	if fs == nil {
 		return nil, nil
@@ -69,7 +101,7 @@ func IndexObjectCache(fs FileService) (*IndexFileCache, FileService) {
 }
 
 func (s *S3FS) cachesIndexObjects() bool {
-	return s.indexObjects.on && s.indexFileCache != nil
+	return s.indexFileCache != nil
 }
 
 // indexObjectCached returns the disk path of the entry of the object at filePath, and

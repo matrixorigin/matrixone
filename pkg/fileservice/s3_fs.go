@@ -335,7 +335,6 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
 	s.indexFileCache = caches.index
-	s.indexObjects.on = config.IndexFileCacheObjects
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}

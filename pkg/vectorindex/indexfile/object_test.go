@@ -86,13 +86,13 @@ func TestOpenObjectReadsOnceForConcurrentOpens(t *testing.T) {
 
 // A large object is read as ranges at once, each written at its offset.
 func TestOpenObjectReadsParts(t *testing.T) {
-	fs, data := newObjectFS(t, objectPartMin+3<<10)
+	fs, data := newObjectFS(t, fileservice.DefaultDiskPrefetchObjectSplitMin+3<<10)
 	cache := newCache(t, t.TempDir())
 	f, err := OpenObject(context.Background(), cache, fs, "object", int64(len(data)))
 	require.NoError(t, err)
 	defer f.Close()
 	require.Equal(t, data, readFile(t, f))
-	require.Equal(t, int64(objectParts), fs.reads.Load())
+	require.Equal(t, int64(2), fs.reads.Load())
 }
 
 // A cached entry of another size than the object's is read again.

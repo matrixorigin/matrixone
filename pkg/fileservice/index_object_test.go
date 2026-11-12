@@ -39,11 +39,11 @@ func (c *readCountingStorage) Read(ctx context.Context, key string, min, max *in
 	return c.ObjectStorage.Read(ctx, key, min, max)
 }
 
-func newIndexObjectFS(t *testing.T, on bool) (*S3FS, *readCountingStorage, []byte) {
+func newIndexObjectFS(t *testing.T, indexCache bool) (*S3FS, *readCountingStorage, []byte) {
 	ctx := context.Background()
 	config := indexCacheConfig(t, 64<<20, 64<<20)
 	config.MemoryCapacity = ptrTo[toml.ByteSize](0)
-	config.IndexFileCacheObjects = on
+	config.IndexFileCacheEnabled = indexCache
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: defines.SharedFileServiceName, Endpoint: "disk", Bucket: t.TempDir()}, config, nil, false, false)
 	require.NoError(t, err)
 	fs.SetAsyncUpdate(false)
@@ -90,10 +90,10 @@ func TestIndexObjectServesReads(t *testing.T) {
 	require.NotZero(t, storage.reads.Load(), "a read without IndexFileObject does not use the entry")
 }
 
-// Without the setting, the index-file cache's entry of an object is not read.
-func TestIndexObjectsOff(t *testing.T) {
+// Without an index-file cache, IndexFileObject reads take the normal path.
+func TestIndexObjectsWithoutIndexFileCache(t *testing.T) {
 	fs, storage, data := newIndexObjectFS(t, false)
-	cacheIndexObject(t, fs, "object", data)
+	require.Nil(t, fs.indexFileCache)
 	require.Equal(t, data[1000:1010], readIndexObjectRange(t, fs, IndexFileObject, 1000, 10))
 	require.NotZero(t, storage.reads.Load())
 	cache, _ := IndexObjectCache(fs)
@@ -165,4 +165,34 @@ func TestReadKeepsIndexObject(t *testing.T) {
 		_, cached = fs.indexObjectCached("object")
 		require.Equal(t, read, cached, "read %v", read)
 	}
+}
+
+// An index object of at least the split size downloads as two aligned ranges while fewer
+// than objectSplitMaxDownloads downloads are in flight, and as one range beyond.
+func TestIndexObjectDownloadSplit(t *testing.T) {
+	size := int64(DefaultDiskPrefetchObjectSplitMin + 3<<10)
+	bounds, end := IndexObjectDownload(nil, size/4)
+	require.Nil(t, bounds, "a small object is one range")
+	end(false)
+
+	var ends []func(bool)
+	for range objectSplitMaxDownloads {
+		bounds, end := IndexObjectDownload(nil, size)
+		require.Len(t, bounds, 3)
+		require.Equal(t, []int64{0, size}, []int64{bounds[0], bounds[2]})
+		require.Zero(t, bounds[1]%prefetchBlockMax)
+		ends = append(ends, end)
+	}
+	bounds, end = IndexObjectDownload(nil, size)
+	require.Nil(t, bounds, "past the in-flight cap an object is one range")
+	end(false)
+
+	for _, end := range ends {
+		end(true)
+		end(true)
+	}
+	require.Zero(t, indexObjectDownloads.Load())
+	bounds, end = IndexObjectDownload(nil, size)
+	require.Len(t, bounds, 3)
+	end(false)
 }

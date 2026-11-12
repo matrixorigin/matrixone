@@ -55,8 +55,8 @@ const (
 	DefaultIndexFileDiskCapacity = 8 << 30
 
 	// DefaultIndexFileIdleTTL is how long an index-file cache entry with no holds stays
-	// after its last use.
-	DefaultIndexFileIdleTTL = time.Hour
+	// after its last use; 0 turns idle collection off.
+	DefaultIndexFileIdleTTL time.Duration = 0
 
 	maxIndexFileGCInterval = 10 * time.Minute
 

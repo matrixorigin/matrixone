@@ -78,10 +78,6 @@ type CacheConfig struct {
 	// IndexFileCheckOnStartup checks the full checksum of each cached index file on its
 	// first open since the process started. Default false: opens check the length only.
 	IndexFileCheckOnStartup bool `toml:"index-file-check-on-startup"`
-	// IndexFileCacheObjects keeps whole, in the index-file cache, the objects of index
-	// tables whose reads ask for it, such as IVF-Flat entries, and reads them from there.
-	// Default false.
-	IndexFileCacheObjects bool `toml:"index-file-cache-objects"`
 	// IndexFileCacheEnabled is set by the service launcher for a CN's SHARED file service.
 	IndexFileCacheEnabled bool `toml:"-" json:"-"`
 
