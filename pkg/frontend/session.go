@@ -1279,15 +1279,34 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
-// AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
-func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
+// authenticationResult is only for SELECTs whose first row is required to
+// authenticate a user. Other background statements may legitimately have no result.
+func authenticationResult(ctx context.Context, bh BackgroundExec, sql string) (ExecResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	results, err := executeSQLInBackgroundSession(ctx, bh, sql)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(results) == 0 || results[0] == nil || results[0].GetRowCount() == 0 {
+		return nil, moerr.NewInternalError(ctx, "required authentication query returned no data")
+	}
+	return results[0], nil
+}
+
+// AuthenticateUser verifies credentials and the optional login database. Its
+// transaction completion error is returned to the handshake caller as well.
+func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) (_ []byte, err error) {
 	var (
 		defaultRoleID        int64
 		defaultRole          string
 		sqlForCheckTenant    string
 		sqlForPasswordOfUser string
 		tenant               *TenantInfo
-		err                  error
 		rsset                []ExecResult
 		userRsset            []ExecResult
 		tenantID             int64
@@ -1540,21 +1559,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	statusColIdx := uint64(0)
 	loginAttemptsColIdx := uint64(1)
 	lockTimeColIdx := uint64(2)
-	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
+	userLockResult, err := authenticationResult(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
 		return nil, err
 	}
-	userStatus, err = userRsset[0].GetString(tenantCtx, 0, statusColIdx)
-	if err != nil {
-		return nil, err
-	}
-
-	loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, loginAttemptsColIdx)
+	userStatus, err = userLockResult.GetString(tenantCtx, 0, statusColIdx)
 	if err != nil {
 		return nil, err
 	}
 
-	lockTime, err = userRsset[0].GetString(tenantCtx, 0, lockTimeColIdx)
+	loginAttempts, err = userLockResult.GetUint64(tenantCtx, 0, loginAttemptsColIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	lockTime, err = userLockResult.GetString(tenantCtx, 0, lockTimeColIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -1590,11 +1609,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 			if defPwdLife > 0 {
 				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
-				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
-				if err != nil {
-					return nil, err
+				userExpiredResult, queryErr := authenticationResult(tenantCtx, bh, userExpiredSql)
+				if queryErr != nil {
+					return nil, queryErr
 				}
-				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 0)
+				lastChangedTime, err = userExpiredResult.GetString(tenantCtx, 0, 0)
 				if err != nil {
 					return nil, err
 				}

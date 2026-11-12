@@ -213,6 +213,40 @@ func CompileFilterExprs(
 	return
 }
 
+// decodePrefixFilterVector validates an optional pruning payload before any
+// varlena access. UnmarshalBinary assumes a complete trusted buffer and can panic
+// on truncated input; rejecting this optimization leaves the exact filter intact.
+func decodePrefixFilterVector(data []byte) (vec *vector.Vector) {
+	defer func() {
+		if recover() != nil {
+			vec = nil
+		}
+	}()
+	v := vector.NewVec(types.T_any.ToType())
+	if err := v.UnmarshalBinary(data); err != nil || !v.GetType().IsVarlen() || v.Length() < 0 {
+		return nil
+	}
+	rows := v.Length()
+	if v.IsConst() && rows > 0 {
+		rows = 1
+	}
+	if len(v.GetData())/types.VarlenaSize != rows || len(v.GetData())%types.VarlenaSize != 0 {
+		return nil
+	}
+	if rows > 0 {
+		values, area := vector.MustVarlenaRawData(v)
+		for i := range values {
+			if !values[i].IsSmall() {
+				offset, length := values[i].OffsetLen()
+				if uint64(offset)+uint64(length) > uint64(len(area)) {
+					return nil
+				}
+			}
+		}
+	}
+	return v
+}
+
 func CompileFilterExpr(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
@@ -815,8 +849,11 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(val)
+			vec := decodePrefixFilterVector(val)
+			if vec == nil {
+				canCompile = false
+				return
+			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {

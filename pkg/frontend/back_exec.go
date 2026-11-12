@@ -359,7 +359,12 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
-	proc.SetStmtProfile(&backSes.stmtProfile)
+	// Remote pipelines share message boards by statement ID. A background
+	// session may execute many SQL statements, but none may use the zero ID,
+	// its parent's ID, or a profile mutated by a subsequent statement.
+	stmtID := uuid.New()
+	backSes.SetStmtId(stmtID)
+	proc.SetStmtProfile(process.NewStmtProfile(backSes.stmtProfile.GetTxnId(), stmtID))
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	// Frontend back-exec — session-bound resolver. backSession is a
 	// frontend session without a client connection (NOT a system
@@ -429,6 +434,11 @@ func doComQueryInBack(
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
+		if i > 0 {
+			stmtID = uuid.New()
+			backSes.SetStmtId(stmtID)
+			proc.SetStmtProfile(process.NewStmtProfile(backSes.stmtProfile.GetTxnId(), stmtID))
+		}
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
@@ -542,6 +552,7 @@ func executeStmtInBack(backSes *backSession,
 		return err
 	}
 
+	execCtx.proc.GetStmtProfile().SetTxnId(backSes.GetTxnHandler().GetTxn().Txn().ID)
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -1098,7 +1109,7 @@ func (backSes *backSession) GetSqlOfStmt() string {
 }
 
 func (backSes *backSession) GetStmtId() uuid.UUID {
-	return [16]byte{}
+	return backSes.stmtProfile.GetStmtId()
 }
 
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
