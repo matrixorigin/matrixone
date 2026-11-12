@@ -1,0 +1,1056 @@
+drop database if exists contradictory_selectivity;
+create database contradictory_selectivity;
+use contradictory_selectivity;
+create table points(id int primary key, v int, d decimal(18,2), s varchar(20));
+insert into points values (1,0,0.00,'a'), (2,19,19.00,'b'), (3,81,81.00,'c'), (4,100,100.00,null);
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.points');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.points)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table points(v,d,s) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.points  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  4  ¦  1  ¦  4  ¦  2  ¦  464  ¦  OK  ¦  q=1/1
+explain verbose select id from points where v = 19 and v = 81;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where v = 19 and v = 81;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where d = 19.00 and d = 81.00;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where d = 19.00 and d = 81.00;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v = 19 and v = 19 and v = 81;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where v = 19 and v = 19 and v = 81;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v = 19 and v <> 19;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where v = 19 and v <> 19;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where s = 'a' and s is null;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where s = 'a' and s is null;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v < 20 and v > 40;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (points.v < 20), (points.v > 40)  𝄀
+        Block Filter Cond: (points.v < 20), (points.v > 40)
+select count(*) as matches from points where v < 20 and v > 40;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v = 19 and v = 81 and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where v = 19 and v = 81 and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v = 19 and v <> 19 and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from points where v = 19 and v <> 19 and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from points where v = 19 and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (points.v = 19), points.v BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (points.v = 19), points.v BETWEEN 0 AND 100
+select count(*) as matches from points where v = 19 and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from points where v = 19 and v = 19;
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (points.v = 19)  𝄀
+        Block Filter Cond: (points.v = 19)
+select count(*) as matches from points where v = 19 and v = 19;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from points where v = 19;
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (points.v = 19)  𝄀
+        Block Filter Cond: (points.v = 19)
+select count(*) as matches from points where v = 19;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from points where v = 81;
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=1.00 selectivity=0.2500 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (points.v = 81)  𝄀
+        Block Filter Cond: (points.v = 81)
+select count(*) as matches from points where v = 81;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from points where v = 19 or v = 81;
+-- @regex("Table Scan.*selectivity=0[.]5000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=2.00 outcnt=2.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=2.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: points.v in ([19 81])
+select count(*) as matches from points where v = 19 or v = 81;
+➤ matches[-5,64,0]  𝄀
+2
+explain verbose select id from points where v in (19, 81);
+-- @regex("Table Scan.*selectivity=0[.]5000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=2.00 outcnt=2.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: points.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.points (cost=4.00 outcnt=2.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=57.50)  𝄀
+        Output: points.id  𝄀
+        Table: 'points' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: points.v in ([19 81])
+select count(*) as matches from points where v in (19, 81);
+➤ matches[-5,64,0]  𝄀
+2
+create table dig(n int);
+insert into dig values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),(31),(32),(33),(34),(35),(36),(37),(38),(39),(40),(41),(42),(43),(44),(45),(46),(47),(48),(49),(50),(51),(52),(53),(54),(55),(56),(57),(58),(59),(60),(61),(62),(63),(64),(65),(66),(67),(68),(69),(70),(71),(72),(73),(74),(75),(76),(77),(78),(79),(80),(81),(82),(83),(84),(85),(86),(87),(88),(89),(90),(91),(92),(93),(94),(95),(96),(97),(98),(99);
+create table plain_or_bound(id int primary key, k2 int, key idx_k2(k2));
+insert into plain_or_bound select d1.n * 100 + d2.n, (d1.n * 100 + d2.n) % 1000 from dig d1, dig d2;
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.plain_or_bound');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.plain_or_bound)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table plain_or_bound(k2) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.plain_or_bound  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  10000  ¦  1  ¦  10000  ¦  3  ¦  280000  ¦  OK  ¦  q=1/1
+explain verbose select id from plain_or_bound where k2 = 5;
+-- @regex("Table Scan.*selectivity=0[.]0010.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=9.92 outcnt=9.92 selectivity=0.0010 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: __mo_index_pri_col  𝄀
+  ->  Index Table Scan[0] on plain_or_bound.idx_k2 (cost=9.92 outcnt=9.92 selectivity=0.0010 dop=0 blockNum=1 rowsize=28.02)  𝄀
+        Output: __mo_index_pri_col  𝄀
+        Table: '__mo_index_secondary_01a1c6b7-add0-752c-8a24-95cf3f57630c' (0:'__mo_index_idx_col', 1:'__mo_index_pri_col')  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select count(*) as matches from plain_or_bound where k2 = 5;
+➤ matches[-5,64,0]  𝄀
+10
+explain verbose select id from plain_or_bound where k2 = 6;
+-- @regex("Table Scan.*selectivity=0[.]0010.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=9.92 outcnt=9.92 selectivity=0.0010 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: __mo_index_pri_col  𝄀
+  ->  Index Table Scan[0] on plain_or_bound.idx_k2 (cost=9.92 outcnt=9.92 selectivity=0.0010 dop=0 blockNum=1 rowsize=28.02)  𝄀
+        Output: __mo_index_pri_col  𝄀
+        Table: '__mo_index_secondary_01a1c6b7-add0-752c-8a24-95cf3f57630c' (0:'__mo_index_idx_col', 1:'__mo_index_pri_col')  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select count(*) as matches from plain_or_bound where k2 = 6;
+➤ matches[-5,64,0]  𝄀
+10
+explain verbose select id from plain_or_bound where k2 = 5 or k2 = 6;
+-- @regex("Table Scan.*selectivity=(0[.]001[0-9]|0[.]00[2-9][0-9]|0[.]0[1-9][0-9][0-9]|0[.][1-9][0-9][0-9][0-9]|1[.]0000).*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=10.00 outcnt=10.00 selectivity=0.0010 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: __mo_index_pri_col  𝄀
+  ->  Index Table Scan[0] on plain_or_bound.idx_k2 (cost=10.00 outcnt=10.00 selectivity=0.0010 dop=0 blockNum=1 rowsize=28.02)  𝄀
+        Output: __mo_index_pri_col  𝄀
+        Table: '__mo_index_secondary_01a1c6b7-add0-752c-8a24-95cf3f57630c' (0:'__mo_index_idx_col', 1:'__mo_index_pri_col')  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+select count(*) as matches from plain_or_bound where k2 = 5 or k2 = 6;
+➤ matches[-5,64,0]  𝄀
+20
+explain verbose select id from plain_or_bound where k2 in (5, 6);
+-- @regex("Table Scan.*selectivity=(0[.]001[0-9]|0[.]00[2-9][0-9]|0[.]0[1-9][0-9][0-9]|0[.][1-9][0-9][0-9][0-9]|1[.]0000).*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=10.00 outcnt=10.00 selectivity=0.0010 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: __mo_index_pri_col  𝄀
+  ->  Index Table Scan[0] on plain_or_bound.idx_k2 (cost=10.00 outcnt=10.00 selectivity=0.0010 dop=0 blockNum=1 rowsize=28.02)  𝄀
+        Output: __mo_index_pri_col  𝄀
+        Table: '__mo_index_secondary_01a1c6b7-add0-752c-8a24-95cf3f57630c' (0:'__mo_index_idx_col', 1:'__mo_index_pri_col')  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+select count(*) as matches from plain_or_bound where k2 in (5, 6);
+➤ matches[-5,64,0]  𝄀
+20
+create table zpoints(id int primary key, f double);
+insert into zpoints values (1, 0e0), (2, -1.5e0);
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.zpoints');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.zpoints)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table zpoints(f) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.zpoints  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  2  ¦  1  ¦  2  ¦  2  ¦  64  ¦  OK  ¦  q=1/1
+explain verbose select id from zpoints where f = 0e0 and f = -0e0 and f between -1e0 and 1e0;
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.50 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: zpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.zpoints (cost=2.00 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=31.00)  𝄀
+        Output: zpoints.id  𝄀
+        Table: 'zpoints' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (zpoints.f = 0), (zpoints.f = -0), zpoints.f BETWEEN -1 AND 1  𝄀
+        Block Filter Cond: (zpoints.f = 0), (zpoints.f = -0), zpoints.f BETWEEN -1 AND 1
+select count(*) as matches from zpoints where f = 0e0 and f = -0e0 and f between -1e0 and 1e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from zpoints where f = 0e0 and f = -0e0;
+-- @regex("Table Scan.*selectivity=0[.]5000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: zpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.zpoints (cost=2.00 outcnt=1.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=31.00)  𝄀
+        Output: zpoints.id  𝄀
+        Table: 'zpoints' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (zpoints.f = 0)  𝄀
+        Block Filter Cond: (zpoints.f = 0)
+select count(*) as matches from zpoints where f = 0e0 and f = -0e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from zpoints where f = 0e0 and f = -1.5e0 and f between -1e0 and 1e0;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: zpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.zpoints (cost=2.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=31.00)  𝄀
+        Output: zpoints.id  𝄀
+        Table: 'zpoints' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from zpoints where f = 0e0 and f = -1.5e0 and f between -1e0 and 1e0;
+➤ matches[-5,64,0]  𝄀
+0
+create table cpoints(id int primary key, s varchar(20) collate utf8mb4_unicode_ci);
+insert into cpoints values (1, 'a'), (2, 'z'), (3, 'é');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.cpoints');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.cpoints)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table cpoints(s) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.cpoints  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  144  ¦  OK  ¦  q=1/1
+explain verbose select id from cpoints where s = 'a' and s = 'A' and s between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.03 outcnt=0.03 selectivity=0.0111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: cpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.cpoints (cost=3.00 outcnt=0.03 selectivity=0.0111 dop=0 blockNum=2 rowsize=40.67)  𝄀
+        Output: cpoints.id  𝄀
+        Table: 'cpoints' (0:'id', 1:'s') shuffle: hash(id)  𝄀
+        Filter Cond: cpoints.s BETWEEN 'a' AND 'z', (cpoints.s = 'a'), (cpoints.s = 'A')
+select count(*) as matches from cpoints where s = 'a' and s = 'A' and s between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from cpoints where s = 'a' and s = 'A';
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: cpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.cpoints (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=40.67)  𝄀
+        Output: cpoints.id  𝄀
+        Table: 'cpoints' (0:'id', 1:'s') shuffle: hash(id)  𝄀
+        Filter Cond: (cpoints.s = 'a')
+select count(*) as matches from cpoints where s = 'a' and s = 'A';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from cpoints where s = 'e' and s = 'é' and s between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.03 outcnt=0.03 selectivity=0.0111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: cpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.cpoints (cost=3.00 outcnt=0.03 selectivity=0.0111 dop=0 blockNum=2 rowsize=40.67)  𝄀
+        Output: cpoints.id  𝄀
+        Table: 'cpoints' (0:'id', 1:'s') shuffle: hash(id)  𝄀
+        Filter Cond: cpoints.s BETWEEN 'a' AND 'z', (cpoints.s = 'e'), (cpoints.s = 'é')
+select count(*) as matches from cpoints where s = 'e' and s = 'é' and s between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from cpoints where s = 'a' and s = 'z' and s between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: cpoints.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.cpoints (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=40.67)  𝄀
+        Output: cpoints.id  𝄀
+        Table: 'cpoints' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from cpoints where s = 'a' and s = 'z' and s between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+0
+create table bpts(id int primary key, b varchar(20) collate utf8mb4_bin);
+insert into bpts values (1, 'a'), (2, 'C');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.bpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.bpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table bpts(b) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.bpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  2  ¦  1  ¦  2  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+explain verbose select id from bpts where b = 'a' and b = 'A' and b between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: bpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.bpts (cost=2.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=47.00)  𝄀
+        Output: bpts.id  𝄀
+        Table: 'bpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from bpts where b = 'a' and b = 'A' and b between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+0
+create table hpts(id int primary key, c char(10));
+insert into hpts values (1, 'a'), (2, 'zz');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.hpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.hpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table hpts(c) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.hpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  2  ¦  1  ¦  2  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+explain verbose select id from hpts where c = 'a' and c = 'a ' and c between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0250.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.05 outcnt=0.05 selectivity=0.0250 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: hpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.hpts (cost=2.00 outcnt=0.05 selectivity=0.0250 dop=0 blockNum=2 rowsize=47.00)  𝄀
+        Output: hpts.id  𝄀
+        Table: 'hpts' (0:'id', 1:'c') shuffle: hash(id)  𝄀
+        Filter Cond: hpts.c BETWEEN 'a' AND 'z', (hpts.c = 'a'), (hpts.c = 'a ')
+select count(*) as matches from hpts where c = 'a' and c = 'a ' and c between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from hpts where c = 'a' and c = 'zz' and c between 'a' and 'z';
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: hpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.hpts (cost=2.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=47.00)  𝄀
+        Output: hpts.id  𝄀
+        Table: 'hpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from hpts where c = 'a' and c = 'zz' and c between 'a' and 'z';
+➤ matches[-5,64,0]  𝄀
+0
+create table dpts(id int primary key, d datetime(6));
+insert into dpts values (1, '2024-01-01 00:00:00'), (2, '2024-01-01 00:00:01'), (3, '2023-06-15 12:30:00');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.dpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.dpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table dpts(d) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.dpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+explain verbose select id from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-01 00:00:00' as datetime(6)) and d between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: dpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.dpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: dpts.id  𝄀
+        Table: 'dpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (dpts.d = 2024-01-01 00:00:00), (dpts.d = 2024-01-01 00:00:00.000000), dpts.d BETWEEN 2023-01-01 00:00:00.000000 AND 2025-01-01 00:00:00.000000  𝄀
+        Block Filter Cond: (dpts.d = 2024-01-01 00:00:00), (dpts.d = 2024-01-01 00:00:00.000000), dpts.d BETWEEN 2023-01-01 00:00:00.000000 AND 2025-01-01 00:00:00.000000
+select count(*) as matches from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-01 00:00:00' as datetime(6)) and d between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-01 00:00:00' as datetime(6));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: dpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.dpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: dpts.id  𝄀
+        Table: 'dpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (dpts.d = 2024-01-01 00:00:00)  𝄀
+        Block Filter Cond: (dpts.d = 2024-01-01 00:00:00)
+select count(*) as matches from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-01 00:00:00' as datetime(6));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from dpts where d = cast('2024-01-01 00:00:00' as datetime(0));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: dpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.dpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: dpts.id  𝄀
+        Table: 'dpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (dpts.d = 2024-01-01 00:00:00)  𝄀
+        Block Filter Cond: (dpts.d = 2024-01-01 00:00:00)
+select count(*) as matches from dpts where d = cast('2024-01-01 00:00:00' as datetime(0));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-03 00:00:00' as datetime(6)) and d between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: dpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.dpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: dpts.id  𝄀
+        Table: 'dpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from dpts where d = cast('2024-01-01 00:00:00' as datetime(0)) and d = cast('2024-01-03 00:00:00' as datetime(6)) and d between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from dpts where d = cast('2024-01-01 00:00:00.5' as datetime(0)) and d = cast('2024-01-01 00:00:00.5' as datetime(6));
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: dpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.dpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: dpts.id  𝄀
+        Table: 'dpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from dpts where d = cast('2024-01-01 00:00:00.5' as datetime(0)) and d = cast('2024-01-01 00:00:00.5' as datetime(6));
+➤ matches[-5,64,0]  𝄀
+0
+create table tpts(id int primary key, ts timestamp(6));
+insert into tpts values (1, '2024-01-01 00:00:00'), (2, '2024-02-01 00:00:00');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.tpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.tpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table tpts(ts) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.tpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  2  ¦  1  ¦  2  ¦  2  ¦  64  ¦  OK  ¦  q=1/1
+explain verbose select id from tpts where ts = cast('2024-01-01 00:00:00' as timestamp(0)) and ts = cast('2024-01-01 00:00:00' as timestamp(6)) and ts between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.50 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: tpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.tpts (cost=2.00 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=31.00)  𝄀
+        Output: tpts.id  𝄀
+        Table: 'tpts' (0:'id', 1:'ts') shuffle: hash(id)  𝄀
+        Filter Cond: (tpts.ts = 2023-12-31 16:00:00), (tpts.ts = 2023-12-31 16:00:00.000000), tpts.ts BETWEEN 2022-12-31 16:00:00.000000 AND 2024-12-31 16:00:00.000000  𝄀
+        Block Filter Cond: (tpts.ts = 2023-12-31 16:00:00), (tpts.ts = 2023-12-31 16:00:00.000000), tpts.ts BETWEEN 2022-12-31 16:00:00.000000 AND 2024-12-31 16:00:00.000000
+select count(*) as matches from tpts where ts = cast('2024-01-01 00:00:00' as timestamp(0)) and ts = cast('2024-01-01 00:00:00' as timestamp(6)) and ts between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from tpts where ts = cast('2024-01-01 00:00:00' as timestamp(0)) and ts = cast('2024-02-01 00:00:00' as timestamp(6)) and ts between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: tpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.tpts (cost=2.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=31.00)  𝄀
+        Output: tpts.id  𝄀
+        Table: 'tpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from tpts where ts = cast('2024-01-01 00:00:00' as timestamp(0)) and ts = cast('2024-02-01 00:00:00' as timestamp(6)) and ts between '2023-01-01 00:00:00' and '2025-01-01 00:00:00';
+➤ matches[-5,64,0]  𝄀
+0
+drop table if exists tpts;
+drop table if exists dpts;
+create table wpts(id int primary key, d decimal(16,2));
+insert into wpts values (1, 19.00), (2, 81.25), (3, 7.50);
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.wpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.wpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table wpts(d) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.wpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+explain verbose select id from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('19.00' as decimal(12,2)) and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00  𝄀
+        Block Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00
+select count(*) as matches from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('19.00' as decimal(12,2)) and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('19.00' as decimal(12,2));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00)  𝄀
+        Block Filter Cond: (wpts.d = 19.00)
+select count(*) as matches from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('19.00' as decimal(12,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = cast('19.00' as decimal(8,2));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00)  𝄀
+        Block Filter Cond: (wpts.d = 19.00)
+select count(*) as matches from wpts where d = cast('19.00' as decimal(8,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('81.25' as decimal(12,2)) and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from wpts where d = cast('19.00' as decimal(8,2)) and d = cast('81.25' as decimal(12,2)) and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from wpts where d = 019.00 and d = 19.00 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00  𝄀
+        Block Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00
+select count(*) as matches from wpts where d = 019.00 and d = 19.00 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = 19.00 and d = 019.00 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00  𝄀
+        Block Filter Cond: (wpts.d = 19.00), (wpts.d = 19.00), wpts.d BETWEEN 0.00 AND 100.00
+select count(*) as matches from wpts where d = 19.00 and d = 019.00 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = 019.00 and d = 19.00;
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00)  𝄀
+        Block Filter Cond: (wpts.d = 19.00)
+select count(*) as matches from wpts where d = 019.00 and d = 19.00;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = 19.00 and d = 019.00;
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: (wpts.d = 19.00)  𝄀
+        Block Filter Cond: (wpts.d = 19.00)
+select count(*) as matches from wpts where d = 19.00 and d = 019.00;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from wpts where d = 019.00 and d = 81.25 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: wpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.wpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: wpts.id  𝄀
+        Table: 'wpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from wpts where d = 019.00 and d = 81.25 and d between cast('0.00' as decimal(16,2)) and cast('100.00' as decimal(16,2));
+➤ matches[-5,64,0]  𝄀
+0
+create table ipts(id int primary key, v bigint);
+insert into ipts values (1, 19), (2, 81), (3, 7);
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.ipts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.ipts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table ipts(v) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.ipts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+explain verbose select id from ipts where v = 19 and v = cast('19' as signed) and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100
+select count(*) as matches from ipts where v = 19 and v = cast('19' as signed) and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = cast('19' as signed) and v = 19 and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100
+select count(*) as matches from ipts where v = cast('19' as signed) and v = 19 and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = 19 and v = cast('19' as signed);
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19)  𝄀
+        Block Filter Cond: (ipts.v = 19)
+select count(*) as matches from ipts where v = 19 and v = cast('19' as signed);
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = cast('19' as signed) and v = 19;
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19)  𝄀
+        Block Filter Cond: (ipts.v = 19)
+select count(*) as matches from ipts where v = cast('19' as signed) and v = 19;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = 19 and v = cast('81' as signed) and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from ipts where v = 19 and v = cast('81' as signed) and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from ipts where v = 19 and v = (cast('19.00' as decimal(8,2)) div 1) and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100
+select count(*) as matches from ipts where v = 19 and v = (cast('19.00' as decimal(8,2)) div 1) and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where (cast('19.00' as decimal(8,2)) div 1) = v and v = 19 and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (ipts.v = 19), (ipts.v = 19), ipts.v BETWEEN 0 AND 100
+select count(*) as matches from ipts where (cast('19.00' as decimal(8,2)) div 1) = v and v = 19 and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = 19 and v = (cast('19.00' as decimal(8,2)) div 1);
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19)  𝄀
+        Block Filter Cond: (ipts.v = 19)
+select count(*) as matches from ipts where v = 19 and v = (cast('19.00' as decimal(8,2)) div 1);
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where (cast('19.00' as decimal(8,2)) div 1) = v and v = 19;
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: (ipts.v = 19)  𝄀
+        Block Filter Cond: (ipts.v = 19)
+select count(*) as matches from ipts where (cast('19.00' as decimal(8,2)) div 1) = v and v = 19;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from ipts where v = 19 and v = (cast('81.00' as decimal(8,2)) div 1) and v between 0 and 100;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ipts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.ipts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=24.67)  𝄀
+        Output: ipts.id  𝄀
+        Table: 'ipts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from ipts where v = 19 and v = (cast('81.00' as decimal(8,2)) div 1) and v between 0 and 100;
+➤ matches[-5,64,0]  𝄀
+0
+drop table if exists ipts;
+create table fpts(id int primary key, f double, g float);
+insert into fpts values (1, 19, 19.00), (2, 81.5, 81.50), (3, 7.25, 7.25);
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.fpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.fpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table fpts(f) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.fpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  96  ¦  OK  ¦  q=1/1
+analyze table fpts(g) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.fpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  84  ¦  OK  ¦  q=1/1
+explain verbose select id from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2)) and f between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.f = 19), (fpts.f = 19), fpts.f BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.f = 19), fpts.f BETWEEN 0 AND 100
+select count(*) as matches from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2)) and f between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where cast('19' as double(12,2)) = f and f = cast('19' as double(8,2)) and f between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.f = 19), (fpts.f = 19), fpts.f BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.f = 19), fpts.f BETWEEN 0 AND 100
+select count(*) as matches from fpts where cast('19' as double(12,2)) = f and f = cast('19' as double(8,2)) and f between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where f = cast('81.5' as double(8,1)) and f = cast('81.50' as double(12,2)) and f between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.f = 81.5), (fpts.f = 81.5), fpts.f BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.f = 81.5), fpts.f BETWEEN 0 AND 100
+select count(*) as matches from fpts where f = cast('81.5' as double(8,1)) and f = cast('81.50' as double(12,2)) and f between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'f') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.f = 19)  𝄀
+        Block Filter Cond: (fpts.f = 19)
+select count(*) as matches from fpts where f = cast('19' as double(8,2)) and f = cast('19' as double(12,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where g = cast('19.00' as float(8,2)) and g = cast('19.00' as float(12,2)) and g between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'g') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.g = 19), (fpts.g = 19), fpts.g BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.g = 19), fpts.g BETWEEN 0 AND 100
+select count(*) as matches from fpts where g = cast('19.00' as float(8,2)) and g = cast('19.00' as float(12,2)) and g between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where cast('19.00' as float(12,2)) = g and g = cast('19.00' as float(8,2)) and g between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'g') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.g = 19), (fpts.g = 19), fpts.g BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.g = 19), fpts.g BETWEEN 0 AND 100
+select count(*) as matches from fpts where cast('19.00' as float(12,2)) = g and g = cast('19.00' as float(8,2)) and g between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where g = cast('81.5' as float(8,2)) and g = cast('81.5000' as float(16,4)) and g between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]1111.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.33 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.33 selectivity=0.1111 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'g') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.g = 81.5), (fpts.g = 81.5), fpts.g BETWEEN 0 AND 100  𝄀
+        Block Filter Cond: (fpts.g = 81.5), fpts.g BETWEEN 0 AND 100
+select count(*) as matches from fpts where g = cast('81.5' as float(8,2)) and g = cast('81.5000' as float(16,4)) and g between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where g = cast('19.00' as float(8,2)) and g = cast('19.00' as float(12,2));
+-- @regex("Table Scan.*selectivity=0[.]3333.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=1.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=1.00 selectivity=0.3333 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id', 1:'g') shuffle: hash(id)  𝄀
+        Filter Cond: (fpts.g = 19)  𝄀
+        Block Filter Cond: (fpts.g = 19)
+select count(*) as matches from fpts where g = cast('19.00' as float(8,2)) and g = cast('19.00' as float(12,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from fpts where f = cast('19' as double(8,2)) and f = cast('81' as double(12,2)) and f between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from fpts where f = cast('19' as double(8,2)) and f = cast('81' as double(12,2)) and f between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from fpts where g = cast('19.004' as float(8,2)) and g = cast('19.004' as float(12,3)) and g between 0e0 and 100e0;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: fpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.fpts (cost=3.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=41.33)  𝄀
+        Output: fpts.id  𝄀
+        Table: 'fpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from fpts where g = cast('19.004' as float(8,2)) and g = cast('19.004' as float(12,3)) and g between 0e0 and 100e0;
+➤ matches[-5,64,0]  𝄀
+0
+drop table if exists fpts;
+create table qpts(id int primary key, e decimal(38,2));
+insert into qpts values (1, '19.00'), (2, '9999999999999999999999999999.99');
+select mo_ctl('dn', 'flush', 'contradictory_selectivity.qpts');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, contradictory_selectivity.qpts)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table qpts(e) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+contradictory_selectivity.qpts  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  2  ¦  1  ¦  2  ¦  2  ¦  80  ¦  OK  ¦  q=1/1
+explain verbose select id from qpts where e = cast('19.00' as decimal(20,2)) and e = cast('19.00' as decimal(30,2)) and e between cast('0.00' as decimal(38,2)) and cast('9999999999999999999999999999.99' as decimal(38,2));
+-- @regex("Table Scan.*selectivity=0[.]2500.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.50 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: qpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.qpts (cost=2.00 outcnt=0.50 selectivity=0.2500 dop=0 blockNum=2 rowsize=39.00)  𝄀
+        Output: qpts.id  𝄀
+        Table: 'qpts' (0:'id', 1:'e') shuffle: hash(id)  𝄀
+        Filter Cond: (qpts.e = 19.00), (qpts.e = 19.00), qpts.e BETWEEN 0.00 AND 9999999999999999999999999999.99  𝄀
+        Block Filter Cond: (qpts.e = 19.00), (qpts.e = 19.00), qpts.e BETWEEN 0.00 AND 9999999999999999999999999999.99
+select count(*) as matches from qpts where e = cast('19.00' as decimal(20,2)) and e = cast('19.00' as decimal(30,2)) and e between cast('0.00' as decimal(38,2)) and cast('9999999999999999999999999999.99' as decimal(38,2));
+➤ matches[-5,64,0]  𝄀
+1
+explain verbose select id from qpts where e = cast('19.00' as decimal(20,2)) and e = cast('9999999999999999999999999999.99' as decimal(30,2)) and e between cast('0.00' as decimal(38,2)) and cast('9999999999999999999999999999.99' as decimal(38,2));
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: qpts.id  𝄀
+  ->  Table Scan[0] on contradictory_selectivity.qpts (cost=2.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=2 rowsize=39.00)  𝄀
+        Output: qpts.id  𝄀
+        Table: 'qpts' (0:'id') shuffle: hash(id)  𝄀
+        Filter Cond: false
+select count(*) as matches from qpts where e = cast('19.00' as decimal(20,2)) and e = cast('9999999999999999999999999999.99' as decimal(30,2)) and e between cast('0.00' as decimal(38,2)) and cast('9999999999999999999999999999.99' as decimal(38,2));
+➤ matches[-5,64,0]  𝄀
+0
+drop table if exists qpts;
+drop table if exists wpts;
+drop table if exists hpts;
+drop table if exists bpts;
+drop table if exists cpoints;
+drop table if exists zpoints;
+drop table if exists plain_or_bound;
+drop table if exists dig;
+drop database if exists contradictory_selectivity;

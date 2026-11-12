@@ -3,97 +3,69 @@ queue_rules:
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
 
   - name: release-4.2
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
 
   - name: release-4.1
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
 
   - name: release-4.0
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
 
   - name: release-3.0
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
   - name: release-2.2
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
   - name: release-2.1
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: >
-      {{ title }} (#{{ number }})
-
-
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
-      this PR does / why we need it:") }}
-
-
-      Approved by: @{{ approved_reviews_by | join(', @') }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers:
+        - approved-by
 pull_request_rules:
   - name: Automatic queue on approval for main
     conditions:

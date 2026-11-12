@@ -27,14 +27,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type recordingAllocateTaskService struct {
 	taskservice.TaskService
 	err     error
 	runners []string
+}
+
+func TestSQLTaskAllocationFailureLogsAreBounded(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	serviceID := "sql-task-allocation-log-test"
+	runtime.SetupServiceBasedRuntime(serviceID, runtime.NewRuntime(metadata.ServiceType_LOG, serviceID, zap.New(core)))
+	store := &recordingAllocateTaskService{err: errors.New("injected allocation failure")}
+	pool := newCNPoolWithCNState(pb.CNState{Stores: map[string]pb.CNStoreInfo{"cn1": {}}})
+	beforeFailures := testutil.ToFloat64(v2.SQLTaskAllocationFailureCounter)
+	for id := uint64(1); id <= 100; id++ {
+		allocateTask(serviceID, store, task.AsyncTask{
+			ID: id,
+			Metadata: task.TaskMetadata{
+				ID:       "sql-task-test",
+				Executor: task.TaskCode_SQLTask,
+			},
+		}, pool)
+	}
+	require.Len(t, store.runners, 100)
+	require.LessOrEqual(t, logs.FilterMessage("failed to allocate task").Len(), 3)
+	require.GreaterOrEqual(t, testutil.ToFloat64(v2.SQLTaskAllocationFailureCounter)-beforeFailures, float64(100))
+
+	// Non-SQL task diagnostics keep their existing behavior.
+	before := logs.FilterMessage("failed to allocate task").Len()
+	allocateTask(serviceID, store, task.AsyncTask{ID: 101, Metadata: task.TaskMetadata{Executor: task.TaskCode_TestOnly}}, pool)
+	require.Equal(t, before+1, logs.FilterMessage("failed to allocate task").Len())
+
+	store.err = nil
+	for id := uint64(102); id < 202; id++ {
+		allocateTask(serviceID, store, task.AsyncTask{ID: id, Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask}}, pool)
+	}
+	require.Len(t, store.runners, 201)
+	require.LessOrEqual(t, logs.FilterMessage("task allocated").Len(), 3)
 }
 
 func (s *recordingAllocateTaskService) Allocate(

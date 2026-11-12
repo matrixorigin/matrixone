@@ -431,6 +431,29 @@ func TestTruncateLog(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestTruncateLogRejectsFutureWithoutHidingLaterAppend(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		require.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		first, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		err = store.truncateLog(ctx, 1, first+100)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
+		second, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		truncated, err := store.getTruncatedLsn(ctx, 1)
+		require.NoError(t, err)
+		assert.Zero(t, truncated)
+		entries, _, err := store.queryLog(ctx, 1, first, math.MaxUint64)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries)
+		assert.Equal(t, second, entries[len(entries)-1].Lsn)
+		assert.Equal(t, cmd, entries[len(entries)-1].Data)
+	})
+}
+
 func TestGetTruncatedIndex(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
@@ -1604,6 +1627,42 @@ func TestGetLeaderID(t *testing.T) {
 		assert.Equal(t, uint64(2), leaderID)
 	}
 	runStoreTest(t, fn)
+}
+
+func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	leaderID, term, err := store1.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), leaderID)
+	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
+	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	var lastTransfer time.Time
+	require.Eventually(t, func() bool {
+		id, currentTerm, leaderErr := store2.leaderState(1)
+		if leaderErr == nil && id == 2 && currentTerm > term {
+			return true
+		}
+		if time.Since(lastTransfer) >= time.Second {
+			if leaderID, _, err := store1.leaderState(1); err == nil && leaderID == 1 {
+				_ = store1.requestLeaderTransfer(1, 2)
+			}
+			lastTransfer = time.Now()
+		}
+		return false
+	}, 20*time.Second, 10*time.Millisecond)
+	// The old owner and revision still match: only the new Raft term may
+	// reject this reset before the new DataSync worker claims an owner.
+	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	state, err := store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
 }
 
 func TestAddLogShard(t *testing.T) {

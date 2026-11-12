@@ -57,11 +57,8 @@ func (s *service) MaybeUpgradeTenant(
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied()
-	// The frozen consolidated 4.0.7 terminal crosses in a dedicated on-demand
-	// pass that first releases the planning transaction and account lock. Any
-	// forward handles after 4.0.7 (e.g. 4.0.18) still owe that tenant their
-	// entries, so re-enter planning after each paged crossing until a planning
-	// pass completes without another pending crossing.
+	// Release the planning transaction and account lock before the paged
+	// 4.0.7 walk, then recheck the committed account version before caching it.
 	for {
 		pendingV407 := false
 		err = s.exec.ExecTxn(
@@ -425,16 +422,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 		if resetCursor {
 			cursor = 0
 		}
-		if !hasUpgradeTenants && s.upgrade.finalVersionCompleted.Load() {
-			maintenanceCtx, cancel := context.WithTimeoutCause(passCtx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
-			defer cancel()
-			if err := s.maintainInformationSchemaViews(maintenanceCtx); err != nil {
-				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema views maintenance")
-			}
-			if err := s.maintainOrphanObjectPrivileges(maintenanceCtx); err != nil {
-				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "orphan object privilege maintenance")
-			}
-		}
 		return hasUpgradeTenants, nil
 	}
 }
@@ -446,27 +433,13 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	timer := time.NewTimer(s.upgrade.checkUpgradeTenantDuration)
 	defer timer.Stop()
 
-	maintenanceOwner := false
-	defer func() {
-		if maintenanceOwner {
-			s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.Store(false)
-		}
-	}()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if s.upgrade.finalVersionCompleted.Load() && !maintenanceOwner {
-				// Tenant upgrade workers used to exit at this point. Keep only one
-				// of them as the process-local periodic maintenance owner; this also
-				// prevents manual upgrade pre-checks from accumulating permanent
-				// maintenance workers.
-				if !s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.CompareAndSwap(false, true) {
-					return
-				}
-				maintenanceOwner = true
+			if s.upgrade.finalVersionCompleted.Load() {
+				return
 			}
 			err := drainUpgradeTenants(ctx, fn)
 			var terminal *terminalUpgradeError
@@ -474,7 +447,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				return
 			}
 			if err != nil && ctx.Err() == nil {
-				s.logger.Error("tenant upgrade or catalog maintenance failed; will retry", zap.Error(err))
+				s.logger.Error("tenant upgrade failed; will retry", zap.Error(err))
 			}
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}

@@ -98,6 +98,188 @@ func Test_MockBackend1(t *testing.T) {
 	assert.Equal(t, 3, len(loaded))
 }
 
+func TestReplayCheckpointedInteriorHoleAfterPhysicalTruncate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		boundary  uint64
+		wantError bool
+	}{
+		{"checkpoint recorded", 3, false},
+		{"old truncate without boundary", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newMockDriver(2, [][5]uint64{
+				{uint64(Cmd_Normal), 1, 1, 1, 0},
+				{uint64(Cmd_Normal), 2, 3, 3, 1},
+				{uint64(Cmd_Normal), 3, 2, 2, 1},
+				{uint64(Cmd_Normal), 4, 4, 4, 4},
+			}, 2)
+			d.checkpointedDSN = tc.boundary
+			var applied []uint64
+			r := newReplayer(mockHandleFactory(1, func(e *entry.Entry) {
+				applied = append(applied, e.DSN)
+			}), d, 2,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(d)))
+			err := r.Replay(context.Background())
+			if tc.wantError {
+				require.ErrorContains(t, err, "dsn 3 not found")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []uint64{2, 4}, applied)
+				require.Equal(t, uint64(2), r.ExportDSNStats().Min)
+			}
+		})
+	}
+}
+
+type failFirstWALTruncateClient struct {
+	*mockBackendClient
+	calls atomic.Int32
+}
+
+type cancelReadClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *cancelReadClient) Read(ctx context.Context, firstPSN, maxSize uint64) ([]logservice.LogRecord, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return nil, 0, ctx.Err()
+}
+
+func TestReplayReadStopsOnCallerCancellation(t *testing.T) {
+	client := &cancelReadClient{
+		mockBackendClient: newMockBackendClient(NewMockBackend()),
+		started:           make(chan struct{}),
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
+			return storeDriver.RE_Nomal
+		}, func() storeDriver.ReplayMode {
+			return storeDriver.ReplayMode_ReplayForWrite
+		}, nil)
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("replay did not reach Read")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("replay Read retry ignored caller cancellation")
+	}
+	require.EqualValues(t, 1, client.calls.Load())
+}
+
+type failFirstReadClient struct {
+	*mockBackendClient
+	calls atomic.Int32
+}
+
+func (c *failFirstReadClient) Read(ctx context.Context, firstPSN, maxSize uint64) ([]logservice.LogRecord, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		return nil, 0, errors.New("transient read failure")
+	}
+	return c.mockBackendClient.Read(ctx, firstPSN, maxSize)
+}
+
+func TestReadRetriesTransientErrorWithLiveContext(t *testing.T) {
+	client := &failFirstReadClient{mockBackendClient: newMockBackendClient(NewMockBackend())}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+	_, _, err := d.readFromBackend(context.Background(), 1, 1024)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, client.calls.Load())
+}
+
+func (c *failFirstWALTruncateClient) GetWALTruncate(ctx context.Context) (uint64, uint64, error) {
+	if c.calls.Add(1) == 1 {
+		return 0, 0, errors.New("transient watermark read failure")
+	}
+	return c.mockBackendClient.GetWALTruncate(ctx)
+}
+
+func TestReplayForWriteRetriesWALTruncateWithLiveContext(t *testing.T) {
+	backend := NewMockBackend()
+	client := &failFirstWALTruncateClient{mockBackendClient: newMockBackendClient(backend)}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
+		return storeDriver.RE_Nomal
+	}, func() storeDriver.ReplayMode {
+		return storeDriver.ReplayMode_ReplayForWrite
+	}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, client.calls.Load())
+}
+
+type cancelTruncatedLsnClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *cancelTruncatedLsnClient) GetTruncatedLsn(ctx context.Context) (uint64, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+		<-ctx.Done()
+	}
+	return 0, ctx.Err()
+}
+
+func TestGetTruncatedPSNStopsOnCallerCancellation(t *testing.T) {
+	client := &cancelTruncatedLsnClient{
+		mockBackendClient: newMockBackendClient(NewMockBackend()),
+		started:           make(chan struct{}),
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := d.getTruncatedPSNFromBackend(ctx)
+		result <- err
+	}()
+	<-client.started
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("watermark retry ignored caller cancellation")
+	}
+	require.EqualValues(t, 1, client.calls.Load())
+}
+
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()

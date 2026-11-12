@@ -36,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -167,35 +167,15 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 // This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 // passed into the bind: that hook fires before createQuery, where an index rewrite has not
 // yet had its chance and every candidate expression still looks unresolved.
-// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
-// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
-// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+// indexRewritesDisabled uses the same effective session and statement hints as the
+// optimizer. A later applyIndices=0 must undo an earlier applyIndices=1.
 func indexRewritesDisabled(ctx CompilerContext) bool {
 	if ctx == nil {
 		return false
 	}
-	proc := ctx.GetProcess()
-	if proc == nil {
-		return false
-	}
-	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return false
-	}
-	str, ok := v.(string)
-	if !ok || len(str) == 0 {
-		return false
-	}
-	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
-	// really get switched off", and only the parser the optimizer itself uses knows that. A
-	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
-	// so the rewrites ran while validation below was skipped as if they had not.
-	for _, kv := range strings.Split(str, ",") {
-		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
-			return true
-		}
-	}
-	return false
+	builder := &QueryBuilder{compCtx: ctx}
+	builder.parseOptimizeHints()
+	return builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0
 }
 
 func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
@@ -203,11 +183,11 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 		return nil
 	}
 	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
-	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// only valid when rewrites were allowed to run at all. The session optimizer_hints knob
 	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
-	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
-	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
-	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// place regardless of the catalog -- under `set session optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view in that session, including ones with a perfectly
+	// good index. A diagnostic knob must not
 	// silently turn into a DDL policy, so skip validation entirely while it is set: being
 	// permissive costs an unrunnable view, being wrong here costs working ones.
 	if indexRewritesDisabled(ctx) {
@@ -301,14 +281,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2349,6 +2329,89 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	return nil
 }
 
+// alterSequenceOptionSQL formats one sequence option node without its
+// surrounding whitespace so the synthesized parts can be joined canonically.
+func alterSequenceOptionSQL(node tree.NodeFormatter) string {
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	node.Format(fmtCtx)
+	return strings.TrimSpace(fmtCtx.String())
+}
+
+// AlterSequenceCreateSQLForCatalog renders the canonical CREATE SEQUENCE an
+// ALTER leaves behind (#30679): rel_createsql and SHOW CREATE must never hold
+// the raw ALTER text, and the stored statement must stay replayable. The
+// ALTER text can only be canonicalized from the clauses the statement itself
+// carries at plan time; options it does not name keep their stored values,
+// which only execution can see.
+func AlterSequenceCreateSQLForCatalog(stmt *tree.AlterSequence, database, tableName string) string {
+	var parts []string
+	if stmt.Type != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Type))
+	}
+	if stmt.IncrementBy != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.IncrementBy))
+	}
+	if stmt.MinValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MinValue))
+	}
+	if stmt.MaxValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MaxValue))
+	}
+	if stmt.StartWith != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.StartWith))
+	}
+	if stmt.Cycle != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Cycle))
+	}
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	createSQL := nameCtx.String()
+	if len(parts) > 0 {
+		createSQL += " " + strings.Join(parts, " ")
+	}
+	return createSQL
+}
+
+// AlterSequenceEffectiveDefinition carries the validated effective
+// definition of an ALTER SEQUENCE exactly as execution persists it (#30679;
+// v12-review F2): type, increment, bounds, effective start and cycle. The
+// catalog text synthesized from it is complete — replaying it recreates a
+// sequence with exactly this definition. Numeric clauses are formatted in
+// the type's numeric domain by the caller, identical to the persisted row.
+type AlterSequenceEffectiveDefinition struct {
+	TypeSQL   string // canonical type keyword(s), e.g. "bigint", "int unsigned"
+	Increment int64
+	MinValue  string
+	MaxValue  string
+	Start     string
+	Cycle     bool
+}
+
+// AlterSequenceEffectiveCreateSQL renders the canonical complete CREATE
+// SEQUENCE of one validated effective ALTER definition for rel_createsql
+// and SHOW CREATE consumers: every clause is present with its effective
+// value, not only the clauses the ALTER statement named.
+func AlterSequenceEffectiveCreateSQL(database, tableName string, def AlterSequenceEffectiveDefinition) string {
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	var sb strings.Builder
+	sb.WriteString(nameCtx.String())
+	fmt.Fprintf(&sb, " as %s increment by %d minvalue %s maxvalue %s start with %s",
+		def.TypeSQL, def.Increment, def.MinValue, def.MaxValue, def.Start)
+	if def.Cycle {
+		sb.WriteString(" cycle")
+	} else {
+		sb.WriteString(" no cycle")
+	}
+	return sb.String()
+}
+
 func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, as *plan.AlterSequence) error {
 	// Sequence table got 1 row and 7 col
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
@@ -2357,7 +2420,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	var typ plan.Type
 	var err error
 	if stmt.Type == nil {
-		_, tableDef, err := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, nil)
+		_, tableDef, err := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -2432,8 +2495,10 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 			Value: catalog.SystemSequenceRel,
 		},
 		{
+			// #30679: never persist the raw ALTER text; rel_createsql must
+			// replay as a CREATE SEQUENCE after a successful ALTER.
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
+			Value: AlterSequenceCreateSQLForCatalog(stmt, as.GetDatabase(), as.TableDef.GetName()),
 		},
 	}
 
@@ -2461,7 +2526,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}
 	dropSequence.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropSequence.Database, dropSequence.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropSequence.Database, dropSequence.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2790,6 +2855,81 @@ func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	return nil
 }
 
+// marshalExternalTableParam publishes the CREATE EXTERNAL TABLE source param
+// into catalog metadata. The serialized payload must never carry a
+// non-reconstructible expression interface: UpdateExpr.Expr (and the load
+// column-list entries) hold tree.Expr values that encoding/json cannot decode
+// back, and InitNullMap keeps row-variable wrapper assignments attached to
+// the statement so LOAD replans can rebind them. Scans and SHOW CREATE
+// re-derive every usable option from the serialized reader options and the
+// NullMap this payload keeps, so the statement keeps its expressions and the
+// property strips them on a copy.
+func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		if len(copiedTail.Assignments) > 0 {
+			assignments := make(tree.UpdateExprs, len(copiedTail.Assignments))
+			for i, assignment := range copiedTail.Assignments {
+				if assignment == nil {
+					continue
+				}
+				copiedAssignment := *assignment
+				copiedAssignment.Expr = nil
+				assignments[i] = &copiedAssignment
+			}
+			copiedTail.Assignments = assignments
+		}
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+// prepareCreateLikeSource validates and owns source metadata before any
+// destination planning. Prepared cross-account clones use the same source
+// checks without probing destination metadata in the caller's account.
+func prepareCreateLikeSource(
+	ctx CompilerContext, tableDef *TableDef, snapshot *Snapshot, sub *SubscriptionMeta, dbName, tblName string,
+) (*TableDef, bool, error) {
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, false, err
+	}
+	tableDef = DeepCopyTableDef(tableDef, true)
+	if sub == nil {
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, false, err
+		}
+	}
+	hadStructuredChecks := len(tableDef.Checks) > 0
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, false, err
+	}
+	recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+	if len(tableDef.Checks) > 0 {
+		if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, false, err
+		}
+	}
+	if tableDef.TableType == catalog.SystemViewRel ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		tableDef.TableType == catalog.SystemSequenceRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, false, err
+		}
+		if isIceberg {
+			return nil, false, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+		}
+		return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+	}
+	return tableDef, recoveredLegacyChecks, nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -2830,51 +2970,21 @@ func buildCreateTable(
 			}()
 		}
 
-		_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+		_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if err := validateTableIndexDefinitions(tableDef); err != nil {
-			return nil, err
-		}
-		// Resolve and rewrite a private source definition. Resolve can return a
-		// cached TableDef, and the reconstruction below changes its table name.
-		tableDef = DeepCopyTableDef(tableDef, true)
 		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
 		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
 		// a local source definition and asks the normal CREATE planner to rebuild
 		// it. A subscription definition belongs to the publisher, whose catalog
 		// is not available through this compiler context.
-		if sub == nil {
-			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-				return nil, err
-			}
-		}
-		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		tableDef, recoveredLegacyChecks, err := prepareCreateLikeSource(ctx, tableDef, snapshot, sub, dbName, tblName)
+		if err != nil {
 			return nil, err
-		}
-		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
-		if len(tableDef.Checks) > 0 {
-			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
-				return nil, err
-			}
-		}
-		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel ||
-			tableDef.TableType == catalog.SystemExternalRel ||
-			tableDef.TableType == catalog.SystemSequenceRel {
-			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
-			if err != nil {
-				return nil, err
-			}
-			if isIceberg {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
-			}
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
 		tableDef.Name = string(newTable.ObjectName)
@@ -3010,7 +3120,8 @@ func buildCreateTable(
 	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
 	// Old CNs can deserialize that metadata but do not enforce the narrower write
-	// domain, so only author the schema after the cluster protocol fence opens.
+	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.
+	// Only author the schema after the cluster protocol fence opens.
 	for _, col := range createTable.TableDef.Cols {
 		if err = requireMediumIntProtocolForAuthoring(
 			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
@@ -3244,7 +3355,7 @@ func buildCreateTable(
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
-		json_byte, err := json.Marshal(stmt.Param)
+		json_byte, err := marshalExternalTableParam(stmt.Param)
 		if err != nil {
 			return nil, err
 		}
@@ -3311,7 +3422,16 @@ func buildCreateTable(
 	if stmt.PartitionOption != nil {
 		// Foreign keys are not yet supported in conjunction with partitioning
 		// see: https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-14.html
-		if len(createTable.TableDef.Fkeys) > 0 {
+		//
+		// Fkeys covers references bound at plan time (including self
+		// references), UnresolvedFkParents covers forward references admitted
+		// under foreign_key_checks=0 while the parent table is still absent,
+		// and FksReferToMe covers deferred references registered by previously
+		// created children that would bind to this table once it exists. No
+		// foreign key may involve a partitioned relation in either direction.
+		if len(createTable.TableDef.Fkeys) > 0 ||
+			len(createTable.UnresolvedFkParents) > 0 ||
+			len(createTable.FksReferToMe) > 0 {
 			return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 		}
 
@@ -3500,7 +3620,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		key := equalFoldKey(compareName)
+		key := commonutil.EqualFoldKey(compareName)
 		if _, exists := columnNames[key]; exists {
 			return moerr.NewErrDupFieldName(ctx, name)
 		}
@@ -3813,8 +3933,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if types.T(colType.GetId()).IsArrayRelate() {
+					if types.T(colType.GetId()).IsArray() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "primary"); err != nil {
+						return err
 					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
@@ -3841,6 +3964,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isGeometryPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "unique"); err != nil {
+						return err
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -4488,8 +4614,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].ColName()
-			if _, ok := colMap[colName]; !ok {
+			col, ok := colMap[colName]
+			if !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", stmt.ClusterByOption.ColumnList[i].ColNameOrigin())
+			}
+			if err := lowPrecisionKeyError(ctx.GetContext(), col.Typ.Id, stmt.ClusterByOption.ColumnList[i].ColNameOrigin(), "cluster"); err != nil {
+				return err
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}
@@ -4602,13 +4732,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := IsFkBannedDatabase(createTable.Database)
+	// Temporary destinations live in the session namespace and cannot own or
+	// receive foreign keys. Persistent same-name tables and forward references
+	// must not be resolved while constructing a temporary table.
+	skip := createTable.Temporary || IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		// Existing relations are handled by the execution-time RelationExists
 		// check. Their reverse foreign keys belong to the existing definition and
 		// must never be validated against the ignored replacement definition.
 		_, existingTableDef, err := ctx.Resolve(
-			createTable.Database, createTable.TableDef.Name, nil,
+			createTable.Database, createTable.TableDef.Name, nil, nil,
 		)
 		if err != nil {
 			return err
@@ -4663,6 +4796,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	if replay == nil && !trustedForeignKeyLayoutRebuild(ctx.GetContext()) {
+		if err := validateVirtualTimestampExpansion(ctx.GetContext(), createTable.TableDef); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -6031,7 +6169,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	obj, tableDef, err := ctx.Resolve(truncateTable.Database, truncateTable.Table, nil)
+	obj, tableDef, err := ctx.Resolve(truncateTable.Database, truncateTable.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6216,7 +6354,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	}); ok {
 		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
 	} else {
-		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -6227,7 +6365,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	// non-temporary result means that the requested temporary table is absent.
 	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			return nil, moerr.NewErrDropNonExistsTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
 	}
@@ -6354,7 +6492,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6510,7 +6648,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check table
 	tableName := string(stmt.Table.ObjectName)
-	obj, tableDef, err := ctx.Resolve(createIndex.Database, tableName, nil)
+	obj, tableDef, err := ctx.Resolve(createIndex.Database, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6924,7 +7062,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	// check table
 	dropIndex.Table = string(stmt.TableName.ObjectName)
-	obj, tableDef, err := ctx.Resolve(dropIndex.Database, dropIndex.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropIndex.Database, dropIndex.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6961,7 +7099,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
+			return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), requestedIndexName)
 		}
 	} else {
 		// MySQL equivalent-key transition: when the dropped key is recorded by
@@ -7026,7 +7164,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// step 1: check the view exists or not
-	obj, oldViewDef, err := ctx.Resolve(alterView.Database, viewName, nil)
+	obj, oldViewDef, err := ctx.Resolve(alterView.Database, viewName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7121,7 +7259,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		} else if removed[srcKey] {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 		} else {
-			objRef, tableDef, err = ctx.Resolve(schemaName, tableName, nil)
+			objRef, tableDef, err = ctx.ResolveWithoutTemporaryAlias(schemaName, tableName, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -7182,7 +7320,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 					}
 					if !removed[dstKey] {
-						_, existDef, err := ctx.Resolve(schemaName, newName, nil)
+						_, existDef, err := ctx.ResolveWithoutTemporaryAlias(schemaName, newName, nil, nil)
 						if err != nil {
 							return nil, err
 						}
@@ -7241,7 +7379,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+	_, tableDef, err := ctx.Resolve(databaseName, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7512,6 +7650,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					_, parentTableDef, err := ctx.Resolve(
 						fkData.ParentDbName,
 						fkData.ParentTableName,
+						nil,
 						nil,
 					)
 					if err != nil {
@@ -7815,8 +7954,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				continue
 			}
 
-			// TODO ONLY Check
-			_, destination, err := ctx.Resolve(databaseName, newName, nil)
+			var destination *plan.TableDef
+			var err error
+			if tableDef.IsTemporary {
+				_, destination, err = resolveTemporaryTable(ctx, databaseName, newName, nil)
+			} else {
+				_, destination, err = ctx.Resolve(databaseName, newName, nil, nil)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -8082,6 +8226,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 
+	if err := validateVirtualTimestampExpansion(ctx.GetContext(), currentTableDef); err != nil {
+		return nil, err
+	}
 	alterTable.DetectSqls = detectSqls
 	// Ordered ADD/DROP catalog mutations use the original identity. Rename
 	// their surviving rows and incoming references only after all mutations.
@@ -8118,7 +8265,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		}
 
 		// check table whether exist
-		obj, tableDef, err := ctx.Resolve(schemaName, tblName, nil)
+		obj, tableDef, err := ctx.Resolve(schemaName, tblName, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -8204,6 +8351,21 @@ type FkData struct {
 // but for fk self refer, it is different in not checking fk self refer instantly.
 // because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*FkData, error) {
+	// Foreign keys are not yet supported in conjunction with partitioning.
+	// Partitioning is a dual identity: the authored CREATE records the
+	// logical features.Partitioned flag on this definition before the FK
+	// pass, and a resolved relation fills TableDef.Partition and FeatureFlag
+	// from independent engine state — the engine dispatches the combined
+	// partition relation on that flag (disttae/cache/types.go
+	// IsPartitionTable), not on the pointer. Only the logical Partitioned
+	// bit is structural here; other FeatureFlag bits are not partitioning.
+	// tableDef is the planner-owned final child definition: ALTER routes
+	// pass the resolved relation for the direct and COPY-based paths alike,
+	// and CREATE arrives with the flag authored but partition defs not laid
+	// out yet.
+	if tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+	}
 	refer := def.Refer
 	catalogLayout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
@@ -8290,7 +8452,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.ParentDbName = parentDbName
 	fkData.ParentTableName = parentTableName
 
-	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
+	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -8315,6 +8477,17 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
+	}
+
+	// A resolved partitioned parent is the same structurally unsupported
+	// combination as a partitioned child: deferring this to execution would
+	// surface a recovered not-implemented panic instead of a SQL error.
+	// Partitioning is a dual identity (see the entry guard), so the resolved
+	// Partition pointer and the logical features.Partitioned flag both
+	// reject. The check is independent of foreign_key_checks=0; once the
+	// parent is resolved the combination is rejected.
+	if parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
@@ -8635,7 +8808,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 	if len(fkDefs) == 0 {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "empty forward foreign key declaration")
 	}
-	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
+	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -8651,6 +8824,16 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 	fkDefs []*FkReferDef, childTableDef, parentTableDef *plan.TableDef) (*FkData, error) {
 	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
+	}
+	// Deferred rebinding must keep the structural boundary of fresh binding:
+	// neither side of a foreign key may be partitioned, including the
+	// execution-time rebinding of previously registered forward references.
+	// Partitioning is a dual identity (see getForeignKeyData): the pointer
+	// or the logical features.Partitioned flag on either side rejects, and
+	// other FeatureFlag bits are not partitioning.
+	if childTableDef.Partition != nil || features.IsPartitioned(childTableDef.FeatureFlag) ||
+		parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx)
 	}
 	fkData := FkData{
 		ParentTableName: parentTableDef.Name,
@@ -8792,7 +8975,8 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		// PITR's frontend owner reads persistent mo_tables, not session aliases.
+		objRef, tableDef, err := ctx.ResolveWithoutTemporaryAlias(string(stmt.DatabaseName), string(stmt.TableName), nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -9324,11 +9508,14 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId.IsArrayRelate() {
+		if typId.IsArray() {
 			// IsArrayRelate covers all six vector types: a vector can never
 			// round-trip through a `col=value` path component, so the rejection
 			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
+		}
+		if typId.IsLowPrecisionFloat() {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a %s type", pc, typId)
 		}
 		canonical := strings.ToLower(col.Name)
 		if seen[canonical] {

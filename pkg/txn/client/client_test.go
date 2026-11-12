@@ -48,6 +48,33 @@ type legacyBlockingTimestampWaiter struct {
 
 type immediateTimestampWaiter struct{}
 
+func TestSyncLatestCommitTSContext(t *testing.T) {
+	t.Run("cancellation preserves watermark", func(t *testing.T) {
+		waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+		client := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter)).(*txnClient)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		ts := newTestTimestamp(42)
+		go func() { done <- client.SyncLatestCommitTSContext(ctx, ts) }()
+		<-waiter.entered
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+		require.Equal(t, ts, client.GetLatestCommitTS())
+		require.Zero(t, client.GetSyncLatestCommitTSTimes())
+	})
+
+	t.Run("success is monotonic", func(t *testing.T) {
+		client := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(immediateTimestampWaiter{})).(*txnClient)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		high, low := newTestTimestamp(42), newTestTimestamp(7)
+		require.NoError(t, client.SyncLatestCommitTSContext(context.Background(), high))
+		require.NoError(t, client.SyncLatestCommitTSContext(context.Background(), low))
+		require.Equal(t, high, client.GetLatestCommitTS())
+		require.EqualValues(t, 2, client.GetSyncLatestCommitTSTimes())
+	})
+}
+
 type observedWaitContext struct {
 	context.Context
 	waiting chan struct{}
@@ -2834,6 +2861,37 @@ func TestOpenTxnReturnsWhenPausedContextCanceled(t *testing.T) {
 	defer cancel()
 	_, err := c.New(ctx, timestamp.Timestamp{})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestPausedAdmissionCancelAndRetry(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	waitCtx := &observedWaitContext{Context: ctx, waiting: make(chan struct{})}
+	result := make(chan txnCreateResult, 1)
+	go func() {
+		op, err := c.New(waitCtx, timestamp.Timestamp{})
+		result <- txnCreateResult{op: op, err: err}
+	}()
+	select {
+	case <-waitCtx.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission did not reach the paused wait")
+	}
+	cancel()
+	select {
+	case got := <-result:
+		require.ErrorIs(t, got.err, context.Canceled)
+		require.Nil(t, got.op)
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled admission did not return")
+	}
+	c.Resume()
+	op, err := c.New(context.Background(), timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(context.Background()))
 }
 
 func TestCloseUnblocksPausedNew(t *testing.T) {

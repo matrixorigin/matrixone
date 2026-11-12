@@ -55,7 +55,7 @@ func TestLocalLoadTimeAssignmentAndDecoderPolicies(t *testing.T) {
 			create, err := mysql.ParseOne(t.Context(), "create table local_time_load(v time(6))", 1)
 			require.NoError(t, err)
 			defer create.Free()
-			ddl, err := BuildPlan(ctx, create, false)
+			ddl, err := BuildPlan(ctx, create, false, nil)
 			require.NoError(t, err)
 			table := ddl.GetDdl().GetCreateTable().TableDef
 			table.TblId = 990004
@@ -69,7 +69,7 @@ func TestLocalLoadTimeAssignmentAndDecoderPolicies(t *testing.T) {
 				if legacy {
 					return buildLoad(stmt, ctx, false)
 				}
-				return BuildPlan(ctx, stmt, false)
+				return BuildPlan(ctx, stmt, false, nil)
 			}
 			// Reuse one parsed statement through IGNORE, implicit LOCAL, REPLACE
 			// and implicit LOCAL again: decoder policy and assignment are distinct.
@@ -218,7 +218,7 @@ func TestLegacyLoadTimeAndMediumIntAssignmentBeforeDefaults(t *testing.T) {
 		"create table mixed_load(t time(6), m mediumint, u mediumint unsigned, n int, d time(6) default (t))", 1)
 	require.NoError(t, err)
 	defer create.Free()
-	ddl, err := BuildPlan(ctx, create, false)
+	ddl, err := BuildPlan(ctx, create, false, nil)
 	require.NoError(t, err)
 	table := ddl.GetDdl().GetCreateTable().TableDef
 	table.TblId = 990002
@@ -273,7 +273,7 @@ func TestTextLoadTimeScanTypes(t *testing.T) {
 				create, err := mysql.ParseOne(t.Context(), "create table text_time_load(t time(6), n int)", 1)
 				require.NoError(t, err)
 				defer create.Free()
-				ddl, err := BuildPlan(ctx, create, false)
+				ddl, err := BuildPlan(ctx, create, false, nil)
 				require.NoError(t, err)
 				table := ddl.GetDdl().GetCreateTable().TableDef
 				table.TblId = 990003
@@ -294,7 +294,7 @@ func TestTextLoadTimeScanTypes(t *testing.T) {
 				if legacy {
 					result, err = buildLoad(load.(*tree.Load), ctx, false)
 				} else {
-					result, err = BuildPlan(ctx, load, false)
+					result, err = BuildPlan(ctx, load, false, nil)
 				}
 				require.NoError(t, err)
 				var found bool

@@ -34,7 +34,7 @@ func TestAlterCopyBinaryAssignmentBoundary(t *testing.T) {
 			physicalType := types.New(oid, 4, 0)
 			target := makePlan2Type(&physicalType)
 			source := MakePlan2StringConstExprWithType("🧪")
-			require.Equal(t, "cast", assignmentCastFunctionNameForSource(ordinary, source, target, false, nil))
+			require.Equal(t, "cast_assign", assignmentCastFunctionNameForSource(ordinary, source, target, false, nil))
 			expression, err := forceAssignmentCastExprWithProcess(copyContext, source, target, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, "cast_strict", expression.GetF().Func.ObjName)
@@ -114,7 +114,7 @@ func TestAlterCopyUnchangedBinaryProjection(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "insert into dst select v from src", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	casts := 0
 	var visit func(*pbplan.Expr)

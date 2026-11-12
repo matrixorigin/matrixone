@@ -45,6 +45,17 @@ def _vector_literal(value):
     return '[' + ','.join(map(str, values)) + ']'
 
 
+def _vector_result(value):
+    """Parse vector text while preserving unrecognized result values."""
+    if not isinstance(value, str):
+        return value
+    try:
+        contents = value.strip().strip("[]").strip()
+        return [float(item.strip()) for item in contents.split(",")] if contents else []
+    except ValueError:
+        return value
+
+
 class VectorPrecision:
     """Enum-like class for vector precision types."""
 
@@ -125,25 +136,7 @@ class VectorType(UserDefinedType):
         return _vector_literal(value)
 
     def result_processor(self, dialect, coltype):
-        """Return a conversion function for processing result values."""
-
-        def process(value):
-            if value is None:
-                return None
-            if isinstance(value, str):
-                # Parse MatrixOne vector format back to list
-                try:
-                    # Remove brackets and split by comma
-                    clean_value = value.strip("[]")
-                    if clean_value:
-                        return [float(x.strip()) for x in clean_value.split(",")]
-                    else:
-                        return []
-                except (ValueError, AttributeError):
-                    return value
-            return value
-
-        return process
+        return _vector_result
 
     def __str__(self):
         """Return the column specification for this type."""
@@ -186,23 +179,12 @@ class Vectorf32(TypeDecorator):
         return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            try:
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -253,23 +235,12 @@ class Vectorf64(TypeDecorator):
         return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            try:
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -318,7 +289,7 @@ class VectorTypeDecorator(TypeDecorator):
     def load_dialect_impl(self, dialect):
         """Return the appropriate type for the given dialect."""
         if dialect.name == "mysql":
-            return mysql.TEXT  # Use TEXT for large vector data
+            return mysql.TEXT()  # Use TEXT for large vector data
         return self.impl
 
     def process_bind_param(self, value, dialect):
@@ -326,21 +297,7 @@ class VectorTypeDecorator(TypeDecorator):
         return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
-        """Process the value after retrieving from the database."""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            # Parse MatrixOne vector format back to list
-            try:
-                # Remove brackets and split by comma
-                clean_value = value.strip("[]")
-                if clean_value:
-                    return [float(x.strip()) for x in clean_value.split(",")]
-                else:
-                    return []
-            except (ValueError, AttributeError):
-                return value
-        return value
+        return _vector_result(value)
 
     def __repr__(self):
         if self.dimension:

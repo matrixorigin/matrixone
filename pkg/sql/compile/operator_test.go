@@ -100,6 +100,25 @@ func TestDupOperatorUnionAllMarker(t *testing.T) {
 	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
 }
 
+func TestCompleteKeyShuffleCloneAndRemoteBoundary(t *testing.T) {
+	c := NewMockCompile(t)
+	defer c.proc.Free()
+	source := shuffle.NewArgument()
+	defer source.Release()
+	source.BucketNum = 4
+	source.DrainAllBuckets = true
+	source.ShuffleType = int32(plan.ShuffleType_Hash)
+	source.ShuffleKeyColumns = []int32{0, 2}
+	clone := dupOperator(source, 0, 1).(*shuffle.Shuffle)
+	defer clone.Release()
+	defer clone.Free(c.proc, false, nil)
+	require.Equal(t, source.ShuffleKeyColumns, clone.ShuffleKeyColumns)
+	clone.ShuffleKeyColumns[0] = 1
+	require.Equal(t, int32(0), source.ShuffleKeyColumns[0])
+	_, _, err := convertToPipelineInstruction(source, c.proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "coordinator-local")
+}
+
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
 	groupNode := &plan.Node{GroupBy: []*plan.Expr{
 		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
@@ -693,7 +712,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			)
 			require.NoError(t, err)
 			defer stmt.Free()
-			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var percentileFn *plan.Function
@@ -728,7 +747,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var percentileFn *plan.Function

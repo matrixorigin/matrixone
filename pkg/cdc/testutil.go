@@ -407,7 +407,6 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult 
 		zap.Any("rows", rows),
 	)
 	return &InternalExecResultForTest{
-		affectedRows: uint64(len(rows)),
 		resultSet: &MysqlResultSetForTest{
 			Columns: selectResult.projectionColumns,
 			Data:    retData,
@@ -805,9 +804,8 @@ type MysqlResultSetForTest struct {
 }
 
 type InternalExecResultForTest struct {
-	affectedRows uint64
-	resultSet    *MysqlResultSetForTest
-	err          error
+	resultSet *MysqlResultSetForTest
+	err       error
 }
 
 func (res *InternalExecResultForTest) GetUint64(ctx context.Context, i uint64, j uint64) (uint64, error) {

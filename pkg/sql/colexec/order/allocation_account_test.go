@@ -32,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +45,20 @@ type orderTestAllocation struct {
 type failingOrderChild struct {
 	*colexec.MockOperator
 	err error
+}
+
+type cutoffFailAfterBatch struct {
+	*colexec.MockOperator
+	err       error
+	delivered bool
+}
+
+func (child *cutoffFailAfterBatch) Call(proc *process.Process) (vm.CallResult, error) {
+	if child.delivered {
+		return vm.CancelResult, child.err
+	}
+	child.delivered = true
+	return child.MockOperator.Call(proc)
 }
 
 func (child *failingOrderChild) Call(*process.Process) (vm.CallResult, error) {
@@ -358,13 +373,14 @@ func TestAccountedOrderFinalShuffleUsesRecoveryCapacity(t *testing.T) {
 	require.NoError(t, op.Prepare(proc))
 	_, err := op.ctr.appendBatch(proc, input)
 	require.NoError(t, err)
-	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSlice(
+	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSliceWithCapacityClass(
 		op.ctr.resultOrderList,
 		op.ctr.resultOrderMP,
 		op.ctr.batWaitForSort.RowCount(),
 		proc,
 		op.ctr.allocationAccount,
 		ordersites.OrderSelections,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	for i := range op.ctr.resultOrderList {
@@ -543,6 +559,12 @@ func TestAccountedOrderCapacityFailureIsControlledAndCleans(t *testing.T) {
 func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 	proc, op, _ := newOrderRecoveryTest(t, nil)
 	const rows = 4096
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	t.Cleanup(func() { board.CloseAndDrain() })
+	op.ScanCutoff = NewScanCutoff(2*rows, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	cutoff := op.ScanCutoff
 	firstValues := make([]int64, rows)
 	secondValues := make([]int64, rows)
 	for i := range rows {
@@ -570,6 +592,8 @@ func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](firstResult.Batch.Vecs[0])[0])
 	require.Same(t, second, op.ctr.pendingInput)
 	require.Nil(t, op.ctr.batWaitForSort)
+	require.Equal(t, uint64(rows), cutoff.seen, "a pending batch is not yet a witness")
+	require.False(t, cutoff.Done())
 
 	secondResult, err := vm.Exec(op, proc)
 	require.NoError(t, err)
@@ -579,6 +603,49 @@ func TestAccountedOrderDynamicShareProducesSmallerSortedRuns(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0])[0])
 	require.Nil(t, op.ctr.growthParticipant)
 	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+	require.True(t, cutoff.Done())
+	require.Equal(t, uint64(2*rows), cutoff.seen, "a replayed batch is counted once after append")
+}
+
+func TestScanCutoffSurvivesConcurrentBoardClose(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	input := newOrderPairBatch(t, proc, []int64{4, 1, 3, 2}, []int64{4, 1, 3, 2})
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, op.Prepare(proc))
+	start := make(chan struct{})
+	var closeDone sync.WaitGroup
+	closeDone.Go(func() {
+		<-start
+		board.CloseAndDrain()
+	})
+	close(start)
+	result, err := vm.Exec(op, proc)
+	closeDone.Wait()
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+}
+
+func TestScanCutoffWitnessFailurePropagates(t *testing.T) {
+	proc, op, _ := newOrderRecoveryTest(t, nil)
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	t.Cleanup(func() { board.CloseAndDrain() })
+	op.ScanCutoff = NewScanCutoff(4, types.T_int64.ToType(), false)
+	op.ScanCutoffTag = 42
+	cutoff := op.ScanCutoff
+	wantErr := errors.New("scan failed after accepted batch")
+	input := newOrderPairBatch(t, proc, []int64{4, 1, 3, 2}, []int64{4, 1, 3, 2})
+	op.AppendChild(&cutoffFailAfterBatch{MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}), err: wantErr})
+	require.NoError(t, op.Prepare(proc))
+	result, err := vm.Exec(op, proc)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, result.Batch)
+	require.True(t, cutoff.Done(), "failure after publication must still fail the query")
 }
 
 func TestAccountedOrderDynamicShareUsesAllocatedCapacity(t *testing.T) {
@@ -884,38 +951,38 @@ func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
 	require.NoError(t, ctr.setAllocationAccount(account))
 	require.NoError(t, ctr.setAllocationAccount(account))
 
-	_, _, err = growOrderSlice[int](nil, nil, -1, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, nil, -1, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	_, _, err = growOrderSlice[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	plain, owner, err := growOrderSlice[int](nil, nil, 3, proc, nil, ordersites.OrderSelections)
+	plain, owner, err := growOrderSliceWithCapacityClass[int](nil, nil, 3, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, plain, 3)
 	require.Nil(t, owner)
 
-	accounted, accountedOwner, err := growOrderSlice[int](
-		nil, nil, 3, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err := growOrderSliceWithCapacityClass[int](
+		nil, nil, 3, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 3)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 2)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 100)
 	mpool.FreeSlice(accountedOwner, accounted)
-	_, _, err = growOrderSlice[uint64](
-		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[uint64](
+		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 	rejectRegistry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	rejectController := &orderTestCapacityController{limit: 1 << 20, rejectNext: true}
 	rejectAccount, err := rejectRegistry.OpenWithController(1<<20, rejectController)
 	require.NoError(t, err)
-	_, _, err = growOrderSlice[int](
-		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](
+		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	_, _, err = rejectRegistry.CompleteTerminal(rejectAccount)
 	require.NoError(t, err)

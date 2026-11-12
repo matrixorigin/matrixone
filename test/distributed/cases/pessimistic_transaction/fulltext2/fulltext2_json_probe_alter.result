@@ -3,17 +3,17 @@ drop database if exists ft2_json_alter;
 create database ft2_json_alter;
 use ft2_json_alter;
 create table t (id bigint primary key, j json);
-create fulltext2 index ftj on t(j) with parser json;
 insert into t values
 (1, '{"foo":"needle"}'),
 (2, '{"foo":"hay"}'),
 (3, '{"foo":"needle"}');
+create fulltext2 index ftj on t(j) with parser json;
 alter table t add column extra int default 0;
 set @meta = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and algo_table_type = 'ftv2_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
 set @wait_meta_sql = concat('select coalesce(max(build_ts), 0) > 0 as ready from `', database(), '`.`', @meta, '`');
 prepare wait_meta from @wait_meta_sql;
 execute wait_meta;
-➤ ready[-7,1,0]  𝄀
+➤ ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_meta;
 insert into t values (4, '{"foo":"needle"}', 9), (5, '{"foo":"hay"}', 9);

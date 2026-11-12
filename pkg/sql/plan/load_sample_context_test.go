@@ -52,7 +52,7 @@ func TestLoadSamplesWithStatementFileAccess(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf("load data infile '%s' into table nation fields terminated by ','%s parallel 'true'", file, tc.tail), 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			pn, err := BuildPlan(ctx, stmt, false)
+			pn, err := BuildPlan(ctx, stmt, false, nil)
 			if tc.denied {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "moadmin")

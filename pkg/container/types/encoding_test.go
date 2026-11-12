@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"reflect"
 	"testing"
@@ -50,6 +51,38 @@ func (writer *headerThenShortWriter) Write(data []byte) (int, error) {
 		return len(data), nil
 	}
 	return len(data) - 1, nil
+}
+
+type singleWriteProbe struct {
+	calls int
+	n     int
+	err   error
+}
+
+func (w *singleWriteProbe) Write(_ []byte) (int, error) {
+	w.calls++
+	return w.n, w.err
+}
+
+func TestWriteFullSingleWriteAndErrors(t *testing.T) {
+	sentinel := errors.New("write failed")
+	for _, tc := range []struct {
+		name      string
+		data      []byte
+		n         int
+		err, want error
+	}{
+		{"complete", []byte("abc"), 3, nil, nil},
+		{"short", []byte("abc"), 2, nil, io.ErrShortWrite},
+		{"error takes precedence", []byte("abc"), 2, sentinel, sentinel},
+		{"empty still writes", nil, 0, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &singleWriteProbe{n: tc.n, err: tc.err}
+			require.ErrorIs(t, WriteFull(writer, tc.data), tc.want)
+			require.Equal(t, 1, writer.calls)
+		})
+	}
 }
 
 func TestFixedWidthWritersRejectShortWrites(t *testing.T) {

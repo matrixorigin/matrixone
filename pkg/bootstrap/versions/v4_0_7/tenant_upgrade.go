@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -109,6 +110,27 @@ func (v *versionHandle) UpgradeTenant(ctx context.Context, accountID int32, obje
 			afterIndex = table
 		}
 		if len(tables) < CatalogDataPageSize {
+			break
+		}
+	}
+	var scan v4_0_6.OrphanPrivilegeScan
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		var next v4_0_6.OrphanPrivilegeScan
+		var done bool
+		active, err := run("reconciling orphan object privileges", versions.CatalogUpgradePageBytes, false, func(tx executor.TxnExecutor) error {
+			var err error
+			next, done, err = v4_0_6.MaintainOrphanObjectPrivilegesPage(
+				limitedCatalogTxn{TxnExecutor: tx, limit: versions.CatalogUpgradePageBytes}, uint32(accountID), scan)
+			return err
+		})
+		if err != nil || !active {
+			return false, err
+		}
+		scan = next
+		if done {
 			break
 		}
 	}

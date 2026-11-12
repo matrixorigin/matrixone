@@ -20,9 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -45,10 +47,15 @@ type container struct {
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
-	readerFilter              engine.ReaderFilter
+	readerFilter              *engine.ReaderFilterRequest
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
+	domainSources             []localDomainSourceState
+	domainProbes              []localDomainProbeState
+	domainRows                []int64
+	domainsReady              bool
+	domainEmpty               bool
 }
 
 type TableScan struct {
@@ -63,6 +70,9 @@ type TableScan struct {
 	TableID            uint64
 	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
 	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	LocalDomainBuilds  []runtimefilter.LocalDomainBinding
+	LocalDomainProbes  []runtimefilter.LocalDomainBinding
+	ReadPolicy         fileservice.Policy // added to the read context's fileservice policy
 
 	vm.OperatorBase
 	colexec.Projection
@@ -105,6 +115,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ProjectList != nil {
@@ -130,6 +141,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
@@ -140,6 +154,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
@@ -170,6 +185,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil

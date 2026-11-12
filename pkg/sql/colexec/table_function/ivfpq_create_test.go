@@ -57,6 +57,7 @@ type ivfpqCreateTestCase struct {
 
 func newIvfpqCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) ivfpqCreateTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	installOrdinaryMaintenanceRelations(t, proc)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range ivfpqCreateDefaultColdefs {

@@ -995,7 +995,7 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 		// assignment builders), mirroring the MEDIUMINT protocol gates.
 		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType, "cast_assign", columnName)
 	}
-	if types.T(targetType.Id).IsArrayRelate() {
+	if types.T(targetType.Id).IsArray() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
 	}
@@ -1003,7 +1003,8 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
-	if targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
+	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) ||
+		targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, funcName)
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
@@ -1013,7 +1014,7 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	if isMediumIntPlanType(targetType) {
+	if isMediumIntPlanType(targetType) || targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
 		return forceAssignmentCastExprWithName(
 			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
 	}
@@ -1211,24 +1212,6 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 	}
 	expr.Typ = targetType
 	return expr, nil
-}
-
-// if typ is decimal128 and decimal64 without scalar and width
-// set a default value for it.
-func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
-	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 38 // width
-	}
-	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 2
-		typ.Width = 6 // width
-	}
-	if typ.Id == int32(types.T_decimal256) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 65 // width
-	}
-	return typ
 }
 
 var MakePlan2Type = makePlan2Type

@@ -172,6 +172,10 @@ type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 
+// SQLTaskBackgroundKey marks internal statements of a scheduled SQL task for
+// bounded operational logging. It is not propagated to remote query contexts.
+type SQLTaskBackgroundKey struct{}
+
 // TemporaryTableAccessKey marks trusted internal catalog maintenance that must
 // resolve a temporary table by its exact physical name. It is intentionally
 // separate from InternalExecutorKey: ordinary internal SQL keeps the same
@@ -358,6 +362,28 @@ func WithPublicationViewBinding(ctx context.Context) context.Context {
 func IsPublicationViewBinding(ctx context.Context) bool {
 	value, _ := ctx.Value(PublicationViewBinding{}).(bool)
 	return value
+}
+
+type indexMaintenanceViewBindingKey struct{}
+
+// WithIndexMaintenanceViewBinding marks a private bind-only view probe.
+func WithIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, true)
+}
+
+// WithoutIndexMaintenanceViewBinding prevents a separately executed nested
+// catalog statement from inheriting the probe's no-evaluation semantics.
+func WithoutIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, false)
+}
+
+func IsIndexMaintenanceViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(indexMaintenanceViewBindingKey{}).(bool)
+	return value
+}
+
+func IsNoEvaluationViewBinding(ctx context.Context) bool {
+	return IsPublicationViewBinding(ctx) || IsIndexMaintenanceViewBinding(ctx)
 }
 
 // Sp variable scope

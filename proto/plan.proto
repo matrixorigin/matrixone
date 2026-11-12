@@ -226,6 +226,8 @@ message IndexScanInfo {
   repeated string parts = 4;
   bool is_unique = 5;
   string index_table_name = 6;
+  // This physical access requires the captured execution and local placement.
+  bool requires_captured_execution = 7;
 }
 
 enum AggregateConfigType {
@@ -326,6 +328,10 @@ message Expr {
   }
 
   int32 aux_id = 16;
+  // Keep these flags next to aux_id so they use its alignment padding.
+  // A proved necessary storage condition; early filtering preserves diagnostics.
+  // The complete SQL residual remains authoritative.
+  bool candidate_filter = 27;
   double ndv = 17;
   double selectivity = 18;
   // prepared_numeric is explicit planner metadata, not an executor memo
@@ -472,6 +478,9 @@ message ColDef {
   ResultColumnKind result_column_kind = 23;
   // Result publication only; never persisted as a table/view schema attribute.
   IntegerResultPresentation integer_result_presentation = 24;
+  // Result publication only: the declared ENUM/SET domain of a label field.
+  // typ remains the executable string type; this is not a schema attribute.
+  Type enum_set_result_type = 25;
 }
 
 message Default {
@@ -1377,6 +1386,13 @@ message Node {
   // survive pruning and are evaluated only when rendering a diagnostic;
   // on_list continues to use the opaque physical comparison key.
   repeated Expr dedup_key_exprs = 95;
+
+  // MARK only: a proven Boolean existence consumer with total, pure predicates.
+  // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
+  bool mark_existence_only = 96;
+
+  // TABLE_SCAN only: the scan reads a small share of each object it touches.
+  bool narrow_scan = 97;
 }
 
 message SnapshotExtraInfo {
@@ -1903,6 +1919,16 @@ message Query {
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
   IntegerPrecisionGraph integer_precision = 20;
+  // Logical targets of exclusive SELECT locks, retained across optimization.
+  repeated SelectLockReference select_lock_references = 21;
+
+  // Access-path choice depends on execution-time values or context.
+  // Rebuild from the original owner instead of reusing a physical choice.
+  bool execution_dependent_access = 22;
+  repeated LocalRuntimeFilterDomain local_runtime_filter_domains = 23;
+  // Output-aligned declared ENUM/SET domains, captured before optimization.
+  // Empty when absent; zero types represent outputs without field identity.
+  repeated Type enum_set_result_types = 24 [(gogoproto.nullable) = false];
 }
 
 message TransationControl {
@@ -2613,4 +2639,27 @@ message DatabaseDefaults {
   uint64 version = 4;
   uint32 collation_id = 5;
   uint32 collation_revision = 6;
+}
+
+// Binding identity only; grants and view principals are checked at execution.
+message SelectLockReference {
+  ObjectRef object_ref = 1;
+  repeated ViewStep view_path = 2;
+  bool is_cluster_table = 3;
+}
+
+// Optional local optimization metadata. Older executors ignore these descriptors;
+// no ordinary runtime-filter wait is created from them.
+message LocalRuntimeFilterTarget {
+  int32 scan_node_id = 1;
+  string column_name = 2;
+  // Profitability hint only; never authorizes a membership rejection.
+  double probe_ndv = 3;
+}
+
+message LocalRuntimeFilterDomain {
+  int32 source_scan_node_id = 1;
+  string source_column_name = 2;
+  int32 key_type = 3;
+  repeated LocalRuntimeFilterTarget targets = 4;
 }

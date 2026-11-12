@@ -47,7 +47,7 @@ func hnswAutoPlanFixture(t *testing.T, sql string) *plan.Query {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	return p.GetQuery()
 }
@@ -206,7 +206,7 @@ func cuvsPlanFixture(t *testing.T, algo string, roles []string, sql string) *pla
 	statements, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	return p.GetQuery()
 }

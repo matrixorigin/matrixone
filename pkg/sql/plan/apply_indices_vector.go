@@ -158,6 +158,12 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 	if scanNode == nil {
 		return nil
 	}
+	if sortNode.Limit != nil {
+		if scanNode.Limit != nil || scanNode.Offset != nil {
+			return nil
+		}
+		builder.mergeVectorSortProjects(sortNode)
+	}
 
 	orderExpr := sortNode.OrderBy[0].Expr
 	distFnExpr := orderExpr.GetF()
@@ -168,6 +174,9 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		}
 		childNode = builder.qry.Nodes[sortNode.Children[0]]
 		if childNode.NodeType == plan.Node_PROJECT {
+			if len(childNode.Children) != 1 || childNode.Children[0] != scanNode.NodeId {
+				return nil
+			}
 			// Bounds-check: the ORDER BY column indexes the child project's list, but the
 			// two can disagree. `select count(*) from (<top-k>) t` prunes the derived
 			// table's projection to nothing while the sort still carries ColPos from
@@ -181,23 +190,25 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		if distFnExpr == nil {
 			return nil
 		}
+	} else if len(sortNode.Children) == 1 {
+		// A distance over the columns of a PROJECT between the sort and the scan is read in
+		// the scan's columns, and the PROJECT is detached with its columns remapped.
+		if child := builder.qry.Nodes[sortNode.Children[0]]; child.NodeType == plan.Node_PROJECT {
+			if len(child.Children) != 1 || child.Children[0] != scanNode.NodeId || len(child.BindingTags) == 0 {
+				return nil
+			}
+			distFnExpr = replaceColumnsForExpr(DeepCopyExpr(orderExpr), buildIvfChildProjectionMap(child)).GetF()
+			childNode = child
+		}
 	}
 
-	// SORT anchor only (projNode == nil): the child PROJECT is detached and each of its
-	// non-distance expressions is published through idxColMap, which applyIndices then
-	// substitutes into EVERY ancestor referencing that column -- a deep copy per reference.
-	// Fine for a column reference, wrong for anything evaluated: two ancestors would each
-	// get their own rand()/uuid()/now(), so the value a JOIN predicate admitted a row on can
-	// differ from the value projected out of it, and moving evaluation above a JOIN changes
-	// how many times it runs.
-	//
-	// The PROJECT anchor is unaffected: spliceVectorRewrite applies its remap to that one
-	// node, so the expression is still evaluated exactly once.
-	//
-	// exprCanRemoveProject is the planner's existing answer to this same question --
-	// removeSimpleProjections refuses to inline a PROJECT holding a CannotFold or
-	// IsRealTimeRelated function. Reuse it rather than restate it, so the two cannot drift.
-	if projNode == nil && childNode != nil && !vectorChildProjectIsDetachable(childNode, orderExpr) {
+	// The child PROJECT is detached and its columns are substituted into their readers, a
+	// copy per reference. An expression exprCanRemoveProject rejects (rand(), uuid(), now())
+	// must not be copied: with the SORT anchor every ancestor reads it, with the PROJECT
+	// anchor only that node does, so there it may be read once. Its pagination bounds the
+	// rows ranked, so a paginated child PROJECT keeps the exact path.
+	if childNode != nil && (childNode.Limit != nil || childNode.Offset != nil ||
+		!vectorChildProjectIsDetachable(projNode, childNode, orderExpr)) {
 		return nil
 	}
 
@@ -224,6 +235,54 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		rankOption:       rankOption,
 		providerNodeID:   -1,
 		membershipNodeID: -1,
+	}
+}
+
+// mergeVectorSortProjects inlines the PROJECTs below the PROJECT under a Top-K sort by a
+// vector distance into it, while their expressions can be inlined, so that one PROJECT sits
+// between the sort and the scan.
+func (builder *QueryBuilder) mergeVectorSortProjects(sortNode *plan.Node) {
+	if len(sortNode.Children) != 1 {
+		return
+	}
+	top := builder.qry.Nodes[sortNode.Children[0]]
+	if top.NodeType != plan.Node_PROJECT || len(top.Children) != 1 {
+		return
+	}
+	order := sortNode.OrderBy[0].Expr
+	if col := order.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(top.ProjectList) {
+		order = top.ProjectList[col.ColPos]
+	}
+	if fn := order.GetF(); fn == nil {
+		return
+	} else if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
+		return
+	}
+	for {
+		inner := builder.qry.Nodes[top.Children[0]]
+		if inner.NodeType != plan.Node_PROJECT || len(inner.Children) != 1 || len(inner.BindingTags) == 0 ||
+			inner.Limit != nil || inner.Offset != nil || len(inner.FilterList) > 0 ||
+			builder.isFullTextBooleanScoreProject(inner) {
+			return
+		}
+		if _, protected := builder.existentialGateProjects[inner.NodeId]; protected {
+			return
+		}
+		if _, groupingSetExpand := DecodeGroupingSetExpandOption(inner.ExtraOptions); groupingSetExpand {
+			return
+		}
+		refCnt := make(map[[2]int32]int)
+		increaseRefCntForExprList(top.ProjectList, 1, refCnt)
+		for i, expr := range inner.ProjectList {
+			if !exprCanRemoveProject(expr) {
+				return
+			}
+			if expr.GetCol() == nil && expr.GetLit() == nil && refCnt[[2]int32{inner.BindingTags[0], int32(i)}] > 1 {
+				return
+			}
+		}
+		replaceColumnsForExprList(top.ProjectList, buildIvfChildProjectionMap(inner))
+		top.Children[0] = inner.Children[0]
 	}
 }
 
@@ -843,22 +902,29 @@ func (builder *QueryBuilder) spliceVectorRewrite(
 }
 
 // vectorChildProjectIsDetachable reports whether the PROJECT below the Top-K may be removed
-// with its expressions republished to arbitrarily many ancestors.
+// with its expressions republished to their readers: every ancestor when projNode is nil,
+// else projNode only.
 //
 // The distance entry is exempt: it is replaced by a single ColRef to the index score, so it
 // is not duplicated however many ancestors read it. Every other entry is deep-copied per
 // reference, which is only sound for something whose value does not depend on being
-// evaluated once -- precisely what exprCanRemoveProject already decides.
-func vectorChildProjectIsDetachable(childNode *plan.Node, orderExpr *plan.Expr) bool {
+// evaluated once -- precisely what exprCanRemoveProject already decides -- or, with projNode,
+// for an entry projNode reads at most once.
+func vectorChildProjectIsDetachable(projNode, childNode *plan.Node, orderExpr *plan.Expr) bool {
 	sortIdx := -1
 	if col := orderExpr.GetCol(); col != nil {
 		sortIdx = int(col.ColPos)
 	}
+	var refCnt map[[2]int32]int
+	if projNode != nil {
+		refCnt = make(map[[2]int32]int)
+		increaseRefCntForExprList(projNode.ProjectList, 1, refCnt)
+	}
 	for i, proj := range childNode.ProjectList {
-		if i == sortIdx {
+		if i == sortIdx || exprCanRemoveProject(proj) {
 			continue
 		}
-		if !exprCanRemoveProject(proj) {
+		if projNode == nil || len(childNode.BindingTags) == 0 || refCnt[[2]int32{childNode.BindingTags[0], int32(i)}] > 1 {
 			return false
 		}
 	}
@@ -1355,6 +1421,32 @@ func hasNonDistFnFilter(filters []*plan.Expr, partPos int32, origFuncName string
 // SAME query vector as vecLitArg — see sameQueryPayload. This is a real value comparison: a distance
 // on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
 // report the wrong distance).
+// replaceProjectDistFnsWithScoreCol replaces the distance calls of projNode on the scan's
+// vector column, read directly or through a column of childNode, with the score column.
+func replaceProjectDistFnsWithScoreCol(
+	projNode, childNode *plan.Node,
+	scanBindingTag, partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
+	tableFuncTag int32,
+	scoreColType plan.Type,
+) {
+	if projNode == nil {
+		return
+	}
+	replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanBindingTag, partPos,
+		origFuncName, vecLitArg, tableFuncTag, scoreColType)
+	if childNode == nil || len(childNode.BindingTags) == 0 {
+		return
+	}
+	for i, expr := range childNode.ProjectList {
+		if col := expr.GetCol(); col != nil && col.RelPos == scanBindingTag && col.ColPos == partPos {
+			replaceDistFnExprsWithScoreCol(projNode.ProjectList, childNode.BindingTags[0], int32(i),
+				origFuncName, vecLitArg, tableFuncTag, scoreColType)
+		}
+	}
+}
+
 func replaceDistFnExprsWithScoreCol(
 	exprs []*plan.Expr,
 	scanBindingTag, partPos int32,
@@ -1459,10 +1551,18 @@ func vecFloatKey(e *plan.Expr, elemType types.T) (string, bool) {
 		// peeling it would parse the inner literal at the wrong type and equate two DIFFERENT vectors,
 		// silently rewriting the SELECT distance to a score computed for the other one. Stop and yield
 		// no key (fail-safe: no rewrite) rather than guess at the conversion.
-		if vecElemByteSize(types.T(f.Args[0].Typ.GetId())) != 0 {
+		if in := types.T(f.Args[0].Typ.GetId()); vecElemByteSize(in) != 0 || in.IsBlockScaledArray() {
+			return "", false
+		}
+		// The text must be cast to elemType itself: cast('[...]' as vecf8(n)) quantizes the text
+		// into a different vector than the elemType parse of the same text.
+		if t := types.T(e.Typ.GetId()); t.IsArray() && t != elemType {
 			return "", false
 		}
 		e = f.Args[0]
+	}
+	if t := types.T(e.Typ.GetId()); t.IsArray() && t != elemType {
+		return "", false
 	}
 	lit := e.GetLit()
 	if lit == nil {

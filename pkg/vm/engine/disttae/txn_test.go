@@ -466,12 +466,14 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
 	proc := testutil.NewProc(t)
+	proc.Base.Lim.Size = 64 << 20
 
 	t.Run("A", func(t *testing.T) {
 		txn := Transaction{
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		for i := 0; i < 10; i++ {
@@ -493,6 +495,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := options.DefaultBlockMaxRows*11 + 1
@@ -528,6 +531,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := math.MaxUint16
@@ -1113,6 +1117,10 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	}
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	// Merge no longer self-compacts (failure-atomic admission, issue
+	// #25590): the statement callers run this right after the fallible
+	// dump; here nothing is dumped.
+	txn.compactNilWorkspaceSlotsLocked()
 	require.Len(t, txn.writes, 1)
 	require.Equal(t, 30, txn.writes[0].bat.RowCount())
 	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
@@ -2078,7 +2086,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 			require.False(t, dup.HasNull(), "filtered vector should have no NULLs")
 
 			// InplaceSort on the copy should not corrupt original
-			dup.InplaceSort()
+			require.NoError(t, dup.InplaceSort(mp))
 		}()
 	}
 

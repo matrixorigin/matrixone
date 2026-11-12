@@ -182,7 +182,7 @@ func dependentSourceFactory(metadata uint64, open func(*process.Process, *vector
 			}
 		}
 		if err == nil {
-			err = s.op.Prepare(proc)
+			err = vm.Prepare(s.op, proc)
 		}
 		if err != nil {
 			return nil, errors.Join(err, s.CloseWithCause(err))
@@ -204,7 +204,7 @@ func (s *dependentNativeSource) Read(ctx context.Context) (*batch.Batch, error) 
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	r, err := s.op.Call(s.proc)
+	r, err := vm.Exec(s.op, s.proc)
 	return r.Batch, err
 }
 func (s *dependentNativeSource) Close() error { return s.CloseWithCause(nil) }
@@ -229,8 +229,8 @@ func (s *dependentNativeSource) CloseWithCause(cause error) error {
 		err = errors.Join(err, closer.CloseReader())
 	}
 	terminal := errors.Join(cause, err)
-	s.op.Reset(s.proc, terminal != nil, terminal)
-	s.op.Free(s.proc, terminal != nil, terminal)
+	vm.Reset(s.op, s.proc, terminal != nil, terminal)
+	vm.Free(s.op, s.proc, terminal != nil, terminal)
 	if owner, ok := s.op.(interface {
 		ClearAllocationAccount(*mpool.AllocationAccount) error
 	}); ok && s.account != nil {

@@ -110,65 +110,40 @@ func newAlterColumnUniqueIndex(tableDef *TableDef, column *tree.ColumnTableDef) 
 	return index
 }
 
-// setEmptyUniqueIndexName Set name for unique index constraint whose effective
-// name (explicit index name or constraint symbol) is empty
+// setEmptyIndexConstraintName assigns a collision-free name using the first
+// key column. Explicit names and indexes without key parts are left alone.
+func setEmptyIndexConstraintName(namesMap map[string]bool, name *string, keyParts []*tree.KeyPart) {
+	if *name != "" || len(keyParts) == 0 {
+		return
+	}
+	colName := keyParts[0].ColName.ColName()
+	constrName := colName
+	i := 2
+	if IndexNamesEqual(constrName, "PRIMARY") {
+		constrName = fmt.Sprintf("%s_%d", constrName, 2)
+		i = 3
+	}
+	for namesMap[indexNameKey(constrName)] {
+		constrName = fmt.Sprintf("%s_%d", colName, i)
+		i++
+	}
+	*name = constrName
+	namesMap[indexNameKey(constrName)] = true
+}
+
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
-	if len(indexConstr.GetIndexName()) == 0 && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			// loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
+	if indexConstr.GetIndexName() != "" {
+		return
 	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
-// setEmptyIndexName Set name for index constraint with an empty name
 func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			//  loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
-	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
-// setEmptyFullTextIndexName Set name for index constraint with an empty name
 func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullTextIndex) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			//  loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
-	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
 // TODO
@@ -302,6 +277,28 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 	}
 }
 
+// lowPrecisionKeyError rejects a bf16, float16, float8 or float4 column as a key part, and a
+// vecf8 or vecf4 column as a cluster by key: key encoding, locking and TN dedup have no
+// support for the scalar types, and vecf8/vecf4 cells equal by decoded value can differ in
+// bytes (other vector keys are rejected as vectors). kind is "primary", "unique", "cluster"
+// or another index kind.
+func lowPrecisionKeyError(ctx context.Context, id int32, colName, kind string) error {
+	t := types.T(id)
+	if !t.IsLowPrecisionFloat() && !(t.IsBlockScaledArray() && kind == "cluster") {
+		return nil
+	}
+	switch kind {
+	case "primary":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in primary key", t, colName))
+	case "unique":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in unique index", t, colName))
+	case "cluster":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be a cluster by key", t, colName))
+	default:
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in index", t, colName))
+	}
+}
+
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
 	return checkIndexColumnSupportabilityWithKeyFormat(ctx, col, keyPart, indexKind, collation.KeyFormatLegacy)
 }
@@ -323,6 +320,9 @@ func checkIndexColumnSupportabilityWithKeyFormat(
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	if err := lowPrecisionKeyError(ctx, col.Typ.Id, colName, indexKind); err != nil {
+		return err
+	}
 	switch indexKind {
 	case "primary":
 		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {
@@ -353,7 +353,8 @@ func checkIndexColumnSupportabilityWithKeyFormat(
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
 	case int32(types.T_array_float32), int32(types.T_array_float64),
 		int32(types.T_array_float16), int32(types.T_array_bf16),
-		int32(types.T_array_int8), int32(types.T_array_uint8):
+		int32(types.T_array_int8), int32(types.T_array_uint8),
+		int32(types.T_array_float8), int32(types.T_array_float4):
 		// A vector column is valid only as the key of a vector index, AND only if
 		// that algorithm supports this element type. Delegate to the plugin's
 		// catalog hook (SupportedVectorTypes) rather than hardcoding — each algo

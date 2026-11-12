@@ -603,20 +603,12 @@ class FulltextSearchBuilder:
 
         builder = MatrixOneSQLBuilder()
 
-        # Build SELECT clause
-        columns_str = ", ".join(self.columns)
-        # MatrixOne doesn't support "IN NATURAL_LANGUAGE" syntax, use simple AGAINST
-        if self.search_mode == FulltextModeType.NATURAL_LANGUAGE or self.search_mode == "natural language mode":
-            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)})"
-        elif self.search_mode == FulltextModeType.BOOLEAN or self.search_mode == "boolean mode":
-            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)} IN BOOLEAN MODE)"
-        elif self.search_mode == FulltextModeType.QUERY_EXPANSION or self.search_mode == "query expansion mode":
-            match_clause = (
-                f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)} WITH QUERY EXPANSION)"
-            )
-        else:
-            # Default to simple AGAINST for unknown modes
-            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)})"
+        from .fulltext_search import _match_columns, _match_mode
+
+        columns_str = _match_columns(self.columns)
+        match_clause = (
+            f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)}{_match_mode(self.search_mode)})"
+        )
 
         if self.include_score:
             builder.select("*", f"{match_clause} AS score")
@@ -642,8 +634,8 @@ class FulltextSearchBuilder:
         # Add LIMIT/OFFSET clause
         if self.limit_value is not None:
             builder.limit(self.limit_value)
-            if self.offset_value:
-                builder.offset(self.offset_value)
+        if self.offset_value is not None:
+            builder.offset(self.offset_value)
 
         return builder.build_with_parameter_substitution()
 

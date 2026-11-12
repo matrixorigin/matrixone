@@ -21,16 +21,15 @@ import (
 )
 
 type DataFactory struct {
-	dir string
-	rt  *dbutils.Runtime
+	rt *dbutils.Runtime
 }
 
+// NewDataFactory retains the directory argument for existing callers.
 func NewDataFactory(
-	rt *dbutils.Runtime, dir string,
+	rt *dbutils.Runtime, _ string,
 ) *DataFactory {
 	return &DataFactory{
-		dir: dir,
-		rt:  rt,
+		rt: rt,
 	}
 }
 

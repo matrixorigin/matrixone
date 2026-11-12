@@ -459,8 +459,9 @@ func TestIssue26796WorkspaceMaintenanceWorkBounded(t *testing.T) {
 }
 
 // TestIssue26796WorkspaceMergingBoundsEntryCount documents that the workspace
-// merge, which runs at every statement boundary (IncrStatementID ->
-// mergeTxnWorkspaceLocked), keeps the entry count bounded during long
+// boundary maintenance, which runs at every statement boundary (IncrStatementID
+// -> mergeTxnWorkspaceLocked, then the post-dump compactNilWorkspaceSlotsLocked
+// that the #25590 boundary orders), keeps the entry count bounded during long
 // transactions, so the remaining per-statement growth driver on the unfixed
 // base is the per-row filter work this fix removes, not the entry count.
 func TestIssue26796WorkspaceMergingBoundsEntryCount(t *testing.T) {
@@ -472,6 +473,10 @@ func TestIssue26796WorkspaceMergingBoundsEntryCount(t *testing.T) {
 		issue26796InsertOne(t, txn, int64(c), int64(c))
 		txn.Lock()
 		require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
+		// The production boundary compacts the retired nil slots right
+		// after the (trivially empty here) dump, inside the same critical
+		// section, before the next statement starts.
+		txn.compactNilWorkspaceSlotsLocked()
 		txn.Unlock()
 	}
 	require.LessOrEqual(t, len(txn.writes), 300,

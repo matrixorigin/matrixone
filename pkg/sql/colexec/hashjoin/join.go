@@ -81,6 +81,9 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.ExistenceOnly && !hashJoin.IsMark() {
+		return moerr.NewInternalError(proc.Ctx, "existence mode requires MARK join")
+	}
 	hashJoin.ctr.asofResidualEquality = hashJoin.IsAsof() &&
 		colexec.HasMixedJSONNumericEquality(hashJoin.NonEqCond)
 	if hashJoin.AsofBuildLeft && hashJoin.ctr.asofResidualEquality {
@@ -219,7 +222,19 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 	if len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 || len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) {
 		return moerr.NewInternalError(proc.Ctx, "hash MARK join requires matching non-empty probe and build keys")
 	}
-	if len(hashJoin.EqConds[0]) > 1 {
+	if hashJoin.ExistenceOnly {
+		if hashJoin.IsRightJoin || hashJoin.IsShuffle || hashJoin.HashOnPK || len(hashJoin.EqConds[0]) < 2 {
+			return moerr.NewInternalError(proc.Ctx, "existence MARK requires composite left broadcast membership")
+		}
+		for i, left := range hashJoin.EqConds[0] {
+			right := hashJoin.EqConds[1][i]
+			if left.GetCol() == nil || right.GetCol() == nil || !types.T(left.Typ.Id).IsInteger() ||
+				left.Typ.Id != right.Typ.Id || left.Typ.Width != right.Typ.Width || left.Typ.Scale != right.Typ.Scale {
+				return moerr.NewInternalError(proc.Ctx, "existence MARK requires matching integer column keys")
+			}
+		}
+	}
+	if len(hashJoin.EqConds[0]) > 1 && !hashJoin.ExistenceOnly {
 		for i := range hashJoin.EqConds[0] {
 			if !hashJoin.EqConds[0][i].Typ.NotNullable || !hashJoin.EqConds[1][i].Typ.NotNullable {
 				return moerr.NewInternalError(proc.Ctx, "hash MARK join requires composite keys to be not nullable")
@@ -714,8 +729,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
-	batchUnique := ctr.probeHashOnPK && hashJoin.IsInner() &&
-		!ctr.probeTrackBuildMatches && hashJoin.NonEqCond == nil
+	batchUnique := ctr.probeHashOnPK && hashJoin.NonEqCond == nil &&
+		((hashJoin.IsInner() && !ctr.probeTrackBuildMatches) || hashJoin.JoinType == plan.Node_RIGHT)
 	batchMembership := (ctr.probeLeftSemi || ctr.probeLeftAnti) &&
 		!ctr.probeTrackBuildMatches && hashJoin.NonEqCond == nil
 	if batchMembership {
@@ -790,7 +805,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if ctr.probeMark {
 				markValue := z != 0 && v != 0
-				markNull := !markValue && (z == 0 || ctr.buildHasNullKey)
+				markNull := !hashJoin.ExistenceOnly && !markValue && (z == 0 || ctr.buildHasNullKey)
 				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
 					return err
 				}
@@ -986,6 +1001,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 								return err
 							}
 						} else {
+							dst := ctr.resBat.Vecs[j]
+							// Tiny matches do not amortize gather setup; leave them on
+							// the scalar path irrespective of estimates or query shape.
+							if len(sels) >= 8 && !dst.GetType().IsVarlen() {
+								if err = ctr.appendFixedBuildColumn(dst, rp.Pos, sels, proc); err != nil {
+									return err
+								}
+								continue
+							}
 							for _, sel := range sels {
 								idx1 := sel / colexec.DefaultBatchSize
 								idx2 := sel % colexec.DefaultBatchSize
@@ -1653,6 +1677,32 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 	return nil
 }
 
+func (ctr *container) appendFixedBuildColumn(dst *vector.Vector, column int32, sels []int32, proc *process.Process) error {
+	var sources [hashmap.UnitLimit]vector.FixedSourceRow
+	for len(sels) > 0 {
+		n := min(len(sels), len(sources))
+		for i, sel := range sels[:n] {
+			sources[i] = vector.FixedSourceRow{
+				Vec: ctr.rightBats[sel/colexec.DefaultBatchSize].Vecs[column],
+				Row: int64(sel % colexec.DefaultBatchSize),
+			}
+		}
+		used, err := dst.TryUnionFlatFixedRows(sources[:n], proc.Mp())
+		if err != nil {
+			return err
+		}
+		if !used {
+			for _, row := range sources[:n] {
+				if err = dst.UnionOne(row.Vec, row.Row, proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+		sels = sels[n:]
+	}
+	return nil
+}
+
 func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) error {
 	ctr.bitmapSynced = true
 
@@ -1708,18 +1758,39 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	}
 	rowCnt := 0
 
-	for ; rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext(); rowCnt++ {
+	rows := &hashJoin.uniqueRightRows
+	for rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext() {
 		row := ctr.rightMatchedIter.Next()
-		idx1, idx2 := row/colexec.DefaultBatchSize, row%colexec.DefaultBatchSize
+		batchIdx := row / colexec.DefaultBatchSize
+		rows[0] = int64(row % colexec.DefaultBatchSize)
+		count := 1
+		limit := min(len(rows), colexec.DefaultBatchSize-rowCnt)
+		// Finalize follows probe, so its bounded selection can reuse the
+		// operator's Find scratch. Only adjacent rows from the same source
+		// batch share a gather; the iterator and output order are unchanged.
+		for count < limit && ctr.rightMatchedIter.HasNext() &&
+			ctr.rightMatchedIter.PeekNext()/colexec.DefaultBatchSize == batchIdx {
+			rows[count] = int64(ctr.rightMatchedIter.Next() % colexec.DefaultBatchSize)
+			count++
+		}
 
 		for i, rp := range hashJoin.ResultCols {
 			if rp.Rel == 1 {
-				err := ctr.resBat.Vecs[i].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+				src := ctr.rightBats[batchIdx].Vecs[rp.Pos]
+				var err error
+				if count == 1 {
+					err = ctr.resBat.Vecs[i].UnionOne(src, rows[0], proc.Mp())
+				} else {
+					// Selected gather does not retain unreferenced varlena area,
+					// even when the selection covers the entire source vector.
+					err = ctr.resBat.Vecs[i].Union(src, rows[:count], proc.Mp())
+				}
 				if err != nil {
 					return err
 				}
 			}
 		}
+		rowCnt += count
 	}
 
 	if rowCnt == 0 {
@@ -1785,7 +1856,8 @@ func (ctr *container) appendMembershipMatches(hashJoin *HashJoin, proc *process.
 }
 
 // appendUniqueMatches projects one bounded Find chunk for a unique, residual-free
-// inner join. Selections preserve probe order, including repeated build matches.
+// INNER/RIGHT join. Selections preserve probe order, including repeated build
+// matches. RIGHT still tracks build matches for the existing finalize phase.
 func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Process, count int) (int, error) {
 	leftRows, rightRows := &hashJoin.uniqueLeftRows, &hashJoin.uniqueRightRows
 	matched := 0
@@ -1800,11 +1872,68 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 	if matched == 0 {
 		return 0, nil
 	}
+	if ctr.probeTrackBuildMatches {
+		for _, row := range rightRows[:matched] {
+			ctr.rightRowsMatched.Add(uint64(row))
+		}
+	}
 	for j, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
-			if err := ctr.resBat.Vecs[j].Union(ctr.leftBat.Vecs[rp.Pos], leftRows[:matched], proc.Mp()); err != nil {
+			src := ctr.leftBat.Vecs[rp.Pos]
+			// Whole flat varlena copies may retain unreferenced area bytes.
+			// Keep the exact selected-payload allocation behavior in that case.
+			wholeVarlena := ctr.lastIdx == 0 && count == src.Length() &&
+				!src.IsConst() && src.GetType().IsVarlen()
+			var err error
+			if matched == count && !wholeVarlena {
+				// Every probe row in this bounded Find window matched, so its
+				// selection is exactly the contiguous range starting at lastIdx.
+				err = ctr.resBat.Vecs[j].UnionBatch(src, int64(ctr.lastIdx), count, nil, proc.Mp())
+			} else {
+				err = ctr.resBat.Vecs[j].Union(src, leftRows[:matched], proc.Mp())
+			}
+			if err != nil {
 				return 0, err
 			}
+		}
+	}
+	// A bounded fixed-width gather amortizes per-row projection when the
+	// selected build rows cross physical batches. Keep short, same-source and
+	// varlena output on the existing path, without changing stream order.
+	if matched >= 8 && rightRows[0]/colexec.DefaultBatchSize != rightRows[matched-1]/colexec.DefaultBatchSize {
+		fixedBuild := true
+		for j, rp := range hashJoin.ResultCols {
+			if rp.Rel != 0 && ctr.resBat.Vecs[j].GetType().IsVarlen() {
+				fixedBuild = false
+				break
+			}
+		}
+		if fixedBuild {
+			var sources [hashmap.UnitLimit]vector.FixedSourceRow
+			for j, rp := range hashJoin.ResultCols {
+				if rp.Rel == 0 {
+					continue
+				}
+				for i, row := range rightRows[:matched] {
+					sources[i] = vector.FixedSourceRow{
+						Vec: ctr.rightBats[row/colexec.DefaultBatchSize].Vecs[rp.Pos],
+						Row: row % colexec.DefaultBatchSize,
+					}
+				}
+				dst := ctr.resBat.Vecs[j]
+				used, err := dst.TryUnionFlatFixedRows(sources[:matched], proc.Mp())
+				if err != nil {
+					return 0, err
+				}
+				if !used {
+					for _, row := range sources[:matched] {
+						if err = dst.UnionOne(row.Vec, row.Row, proc.Mp()); err != nil {
+							return 0, err
+						}
+					}
+				}
+			}
+			return matched, nil
 		}
 	}
 	// Only consecutive rows from the same build batch can share a Union call:

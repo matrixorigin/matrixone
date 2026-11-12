@@ -165,7 +165,7 @@ func TestInsertValuesSQLUdfAdmission(t *testing.T) {
 		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 		stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err, text)
 	}
@@ -365,7 +365,7 @@ func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
 	defer stmt.Free()
-	_, err := buildPrepare(stmt, ctx)
+	_, err := buildPrepare(stmt, ctx, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
 		"expected 1064/42000 for inner syntax error, got: %v", err)
@@ -376,7 +376,7 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		sqlMode:             "PIPES_AS_CONCAT",
 	}
-	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
@@ -394,7 +394,7 @@ func TestPreparePublicationUsesFrontendExecutionPlan(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt := tree.NewPrepareString("stmt", sql)
 			defer stmt.Free()
-			p, err := buildPrepare(stmt, ctx)
+			p, err := buildPrepare(stmt, ctx, nil)
 			require.NoError(t, err)
 			prepared := p.GetDcl().GetPrepare()
 			require.NotNil(t, prepared.Plan)
@@ -419,7 +419,7 @@ func TestPreparePublicationLikeParameter(t *testing.T) {
 				stmt = tree.NewPrepareString("stmt", "show publications like ?")
 			}
 			defer stmt.Free()
-			p, err := buildPrepare(stmt, ctx)
+			p, err := buildPrepare(stmt, ctx, nil)
 			require.NoError(t, err)
 			prepared := p.GetDcl().GetPrepare()
 			require.Equal(t, []int32{int32(types.T_varchar)}, prepared.ParamTypes)
@@ -437,7 +437,7 @@ func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
 		require.NoError(t, err)
 		defer stmts[0].Free()
 		stmts[0].(*tree.ShowPublications).Like.Right.(*tree.ParamExpr).Offset = 2
-		_, _, err = getPreparePlan(ctx, stmts[0])
+		_, _, err = getPreparePlan(ctx, stmts[0], nil)
 		require.ErrorContains(t, err, "requires one LIKE parameter")
 	})
 	for _, sql := range []string{
@@ -447,7 +447,7 @@ func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			stmt := tree.NewPrepareString("stmt", sql)
 			defer stmt.Free()
-			_, err := buildPrepare(stmt, NewMockCompilerContext(true, newPlanTestProcess(t)))
+			_, err := buildPrepare(stmt, NewMockCompilerContext(true, newPlanTestProcess(t)), nil)
 			require.ErrorContains(t, err, "requires a string literal or parameter marker LIKE pattern")
 		})
 	}
@@ -674,7 +674,7 @@ func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	viewDef := p.GetDdl().GetCreateView().GetTableDef().GetViewSql()
 	require.NotNil(t, viewDef)
@@ -699,7 +699,7 @@ func TestPerformRejectsNestedSelectIntoOutfile(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "PERFORM SELECT INTO OUTFILE")
 		})
 	}
@@ -718,7 +718,7 @@ func TestPerformAllowsNestedSelectWithoutOutfile(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -4550,7 +4550,7 @@ func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 
 	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not found index: nonexist")
+	require.Contains(t, err.Error(), "Can't DROP 'nonexist'")
 }
 
 func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
@@ -7353,6 +7353,241 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
+// TestLowPrecisionFloatLiteralNarrowing checks that a comparison of a bf16 column with a
+// numeric literal inside the type's range compares in the column's precision (the column
+// is not cast), and that an out-of-range literal keeps the widened comparison.
+func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	firstFilter := func(sql string) *plan.Expr {
+		p, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		for _, n := range p.GetQuery().Nodes {
+			if len(n.FilterList) > 0 {
+				return n.FilterList[0]
+			}
+		}
+		t.Fatalf("no filter: %s", sql)
+		return nil
+	}
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE f = 0.3",
+		"SELECT id FROM vecblock_t WHERE f >= 2",
+		"SELECT id FROM vecblock_t WHERE f < -1.5e3",
+		"SELECT id FROM vecblock_t WHERE 0.3 = f",
+		"SELECT id FROM vecblock_t WHERE f IN (0.3, 1.5)",
+	} {
+		args := firstFilter(sql).GetF().Args
+		col := args[0]
+		if col.GetCol() == nil {
+			col = args[1]
+		}
+		require.NotNil(t, col.GetCol(), "%s: the column is compared without a cast", sql)
+		require.Equal(t, int32(types.T_bf16), col.Typ.Id, sql)
+	}
+	args := firstFilter("SELECT id FROM vecblock_t WHERE f < 1e39").GetF().Args
+	require.Nil(t, args[0].GetCol(), "an out-of-range literal widens the column")
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+
+	// a literal is in range by the value CAST rounds it to (to odd, from the exact source):
+	// one just outside float4 (±6) or float8 (±448) that float32 rounds to the maximum
+	// keeps the wide comparison, and the exact maximum compares in the column type
+	for _, tc := range []struct {
+		sql    string
+		narrow bool
+	}{
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000001", false},
+		{"SELECT id FROM vecblock_t WHERE h >= -6.0000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= '6.0000001'", false},
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000000000000000000000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= '6.0000000000000000000000001'", false},
+		{"SELECT id FROM vecblock_t WHERE g <= 448.000001", false},
+		{"SELECT id FROM vecblock_t WHERE g >= -448.000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= 6", true},
+		{"SELECT id FROM vecblock_t WHERE h >= -6.0", true},
+		{"SELECT id FROM vecblock_t WHERE h <= '6'", true},
+		{"SELECT id FROM vecblock_t WHERE g <= 448", true},
+		{"SELECT id FROM vecblock_t WHERE g >= -448.0", true},
+		// float16 (±65504) and bf16: just above the maximum rounds back to it, and is outside
+		{"SELECT id FROM vecblock_t WHERE k < 65505", false},
+		{"SELECT id FROM vecblock_t WHERE k = 65505", false},
+		{"SELECT id FROM vecblock_t WHERE k > -65505", false},
+		{"SELECT id FROM vecblock_t WHERE k <= '65504.5'", false},
+		{"SELECT id FROM vecblock_t WHERE f < 3.39e38", false},
+		{"SELECT id FROM vecblock_t WHERE f > -3.39e38", false},
+		{"SELECT id FROM vecblock_t WHERE k <= 65504", true},
+		{"SELECT id FROM vecblock_t WHERE k >= -65504", true},
+		{"SELECT id FROM vecblock_t WHERE f <= 3.38e38", true},
+		// bf16's printed maximum narrows: CAST accepts it by its float32 value
+		{"SELECT id FROM vecblock_t WHERE f = 3.3895314e38", true},
+		{"SELECT id FROM vecblock_t WHERE f = -3.3895314e38", true},
+		{"SELECT id FROM vecblock_t WHERE f <=> 3.3895314e+38", true},
+		{"SELECT id FROM vecblock_t WHERE f = '3.3895314e+38'", true},
+		{"SELECT id FROM vecblock_t WHERE f = 3.3895316e38", false},
+		// a numeral beyond DECIMAL128 binds as DECIMAL256
+		{"SELECT id FROM vecblock_t WHERE f = 0.30000000000000000000000000000000000000001", true},
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000000000000000000000000000000000000001", false},
+		// a constant expression is folded and narrowed as a literal is
+		{"SELECT id FROM vecblock_t WHERE f = abs(-0.3)", true},
+		{"SELECT id FROM vecblock_t WHERE k = abs(-0.1)", true},
+		{"SELECT id FROM vecblock_t WHERE g >= 1 + 0.5", true},
+		{"SELECT id FROM vecblock_t WHERE h <= abs(-6.0000001)", false},
+	} {
+		args := firstFilter(tc.sql).GetF().Args
+		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)
+	}
+}
+
+// TestLowPrecisionFloatColumnsStayNarrow checks that NOT IN, !=, <=> and BETWEEN round
+// in-range literals to the column type as = and IN do, that two literals rounding to the
+// same value are not folded as different constants, and that a multi-table UPDATE
+// projects bf16/vecf8/vecf4 values in the column types.
+func TestLowPrecisionFloatColumnsStayNarrow(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	columnWidened := func(sql string) (bool, string) {
+		p, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		widened := false
+		for _, n := range p.GetQuery().Nodes {
+			exprs := append(append([]*plan.Expr{}, n.FilterList...), n.ProjectList...)
+			for _, e := range exprs {
+				require.NoError(t, plan.VisitExprTree(e, func(expr *plan.Expr) error {
+					fn := expr.GetF()
+					if fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 && fn.Args[0].GetCol() != nil {
+						switch types.T(fn.Args[0].Typ.Id) {
+						case types.T_bf16, types.T_array_float8, types.T_array_float4:
+							widened = widened || expr.Typ.Id != fn.Args[0].Typ.Id
+						}
+					}
+					return nil
+				}))
+			}
+		}
+		return widened, p.String()
+	}
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE f NOT IN (1.501)",
+		"SELECT id FROM vecblock_t WHERE f NOT IN (1.501, 7)",
+		"SELECT id FROM vecblock_t WHERE f != 1.501",
+		"SELECT id FROM vecblock_t WHERE f <=> 1.501",
+		"SELECT id FROM vecblock_t WHERE f BETWEEN 1.501 AND 2",
+		"SELECT id FROM vecblock_t WHERE f = 0.3 AND f = 0.30078125",
+		"UPDATE vecblock_t t1 JOIN vecblock_t t2 ON t1.id = t2.id + 1 SET t1.f = t2.f, t1.a = t2.a, t1.b = t2.b",
+	} {
+		widened, plan := columnWidened(sql)
+		require.False(t, widened, "%s\n%s", sql, plan)
+	}
+	p, err := runOneStmt(mock, t, "SELECT id FROM vecblock_t WHERE f = 0.3 AND f = 0.30078125")
+	require.NoError(t, err)
+	for _, n := range p.GetQuery().Nodes {
+		for _, filter := range n.FilterList {
+			if lit := filter.GetLit(); lit != nil {
+				require.False(t, !lit.Isnull && !lit.GetBval(), "equal rounded literals must not fold to false")
+			}
+		}
+	}
+}
+
+// TestInsertValuesBlobVector checks that a vector column type is not the binding type of a
+// literal in VALUES, so CAST(X'...' AS BLOB) binds as the binary vector input.
+func TestInsertValuesBlobVector(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"INSERT INTO docs_ft (id, embedding) VALUES (1, CAST(X'0000803F0000004000004040' AS BLOB))",
+		"INSERT INTO vecblock_t (id, a, b) VALUES (1, CAST(X'0000803F000000400000404000008040' AS BLOB), CAST(X'0000803F000000400000404000008040' AS BLOB))",
+		"REPLACE INTO vecblock_t (id, a) VALUES (2, CAST(X'0000803F000000400000404000008040' AS BLOB))",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+// TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
+// of vecf8/vecf4 columns, comparing the cells with <=> without casting them to vecf32.
+func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
+	for _, count := range []bool{true, false} {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = count
+		logicPlan, err := runOneStmt(mock, t, "UPDATE vecblock_t SET a = '[4,3,2,1]', b = '[1,2,3,4]' WHERE id = 2")
+		require.NoError(t, err, "count changed rows %v", count)
+		blockScaledNullSafeEqual, widened := 0, 0
+		for _, node := range logicPlan.GetQuery().GetNodes() {
+			for _, list := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList} {
+				for _, e := range list {
+					require.NoError(t, plan.VisitExprTree(e, func(cur *plan.Expr) error {
+						fn := cur.GetF()
+						if fn == nil || len(fn.Args) == 0 {
+							return nil
+						}
+						argType := types.T(fn.Args[0].Typ.Id)
+						switch fn.Func.GetObjName() {
+						case "<=>":
+							if argType.IsBlockScaledArray() {
+								blockScaledNullSafeEqual++
+							}
+						case "cast":
+							if argType.IsBlockScaledArray() && types.T(cur.Typ.Id) == types.T_array_float32 {
+								widened++
+							}
+						}
+						return nil
+					}))
+				}
+			}
+		}
+		require.Zero(t, widened, "count changed rows %v", count)
+		if count {
+			require.Equal(t, 2, blockScaledNullSafeEqual)
+		} else {
+			require.Zero(t, blockScaledNullSafeEqual)
+		}
+	}
+}
+
+// TestLowPrecisionFloatPlans checks that a bf16 column binds where it has no overload of
+// its own by widening to float32 (RANGE frames, aggregates, JSON and percentile functions),
+// that vecf8/vecf4 widen to vecf32 for the allowlisted functions and compare as the other
+// narrow vector types, and that their byte encodings stay rejected.
+func TestLowPrecisionFloatPlans(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"SELECT id, SUM(id) OVER (ORDER BY f RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM vecblock_t",
+		"SELECT ANY_VALUE(f), MEDIAN(f), STDDEV(f), GROUP_CONCAT(f) FROM vecblock_t",
+		"SELECT JSON_ARRAYAGG(f), JSON_OBJECTAGG('k', f), JSON_ARRAYAGG(a) FROM vecblock_t",
+		"SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY f) FROM vecblock_t",
+		"SELECT COALESCE(f, 0), GREATEST(f, 1), IF(f > 1, f, 0), JSON_OBJECT('k', f) FROM vecblock_t",
+		"SELECT id FROM vecblock_t WHERE f = CAST(0.3 AS BF16) OR f IN (CAST(0.3 AS BF16), CAST(1.5 AS BF16))",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// vecf8/vecf4 dequantize to vecf32 for NULL handling, conditionals, element math and JSON
+	for _, sql := range []string{
+		"SELECT COALESCE(a, '[0,0,0,0]'), GREATEST(a, a), CASE WHEN id > 1 THEN b ELSE a END FROM vecblock_t",
+		"SELECT ABS(a), SQRT(b), SUMMATION(a), L1_NORM(b), L2_NORM(a) FROM vecblock_t",
+		"SELECT JSON_OBJECT('k', a), JSON_ARRAY(a, b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// comparisons as for the other narrow vector types; hex/to_base64 are vecf32-only
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE a = a",
+		"SELECT id FROM vecblock_t WHERE a < '[1,1,1,1]' OR b >= '[0,0,0,1]'",
+		"SELECT id FROM vecblock_t WHERE a IN ('[1,0,0,0]', '[0,1,0,0]')",
+		"SELECT id FROM vecblock_t WHERE b BETWEEN '[0,0,0,0]' AND '[1,1,1,1]'",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	for _, sql := range []string{
+		"SELECT HEX(a) FROM vecblock_t",
+		"SELECT TO_BASE64(b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+	}
+}
+
 func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",
@@ -8199,7 +8434,7 @@ func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
 	preparedSQL := "REPLACE INTO replace_fk_p VALUES (?, 'x')"
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), preparedSQL, 1)
 	require.NoError(t, err)
-	logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+	logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
 
@@ -9685,7 +9920,7 @@ func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false, nil)
 			if test.wantErr {
 				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
 			} else {
@@ -9804,14 +10039,14 @@ func TestOnlyFullGroupByEnumColumnValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
-			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil)
+			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil, nil)
 			require.NoError(t, err)
 			tableDef.Cols[2].Typ.Id = int32(types.T_enum)
 			tableDef.Cols[2].Typ.Enumvalues = "clerk,manager"
 
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false, nil)
 			if test.wantErr {
 				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
 			} else {
@@ -10235,7 +10470,7 @@ func runOneStmt(opt Optimizer, t testing.TB, sql string) (*Plan, error) {
 	// planner tests and retaining every AST until the package test exits can
 	// exhaust the coverage runner's memory budget.
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, false, nil)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
@@ -10876,15 +11111,22 @@ func TestExtensionPlansAreNotSupported(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
 			prepared := tree.NewPrepareString("unsupported_extension", sql)
 			defer prepared.Free()
-			p, err = buildPrepare(prepared, ctx)
+			p, err = buildPrepare(prepared, ctx, nil)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 		})
 	}
+}
+
+// Only internal SQL may name the index of a CENTROIDX join, whose operator writes it.
+func TestCentroidxIndexParametersAreInternal(t *testing.T) {
+	mock := NewMockOptimizer(false, nil)
+	_, err := runOneStmt(mock, t, "SELECT N_NAME FROM NATION CENTROIDX('vector_l2_ops', '{}', '{\"ignored\":\"t\"}') JOIN REGION ON N_REGIONKEY = R_REGIONKEY")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }

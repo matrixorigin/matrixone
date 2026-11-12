@@ -26,6 +26,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTxnUnknownIsRecognizedThroughCleanupErrors(t *testing.T) {
+	unknown := moerr.NewTxnUnknown(context.Background(), "txn")
+	require.True(t, isTxnCommitResultUnknown(errors.Join(moerr.NewInternalErrorNoCtx("cleanup"), fmt.Errorf("wrapped: %w", unknown))))
+	require.False(t, isTxnCommitResultUnknown(moerr.NewInternalErrorNoCtx("ordinary")))
+}
+
 // TestSessionRollsBackTxnOnError: the opt-in is per session, applies to ANY
 // real error, and is off unless the session asks for it. Default off is
 // MySQL's behaviour -- a failed statement rolls back the statement, not the

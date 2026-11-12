@@ -132,6 +132,16 @@ func (v *Vector) UnionBatchWithAllocationAccount(
 	return v.UnionBatch(source, offset, count, flags, mp)
 }
 
+// NewAccountedBuffer creates owned auxiliary bytes under this destination's
+// immutable provenance and capacity class. The caller must Free the buffer or
+// transfer it to an owner that releases it through its MPool.
+func (s *AllocationAccountSelection) NewAccountedBuffer(mp *mpool.MPool) (*mpool.AccountedBuffer, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return mpool.NewAccountedBufferWithCapacityClass(mp, s.account, s.owner, s.dataSite, s.capacityClass)
+}
+
 func NewAllocationAccountSelection(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
@@ -355,7 +365,7 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 ||
+	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -376,7 +386,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
 // after replacement. Accounted bitmap storage is explicit external storage.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.dataLease != nil || v.areaLease != nil ||
+	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||
@@ -481,9 +491,8 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 		rows = v.Capacity()
 	}
 	if v.allocationAccount != nil {
-		// InplaceSort has an infallible public API and reorders all row
-		// metadata together. Reserve its NULL and grouping sidecars while an
-		// MPool is available, before publishing binary row metadata.
+		// Reserve the NULL and grouping sidecars alongside binary row
+		// metadata so later row reordering can move all bitmaps together.
 		if err := v.ensureNullCapacity(rows, mp); err != nil {
 			return err
 		}

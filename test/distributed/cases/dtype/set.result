@@ -11,7 +11,7 @@ set01  ¦  CREATE TABLE `set01` (
   PRIMARY KEY (`id`)
 )
 desc set01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 colors  ¦  set('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name, data_type, column_type, is_nullable
@@ -99,7 +99,8 @@ select id, tags from c order by tags, id;
 3  ¦  a
 select tags, count(*) as cnt from set_empty_member_order group by tags order by tags;
 ➤ tags[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 a  ¦  1
 select distinct tags from set_empty_member_order order by tags;
 ➤ tags[12,-1,0]  𝄀
@@ -119,7 +120,8 @@ select id, s, s + 0 as bitmap from (select id, s from set_boundary_order) d orde
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;
@@ -160,7 +162,8 @@ insert into set_boundary_order values (5, null), (4, 4), (3, 1), (2, 0), (1, 2);
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;

@@ -783,6 +783,93 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// setupCreateCDCTimestampTest stubs the source/sink connection probe and the
+// PITR admission so option validation reaches the StartTs/EndTs handling, and
+// returns a CreateCDC request builder that always carries a valid table level.
+func setupCreateCDCTimestampTest(t *testing.T) (newCreate func(option ...string) *tree.CreateCDC) {
+	pu := config.ParameterUnit{}
+	pu.TaskService = &testTaskService{}
+	setPu("", &pu)
+
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitr.Reset)
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitrWithExclude.Reset)
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
+	})
+	t.Cleanup(stubOpenDbConn.Reset)
+
+	levelOpt := []string{cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table}
+	return func(option ...string) *tree.CreateCDC {
+		return &tree.CreateCDC{
+			TaskName:  "task1",
+			SourceUri: "mysql://root:111@127.0.0.1:6001",
+			SinkType:  cdc.CDCSinkType_MySQL,
+			SinkUri:   "mysql://root:111@127.0.0.1:3306",
+			Tables:    "db1.t1:db1.t1",
+			Option:    append(levelOpt, option...),
+		}
+	}
+}
+
+// Test_doCreateCdc_startTsEndTsFractionalPrecision locks the documented
+// persistence contract in the frontend option-validation path: fractional
+// RFC3339 boundaries persist at full precision for both options.
+func Test_doCreateCdc_startTsEndTsFractionalPrecision(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	create := newCreate(
+		cdc.CDCRequestOptions_StartTs, "2026-11-06T03:02:35.123Z",
+		cdc.CDCRequestOptions_EndTs, "2026-11-07T03:02:35.123456789Z",
+	)
+	require.NoError(t, opts.ValidateAndFill(context.Background(), ses, create))
+	require.Equal(t, "2026-11-06T03:02:35.123Z", opts.StartTs)
+	require.Equal(t, "2026-11-07T03:02:35.123456789Z", opts.EndTs)
+}
+
+// Test_doCreateCdc_startTsEndTsZoneDisclosureError locks the documented
+// diagnostic contract in the frontend option-validation path: an invalid
+// StartTs or EndTs value fails with an error that discloses the
+// session-time-zone interpretation of the unzoned format.
+func Test_doCreateCdc_startTsEndTsZoneDisclosureError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	err := opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_StartTs, "123456",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+
+	err = opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_EndTs, "not-a-time",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+}
+
 type testTaskData struct {
 	metadata task.TaskMetadata
 	details  *task.Details
@@ -800,6 +887,8 @@ type testTaskService struct {
 	sqlExec               taskservice.SqlExecutor
 	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
 }
+
+func (*testTaskService) SQLTaskService() taskservice.TaskService { return nil }
 
 func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	var (
@@ -953,6 +1042,10 @@ func (ts *testTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 
 func (ts *testTaskService) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
 	panic("unexpected UpdateDaemonTaskError")
+}
+
+func (ts *testTaskService) RequestDaemonTaskStatus(context.Context, task.DaemonTask, task.TaskStatus) (int, error) {
+	panic("unexpected RequestDaemonTaskStatus")
 }
 
 func (ts *testTaskService) UpdateDaemonTaskStatus(
@@ -1122,14 +1215,13 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 		// Capability probes intentionally return an empty result set. Keep the
 		// row-bearing fixture strict for all other queries, while allowing this
 		// zero-row probe to exercise the production empty-result path.
-		return &testIER{rows: rows, sqlIdx: idx}
+		return &testIER{rows: rows}
 	} else {
 		panic("must have data")
 	}
 
 	return &testIER{
 		rows:      rows,
-		sqlIdx:    idx,
 		rowValues: rowValues,
 	}
 }
@@ -1138,7 +1230,6 @@ var _ ie.InternalExecResult = new(testIER)
 
 type testIER struct {
 	rows      *sql.Rows
-	sqlIdx    int
 	rowValues []any
 }
 
@@ -1380,6 +1471,21 @@ const (
 	mSqlIdx49
 	mSqlIdx50
 )
+
+func TestCDCCreateTaskDetailsPreserveIdentity(t *testing.T) {
+	opts := &CDCCreateTaskOptions{
+		TaskId: "task-id", TaskName: "task-name",
+		UserInfo: &CDCUserInfo{AccountId: 42, AccountName: "tenant", UserName: "user"},
+	}
+	details, err := opts.BuildTaskDetails()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), details.AccountID)
+	require.Equal(t, "tenant", details.Account)
+	require.Equal(t, "user", details.Username)
+	require.Equal(t, "task-id", details.GetCreateCdc().TaskId)
+	require.Equal(t, "task-name", details.GetCreateCdc().TaskName)
+	require.Equal(t, []*task.Account{{Id: 42, Name: "tenant"}}, details.GetCreateCdc().Accounts)
+}
 
 func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
@@ -4166,6 +4272,67 @@ func TestCdcTaskStopAllReadersReportsImmediateCompletion(t *testing.T) {
 	require.True(t, completionReady(allDone))
 }
 
+func TestCdcPauseRetriesAfterReaderStopTimeout(t *testing.T) {
+	for _, finish := range []string{"retry", "cancel"} {
+		t.Run(finish, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runningGauge := v2.CdcTaskTotalGauge.WithLabelValues("running")
+				pausedGauge := v2.CdcTaskTotalGauge.WithLabelValues("paused")
+				runningBefore := readFrontendGaugeValue(t, runningGauge)
+				pausedBefore := readFrontendGaugeValue(t, pausedGauge)
+				defer runningGauge.Set(runningBefore)
+				defer pausedGauge.Set(pausedBefore)
+				// This fixture enters Running directly instead of calling Start.
+				runningGauge.Inc()
+				readerDone := make(chan struct{})
+				var release sync.Once
+				defer release.Do(func() { close(readerDone) })
+				exec := &CDCTaskExecutor{
+					activeRoutine:  cdc.NewCdcActiveRoutine(),
+					runningReaders: &sync.Map{},
+					spec: &task.CreateCdcDetails{
+						TaskId: "pause-slow-reader", TaskName: "pause-slow-reader",
+						Accounts: []*task.Account{{Id: 1}},
+					},
+					stateMachine: NewExecutorStateMachine(),
+					holdCh:       make(chan int, 1),
+				}
+				exec.runningReaders.Store("db.table", &mockChangeReader{
+					info: &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"}, waitCh: readerDone,
+				})
+				require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+				require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+				require.ErrorContains(t, exec.Pause(), "waiting for readers to stop")
+				require.Equal(t, StatePausing, exec.stateMachine.State())
+				require.Equal(t, runningBefore, readFrontendGaugeValue(t, runningGauge))
+				select {
+				case <-exec.holdCh:
+					t.Fatal("pause released the executor before its reader stopped")
+				default:
+				}
+				release.Do(func() { close(readerDone) })
+				synctest.Wait()
+				if finish == "cancel" {
+					require.NoError(t, exec.Cancel())
+					require.Equal(t, StateCancelled, exec.stateMachine.State())
+					require.Equal(t, runningBefore, readFrontendGaugeValue(t, runningGauge))
+					require.Equal(t, pausedBefore, readFrontendGaugeValue(t, pausedGauge))
+					return
+				}
+				require.NoError(t, exec.Pause())
+				require.Equal(t, StatePaused, exec.stateMachine.State())
+				require.Equal(t, runningBefore, readFrontendGaugeValue(t, runningGauge))
+				require.Equal(t, pausedBefore+1, readFrontendGaugeValue(t, pausedGauge))
+				select {
+				case <-exec.holdCh:
+				default:
+					t.Fatal("successful pause did not release the executor")
+				}
+			})
+		})
+	}
+}
+
 func TestCdcTaskReaderShutdownDoesNotHideLaterPublication(t *testing.T) {
 	oldReaderDone := make(chan struct{})
 	var oldCloseCalls atomic.Int32
@@ -4582,6 +4749,52 @@ func Test_getSqlForGetTask(t *testing.T) {
 				tt.args.taskName,
 			)
 		})
+	}
+}
+
+func TestCDCControlRejectsPartialTaskKeyRead(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	defer db.Close()
+	readErr := errors.New("task key read interrupted")
+	rows := sqlmock.NewRows([]string{"task_id"}).AddRow("first").AddRow("second").RowError(1, readErr)
+	mock.ExpectQuery(cdc.CDCSQLBuilder.GetTaskIdSQL(7, "")).WillReturnRows(rows)
+	keys := make(map[taskservice.CDCTaskKey]struct{})
+	_, err = onPreUpdateCDCTasks(context.Background(), task.TaskStatus_PauseRequested, keys, db, 7, "", false)
+	require.ErrorIs(t, err, readErr)
+	require.Len(t, keys, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+type cdcNoopUpdateService struct{ taskservice.TaskService }
+
+func (cdcNoopUpdateService) UpdateCDCTask(context.Context, task.TaskStatus,
+	func(context.Context, task.TaskStatus, map[taskservice.CDCTaskKey]struct{}, taskservice.SqlExecutor) (int, error),
+	...taskservice.Condition) (int, error) {
+	return 0, nil
+}
+
+func TestCDCControlConcurrentTaskServicePublication(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	pu := &config.ParameterUnit{}
+	setPu(service, pu)
+	first, second := &cdcNoopUpdateService{}, &cdcNoopUpdateService{}
+	pu.SetTaskService(first)
+	started, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		close(started)
+		for i := 0; i < 100; i++ {
+			pu.SetTaskService(first)
+			pu.SetTaskService(second)
+		}
+	}()
+	<-started
+	defer func() { <-done }()
+	for i := 0; i < 100; i++ {
+		require.NoError(t, doUpdateCDCTask(context.Background(), task.TaskStatus_PauseRequested, 1, "task", false, service))
 	}
 }
 
@@ -6090,6 +6303,18 @@ func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
 	require.Equal(t, int64(0), int64(legacy.Logical()))
 }
 
+// TestCDCStrToTSPersistedBoundaryZoneIndependent proves that the persisted
+// StartTs/EndTs boundary (RFC3339 with the offset applied at creation) is
+// re-parsed into the identical physical timestamp no matter which session
+// later loads the task row: CDCStrToTS takes no time zone.
+func TestCDCStrToTSPersistedBoundaryZoneIndependent(t *testing.T) {
+	fromUTC, err := CDCStrToTS("2025-01-02T03:04:05Z")
+	require.NoError(t, err)
+	fromCST, err := CDCStrToTS("2025-01-02T11:04:05+08:00")
+	require.NoError(t, err)
+	require.Equal(t, fromUTC, fromCST)
+}
+
 func TestCDCParseGranularityTuple(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -6284,8 +6509,8 @@ func TestIsValidFrequency(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.freq, func(t *testing.T) {
-			if got := isValidFrequency(tt.freq); got != tt.valid {
-				t.Errorf("isValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
+			if got := cdc.IsValidFrequency(tt.freq); got != tt.valid {
+				t.Errorf("cdc.IsValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
 			}
 		})
 	}
@@ -6312,8 +6537,8 @@ func TestTransformIntoHours(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			if got := transformIntoHours(tt.input); got != tt.want {
-				t.Errorf("transformIntoHours(%q) = %d, want %d", tt.input, got, tt.want)
+			if got := cdc.FrequencyHours(tt.input); got != tt.want {
+				t.Errorf("cdc.FrequencyHours(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
 	}

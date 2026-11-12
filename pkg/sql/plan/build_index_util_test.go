@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -133,6 +135,59 @@ func TestUniqueIndexConstraintSymbolIsEffectiveNameOnCreate(t *testing.T) {
 	require.NoError(t, checkConstraintNames([]*tree.UniqueIndex{first, anon}, nil, ctx))
 	require.Equal(t, "k", first.GetIndexName())
 	require.Equal(t, "k_2", anon.Name)
+}
+
+// TestParsedMixedCaseConstraintSymbolIsEffectiveName runs the real parser
+// into the CREATE-side naming entry for the mixed-case residual of issue
+// #31659: `CONSTRAINT `Uq_MiXeD` UNIQUE(k)` must land on the byte-identical
+// effective display name as the equivalent `UNIQUE KEY `Uq_MiXeD`(k)`, a
+// case-variant collision is still rejected on the case-insensitive
+// effective name, and an explicit index name still wins over the symbol.
+func TestParsedMixedCaseConstraintSymbolIsEffectiveName(t *testing.T) {
+	ctx := context.Background()
+	parseUniques := func(sql string) []*tree.UniqueIndex {
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		// Owner is the enclosing test: free the AST when it finishes so the
+		// returned nodes stay readable through the caller's assertions
+		// (helper-local defer Free scrubbed them; no Free leaks instead).
+		t.Cleanup(stmts[0].Free)
+		create, ok := stmts[0].(*tree.CreateTable)
+		require.True(t, ok)
+		var out []*tree.UniqueIndex
+		for _, def := range create.Defs {
+			if u, ok := def.(*tree.UniqueIndex); ok {
+				out = append(out, u)
+			}
+		}
+		require.NotEmpty(t, out)
+		return out
+	}
+
+	symbolForm := parseUniques(
+		"create table symbol_case (id int primary key, k int, constraint `Uq_MiXeD` unique(k))")
+	require.NoError(t, checkConstraintNames(symbolForm, nil, ctx))
+	require.Equal(t, "Uq_MiXeD", symbolForm[0].GetIndexName())
+
+	explicitForm := parseUniques(
+		"create table explicit_case (id int primary key, k int, unique key `Uq_MiXeD`(k))")
+	require.NoError(t, checkConstraintNames(explicitForm, nil, ctx))
+	require.Equal(t, symbolForm[0].GetIndexName(), explicitForm[0].GetIndexName())
+
+	// The preserved spelling must not weaken case-insensitive uniqueness:
+	// `Uq_MiXeD` collides with the case-variant explicit name `uq_mixed`.
+	collide := parseUniques(
+		"create table collide (id int primary key, a int, b int, " +
+			"constraint `Uq_MiXeD` unique(a), unique key `uq_mixed`(b))")
+	require.Error(t, checkConstraintNames(collide, nil, ctx))
+
+	// An explicit index name keeps precedence over the constraint symbol.
+	precedence := parseUniques(
+		"create table precedence (id int primary key, k int, " +
+			"constraint `SyMbOl_MiXeD` unique key `NaMe_WiNs`(k))")
+	require.NoError(t, checkConstraintNames(precedence, nil, ctx))
+	require.Equal(t, "NaMe_WiNs", precedence[0].GetIndexName())
 }
 
 func TestIndexTableKeyTypeForPrefix(t *testing.T) {
@@ -362,4 +417,55 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_int64), keyPart, "primary"))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), keyPart, "secondary"))
 	})
+}
+
+func TestGeneratedIndexNames(t *testing.T) {
+	for _, kind := range []string{"ordinary", "unique", "fulltext"} {
+		for _, tc := range []struct {
+			name, initial, column, want string
+			existing                    []string
+			keyParts                    bool
+			inserted                    bool
+		}{
+			{name: "first name", column: "Orders", want: "orders", keyParts: true, inserted: true},
+			{name: "case insensitive collision", column: "Orders", existing: []string{"orders", "ORDERS_2"}, want: "orders_3", keyParts: true, inserted: true},
+			{name: "primary reserved", column: "pRiMaRy", want: "primary_2", keyParts: true, inserted: true},
+			{name: "primary collision", column: "pRiMaRy", existing: []string{"PRIMARY_2"}, want: "primary_3", keyParts: true, inserted: true},
+			{name: "explicit name", initial: "explicit", column: "Orders", want: "explicit", keyParts: true},
+			{name: "no key parts", want: ""},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				names := make(map[string]bool)
+				for _, name := range tc.existing {
+					names[indexNameKey(name)] = true
+				}
+				var parts []*tree.KeyPart
+				if tc.keyParts {
+					parts = []*tree.KeyPart{keyPartWithLength(tc.column, 0)}
+				}
+				var got string
+				switch kind {
+				case "ordinary":
+					index := &tree.Index{Name: tc.initial, KeyParts: parts}
+					setEmptyIndexName(names, index)
+					got = index.Name
+				case "unique":
+					index := &tree.UniqueIndex{Name: tc.initial, KeyParts: parts}
+					setEmptyUniqueIndexName(names, index)
+					got = index.Name
+				case "fulltext":
+					index := &tree.FullTextIndex{Name: tc.initial, KeyParts: parts}
+					setEmptyFullTextIndexName(names, index)
+					got = index.Name
+				}
+				require.Equal(t, tc.want, got)
+				wantLen := len(tc.existing)
+				if tc.inserted {
+					require.True(t, names[indexNameKey(tc.want)])
+					wantLen++
+				}
+				require.Len(t, names, wantLen)
+			})
+		}
+	}
 }

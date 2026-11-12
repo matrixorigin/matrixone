@@ -199,12 +199,16 @@ func informationSchemaMetadataVisibilityCompatibilityCTE() string {
 }
 
 func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string) string {
+	return informationSchemaMetadataVisibilityCTEWithTableFilter(activeRolesSQL, "")
+}
+
+func informationSchemaMetadataVisibilityCTEWithTableFilter(activeRolesSQL, tableFilter string) string {
 	return "WITH __mo_active_roles(role_id) AS (" + activeRolesSQL + "), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
 		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
-		"WHERE tbl.account_id = current_account_id() AND (" +
+		"WHERE tbl.account_id = current_account_id()" + tableFilter + " AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
 		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
@@ -303,12 +307,68 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 
 func informationSchemaCurrentColumnsDDL() string {
 	// Binary-family types have no character set or collation under MySQL
-	// parity (issue #31160): the current view must render NULL there, not the
-	// historical 'binary' literal. Historical layers (V41/V58/V100/V109)
-	// stay byte-stable; only the current definition is adapted.
-	return strings.ReplaceAll(
-		informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL()),
+	// parity (issue #31160): the current view renders NULL there instead of
+	// the historical 'binary' literal, and the label-aware metadata
+	// projections and the unbounded generated expression ride the same
+	// current identity. Historical layers (V41/V58/V100/V109/V110) stay
+	// byte-stable; only the current definition is adapted.
+	return informationSchemaColumnsUnboundedGeneratedExpressionDDL(
+		informationSchemaColumnsEnumSetDDL(InformationSchemaColumnsBinaryFamilyNullDDL()))
+}
+
+// informationSchemaColumnsUnboundedGeneratedExpressionDDL removes the
+// 500-character rendering bound from the persisted current template.
+// mo_columns.attr_generated is varchar(2048) and MySQL reports the full
+// generated expression, so the casts silently removed valid trailing
+// characters. The historical predecessor templates keep the bound, so every
+// definition an older binary persisted stays byte-stable and recognized.
+func informationSchemaColumnsUnboundedGeneratedExpressionDDL(definition string) string {
+	return strings.NewReplacer(
+		"cast(case when mc.attr_has_generated = 1 then ifnull(cast(mo_show_visible_bin(mc.attr_generated, 5) as varchar(500)), '') else '' end as varchar(500)) as GENERATION_EXPRESSION,",
+		"case when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 5), '') else '' end as GENERATION_EXPRESSION,",
+	).Replace(definition)
+}
+
+// InformationSchemaColumnsV110DDL is the MEDIUMINT-aware template the
+// previous binary generations persisted as their current COLUMNS
+// definition. The historical readers recognize it byte-stably (design
+// 5.5), so accounts and snapshots recorded under that generation keep
+// binding after the current identity moves on.
+func InformationSchemaColumnsV110DDL() string {
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL())
+}
+
+// InformationSchemaColumnsBinaryFamilyNullDDL is the previous current
+// identity: the V110 template with the binary-family
+// CHARACTER_SET_NAME/COLLATION_NAME selector rendered as SQL NULL
+// (issue #31160) instead of the historical 'binary' literal. Base-era
+// services published exactly this text as their current definition, so it
+// is the definition their persisted snapshots and not-yet-refreshed
+// accounts carry. Every historical reader recognizes it byte-stably
+// (design 5.5, D9-1), and a stored live definition holding it refreshes
+// to the current identity through the shared upgrade entry and the
+// consolidated 4.0.7 entry. The V110 template itself stays byte-stable.
+func InformationSchemaColumnsBinaryFamilyNullDDL() string {
+	return strings.ReplaceAll(InformationSchemaColumnsV110DDL(),
 		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
+}
+
+// informationSchemaColumnsEnumSetDDL replaces the physical Type OID driven
+// metadata projections with the declared label-aware overloads. Each of the
+// four current branches feeds mo_catalog.mo_columns, mo_view_columns,
+// mo_subscription_columns, or mo_subscription_view_columns, and all of them
+// expose both atttyp and attr_enum.
+func informationSchemaColumnsEnumSetDDL(definition string) string {
+	return strings.NewReplacer(
+		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,",
+		"internal_char_length(mc.atttyp, mc.attr_enum) AS CHARACTER_MAXIMUM_LENGTH,",
+		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,",
+		"internal_char_size(mc.atttyp, mc.attr_enum) AS CHARACTER_OCTET_LENGTH,",
+		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,",
+		"internal_numeric_precision(mc.atttyp, mc.attr_enum) AS NUMERIC_PRECISION,",
+		"internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,",
+		"internal_numeric_scale(mc.atttyp, mc.attr_enum) AS NUMERIC_SCALE,",
+	).Replace(definition)
 }
 
 // InformationSchemaViewDefinitionMatches compares initialization and replacement
@@ -338,8 +398,7 @@ func canonicalInformationSchemaViewDDL(definition string) string {
 // cast-as-varchar is itself an ancient construct already used by the
 // historical templates (TABLE_SCHEMA/TABLE_NAME, EXTRA, GENERATION_EXPRESSION),
 // so the frozen-template rule is preserved.
-func informationSchemaColumnsWithUnsignedDecimalDDL() string {
-	current := informationSchemaCurrentColumnsDDL()
+func informationSchemaColumnsUnsignedDecimalColumnsTypeOver(base string) string {
 	const columnTypeExpr = "(case when length(mc.attr_enum) > 0 then " +
 		"mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"
 	const decoratedColumnTypeExpr = "cast(concat((case when length(mc.attr_enum) > 0 then " +
@@ -347,9 +406,80 @@ func informationSchemaColumnsWithUnsignedDecimalDDL() string {
 		"case when upper(mo_show_visible_bin(mc.atttyp,2)) like 'DECIMAL%' then " +
 		"case mc.att_is_unsigned when 3 then ' unsigned zerofill' when 1 then ' unsigned' else '' end " +
 		"else '' end) as varchar(65535)) as COLUMN_TYPE,"
-	branches := strings.SplitN(current, " UNION ALL ", 2)
+	branches := strings.SplitN(base, " UNION ALL ", 2)
 	branches[0] = strings.Replace(branches[0], columnTypeExpr, decoratedColumnTypeExpr, 1)
 	return strings.Join(branches, " UNION ALL ")
+}
+
+// The merged current identity composes upstream's decoration verbatim over
+// the revision-12 current constructor, so the local mo_columns branch gains
+// the label-aware metadata projections and the unbounded generated
+// expression under the same attributed-DECIMAL COLUMN_TYPE.
+func informationSchemaColumnsWithUnsignedDecimalDDL() string {
+	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(informationSchemaCurrentColumnsDDL())
+}
+
+// columnsExtraDefaultGeneratedArm is the EXTRA arm publishing the
+// expression-default attribute (issue #31161): the mode-7 classifier marks
+// expression defaults DEFAULT_GENERATED while literal defaults keep empty
+// EXTRA. The arm composes after the generated-column arm, so auto-increment
+// and generated columns keep precedence, and the varchar(24) EXTRA cast
+// still bounds the result (DEFAULT_GENERATED is 17 characters).
+const columnsExtraDefaultGeneratedArm = "when length(mo_show_visible_bin(mc.att_default, 7)) > 0 then 'DEFAULT_GENERATED' "
+
+// informationSchemaColumnsDefaultGeneratedExtraOver layers the
+// expression-default EXTRA arm onto every branch of the given COLUMNS
+// template. The generated-column EXTRA tail is identical in all four
+// branches; mo_show_visible_bin with a two-argument mode is an ancient
+// construct the historical templates already use, so the frozen-template
+// rule is preserved.
+func informationSchemaColumnsDefaultGeneratedExtraOver(base string) string {
+	const extraTail = "when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"
+	return strings.ReplaceAll(base, extraTail,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') "+
+			columnsExtraDefaultGeneratedArm+"else '' end as varchar(24)) as EXTRA,")
+}
+
+// informationSchemaColumnsWithDefaultGeneratedExtraDDL is the current
+// identity derivation: the expression-default EXTRA arm over the merged
+// attributed-DECIMAL chain.
+func informationSchemaColumnsWithDefaultGeneratedExtraDDL() string {
+	return informationSchemaColumnsDefaultGeneratedExtraOver(informationSchemaColumnsWithUnsignedDecimalDDL())
+}
+
+// InformationSchemaColumnsPreDefaultGeneratedDDL is the frozen pre-change
+// current identity for the DEFAULT_GENERATED revision: exactly what a
+// pre-change binary persisted as its live information_schema.COLUMNS
+// definition before the consolidated 4.0.7 entry recreates the view with
+// the expression-default arm. It is built only from frozen templates and
+// the fixed decoration/layer functions, never from the mutable current
+// constructor, so later revisions of the current derivation cannot drift
+// it; a test pins it byte-identical to the base derivation of the current
+// template.
+func InformationSchemaColumnsPreDefaultGeneratedDDL() string {
+	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(
+		informationSchemaColumnsUnboundedGeneratedExpressionDDL(
+			informationSchemaColumnsEnumSetDDL(InformationSchemaColumnsBinaryFamilyNullDDL())))
+}
+
+// informationSchemaColumnsWithLocalPhysicalIndexFilter filters local sources
+// before APPLY without changing the historical templates.
+func informationSchemaColumnsWithLocalPhysicalIndexFilter(ddl string) string {
+	local := informationSchemaMetadataVisibilityCTEWithTableFilter(
+		"SELECT role_id FROM mo_current_roles() role_closure", " AND "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	return strings.Replace(ddl, informationSchemaMetadataVisibilityCTE(), local, 1)
+}
+
+// informationSchemaColumnsPhysicalIndexDDL applies the current listing policy
+// without changing the historical templates from which this view is derived.
+// Filter view sources before APPLY so an internal relation is never described.
+func informationSchemaColumnsPhysicalIndexDDL() string {
+	ddl := informationSchemaColumnsWithLocalPhysicalIndexFilter(informationSchemaColumnsWithDefaultGeneratedExtraDDL())
+	subscription := informationSchemaSubscriptionColumnAuthorizationPredicate()
+	ddl = strings.Replace(ddl, subscription, subscription+" AND "+catalog.NonIndexRelationSQLPredicateForColumns(
+		"mc.att_relname", "mc.relkind", "mc.extra_info"), 1)
+	subscriptionView := informationSchemaSubscriptionViewAuthorizationPredicate()
+	return strings.Replace(ddl, subscriptionView, subscriptionView+" AND "+catalog.NonIndexRelationSQLPredicate("mt"), 1)
 }
 
 // The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
@@ -362,7 +492,7 @@ const (
 
 // informationSchemaColumnsPreAttributesDDL is the pre-change CURRENT template:
 // what a pre-change binary persists in information_schema.COLUMNS before the
-// v4_0_18 upgrade entry recreates it with the attributed-DECIMAL decoration.
+// consolidated 4.0.7 entry recreates it with the attributed-DECIMAL decoration.
 // It is built from the frozen V109 historical constructor and literal
 // replacements only, so this identity cannot drift with later revisions of
 // the current derivation; a test pins it byte-identical to the base-era
@@ -381,7 +511,7 @@ func informationSchemaColumnsPreAttributesDDL() string {
 // pre-change variant: the #31461 selector revision of the pre-change current
 // template (the T0 text with the binary-family charset selectors rendering
 // NULL). A binary from the #31461 era persists exactly this text before the
-// v4_0_18 entry recreates the view with the attributed-DECIMAL decoration.
+// consolidated 4.0.7 entry recreates the view with the attributed-DECIMAL decoration.
 // It is built from the frozen T0 text and a literal replacement only, so it
 // cannot drift with later revisions of the current derivation; a test pins
 // it byte-identical to the live pre-decoration derivation.
@@ -397,6 +527,20 @@ func informationSchemaColumnsPreAttributesBinaryNullDDL() string {
 func isPreAttributesColumnsDDL(definition string) bool {
 	return definition == informationSchemaColumnsPreAttributesDDL() ||
 		definition == informationSchemaColumnsPreAttributesBinaryNullDDL()
+}
+
+// InformationSchemaColumns4018DDL is the exact identity the upstream
+// 4.0.18-era binaries published as their current information_schema.COLUMNS
+// definition: the attributed-DECIMAL branch-0 decoration applied verbatim
+// over the frozen binary-null pre-attributes template (design D14-1). It is
+// built only from frozen templates and the literal decoration, never from
+// the mutable current constructor, so later revisions of the merged current
+// cannot drift it. Released main-era catalogs hold this text live before the
+// 4.0.19 refresh, and snapshots recorded then keep it, so every historical
+// reader recognizes it byte-stably; a test pins it.
+func InformationSchemaColumns4018DDL() string {
+	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(
+		informationSchemaColumnsPreAttributesBinaryNullDDL())
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -427,6 +571,38 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	if isPreAttributesColumnsDDL(definition) {
 		return definition, true
 	}
+	// The V110 MEDIUMINT template is already fully derived, including its
+	// subscription branches. The previous binary generations persisted it
+	// as their current definition; keep it byte-stable while binding
+	// historical snapshots.
+	if definition == InformationSchemaColumnsV110DDL() {
+		return definition, true
+	}
+	// The NULL-selector MEDIUMINT identity is the current definition the
+	// base-era binaries published (the V110 template with the #31160 NULL
+	// selector). It is fully derived as well; recognize it byte-stably so
+	// base-era snapshots keep binding (design 5.5, D9-1).
+	if definition == InformationSchemaColumnsBinaryFamilyNullDDL() {
+		return definition, true
+	}
+	// The upstream 4.0.18 published identity (design D14-1): the exact
+	// attributed-DECIMAL decorated main-era current, frozen independently
+	// of the mutable current constructor. Released catalogs hold it in
+	// live rows and recorded snapshots, and it already carries current
+	// column authority and projections, so it passes through byte-stable
+	// under the same rule as its pre-attributes predecessor.
+	if definition == InformationSchemaColumns4018DDL() {
+		return definition, true
+	}
+	// The pre-change identity of the DEFAULT_GENERATED revision (issue
+	// #31161, design D3): exactly what binaries between the merged current
+	// and this revision persisted as their live definition. It is fully
+	// derived and already carries current column authority and projections,
+	// so it passes through byte-stable under the same rule as its 4.0.18
+	// predecessor.
+	if definition == InformationSchemaColumnsPreDefaultGeneratedDDL() {
+		return definition, true
+	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -443,7 +619,10 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 	definition = canonicalColumnsViewDDL(definition)
 	known := definition == InformationSchemaColumnsDDL ||
 		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL() ||
-		isPreAttributesColumnsDDL(definition)
+		isPreAttributesColumnsDDL(definition) ||
+		definition == InformationSchemaColumnsV110DDL() || definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
+		definition == InformationSchemaColumns4018DDL() ||
+		definition == InformationSchemaColumnsPreDefaultGeneratedDDL()
 	if !known {
 		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 			derived := informationSchemaDerivedColumnsDDL(legacy)
@@ -478,12 +657,20 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
 // definition has the on-demand View-column migration needed by historical
-// snapshot binding. The protocol-100 definition and current definition are
-// migration gates; the historical protocol-109 definition is an input to the
-// adapter, not a migration gate.
+// snapshot binding. The gates are the on-demand-format generations recent
+// binaries persisted as their current definition: the protocol-100
+// definition, the V110 MEDIUMINT template, its base-era NULL-selector
+// variant, the upstream 4.0.18 published identity, the pre-change identity
+// of the DEFAULT_GENERATED revision, and the current
+// (merged) definition. The historical protocol-109
+// definition is an input to the adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewDDL(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
+		definition == InformationSchemaColumnsV110DDL() ||
+		definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
+		definition == InformationSchemaColumns4018DDL() ||
+		definition == InformationSchemaColumnsPreDefaultGeneratedDDL() ||
 		definition == InformationSchemaColumnsDDL
 }
 
@@ -728,7 +915,8 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsWithUnsignedDecimalDDL()
+	InformationSchemaColumnsDDL             = informationSchemaColumnsPhysicalIndexDDL()
+	InformationSchemaColumnsLocalCurrentDDL = informationSchemaColumnsWithLocalPhysicalIndexFilter(InformationSchemaColumnsV41DDL)
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -862,60 +1050,39 @@ var (
 		"cast(null as timestamp) AS CHECK_TIME,",
 	).Replace(InformationSchemaTablesDDL)
 
-	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
+	// The released definitions above remain stable. Only current listings add
+	// the physical-index classifier, independently in each SELECT branch.
+	InformationSchemaTablesCurrentDDL = strings.ReplaceAll(InformationSchemaTablesV118DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	InformationSchemaTablesLocalCurrentDDL = strings.Replace(InformationSchemaTablesV41DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"), 1)
+
+	InformationSchemaPartitionsDDL = informationSchemaPartitionsCreate +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
-		"'def' AS `TABLE_CATALOG`," +
-		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
-		"`tbl`.`relname` AS `TABLE_NAME`," +
-		"`pt`.`partition_name` AS `PARTITION_NAME`," +
-		"NULL AS `SUBPARTITION_NAME`," +
-		"(`pt`.`partition_ordinal_position` + 1) AS `PARTITION_ORDINAL_POSITION`," +
-		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
-		"(case `meta`.`partition_method` " +
-		"when 'Key' then NULL " +
-		"when 'LinearKey' then 'LINEAR KEY' " +
-		"when 'Hash' then 'HASH' " +
-		"when 'LinearHash' then 'LINEAR HASH' " +
-		"when 'Range' then (case when `meta`.`partition_description` like '%columns%' then 'RANGE COLUMNS' else 'RANGE' end) " +
-		"when 'List' then 'LIST' " +
-		"else NULL end) AS `PARTITION_METHOD`," +
-		"NULL AS `SUBPARTITION_METHOD`," +
-		"(case when `meta`.`partition_description` like '%(%' then " +
-		"  replace( " +
-		"    substring( " +
-		"      `meta`.`partition_description`, " +
-		"      locate('(', `meta`.`partition_description`) + 1, " +
-		"      (length(`meta`.`partition_description`) - locate(')', reverse(`meta`.`partition_description`)) + 1) - locate('(', `meta`.`partition_description`) - 1 " +
-		"    ), '`', '' " +
-		"  ) " +
-		"when `meta`.`partition_description` like '%)' then " +
-		"  replace(`meta`.`partition_description`, '`', '') " +
-		"else `meta`.`partition_description` end) AS `PARTITION_EXPRESSION`," +
-		"NULL AS `SUBPARTITION_EXPRESSION`," +
-		"(case when `pt`.`partition_expression_str` like 'values less than%' then " +
-		"  substring(`pt`.`partition_expression_str`, locate('(', `pt`.`partition_expression_str`) + 1, " +
-		"    locate(')', `pt`.`partition_expression_str`) - locate('(', `pt`.`partition_expression_str`) - 1" +
-		"  ) " +
-		"when `pt`.`partition_expression_str` like 'values in%' then " +
-		"  `pt`.`partition_expression_str` " +
-		"else `pt`.`partition_expression_str` end) AS `PARTITION_DESCRIPTION`," +
-		"mo_table_rows(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `TABLE_ROWS`," +
-		"0 AS `AVG_ROW_LENGTH`," +
-		"mo_table_size(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `DATA_LENGTH`," +
-		"0 AS `MAX_DATA_LENGTH`," +
-		"0 AS `INDEX_LENGTH`," +
-		"0 AS `DATA_FREE`," +
-		"`tbl`.`created_time` AS `CREATE_TIME`," +
-		"NULL AS `UPDATE_TIME`," +
-		"NULL AS `CHECK_TIME`," +
-		"NULL AS `CHECKSUM`," +
-		"''  AS `PARTITION_COMMENT`," +
-		"'default' AS `NODEGROUP`," +
-		"NULL AS `TABLESPACE_NAME` " +
+		informationSchemaPartitionsProjection +
+		"mo_table_rows(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`," +
+		informationSchemaPartitionsAverageRowLength +
+		"mo_table_size(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`," +
+		informationSchemaPartitionsProjectionTail +
 		"FROM `__mo_visible_tables` `tbl` " +
-		"JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
-		"JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`account_id` = current_account_id()"
+		"LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
+		"LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`account_id` = current_account_id() " +
+		// With the outer joins every visible table yields the MySQL row
+		// shape: ordinary base tables get exactly one row with NULL
+		// partition fields while partitioned tables keep one row per
+		// physical partition. Guard the joined rows so partition
+		// sub-tables, views, sequences, temporary tables and internal
+		// index tables do not leak in as ordinary-table rows; stats stay
+		// one evaluation per row on the real base or physical partition
+		// identity (coalesce above).
+		" AND " + catalog.NonIndexRelationSQLPredicate("tbl") +
+		" AND " + catalog.NonTemporaryTableSQLPredicate("tbl") +
+		" AND `tbl`.`relname` != '" + catalog.MO_ACCOUNT_LOCK + "'" +
+		" AND `tbl`.`relkind` NOT IN ('" + catalog.SystemPartitionRel + "', '" +
+		catalog.SystemViewRel + "', '" + catalog.SystemSequenceRel + "')"
 
 	InformationSchemaViewsDDL = "CREATE VIEW information_schema.VIEWS AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
@@ -949,6 +1116,10 @@ var (
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
 		informationSchemaViewsSourceSQL
+	// InformationSchemaStatisticsDDL is the historical STATISTICS
+	// template: SUB_PART is the unconditional SQL NULL persisted by every
+	// pre-fix binary. Historical upgrade handlers keep publishing this
+	// text, so its identity stays byte-stable.
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
@@ -977,6 +1148,15 @@ var (
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, "+
 		"`idx`.`comment`, `idx`.`is_visible`, `tcl`.`att_is_hidden`, `tcl`.`attr_has_generated`, `tcl`.`attr_generated`",
 		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
+	// The current definition reports the retained prefix length of each
+	// index part from the canonical mo_indexes.algo_params metadata and
+	// remains SQL NULL when the whole column is indexed (#30935).
+	InformationSchemaStatisticsPrefixSubPartDDL = strings.NewReplacer(
+		"NULL AS `SUB_PART`,",
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) AS `SUB_PART`,",
+		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`,",
+		"`idx`.`ordinal_position`, `idx`.`column_name`, `idx`.`algo_params`, `tcl`.`attnotnull`,",
+	).Replace(InformationSchemaStatisticsDDL)
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +

@@ -941,14 +941,49 @@ const (
 	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
 	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
 
+	// Retained index prefix length of one index part, read from
+	// mo_catalog.mo_indexes.algo_params and reported by information_schema
+	// STATISTICS SUB_PART and SHOW INDEX Sub_part. Upstream #31739 allocated
+	// 620..622 first; the id is internal plan wiring only and every reference
+	// is by name, so this entry renumbers to 623 (design D13-5).
+	MO_INDEX_SUB_PART = 623
+
+	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
+	VECTOR_MATMUL = 629
+
+	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
+	VECBLOCK_JSON = 630
+
+	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
+	VECBLOCK_BINARY = 631
+
+	// Exponentially weighted window statistics (issue #29945). Renumbered
+	// from 605..609 when main's #31017/#31020/#31000/#31739 claimed 605..623;
+	// every reference is by name, so renumbering is safe.
+	EWM_MEAN = 624
+	EWM_VAR  = 625
+	EWM_STD  = 626
+	EWM_COV  = 627
+	EWM_CORR = 628
+
+	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
+	UNZIP_FILE           = 632
+	MO_IS_PHYSICAL_INDEX = 633
+
+	// Internal temporal candidate helpers.
+	TEMPORAL_DATETIME_BOUND  = 634
+	TEMPORAL_TIMESTAMP_BOUND = 635
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 623
+	FUNCTION_END_NUMBER = 636
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
-	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
+	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
+	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,
+	"_check_async_datalink_source":  CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
@@ -1054,7 +1089,13 @@ var functionIdRegister = map[string]int32{
 	"any_value":                    ANY_VALUE,
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
+	"ewmmean":                      EWM_MEAN,
+	"ewmvar":                       EWM_VAR,
+	"ewmstd":                       EWM_STD,
+	"ewmcov":                       EWM_COV,
+	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_is_physical_index":         MO_IS_PHYSICAL_INDEX,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
 	"mrank":                        MRANK,
@@ -1271,6 +1312,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
@@ -1312,6 +1354,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"unzip_file":                     UNZIP_FILE,
 	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
@@ -1359,6 +1402,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_index_sub_part":              MO_INDEX_SUB_PART,
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
@@ -1572,6 +1616,8 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"vecblock_json":     VECBLOCK_JSON,
+	"vecblock_binary":   VECBLOCK_BINARY,
 	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,

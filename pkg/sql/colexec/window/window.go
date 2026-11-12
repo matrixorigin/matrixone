@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window/ewm"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -47,6 +48,15 @@ import (
 )
 
 const opName = "window"
+
+// The EWM dispatch's staged-row layout factors (bytes): this file is this
+// package's allocation-owner for physical size/layout accounting (the
+// repository's unsafe allowlist covers it), so the EWM dispatch file itself
+// stays unsafe-free and reads these values for its staging budget.
+var (
+	ewmRowSize = int(unsafe.Sizeof(ewm.Row{}))
+	ewmKeySize = int(unsafe.Sizeof(ewm.KeyVal{}))
+)
 
 // A Window call can spend a long time inside one frame evaluation, especially
 // for running frames whose aggregate work is quadratic in the partition size.
@@ -74,6 +84,14 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	window.ctr.cleanOutput(proc.Mp())
+	window.ctr.resetRowNumber()
+	// Retire reusable materialized input before entering a streaming generation
+	// or admitting copies under an account, including unaccounted reuse.
+	if window.ctr.bat != nil && (window.ctr.allocation.Account != nil || window.canStreamRowNumber()) {
+		window.Free(proc, false, nil)
+	}
+
 	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
@@ -114,6 +132,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr.runtimeFrames = runtimeFrames
+	ctr.streamRowNumber = window.canStreamRowNumber()
 	return nil
 }
 
@@ -297,6 +316,33 @@ func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal2
 	return offset, nil
 }
 
+// appendInput owns the materialized input independently of the child. Dup
+// inherits the source selection, which can be absent (e.g. VALUE_SCAN) or
+// belong to a different owner. Configure empty destination vectors before
+// copying so every retained data/area/null/grouping allocation is admitted by
+// Window's account. Without a Window account, retain the legacy copy policy.
+func (ctr *container) appendInput(proc *process.Process, input *batch.Batch) error {
+	if ctr.bat == nil && ctr.allocation.Vector != nil {
+		attrs, typs := input.GetSchema()
+		owned := batch.NewWithSchema(true, attrs, typs)
+		owned.Recursive = input.Recursive
+		if err := owned.SetAllocationAccount(ctr.allocation.Vector); err != nil {
+			owned.Clean(proc.Mp())
+			return err
+		}
+		// CloneTo preserves the first batch's vector metadata and cleans the
+		// destination on failure. Publish only the fully admitted first copy.
+		if err := input.CloneTo(owned, proc.Mp()); err != nil {
+			return err
+		}
+		ctr.bat = owned
+		return nil
+	}
+	var err error
+	ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), input)
+	return err
+}
+
 func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, callErr error) {
 	defer func() {
 		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "window", callErr)
@@ -310,6 +356,13 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 	// next Call begins, release its borrowed input windows and owned result
 	// vector before reusing any operator state.
 	ctr.cleanOutput(proc.Mp())
+	if ctr.streamRowNumber {
+		result, err := window.callRowNumber(proc)
+		if err != nil {
+			ctr.resetRowNumber()
+		}
+		return result, err
+	}
 
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {
@@ -336,7 +389,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 				if result.Batch.IsEmpty() {
 					continue
 				}
-				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				err = ctr.appendInput(proc, result.Batch)
 				if err != nil {
 					return result, err
 				}
@@ -358,7 +411,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 				if ctr.bat != nil {
 					ctr.bat.CleanOnlyData()
 				}
-				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				err = ctr.appendInput(proc, result.Batch)
 				if err != nil {
 					return result, err
 				}
@@ -378,6 +431,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// the other generation-scoped state.
 			ctr.clearCivilOrder()
 			ctr.freeIndicatorState(proc.Mp())
+			ctr.freeEwmState()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -507,6 +561,11 @@ func (ctr *container) processFuncRange(
 		// materialization and emit from a cached, incrementally advanced
 		// prefix (docs/design/technical_indicator_window_kernels.md 5.2).
 		vec, err = ctr.processIndicatorFuncRange(idx, ap, proc, outputStart, outputEnd)
+	case function.GetFunctionIsWinEwmFunByName(funcName):
+		// The ewm window statistics own a dedicated resumable dispatch:
+		// whole peer groups, exactly-once merges, per-partition accounts
+		// and the bounded in-loop cancellation contract (§9).
+		vec, err = ctr.processEwmFuncRange(idx, ap, proc, funcName, outputStart, outputEnd)
 	case function.GetFunctionIsWinValueFunByName(funcName):
 		// Value window functions use direct source-row lookup and therefore can
 		// materialize only the rows requested by this output chunk.
@@ -609,7 +668,7 @@ func (ctr *container) newAggregateExecutor(
 			ap.OpAnalyzer.SetMemUsed(retainedMemory)
 		},
 	)
-	if err = exec.GroupGrow(groupCount); err != nil {
+	if err = aggexec.GrowWindowGroups(exec, groupCount); err != nil {
 		return nil, err
 	}
 	succeeded = true

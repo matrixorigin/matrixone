@@ -62,7 +62,7 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
 
-	pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 
 	var result *planpb.Expr
@@ -187,7 +187,7 @@ func TestConstantFoldLeastGreatestTemporalScale(t *testing.T) {
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
 
-	pl, err := BuildPlan(ctx, stmt, false)
+	pl, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var result *planpb.Expr
@@ -261,7 +261,7 @@ func TestConstantFoldLeastGreatestBitUsesNumericText(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(ctx, stmt, false)
+			pl, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var result *planpb.Expr

@@ -125,7 +125,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 	defer stmt.Free()
 	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 10}
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion96)
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "protocol version 97")
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion97)
 
@@ -159,7 +159,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("increment_%d", tc.increment), func(t *testing.T) {
 			ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: tc.increment}
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			table := built.GetDdl().GetCreateTable().GetTableDef()
 			require.NotNil(t, table)
@@ -197,7 +197,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 				build := func(increment int64) *planpb.TableDef {
 					planned, buildErr := BuildPlan(divPrecisionCompilerContext{
 						CompilerContext: compiler, increment: increment,
-					}, stmt, false)
+					}, stmt, false, nil)
 					require.NoError(t, buildErr)
 					return planned.GetDdl().GetCreateTable().GetTableDef()
 				}
@@ -234,7 +234,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		at := func(increment int64) *planpb.TableDef {
 			p, buildErr := BuildPlan(divPrecisionCompilerContext{
 				CompilerContext: compiler, increment: increment,
-			}, mixedStmt, false)
+			}, mixedStmt, false, nil)
 			require.NoError(t, buildErr)
 			return p.GetDdl().GetCreateTable().GetTableDef()
 		}
@@ -281,7 +281,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		defer stmt.Free()
 		built, buildErr := BuildPlan(divPrecisionCompilerContext{
 			CompilerContext: compiler, increment: 10,
-		}, stmt, false)
+		}, stmt, false, nil)
 		require.NoError(t, buildErr)
 		definition := built.GetDdl().GetCreateTable().GetTableDef()
 		nested := DeepCopyTableDef(definition, true)
@@ -346,7 +346,7 @@ func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
 			stmt, err := mysql.ParseOne(b.Context(), sql.String(), 1)
 			require.NoError(b, err)
 			b.Cleanup(stmt.Free)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(b, err)
 			def := built.GetDdl().GetCreateTable().GetTableDef()
 			b.ReportAllocs()
@@ -528,7 +528,7 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			statement, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
 			defer statement.Free()
-			plan, err := BuildPlan(ctx, statement, false)
+			plan, err := BuildPlan(ctx, statement, false, nil)
 			require.NoError(t, err)
 			query := plan.GetQuery()
 			expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]

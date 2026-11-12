@@ -57,6 +57,50 @@ func TestBuildImportPlanPinsSnapshotAndBuildsProfile(t *testing.T) {
 	require.Equal(t, plan.Profile.Checksum, again.Profile.Checksum)
 }
 
+func TestImportChecksumUsesExistingOrComputedPathHash(t *testing.T) {
+	snapshot := api.SnapshotPlan{SnapshotID: 42, MetadataLocationHash: "metadata"}
+	data := []api.DataFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/a", RecordCount: 5}}}
+	deletes := []api.DeleteFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/b"}}}
+	want := importChecksum(snapshot, data, deletes)
+	data[0].DataFile.FilePathHash = "  " + api.PathHash(data[0].DataFile.FilePath) + "  "
+	deletes[0].DataFile.FilePathHash = "\t" + api.PathHash(deletes[0].DataFile.FilePath) + "\n"
+	require.Equal(t, want, importChecksum(snapshot, data, deletes))
+	data[0].DataFile.FilePath = "different location"
+	deletes[0].DataFile.FilePath = "different location"
+	require.Equal(t, want, importChecksum(snapshot, data, deletes), "precomputed hashes determine the checksum")
+	data[0].DataFile.FilePathHash = "  "
+	require.NotEqual(t, want, importChecksum(snapshot, data, deletes), "blank hash falls back to the path")
+}
+
+func TestImportPlanDataFileCopies(t *testing.T) {
+	file := api.DataFile{
+		Partition:    map[string]any{"region": "old"},
+		ValueCounts:  map[int]int64{1: 10},
+		LowerBounds:  map[int][]byte{1: {1}},
+		SplitOffsets: []int64{7},
+		EqualityIDs:  []int{5},
+	}
+	scan := api.IcebergScanPlan{
+		Snapshot:    api.SnapshotPlan{SnapshotID: 1},
+		DataTasks:   []api.DataFileTask{{DataFile: file}},
+		DeleteTasks: []api.DeleteFileTask{{DataFile: file}},
+	}
+	plan, err := BuildImportPlan(context.Background(), ImportPlanRequest{ScanPlan: scan, TargetTable: "target"})
+	require.NoError(t, err)
+	file.Partition["region"] = "new"
+	file.ValueCounts[1] = 20
+	file.LowerBounds[1][0] = 2
+	file.SplitOffsets[0] = 8
+	file.EqualityIDs[0] = 6
+	for _, copied := range []api.DataFile{plan.DataTasks[0].DataFile, plan.DeleteTasks[0].DataFile} {
+		require.Equal(t, "old", copied.Partition["region"])
+		require.Equal(t, int64(10), copied.ValueCounts[1])
+		require.Equal(t, []byte{1}, copied.LowerBounds[1])
+		require.Equal(t, []int64{7}, copied.SplitOffsets)
+		require.Equal(t, []int{6}, copied.EqualityIDs, "existing equality ID ownership is retained")
+	}
+}
+
 func TestBuildImportPlanRequiresResolvedSnapshot(t *testing.T) {
 	_, err := BuildImportPlan(context.Background(), ImportPlanRequest{TargetTable: "orders_native"})
 	require.Error(t, err)
