@@ -438,13 +438,13 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		}
 		sys := open("dump", cn0.GetServiceConfig().CN.Frontend.Port)
 		const account = "issue_29399_scope"
-		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
 		defer func() {
 			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 			defer done()
 			_, err := sys.ExecContext(cleanup, "drop account if exists "+account)
 			require.NoError(t, err)
 		}()
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
 		admin := open(account+"#admin", cn0.GetServiceConfig().CN.Frontend.Port)
 		for _, stmt := range []string{
 			"create database allowed", "create database denied",
@@ -515,12 +515,19 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 		require.Equal(t, 1, count)
-		t.Run("account restore removes current membership", func(t *testing.T) {
+		if !t.Run("account restore removes current membership", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+			defer cancel()
 			const snapshot = "issue_29399_scope_membership"
 			execSQLRequire(t, ctx, admin, "revoke reader from u")
 			syncAuthenticatedClusterCommit(t, ctx, c)
+			defer func() {
+				cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+				defer done()
+				_, err := sys.ExecContext(cleanup, "drop snapshot if exists "+snapshot)
+				require.NoError(t, err)
+			}()
 			execSQLRequire(t, ctx, sys, "create snapshot "+snapshot+" for account "+account)
-			defer func() { _, err := sys.ExecContext(ctx, "drop snapshot if exists "+snapshot); require.NoError(t, err) }()
 			execSQLRequire(t, ctx, admin, "grant reader to u")
 			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
@@ -530,8 +537,12 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			execSQLRequire(t, ctx, admin, "grant reader to u")
 			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
-		})
-		t.Run("dropped user cannot retain public privileges", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !t.Run("dropped user cannot retain public privileges", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+			defer cancel()
 			execSQLRequire(t, ctx, admin, "grant select on table allowed.t to public")
 			execSQLRequire(t, ctx, admin, "create user public_u identified by '111'")
 			public, err := open(account+"#public_u#public", cn1.GetServiceConfig().CN.Frontend.Port).Conn(ctx)
@@ -548,8 +559,12 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 				"select count(*) from mo_catalog.mo_user where user_name = 'public_u'").Scan(&users))
 			require.Zero(t, users, "CN1 must observe the committed user deletion")
 			require.ErrorContains(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count), "do not have privilege")
-		})
-		t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+			defer cancel()
 			const source, target, snapshot = "issue_29399_identity_source", "issue_29399_identity_target", "issue_29399_identity"
 			defer func() {
 				cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
@@ -660,8 +675,12 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			fresh := open(target+"#source_user#secret_reader", cn1.GetServiceConfig().CN.Frontend.Port)
 			require.NoError(t, fresh.QueryRowContext(ctx, "select id from app.secret").Scan(&count))
 			require.Equal(t, 42, count)
-		})
+		}) {
+			return
+		}
 		t.Run("recreated creator is not historical owner", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+			defer cancel()
 			var err error
 			execSQLRequire(t, ctx, admin, "grant create database on account * to reader")
 			// The retained session is on CN1; observe CN0's grant before DDL.
@@ -684,13 +703,13 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			execSQLRequire(t, ctx, admin, "insert into external_parent.t values(9)")
 
 			const snapshot = "issue_29399_scope_owner"
-			execSQLRequire(t, ctx, admin, "create snapshot "+snapshot+" for account")
 			defer func() {
 				cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 				defer done()
 				_, err := admin.ExecContext(cleanup, "drop snapshot if exists "+snapshot)
 				require.NoError(t, err)
 			}()
+			execSQLRequire(t, ctx, admin, "create snapshot "+snapshot+" for account")
 
 			var owner, restoredOwner uint32
 			require.NoError(t, admin.QueryRowContext(ctx, "select owner from mo_catalog.mo_tables where reldatabase = 'allowed' and relname = 'owned'").Scan(&owner))
