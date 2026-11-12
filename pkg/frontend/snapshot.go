@@ -914,14 +914,18 @@ func shouldInvalidateTimestampSnapshotBindings(
 }
 
 // activateAccountCatalogIfNeeded ensures the lazy catalog for the given
-// account is activated before restore runs internal SQL as that account.
+// account is activated before internal SQL reads that account's catalog.
 // Without this, logtail entries for the target account's catalog tables
 // would be delayed and invisible to background SQL sessions.
 func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
 	if accountID == 0 {
 		return nil // sys account is always activated
 	}
-	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		return nil
+	}
+	if activator, ok := txnHandler.GetStorage().(engine.TenantCatalogActivator); ok {
 		return activator.ActivateTenantCatalog(ctx, accountID)
 	}
 	return nil

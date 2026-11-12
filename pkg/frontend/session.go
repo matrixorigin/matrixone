@@ -3617,10 +3617,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
 	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
 
-	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
-		if err = activator.ActivateTenantCatalog(ctx, uint32(tenantID)); err != nil {
-			return nil, err
-		}
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(tenantID)); err != nil {
+		return nil, err
 	}
 
 	ses.timestampMap[TSCheckUserStart] = time.Now()
