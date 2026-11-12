@@ -1,0 +1,48 @@
+-- @suite
+-- @case
+-- @desc:AVG over a DECIMAL(34,0) column returns the exact representable mean across the intermediate accumulation boundary (v = 10^34-1 needs 17014*v <= 2^127-1 < 17015*v rows)
+-- @label:bvt
+
+drop table if exists avg_decimal34_boundary_src;
+create table avg_decimal34_boundary_src (
+    id int primary key,
+    d decimal(34,0)
+);
+
+-- ids 0 .. 34029: mod(id,2) groups hold exactly 17015 rows each, and
+-- id <= 17014 selects the first row count whose exact sum exceeds 2^127-1.
+insert into avg_decimal34_boundary_src
+select a.i + 10*b.i + 100*c.i + 1000*d.i,
+       cast('9999999999999999999999999999999999' as decimal(34,0))
+from (select 0 as i union all select 1 union all select 2 union all select 3 union all select 4
+      union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) a,
+     (select 0 as i union all select 1 union all select 2 union all select 3 union all select 4
+      union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) b,
+     (select 0 as i union all select 1 union all select 2 union all select 3 union all select 4
+      union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) c,
+     (select 0 as i union all select 1 union all select 2 union all select 3 union all select 4
+      union all select 5 union all select 6 union all select 7 union all select 8 union all select 9
+      union all select 10 union all select 11 union all select 12 union all select 13 union all select 14
+      union all select 15 union all select 16 union all select 17 union all select 18 union all select 19
+      union all select 20 union all select 21 union all select 22 union all select 23 union all select 24
+      union all select 25 union all select 26 union all select 27 union all select 28 union all select 29
+      union all select 30 union all select 31 union all select 32 union all select 33 union all select 34) d
+where a.i + 10*b.i + 100*c.i + 1000*d.i < 34030;
+
+select count(*), min(d), max(d), sum(d) from avg_decimal34_boundary_src;
+select avg(d) from avg_decimal34_boundary_src where id <= 17013;
+select avg(d) from avg_decimal34_boundary_src where id <= 17014;
+select avg(d) from avg_decimal34_boundary_src;
+select avg(-d) from avg_decimal34_boundary_src where id <= 17014;
+select avg(distinct d) from avg_decimal34_boundary_src where id <= 17014;
+select mod(id,2), avg(d) from avg_decimal34_boundary_src group by mod(id,2) order by mod(id,2);
+select avg(cast(d as decimal(35,0))) from avg_decimal34_boundary_src where id <= 17014;
+
+drop table if exists avg_decimal34_boundary_ctas;
+create table avg_decimal34_boundary_ctas as
+select avg(d) as a from avg_decimal34_boundary_src where id <= 17014;
+show create table avg_decimal34_boundary_ctas;
+select * from avg_decimal34_boundary_ctas;
+drop table avg_decimal34_boundary_ctas;
+
+drop table avg_decimal34_boundary_src;

@@ -1034,7 +1034,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 			}
 		}
 	}

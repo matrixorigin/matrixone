@@ -910,6 +910,19 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
+	logStatementStringStatusWithLog(ctx, ses, stmtStr, status, err, true)
+}
+
+// logStatementStringStatusWithLog always performs statement accounting, even
+// when a caller has suppressed a repetitive statement failure log.
+func logStatementStringStatusWithLog(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+	writeLog bool,
+) {
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -929,7 +942,7 @@ func logStatementStringStatus(
 			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		}
 		err = nil // make sure: it is nil for EndStatement
-	} else {
+	} else if writeLog {
 		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
@@ -3051,6 +3064,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	}
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
+	}
+	if col.EnumSetResultType != nil && typ.Oid.IsMySQLString() {
+		if err = setEnumSetResultMetadata(ctx, col.EnumSetResultType, typ.Charset, c); err != nil {
+			return nil, err
+		}
 	}
 	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.
