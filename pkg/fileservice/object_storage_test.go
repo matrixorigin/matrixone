@@ -338,6 +338,15 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				})
 
+			case args.IsMinio:
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
+
 			case strings.Contains(args.Endpoint, "aliyun"):
 				// aliyun
 				testObjectStorageWithParentContext(t, "aliyun", specCtx, func(t *testing.T, ctx context.Context) *AliyunSDK {
@@ -423,7 +432,7 @@ func TestObjectStorages(t *testing.T) {
 				})
 
 			default:
-				t.Fatalf("not handle spec: %+v", args)
+				t.Fatal("unsupported object storage test endpoint")
 
 			}
 

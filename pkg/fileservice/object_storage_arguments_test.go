@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,38 @@ func TestObjectStorageArguments(t *testing.T) {
 		}
 
 	})
+}
+
+func validCITestS3Prefix(prefix string) bool {
+	return prefix != "" && prefix != "." && !strings.HasPrefix(prefix, "/") && path.Clean(prefix) == prefix && strings.Contains(prefix, "/")
+}
+
+func TestValidCITestS3Prefix(t *testing.T) {
+	for _, tc := range []struct {
+		prefix string
+		valid  bool
+	}{
+		{"ci-ut/run-123", true}, {"", false}, {"/ci-ut/run", false}, {".", false},
+		{"ci-ut", false}, {"ci-ut/../other", false}, {"ci-ut//run", false},
+	} {
+		if got := validCITestS3Prefix(tc.prefix); got != tc.valid {
+			t.Errorf("validCITestS3Prefix(%q) = %v, want %v", tc.prefix, got, tc.valid)
+		}
+	}
+}
+
+func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
+	t.Setenv("MO_CI_S3_PREFIX", "ci-ut/run-123")
+	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint=https://example.invalid,bucket=test,key-id=id,key-secret=secret,is-minio=true")
+	for _, args := range objectStorageArgumentsForTest("test", t) {
+		if args.Name == "cs-s3" {
+			if !strings.HasPrefix(args.KeyPrefix, "ci-ut/run-123/") || !args.IsMinio {
+				t.Fatal("CS test storage is not isolated under the run prefix")
+			}
+			return
+		}
+	}
+	t.Fatal("CS test storage was not configured")
 }
 
 func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []ObjectStorageArguments) {
@@ -141,15 +174,32 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 		reader := csv.NewReader(strings.NewReader(value))
 		argStrs, err := reader.Read()
 		if err != nil {
+			if name == "TEST_S3FS_CS" {
+				t.Fatal("invalid TEST_S3FS_CS test specification")
+			}
 			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
 			continue
 		}
 		var args ObjectStorageArguments
 		if err := args.SetFromString(argStrs); err != nil {
+			if name == "TEST_S3FS_CS" {
+				t.Fatal("invalid TEST_S3FS_CS test specification")
+			}
 			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
 			continue
 		}
 		args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
+		if name == "TEST_S3FS_CS" {
+			prefix := os.Getenv("MO_CI_S3_PREFIX")
+			if !validCITestS3Prefix(prefix) {
+				t.Fatal("TEST_S3FS_CS requires a non-root, normalized MO_CI_S3_PREFIX")
+			}
+			if !args.IsMinio {
+				t.Fatal("TEST_S3FS_CS requires is-minio=true")
+			}
+			args.Name = "cs-s3"
+			args.KeyPrefix = path.Join(prefix, args.KeyPrefix)
+		}
 
 		ret = append(ret, args)
 	}
