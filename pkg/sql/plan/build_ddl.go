@@ -3995,7 +3995,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
-					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(replay, colName))
 				}
 				if err != nil {
 					return err
@@ -4057,7 +4057,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 							}
 							defaultDef = &copy
 						}
-						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName))
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(replay, colName))
 					}
 				}
 				if err != nil {
@@ -4942,8 +4942,8 @@ func appendCheckDef(
 			return nil
 		}
 	}
-	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
-		for _, check := range source.Checks {
+	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil && replay.target != nil {
+		for _, check := range replay.target.Checks {
 			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
 				// Raw catalog coordinates belong to the old schema. Only replay
 				// can preserve them after a reorder and verify input compatibility.

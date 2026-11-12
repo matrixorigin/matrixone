@@ -20,7 +20,6 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -86,11 +85,7 @@ func TestCRC32CopyGeneratedAttributeValidation(t *testing.T) {
 			require.NoError(t, err)
 			source := &planpb.ColDef{Name: "g", Typ: typ, GeneratedCol: &planpb.GeneratedCol{Expr: legacyCRC32Expr(), OriginString: "crc32(j)", IsStored: true}}
 			before := proto.Clone(source).(*planpb.ColDef)
-			ctx := context.WithValue(proc.Ctx, defines.CRC32CopyExpressionsKey{}, &planpb.TableDef{Cols: []*planpb.ColDef{source}})
-			oldCtx := proc.Ctx
-			proc.Ctx = ctx
-			defer func() { proc.Ctx = oldCtx }()
-			got, err := buildGeneratedExpr(ctx, col, typ, []*ColDef{{Name: "j", Typ: planpb.Type{Id: int32(types.T_json)}}}, proc)
+			got, err := buildGeneratedExpr(proc.Ctx, col, typ, []*ColDef{{Name: "j", Typ: planpb.Type{Id: int32(types.T_json)}}}, proc, source)
 			require.ErrorContains(t, err, "generated column 'g' cannot have")
 			require.Nil(t, got)
 			require.True(t, proto.Equal(before, source))

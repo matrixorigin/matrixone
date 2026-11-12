@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -29,21 +28,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// Internal ALTER COPY and catalog LIKE/CLONE supply this execution-owned schema. SQL dump/replay
-// remains new DDL. Never infer a legacy algorithm from display SQL or row values.
-func crc32CopyColumn(ctx context.Context, name string) *planpb.ColDef {
-	def, _ := ctx.Value(defines.CRC32CopyExpressionsKey{}).(*planpb.TableDef)
-	if def == nil {
+// The scoped DDL replay identifies the schema used to preserve old expressions.
+func crc32CopyColumn(replay *persistedDDLReplay, name string) *planpb.ColDef {
+	if replay == nil || replay.target == nil {
 		return nil
 	}
-	return FindColumn(def.Cols, name)
+	return FindColumn(replay.target.Cols, name)
 }
 
 func containsLegacyCRC32(owner *planpb.Expr) bool {
 	found := false
 	_ = planpb.VisitExprTree(owner, func(expr *planpb.Expr) error {
 		f := expr.GetF()
-		if f != nil && f.Func != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) && len(f.Args) != 0 && f.Args[0] != nil && f.Args[0].Typ.Id == int32(types.T_json) {
+		if f != nil && f.Func != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, 0) && len(f.Args) != 0 && f.Args[0] != nil && f.Args[0].Typ.Id == int32(types.T_json) {
 			found = true
 		}
 		return nil
@@ -267,11 +264,11 @@ func preserveLegacyCRC32Generated(ctx context.Context, old *planpb.ColDef, attr 
 	return &owned, true, nil
 }
 
-func crc32SourceColumn(ctx context.Context, name string, sources []*planpb.ColDef) *planpb.ColDef {
-	if len(sources) > 0 && sources[0] != nil {
+func crc32SourceColumn(sources []*planpb.ColDef) *planpb.ColDef {
+	if len(sources) > 0 {
 		return sources[0]
 	}
-	return crc32CopyColumn(ctx, name)
+	return nil
 }
 
 // A bound legacy expression cannot be copied onto a different input

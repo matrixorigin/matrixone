@@ -3951,7 +3951,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// A serialized legacy call with an already-JSON argument keeps that
 			// argument. A new unresolved marker can instead acquire the text
 			// conversion when its actual input domain becomes known.
-			if originalFuncObj == planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32LegacyOverload) && rewritten.GetF() != nil {
+			if originalFuncObj == planfunction.EncodeOverloadID(planfunction.CRC32, 0) && rewritten.GetF() != nil {
 				rewritten.GetF().Func.Obj = originalFuncObj
 				rewritten.Typ = originalTyp
 				// A persisted legacy JSON call owns its original binary argument;

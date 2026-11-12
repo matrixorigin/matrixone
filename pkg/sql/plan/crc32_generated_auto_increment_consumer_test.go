@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,14 +30,11 @@ import (
 // production omits replay: the replay-enabled case must naturally decline g.
 func TestLegacyCRC32CopyConsumerAutoIncrementInput(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		auto   bool
-		replay bool
+		name string
+		auto bool
 	}{
-		{"ordinary_replay", false, true},
-		{"ordinary_missing_replay", false, false},
-		{"auto_replay_declined", true, true},
-		{"auto_missing_replay", true, false},
+		{"ordinary_replay", false},
+		{"auto_replay_declined", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := legacyCRC32AutoIncrementCopyFixture(t)
@@ -48,17 +44,14 @@ func TestLegacyCRC32CopyConsumerAutoIncrementInput(t *testing.T) {
 			FindColumn(target.Cols, "id").Typ.AutoIncr = tc.auto
 			before := proto.Clone(target).(*planpb.TableDef)
 			parent := mock.ctxt.GetContext()
-			ctx := context.WithValue(parent, defines.CRC32CopyExpressionsKey{}, target)
-			if tc.replay {
-				ctx = WithPersistedDDLReplay(ctx, original, target)
-				replay := ddlReplayForTable(ctx, target.Name)
-				require.NotNil(t, replay)
-				require.NotNil(t, replay.columns["g"])
-				if tc.auto {
-					require.Nil(t, replay.columns["g"].generated, "real compatibility predicate must decline AutoIncr change")
-				} else {
-					require.NotNil(t, replay.columns["g"].generated)
-				}
+			ctx := WithPersistedDDLReplay(parent, original, target)
+			replay := ddlReplayForTable(ctx, target.Name)
+			require.NotNil(t, replay)
+			require.NotNil(t, replay.columns["g"])
+			if tc.auto {
+				require.Nil(t, replay.columns["g"].generated, "real compatibility predicate must decline AutoIncr change")
+			} else {
+				require.NotNil(t, replay.columns["g"].generated)
 			}
 			mock.ctxt.SetContext(ctx)
 			defer mock.ctxt.SetContext(parent)

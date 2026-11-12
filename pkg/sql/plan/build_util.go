@@ -936,7 +936,7 @@ func buildDefaultExprWithColumns(
 	columns []*ColDef,
 	sources ...*ColDef,
 ) (*plan.Default, error) {
-	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && preserveCRC32Default(source.Default) {
+	if source := crc32SourceColumn(sources); source != nil && preserveCRC32Default(source.Default) {
 		value := *source.Default
 		value.Expr = DeepCopyExpr(value.Expr)
 		// A retained DEFAULT may hash a referenced column. Its bound ColRef
@@ -1419,7 +1419,7 @@ func validateGeneratedColumnAttributes(bindCtx context.Context, col *tree.Column
 }
 
 func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
-	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+	if source := crc32SourceColumn(sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
 		if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
 			return nil, err
 		}

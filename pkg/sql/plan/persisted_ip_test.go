@@ -1231,7 +1231,7 @@ func TestPersistedCRC32JSONRetainsExistingAdmission(t *testing.T) {
 	}
 	jsonCol := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
 	legacy := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), ObjName: "crc32"},
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, 0), ObjName: "crc32"},
 		Args: []*planpb.Expr{jsonCol},
 	}}}
 	text := mustBindPersistedFollowupExpr(t, proc.Ctx, "crc32", []*planpb.Expr{jsonCol})

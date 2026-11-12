@@ -106,7 +106,7 @@ func TestCRC32ExecutionIdentityPreservesLegacyJSON(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	encoded := makeJSONEncodedFromText(t, []string{`{"t1":"a"}`}, nil)
-	f, err := GetFunctionById(proc.Ctx, EncodeOverloadID(CRC32, CRC32LegacyOverload))
+	f, err := GetFunctionById(proc.Ctx, EncodeOverloadID(CRC32, 0))
 	require.NoError(t, err)
 	run := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{3719146973}, nil), f.newOp())
 	ok, info := run.RunAndFree()
@@ -117,8 +117,8 @@ func TestCRC32ExecutionIdentityPreservesLegacyJSON(t *testing.T) {
 		typ      types.T
 		overload int32
 	}{
-		{types.T_json, CRC32LegacyOverload}, {types.T_any, CRC32LegacyOverload},
-		{types.T_varchar, CRC32LegacyOverload}, {types.T_varbinary, CRC32LegacyOverload}, {types.T_int64, CRC32LegacyOverload},
+		{types.T_json, 0}, {types.T_any, 0},
+		{types.T_varchar, 0}, {types.T_varbinary, 0}, {types.T_int64, 0},
 	} {
 		resolved, err := GetFunctionByName(proc.Ctx, "crc32", []types.Type{tc.typ.ToType()})
 		require.NoError(t, err)

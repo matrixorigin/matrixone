@@ -20,7 +20,6 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -30,8 +29,7 @@ import (
 
 // A same-type competitor makes stale ColPos pass a type-only validator.
 // Use the real ALTER parser/planner and its emitted CREATE, not a hand-reordered
-// target. The no-replay subtest is an explicitly injected fallback control;
-// production installs replay, and the test does not claim otherwise.
+// target.
 func TestLegacyCRC32SameTypeCopyInputIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -86,39 +84,28 @@ func TestLegacyCRC32SameTypeCopyInputIdentity(t *testing.T) {
 			targetBeforeCreate := proto.Clone(target).(*planpb.TableDef)
 			parent := mock.ctxt.GetContext()
 
-			for _, useReplay := range []bool{true, false} {
-				name := "production_replay"
-				if !useReplay {
-					name = "injected_no_replay_fallback"
-				}
-				t.Run(name, func(t *testing.T) {
-					ctx := context.WithValue(parent, defines.CRC32CopyExpressionsKey{}, target)
-					if useReplay {
-						ctx = WithPersistedDDLReplay(ctx, alter.TableDef, target)
-						replay := ddlReplayForTable(ctx, target.Name)
-						require.NotNil(t, replay)
-						require.NotNil(t, replay.columns["g"])
-						require.NotNil(t, replay.columns["g"].generated, "same-type reorder must not decline generated replay")
-						require.True(t, proto.Equal(want, replay.columns["g"].generated.Expr))
-					}
-					mock.ctxt.SetContext(ctx)
-					defer mock.ctxt.SetContext(parent)
-					rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
-					require.NoError(t, err)
-					copied := FindColumn(rebuilt.GetDdl().GetCreateTable().TableDef.Cols, "g")
-					require.NotNil(t, copied)
-					require.NotNil(t, copied.GeneratedCol)
-					require.True(t, copied.GeneratedCol.IsStored)
-					require.True(t, proto.Equal(want, copied.GeneratedCol.Expr))
-					crc := copied.GeneratedCol.Expr.GetF()
-					require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), crc.Func.Obj)
-					require.Equal(t, int32(2), crc.Args[0].GetCol().ColPos)
-					require.NotEqual(t, tc.competitor, crc.Args[0].GetCol().ColPos)
-					crc.Args[0].GetCol().ColPos = 99
-					require.True(t, proto.Equal(targetBeforeCreate, target), "reconstruction must own its expression")
-					require.True(t, proto.Equal(original, base))
-				})
-			}
+			ctx := WithPersistedDDLReplay(parent, alter.TableDef, target)
+			replay := ddlReplayForTable(ctx, target.Name)
+			require.NotNil(t, replay)
+			require.NotNil(t, replay.columns["g"])
+			require.NotNil(t, replay.columns["g"].generated, "same-type reorder must not decline generated replay")
+			require.True(t, proto.Equal(want, replay.columns["g"].generated.Expr))
+			mock.ctxt.SetContext(ctx)
+			defer mock.ctxt.SetContext(parent)
+			rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+			require.NoError(t, err)
+			copied := FindColumn(rebuilt.GetDdl().GetCreateTable().TableDef.Cols, "g")
+			require.NotNil(t, copied)
+			require.NotNil(t, copied.GeneratedCol)
+			require.True(t, copied.GeneratedCol.IsStored)
+			require.True(t, proto.Equal(want, copied.GeneratedCol.Expr))
+			crc := copied.GeneratedCol.Expr.GetF()
+			require.Equal(t, function.EncodeOverloadID(function.CRC32, 0), crc.Func.Obj)
+			require.Equal(t, int32(2), crc.Args[0].GetCol().ColPos)
+			require.NotEqual(t, tc.competitor, crc.Args[0].GetCol().ColPos)
+			crc.Args[0].GetCol().ColPos = 99
+			require.True(t, proto.Equal(targetBeforeCreate, target), "reconstruction must own its expression")
+			require.True(t, proto.Equal(original, base))
 		})
 	}
 }

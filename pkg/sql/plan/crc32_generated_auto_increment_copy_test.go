@@ -28,7 +28,7 @@ import (
 // a newly bound CRC32(JSON) expression without changing the surrounding tree.
 func restoreLegacyCRC32JSONInput(expr *planpb.Expr) bool {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) ||
+	if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, 0) ||
 		len(f.Args) != 1 || f.Args[0] == nil || f.Args[0].Typ.Id != int32(types.T_text) {
 		return false
 	}

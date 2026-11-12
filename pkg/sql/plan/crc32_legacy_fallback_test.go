@@ -100,7 +100,7 @@ func TestCRC32LegacyGeneratedFallbackRoutes(t *testing.T) {
 				for _, e := range node.ProjectList {
 					require.NoError(t, planpb.VisitExprTree(e, func(expr *planpb.Expr) error {
 						f := expr.GetF()
-						if f != nil && f.Func != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) && len(f.Args) > 0 && f.Args[0] != nil && f.Args[0].Typ.Id == int32(types.T_json) {
+						if f != nil && f.Func != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, 0) && len(f.Args) > 0 && f.Args[0] != nil && f.Args[0].Typ.Id == int32(types.T_json) {
 							found = true
 						}
 						return nil

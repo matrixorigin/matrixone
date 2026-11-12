@@ -37,7 +37,7 @@ import (
 
 func legacyCRC32Expr() *planpb.Expr {
 	return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), ObjName: "crc32"},
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, 0), ObjName: "crc32"},
 		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0, Name: "j"}}}},
 	}}}
 }
@@ -49,7 +49,7 @@ func containsCRC32JSONTextCall(owner any) (bool, error) {
 	err := planpb.VisitExpressionsInOwner(owner, func(expr *planpb.Expr) error {
 		return planpb.VisitExprTree(expr, func(current *planpb.Expr) error {
 			f := current.GetF()
-			if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload) ||
+			if f == nil || f.Func == nil || f.Func.Obj != function.EncodeOverloadID(function.CRC32, 0) ||
 				len(f.Args) != 1 || f.Args[0] == nil || f.Args[0].Typ.Id != int32(types.T_text) {
 				return nil
 			}
@@ -62,16 +62,33 @@ func containsCRC32JSONTextCall(owner any) (bool, error) {
 	return found, err
 }
 
+func TestCRC32ReplayDoesNotAffectUnrelatedCreate(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	source := &planpb.TableDef{Name: "source", Cols: []*planpb.ColDef{
+		{Name: "j", Typ: planpb.Type{Id: int32(types.T_json)}},
+		{Name: "c", Typ: planpb.Type{Id: int32(types.T_uint64)}, GeneratedCol: &planpb.GeneratedCol{Expr: legacyCRC32Expr(), OriginString: "crc32(j)", IsStored: true}},
+	}}
+	parent := mock.ctxt.GetContext()
+	mock.ctxt.SetContext(WithPersistedDDLReplay(parent, source, source))
+	defer mock.ctxt.SetContext(parent)
+	built, err := runOneStmt(mock, t, "create table unrelated(j json,c bigint unsigned generated always as (crc32(j)) stored)")
+	require.NoError(t, err)
+	col := FindColumn(built.GetDdl().GetCreateTable().TableDef.Cols, "c")
+	require.NotNil(t, col)
+	require.NotNil(t, col.GeneratedCol)
+	usesText, err := containsCRC32JSONTextCall(col.GeneratedCol)
+	require.NoError(t, err)
+	require.True(t, usesText, "an unrelated CREATE must use current JSON text semantics")
+}
+
 func TestCRC32LegacyCheckCopyReplay(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		typ    types.T
-		replay bool
+		name string
+		typ  types.T
 	}{
-		{"reorder_integer", types.T_int32, true},
-		{"reorder_json", types.T_json, true},
-		{"no_replay", types.T_json, false},
-		{"changed_input_type", types.T_int64, true},
+		{"reorder_integer", types.T_int32},
+		{"reorder_json", types.T_json},
+		{"changed_input_type", types.T_int64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -87,14 +104,11 @@ func TestCRC32LegacyCheckCopyReplay(t *testing.T) {
 			if tc.name == "changed_input_type" {
 				target.Cols[1].Typ.Id = int32(types.T_int64)
 			}
-			ctx := context.WithValue(mock.ctxt.GetContext(), defines.CRC32CopyExpressionsKey{}, target)
-			if tc.replay {
-				ctx = WithPersistedDDLReplay(ctx, original, target)
-			}
+			ctx := WithPersistedDDLReplay(mock.ctxt.GetContext(), original, target)
 			mock.ctxt.SetContext(ctx)
 			created := &planpb.TableDef{Name: target.Name, Cols: target.Cols}
 			err = appendCheckDef(&mock.ctxt, created, "ck", nil, -1)
-			if tc.name == "changed_input_type" || !tc.replay {
+			if tc.name == "changed_input_type" {
 				require.ErrorContains(t, err, "explicit table rebuild")
 				require.Empty(t, created.Checks)
 				return
@@ -161,7 +175,7 @@ func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
 				require.ErrorContains(t, err, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
 				require.Nil(t, built, "unsafe input conversion must fail before COPY execution")
 				crc := base.Checks[0].Check.GetF().Args[0].GetF()
-				require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), crc.Func.Obj)
+				require.Equal(t, function.EncodeOverloadID(function.CRC32, 0), crc.Func.Obj)
 				require.Equal(t, int32(types.T_json), crc.Args[0].Typ.Id)
 				require.Equal(t, int32(1), crc.Args[0].GetCol().ColPos)
 				// The identical ALTER without CHECK must plan successfully:
@@ -186,17 +200,17 @@ func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
 			require.True(t, proto.Equal(original.Checks[0], alter.TableDef.Checks[0]))
 			require.True(t, proto.Equal(original.Checks[0], target.Checks[0]), "COPY skeleton must keep original CHECK coordinates")
 
-			ctx := context.WithValue(mock.ctxt.GetContext(), defines.CRC32CopyExpressionsKey{}, target)
-			mock.ctxt.SetContext(WithPersistedDDLReplay(ctx, alter.TableDef, target))
+			ctx := WithPersistedDDLReplay(mock.ctxt.GetContext(), alter.TableDef, target)
+			mock.ctxt.SetContext(ctx)
 			rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
 			require.NoError(t, err)
 			checks := rebuilt.GetDdl().GetCreateTable().TableDef.Checks
 			require.Len(t, checks, 1)
 			want := DeepCopyExpr(original.Checks[0].Check)
 			want.GetF().Args[0].GetF().Args[0].GetCol().ColPos = 2
-			require.True(t, proto.Equal(want, checks[0].Check), "both clause orders must rebuild the same mapped CRC0(j)")
+			require.True(t, proto.Equal(want, checks[0].Check), "both clause orders must rebuild the same mapped CRC32(j)")
 			crc := checks[0].Check.GetF().Args[0].GetF()
-			require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), crc.Func.Obj)
+			require.Equal(t, function.EncodeOverloadID(function.CRC32, 0), crc.Func.Obj)
 			require.Equal(t, int32(2), crc.Args[0].GetCol().ColPos)
 			require.Equal(t, "j", crc.Args[0].GetCol().Name)
 			crc.Args[0].GetCol().ColPos = 99
@@ -248,8 +262,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[1].(*tree.ColumnTableDef)
-	proc.Ctx = context.WithValue(proc.Ctx, defines.CRC32CopyExpressionsKey{}, owner)
-	got, err := buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
+	got, err := buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc, source)
 	require.NoError(t, err)
 	require.True(t, containsLegacyCRC32(got.Expr))
 	got.Expr.GetF().Args[0].GetCol().ColPos = 99
@@ -258,7 +271,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	for _, inputType := range []types.T{types.T_int64, types.T_varchar} {
 		t.Run(inputType.String(), func(t *testing.T) {
 			changed := []*planpb.ColDef{{Name: "j", Typ: planpb.Type{Id: int32(inputType)}}, source}
-			_, err := buildGeneratedExpr(proc.Ctx, col, typ, changed, proc)
+			_, err := buildGeneratedExpr(proc.Ctx, col, typ, changed, proc, source)
 			require.ErrorContains(t, err, "explicit table rebuild")
 			require.Equal(t, int32(types.T_json), source.GeneratedCol.Expr.GetF().Args[0].Typ.Id)
 		})
@@ -299,7 +312,7 @@ func TestCRC32PreparedAndLegacyBinding(t *testing.T) {
 		require.NoError(t, err)
 		expr := findPlanFunctionExpr(filled, "crc32")
 		require.NotNil(t, expr)
-		require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), expr.GetF().Func.Obj,
+		require.Equal(t, function.EncodeOverloadID(function.CRC32, 0), expr.GetF().Func.Obj,
 			"prepared non-JSON values must select the ordinary byte identity")
 		func() {
 			proc := testutil.NewProcess(t)
