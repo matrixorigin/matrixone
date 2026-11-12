@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -216,15 +217,29 @@ func TombstoneRangeScanByObject(
 
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.SortKeyZoneMap()
-			if !zm.RowidPrefixEq(objectID[:]) {
+			// A committed drop does not imply that an appendable object has
+			// persisted stats. Empty appendable tombstones can be flushed without
+			// producing an object file, leaving their rowid ZM uninitialized. An
+			// unknown summary cannot prove the object does not contain this rowid;
+			// let the object-data collector apply the normal MVCC and I/O rules.
+			if zm.IsInited() && !zm.RowidPrefixEq(objectID[:]) {
 				return true
 			}
 			// TODO: Bloomfilter
 		}
-		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
+		objectData := tombstone.GetObjectData()
+		if objectData == nil {
+			err = moerr.NewInternalErrorNoCtx("tombstone object data is unavailable")
+			return false
+		}
+		err = objectData.CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
 		return err == nil
 	})
 	if err != nil {
+		if bat != nil {
+			bat.Close()
+			bat = nil
+		}
 		return nil, err
 	}
 	return
