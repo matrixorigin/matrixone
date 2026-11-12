@@ -21,6 +21,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -163,17 +164,21 @@ func TestNewServiceRetry(t *testing.T) {
 }
 
 func TestNewServiceRetryStops(t *testing.T) {
-	for _, bindConflict := range []bool{false, true} {
-		t.Run(fmt.Sprintf("bindConflict=%t", bindConflict), func(t *testing.T) {
+	for _, scenario := range []string{"bad-config", "gossip-conflict", "rpc-conflict"} {
+		t.Run(scenario, func(t *testing.T) {
 			defer leaktest.AfterTest(t)()
 			cfg := getServiceTestConfig()
 			defer vfs.ReportLeakedFD(cfg.FS, t)
-			if bindConflict {
-				listener, err := net.Listen("tcp", cfg.GossipListenAddr())
+			if scenario == "bad-config" {
+				cfg.UUID = ""
+			} else {
+				addr := cfg.GossipListenAddr()
+				if scenario == "rpc-conflict" {
+					addr = cfg.LogServiceListenAddr()
+				}
+				listener, err := net.Listen("tcp", addr)
 				require.NoError(t, err)
 				defer listener.Close()
-			} else {
-				cfg.UUID = ""
 			}
 			attempts := 0
 			fs := newFS()
@@ -181,13 +186,16 @@ func TestNewServiceRetryStops(t *testing.T) {
 			service, err := NewServiceWithRetry(func() Config { attempts++; return cfg }, fs, nil)
 			require.Nil(t, service)
 			require.Error(t, err)
-			if bindConflict {
+			if scenario == "bad-config" {
+				require.Equal(t, 1, attempts)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			} else {
 				require.Equal(t, serviceStartupAttempts, attempts)
 				require.Contains(t, err.Error(), "bind conflicts")
 				require.Contains(t, err.Error(), "address already in use")
-			} else {
-				require.Equal(t, 1, attempts)
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+				if scenario == "rpc-conflict" {
+					require.ErrorIs(t, err, syscall.EADDRINUSE)
+				}
 			}
 		})
 	}

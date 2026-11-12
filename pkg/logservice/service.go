@@ -19,6 +19,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -243,7 +244,7 @@ func NewServiceWithRetry(
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("log service startup failed after %d bind conflicts: %w", serviceStartupAttempts, err)
+	return nil, errors.Join(moerr.NewInternalErrorNoCtxf("log service startup failed after %d bind conflicts", serviceStartupAttempts), err)
 }
 
 func (s *Service) Start() error {
