@@ -4567,6 +4567,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			(builder.optimizerHints == nil || builder.optimizerHints.joinOrdering == 0) {
 			rootID, _ = builder.applyAntiJoinPreservedSideRule(rootID)
 		}
+		builder.pruneGroupedOuterDomains(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
