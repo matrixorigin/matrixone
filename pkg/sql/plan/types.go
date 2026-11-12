@@ -190,6 +190,11 @@ type QueryBuilder struct {
 	nextBindTag int32
 	nextMsgTag  int32
 
+	// Occurrences belong to this builder; CTE descriptors never cache rows or
+	// bindings across queries/prepared executions.
+	scalarCTEOrder       []*CTERef
+	scalarCTEOccurrences map[*CTERef][]int32
+
 	isPrepareStatement    bool
 	mysqlCompatible       bool
 	isForUpdate           bool // if it's a query plan for update
@@ -261,6 +266,7 @@ type OptimizerHints struct {
 	sendMessageFromTopToScan   int
 	determineShuffle           int
 	blockFilter                int
+	scalarCTEReuse             int
 	applyIndices               int
 	runtimeFilter              int
 	joinOrdering               int

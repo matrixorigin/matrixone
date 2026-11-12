@@ -186,11 +186,12 @@ Project
         ->  Table Scan on table_func_generate_series.t
         ->  Table Function on generate_series
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
-TP QUERY PLAN
-Project
-  ->  CROSS APPLY
-        ->  Table Scan on table_func_generate_series.t
-              Filter Cond: (t.a > 1)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  CROSS APPLY  𝄀
+        ->  Table Scan on table_func_generate_series.t  𝄀
+              Filter Cond: (t.a > 1)  𝄀
+              Block Filter Cond: (t.a > 1)  𝄀
         ->  Table Function on generate_series
 drop table t;
 create table t (id int);

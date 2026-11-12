@@ -32,10 +32,11 @@ select a from t1 where a = 2 and a in (1,2,3);
 a
 2
 explain select a from t1 where a = 2 and a in (1,2,3);
-TP QUERY PLAN
-Project
-  ->  Table Scan on d_indomain.t1
-        Filter Cond: (t1.a = 2)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d_indomain.t1  𝄀
+        Filter Cond: (t1.a = 2)  𝄀
+        Block Filter Cond: (t1.a = 2)
 select a from t1 where a in (1,2) and a in (3,4);
 a
 explain select a from t1 where a in (1,2) and a in (3,4);
@@ -59,10 +60,11 @@ a
 5
 6
 explain select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6;
-TP QUERY PLAN
-Project
-  ->  Table Scan on d_indomain.t1
-        Filter Cond: t1.a BETWEEN 3 AND 6, t1.a in ([1 2 3 4 5 6 7 8])
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d_indomain.t1  𝄀
+        Filter Cond: t1.a BETWEEN 3 AND 6, t1.a in ([1 2 3 4 5 6 7 8])  𝄀
+        Block Filter Cond: t1.a BETWEEN 3 AND 6
 insert into t1 values (101, 2);
 insert into t1 values (102, 2);
 select a,b from t1 where a in (1,101,102) and b != 2 order by a;
