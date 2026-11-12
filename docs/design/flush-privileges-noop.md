@@ -1,8 +1,8 @@
 # FLUSH PRIVILEGES compatibility no-op
 
-Status: proposed; design review required before implementation delivery.
+Status: design review passed on 2026-11-12 for further implementation review; see the review record below.
 
-Issue: #30468 (FLUSH PRIVILEGES sub-item only). Implementation PR: pending.
+Issue: #30468 (FLUSH PRIVILEGES sub-item only). Implementation PR: #31834.
 
 ## Problem and scope
 
@@ -54,3 +54,25 @@ validation must verify OK and denial, BEGIN/ROLLBACK and autocommit=0 on both
 success and rejection, cache on/off, GRANT/REVOKE visibility, preservation of
 existing prepared statements, unsupported FLUSH variants and PREPARE in both
 protocols. A service-backed case is required in addition to unit tests.
+
+## Design review record
+
+- Scope: the complete `FLUSH PRIVILEGES` compatibility sub-item in #30468.
+- Trigger: new user-visible SQL behavior crossing parser, authorization,
+  transaction, and prepared-statement paths.
+- Reviewed proposal: commit `c0de195f10d64cd036e99d9053ca1c1d676b9579`, this
+  file's Git blob `86b9b362e58a91ffaef3586744e73eb4755022b9`.
+- Blocking design findings: none. The issue-requested no-op is bounded to the
+  active system `moadmin` or tenant `accountadmin` role; it preserves the
+  existing transaction/error policy and introduces no mutable state. The
+  alternatives of unrestricted acceptance and full MySQL `RELOAD` semantics
+  would respectively weaken authorization or require new privilege/cache
+  contracts.
+- Decision: PASS for further implementation review.
+- Reviewer: Codex maintenance review, 2026-11-12; this is not a GitHub human
+  approval. The implementation already existed when this review was recorded;
+  this record does not claim that design approval preceded the initial
+  implementation. It gates subsequent implementation review and delivery.
+- Implementation follow-up: exercise the actual binary `COM_STMT_PREPARE`
+  request path and validate the rebased exact head before implementation
+  acceptance.
