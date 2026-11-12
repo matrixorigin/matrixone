@@ -1401,6 +1401,28 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
+	// A privilege on one concrete relation (privilege_level d.t or t) reaches
+	// enforcement through both stored object classes (the table class written
+	// by the ON TABLE and unqualified spellings, the view class written by the
+	// ON VIEW spelling) and through both qualification spellings, while the
+	// statement that granted or revoked it used only one of them (issue
+	// #32444). A revoke on the exact relation removes the granted rows of both
+	// classes and both spellings, and revoking ALL clears every privilege row
+	// the role holds on that exact object identity, otherwise the relation
+	// stays authorized through a surviving row.
+	deleteRelationRolePrivsFormat = `delete from mo_catalog.mo_role_privs 
+       									where role_id = %d 
+       									    and obj_type in ("table","view") 
+       									    and obj_id = %d 
+       									    and privilege_id = %d 
+       									    and privilege_level in ("%s","%s");`
+
+	deleteRelationAllRolePrivsFormat = `delete from mo_catalog.mo_role_privs 
+       									where role_id = %d 
+       									    and obj_type in ("table","view") 
+       									    and obj_id = %d 
+       									    and privilege_level in ("%s","%s");`
+
 	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = %s;`
 	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
@@ -2000,6 +2022,16 @@ func getSqlForInsertRolePrivs(roleId int64, roleName, objType string, objId, pri
 
 func getSqlForDeleteRolePrivs(roleId int64, objType string, objId, privilegeId int64, privilegeLevel string) string {
 	return fmt.Sprintf(deleteRolePrivsFormat, roleId, objType, objId, privilegeId, privilegeLevel)
+}
+
+func getSqlForDeleteRelationRolePrivs(roleId, objId, privilegeId int64) string {
+	return fmt.Sprintf(deleteRelationRolePrivsFormat, roleId, objId, privilegeId,
+		privilegeLevelDatabaseTable, privilegeLevelTable)
+}
+
+func getSqlForDeleteRelationAllRolePrivs(roleId, objId int64) string {
+	return fmt.Sprintf(deleteRelationAllRolePrivsFormat, roleId, objId,
+		privilegeLevelDatabaseTable, privilegeLevelTable)
 }
 
 func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
@@ -5285,7 +5317,21 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
 				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
-			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
+			// A revoke on one concrete relation (privilege level d.t or t)
+			// removes the granted rows of both stored object classes and both
+			// qualification spellings; revoking ALL clears every privilege row
+			// on the exact object identity instead of only the table-all row.
+			// Wildcard scopes (d.*, *, *.*) keep the class-specific delete: the
+			// object classes hold independent grants there.
+			if privLevel == privilegeLevelDatabaseTable || privLevel == privilegeLevelTable {
+				if privType == PrivilegeTypeTableAll {
+					sql = getSqlForDeleteRelationAllRolePrivs(role.id, objId)
+				} else {
+					sql = getSqlForDeleteRelationRolePrivs(role.id, objId, int64(privType))
+				}
+			} else {
+				sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -8274,6 +8320,18 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	return false, nil
 }
 
+// exactRelationPrivilegeLevels are the privilege levels (d.t and t) that a
+// grant on one concrete relation produces.
+var exactRelationPrivilegeLevels = []privilegeLevelType{privilegeLevelDatabaseTable, privilegeLevelTable}
+
+// verifyViewPrivilegeForRole checks whether the role holds the privilege on
+// the named view. A view privilege is stored either under the view object
+// class ("grant ... on view v") or, for grants written with the table
+// spelling ("grant ... on table v" and the bare "grant ... on v"), under the
+// table object class against the view's exact relation identity. Legacy
+// table-class rows are honored only at the exact-relation levels, which
+// resolve the view by database, name and object identity: table-class
+// wildcard grants (db.*, *.*, *) stay distinct from view access.
 func verifyViewPrivilegeForRole(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -8302,7 +8360,6 @@ func verifyViewPrivilegeForRole(
 		}
 		seen[p] = struct{}{}
 		entry := privilegeEntriesMap[p]
-		entry.objType = objectTypeView
 		entry.databaseName = dbName
 		entry.tableName = viewName
 		entry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -8311,11 +8368,26 @@ func verifyViewPrivilegeForRole(
 		if err != nil {
 			return false, err
 		}
+		entry.objType = objectTypeView
 		yes, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, enableCache)
 		if err != nil {
 			return false, err
 		}
 		if yes {
+			return true, nil
+		}
+		entry.objType = objectTypeTable
+		yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, exactRelationPrivilegeLevels, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			// Cache under the view class so later checks of the same view take
+			// the same cache path as a view-class grant. The catalog-version
+			// based invalidation covers the legacy row like any other grant.
+			if cache != nil && enableCache {
+				cache.add(objectTypeView, privilegeLevelDatabaseTable, dbName, viewName, p)
+			}
 			return true, nil
 		}
 	}

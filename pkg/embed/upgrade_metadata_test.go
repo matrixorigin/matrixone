@@ -299,7 +299,7 @@ func requireColumnsEntryNoop(t *testing.T, ctx context.Context, cn ServiceOperat
 }
 
 // requireColumnsUpgradeComplete pins the completed forward route: the final
-// version marker is Ready at 4.0.7/41, and the single 4.0.6 -> 4.0.7 step is
+// version marker is Ready at the 4.0.7 target, and the single 4.0.6 -> 4.0.7 step is
 // Ready with converged tenant counters.
 func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn ServiceOperator) []uint64 {
 	t.Helper()
@@ -422,7 +422,7 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	var ctx context.Context
 	var err error
 
-	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_7 handle.
+	// Ablation generation: the predecessor chain without the v4_0_7 handle.
 	setRecoveryCNHandles(c, columns46ShapeChain(), true)
 	ctx, err = start()
 	require.NoError(t, err)

@@ -116,7 +116,7 @@ func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
 
 // TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward pins that a source
 // below the frozen stage with no legacy CDC tasks admits past the gate and
-// proceeds through the one consolidated pending target, including inventory.
+// proceeds through the consolidated 4.0.7 target, including inventory.
 func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		source := v4_0_6.Handler.Metadata()

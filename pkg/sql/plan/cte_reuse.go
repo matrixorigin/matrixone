@@ -1143,6 +1143,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 	drainedOccurrences := make(map[int32]bool)
 	requiredBuildChildByJoin := make(map[int32]int32)
 	hasDrainWitness := false
+	var scalarRowBounds map[int32]uint64
 
 	for _, occurrence := range occurrences {
 		// replaceCTEOccurrences rewrites only the tree below rootID. An
@@ -1188,13 +1189,23 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			if path.inputDrained && len(node.Children) > 1 && node.NodeType != planpb.Node_JOIN {
 				path.inputDrained = false
 			}
-			// LIMIT can stop the subtree before it completes. Only a positive
-			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
-			// compiled without its input steps, and a dynamic limit may be zero at
-			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil &&
-				(!cteLimitIsPositive(node.Limit) || !path.inputDrained && !cteLimitPreservesFullInput(node)) {
-				continue
+			// LIMIT 0 is compiled without its input steps, and a dynamic limit
+			// may be zero at execution time. A positive literal cannot truncate
+			// a blocking input or a structurally bounded scalar UNION ALL whose
+			// entire output fits. OFFSET is not used to relax the latter bound.
+			if node.Limit != nil {
+				if !cteLimitIsPositive(node.Limit) {
+					continue
+				}
+				if !path.inputDrained && !cteLimitPreservesFullInput(node) {
+					if scalarRowBounds == nil {
+						scalarRowBounds = make(map[int32]uint64)
+					}
+					bound := builder.cteScalarUnionRowBound(path.nodeID, scalarRowBounds)
+					if bound == 0 || bound > node.Limit.GetLit().GetU64Val() {
+						continue
+					}
+				}
 			}
 			// APPLY may skip its right input when the left side is empty. Block
 			// sampling can terminate successfully after a subset of its input.
@@ -1368,6 +1379,44 @@ func (builder *QueryBuilder) cteInnerJoinGetsEquiCondition(
 		}
 	}
 	return false
+}
+
+// cteScalarUnionRowBound proves a positive output bound rooted in blocking
+// scalar aggregates. Zero means unknown, never an empty input. Do not tighten
+// this bound with LIMIT, predicates or estimates: doing so could let an early
+// consumer skip another branch's work/errors while appearing to fit the bound.
+// Unsupported operators remain barriers, and the caller still proves every
+// occurrence's path (including inner limits and conditional joins) separately.
+func (builder *QueryBuilder) cteScalarUnionRowBound(nodeID int32, memo map[int32]uint64) uint64 {
+	if bound, ok := memo[nodeID]; ok {
+		return bound
+	}
+	memo[nodeID] = 0
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return 0
+	}
+	node := builder.qry.Nodes[nodeID]
+	var bound uint64
+	switch node.NodeType {
+	case planpb.Node_AGG:
+		if len(node.Children) == 1 && len(node.GroupBy) == 0 && len(node.GroupingFlag) == 0 {
+			bound = 1
+		}
+	case planpb.Node_PROJECT, planpb.Node_FILTER, planpb.Node_WINDOW, planpb.Node_SORT:
+		if len(node.Children) == 1 {
+			bound = builder.cteScalarUnionRowBound(node.Children[0], memo)
+		}
+	case planpb.Node_UNION_ALL:
+		if len(node.Children) == 2 {
+			left := builder.cteScalarUnionRowBound(node.Children[0], memo)
+			right := builder.cteScalarUnionRowBound(node.Children[1], memo)
+			if left > 0 && right > 0 && left <= math.MaxUint64-right {
+				bound = left + right
+			}
+		}
+	}
+	memo[nodeID] = bound
+	return bound
 }
 
 func cteLimitPreservesFullInput(node *planpb.Node) bool {

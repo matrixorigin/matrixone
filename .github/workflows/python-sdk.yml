@@ -214,6 +214,8 @@ jobs:
           SDK_SERVER_TARGET: ${{ matrix.server }}
         run: python scripts/run_contracts.py --server "$SDK_SERVER_TARGET" --output online-contracts
       - name: Run existing extended integration suite
+        env:
+          MO_SDK_TARGET: ${{ matrix.server }}
         run: |
           python -m pip install -e '.[analytics]'
           python -m pytest tests/online tests/analytics --ignore=tests/online/test_sdk_quality_contracts.py --ignore=tests/online/test_sdk_manager_contracts.py --ignore=tests/online/test_sdk_search_contracts.py --ignore=tests/online/test_sdk_wave2_contracts.py -o addopts='' -q --tb=short --junitxml=online-extended.xml

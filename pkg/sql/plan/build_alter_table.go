@@ -274,6 +274,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	// 2. split alter_option list
+	// A binary conversion must validate the source identity before MODIFY or
+	// CONVERT can erase unsupported persisted collation metadata.
+	for _, option := range stmt.Options {
+		if charset, ok := option.(*tree.TableOptionCharset); ok && charset.Convert && strings.EqualFold(charset.Charset, "binary") {
+			if err := plan.RequireLegacyCollations(tableDef); err != nil {
+				return nil, err
+			}
+		}
+	}
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
 		return nil, err
@@ -1480,6 +1489,27 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else if isKafka {
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
+	}
+
+	// A read-only file mapping (CSV/JSONLINE/Parquet) cannot take the
+	// copy-based ALTER route: the data-copy step fails only later with the
+	// generic insert/update/delete error, which misreports an unsupported
+	// ALTER as a DML problem (issue #31920). Reject it here so the diagnostic
+	// names the ALTER itself; writable file mappings keep their own
+	// INSERT/LOAD contract, and their ALTER behavior is unchanged here.
+	if IsFileExternalTableDef(tableDef) && !IsWritableFileExternalTableDef(tableDef) {
+		if AlterAddsIndexOrConstraint(stmt) {
+			// Constraint/index sub-actions keep their dedicated diagnostic:
+			// delegate to the established index type rejection. It rejects
+			// every external relation, and on an unexpected nil the typed
+			// read-only rejection below still fires, so a read-only file
+			// mapping is never admitted into the data-copy ALTER route.
+			if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+				return nil, err
+			}
+		}
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema")
 	}
 
 	if tableDef.IsTemporary {
