@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -56,6 +57,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// These reduced schemas support the database-retirement predicates in engine tests.
+const (
+	DatabaseRetirementProcedureDDL     = "create table mo_catalog.mo_stored_procedure (id bigint primary key, db varchar(100))"
+	DatabaseRetirementFunctionDDL      = "create table mo_catalog.mo_user_defined_function (id bigint primary key, db varchar(100))"
+	DatabaseRetirementCompatibilityDDL = "create table mo_catalog.mo_mysql_compatibility_mode (id bigint primary key, account_id int, dat_name varchar(5000))"
 )
 
 type TestDisttaeEngine struct {
@@ -193,6 +201,7 @@ func NewTestDisttaeEngine(
 	defer stopNotify()
 
 	op, err := de.txnClient.New(de.ctx, types.TS{}.ToTimestamp())
+	stopNotify()
 	if err != nil {
 		return nil, err
 	}
@@ -251,9 +260,22 @@ func NewTestDisttaeEngine(
 
 	// This fixture skips frontend bootstrap. Build the real inventory definition
 	// without requiring mo_indexes, which individual engine tests own themselves.
-	bootstrapCtx, cancelBootstrap := context.WithTimeout(de.ctx, time.Minute)
+	systemCtx := context.WithValue(de.ctx, defines.TenantIDKey{}, catalog.System_Account)
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(systemCtx, time.Minute)
 	defer cancelBootstrap()
-	bootstrap, err := de.txnClient.New(bootstrapCtx, de.Now())
+	// The construction notifier only unblocks the pre-logtail transaction.
+	// Let the real logtail catch up before using its waiter for bootstrap.
+	initialFrontier := de.timestampWaiter.LatestTS()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !de.Engine.PushClient().LatestLogtailAppliedTime().GreaterEq(initialFrontier) {
+		select {
+		case <-bootstrapCtx.Done():
+			return de, bootstrapCtx.Err()
+		case <-ticker.C:
+		}
+	}
+	bootstrap, err := de.txnClient.New(bootstrapCtx, types.TS{}.ToTimestamp())
 	if err != nil {
 		return de, err
 	}
@@ -309,9 +331,9 @@ func NewTestDisttaeEngine(
 	// definitions provide only the predicates used when retiring a database;
 	// they are not a substitute for the full routine and compatibility schemas.
 	for _, fixture := range []struct{ name, temporary, ddl string }{
-		{"mo_stored_procedure", "mo_indexes_procedure_fixture", "create table mo_catalog.mo_stored_procedure (id bigint primary key, db varchar(100))"},
-		{"mo_user_defined_function", "mo_indexes_function_fixture", "create table mo_catalog.mo_user_defined_function (id bigint primary key, db varchar(100))"},
-		{"mo_mysql_compatibility_mode", "mo_indexes_compatibility_fixture", "create table mo_catalog.mo_mysql_compatibility_mode (id bigint primary key, account_id int, dat_name varchar(5000))"},
+		{"mo_stored_procedure", "mo_indexes_procedure_fixture", DatabaseRetirementProcedureDDL},
+		{"mo_user_defined_function", "mo_indexes_function_fixture", DatabaseRetirementFunctionDDL},
+		{"mo_mysql_compatibility_mode", "mo_indexes_compatibility_fixture", DatabaseRetirementCompatibilityDDL},
 	} {
 		if err = createFixture(fixture.name, fixture.temporary, fixture.ddl); err != nil {
 			return de, err

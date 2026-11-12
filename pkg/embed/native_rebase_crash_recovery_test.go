@@ -128,16 +128,20 @@ func runNativeRebaseCrashPhase(t *testing.T, phase, root string, db *sql.DB, ctx
 		}
 	}()
 	go func() {
-		rows, err := db.QueryContext(ctx, query("rebase_crash_uncommitted"))
-		if err == nil {
+		queryDone <- func() (queryErr error) {
+			rows, queryErr := db.QueryContext(ctx, query("rebase_crash_uncommitted"))
+			if queryErr != nil {
+				return queryErr
+			}
+			defer func() {
+				if closeErr := rows.Close(); queryErr == nil {
+					queryErr = closeErr
+				}
+			}()
 			for rows.Next() {
 			}
-			err = rows.Err()
-			if closeErr := rows.Close(); err == nil {
-				err = closeErr
-			}
-		}
-		queryDone <- err
+			return rows.Err()
+		}()
 	}()
 	select {
 	case err := <-reached:

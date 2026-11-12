@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,8 +60,8 @@ func TestPrivateAlterCopyRejectsWrongOwner(t *testing.T) {
 func TestPrivateInventoryFenceCommitAndRollback(t *testing.T) {
 	txn := &Transaction{tableOps: newTableOps()}
 	txn.readOnly.Store(true)
-	txn.tableOps.addPrivateInventory(7, 41, 1)
-	txn.tableOps.addPrivateInventory(7, 41, 1)
+	txn.tableOps.addPrivateInventory(7, 41, 101, 1)
+	txn.tableOps.addPrivateInventory(7, 41, 102, 1)
 	_, err := txn.Commit(context.Background())
 	require.Error(t, err, "unfenced private relations cannot commit")
 
@@ -83,11 +84,45 @@ func TestPrivateInventoryFenceCommitAndRollback(t *testing.T) {
 
 func TestPrivateInventoryKeepsEarlierFenceAcrossLaterRollback(t *testing.T) {
 	txn := &Transaction{tableOps: newTableOps()}
-	txn.tableOps.addPrivateInventory(7, 41, 1)
+	txn.tableOps.addPrivateInventory(7, 41, 101, 1)
 	txn.tableOps.fencePrivateInventory(7, 41, 2)
 	txn.tableOps.fencePrivateInventory(7, 41, 3)
 	txn.tableOps.rollbackLastStatement(3)
 	require.NoError(t, txn.checkPrivateInventoryFences(context.Background()))
 	txn.tableOps.rollbackLastStatement(2)
 	require.Error(t, txn.checkPrivateInventoryFences(context.Background()))
+}
+
+func TestPrivateInventoryMetadataReplacementRequiresFence(t *testing.T) {
+	txn := &Transaction{tableOps: newTableOps()}
+	txn.tableOps.addPrivateInventory(7, 41, 101, 1)
+	txn.tableOps.fencePrivateInventory(7, 41, 2)
+	require.NoError(t, txn.checkPrivateInventoryFences(context.Background()))
+
+	// Recreating the private metadata after an earlier fence adds a new
+	// obligation; rolling its fence back must not leave the update publishable.
+	txn.tableOps.addPrivateInventory(7, 41, 101, 3)
+	require.Error(t, txn.checkPrivateInventoryFences(context.Background()))
+	txn.tableOps.fencePrivateInventory(7, 41, 4)
+	require.NoError(t, txn.checkPrivateInventoryFences(context.Background()))
+	txn.tableOps.rollbackLastStatement(4)
+	require.Error(t, txn.checkPrivateInventoryFences(context.Background()))
+	txn.tableOps.rollbackLastStatement(3)
+	require.NoError(t, txn.checkPrivateInventoryFences(context.Background()))
+}
+
+func TestPrivateInventoryAutoIncrementOwnership(t *testing.T) {
+	chain := newTableOps()
+	chain.addPrivateInventory(7, 41, 101, 1)
+	valid := api.NewUpdateAutoIncrementReq(41, 101, 5, 0)
+	require.True(t, chain.ownsPrivateAutoIncrement(7, 41, 101, []*api.AlterTableReq{valid}))
+	require.False(t, chain.ownsPrivateAutoIncrement(8, 41, 101, []*api.AlterTableReq{valid}))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 42, 101, []*api.AlterTableReq{valid}))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 102, []*api.AlterTableReq{valid}))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 101, nil))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 101, []*api.AlterTableReq{nil}))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 101, []*api.AlterTableReq{api.NewUpdateAutoIncrementReq(41, 102, 5, 0)}))
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 101, []*api.AlterTableReq{valid, {Kind: api.AlterKind_RenameTable}}))
+	chain.rollbackLastStatement(1)
+	require.False(t, chain.ownsPrivateAutoIncrement(7, 41, 101, []*api.AlterTableReq{valid}))
 }

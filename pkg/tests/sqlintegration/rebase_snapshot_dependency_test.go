@@ -143,16 +143,14 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 				require.Equal(t, pbtxn.TxnMode_Pessimistic, op.Txn().Mode)
 				require.Equal(t, pbtxn.TxnIsolation_RC, op.Txn().Isolation)
 				query := fmt.Sprintf("data branch rebase database %s from %s against %s between %s and %s tables (t) for update expect (%d,%d)", target, fh, uh, bf, bu, id, fixed)
-				rows, err := owner.QueryContext(ctx, query)
+				count, queryErr, closeErr := readRebaseQuery(ctx, owner, query)
+				require.NoError(t, closeErr)
 				if catalogChanged {
-					if rows != nil {
-						require.NoError(t, rows.Close())
-					}
 					if scenario == "catalog_rename" || scenario == "catalog_drop" {
 						// The fixed relation may already be absent before epoch reservation.
-						require.Error(t, err, "a removed fixed relation must reject publication")
+						require.Error(t, queryErr, "a removed fixed relation must reject publication")
 					} else {
-						require.ErrorContains(t, err, "def changed", "committed catalog changes after F must invalidate publication")
+						require.ErrorContains(t, queryErr, "def changed", "committed catalog changes after F must invalidate publication")
 					}
 					_, err = owner.ExecContext(ctx, "rollback")
 					require.NoError(t, err)
@@ -184,11 +182,8 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 					require.Equal(t, []string{"1:10", "2:20", "3:30"}, f.rows(upstream, "t"))
 					return
 				}
-				require.NoError(t, err)
-				defer rows.Close()
-				require.True(t, rows.Next(), "R1 must return a provisional summary")
-				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
+				require.NoError(t, queryErr)
+				require.Equal(t, 1, count, "R1 must return exactly one provisional summary")
 				if scenario == "after_replay" {
 					f.exec("insert into " + source + ".history values(2)")
 				}

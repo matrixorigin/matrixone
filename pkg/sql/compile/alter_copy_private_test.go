@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,4 +92,61 @@ func TestPrivateAlterCopyCreateAuthority(t *testing.T) {
 		_ = c.withPrivateAlterCopyCreate("db", "replica", sql, func() error { panic("injected") })
 	})
 	require.Same(t, original, c.proc.Ctx)
+}
+
+func TestPrivateAlterCopyPartitionAuthority(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+	c.db = "db"
+	const sql = "create table db.replica (id int)"
+	stmt := &tree.CreateTable{Table: *tree.NewTableName("p0", tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil)}
+	query := &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "p0"}}
+	var childContext context.Context
+	require.NoError(t, c.withPrivateAlterCopyCreate("db", "replica", sql, func() error {
+		parent, err := authorizePrivateAlterCopyCreate(c.proc.Ctx, c.proc.GetTxnOperator(), sql)
+		require.NoError(t, err)
+		scoped, err := defines.WithPrivateCopyPartitionParent(parent, "db", "replica")
+		require.NoError(t, err)
+		scoped, err = defines.WithPrivateCopyPartitionChildren(scoped, "db", "replica", []string{"p0"})
+		require.NoError(t, err)
+		masked, err := authorizePrivateAlterCopyCreate(scoped, c.proc.GetTxnOperator(), "create table db.p0 (id int)")
+		require.NoError(t, err)
+		childContext, err = authorizePrivateCopyPartitionCreate(masked, scoped, c.proc.GetTxnOperator(), "db", []tree.Statement{stmt})
+		require.NoError(t, err)
+		c.proc.Ctx = childContext
+		ok, err := c.validatePrivateAlterCopyCreate(query)
+		require.NoError(t, err)
+		require.True(t, ok)
+		_, err = c.validatePrivateAlterCopyCreate(&plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "other"}})
+		require.Error(t, err)
+		_, err = authorizePrivateCopyPartitionCreate(masked, scoped, mock_frontend.NewMockTxnOperator(ctrl), "db", []tree.Statement{stmt})
+		require.Error(t, err)
+		wrongAccount := defines.AttachAccountId(masked, 8)
+		_, err = authorizePrivateCopyPartitionCreate(wrongAccount, scoped, c.proc.GetTxnOperator(), "db", []tree.Statement{stmt})
+		require.Error(t, err)
+		unrelated := &tree.CreateTable{Table: *tree.NewTableName("other", tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil)}
+		unrelatedContext, err := authorizePrivateCopyPartitionCreate(masked, scoped, c.proc.GetTxnOperator(), "db", []tree.Statement{unrelated})
+		require.NoError(t, err)
+		c.proc.Ctx = unrelatedContext
+		ok, err = c.validatePrivateAlterCopyCreate(query)
+		require.NoError(t, err)
+		require.False(t, ok)
+		multi, err := authorizePrivateCopyPartitionCreate(masked, scoped, c.proc.GetTxnOperator(), "db", []tree.Statement{stmt, stmt})
+		require.NoError(t, err)
+		c.proc.Ctx = multi
+		ok, err = c.validatePrivateAlterCopyCreate(query)
+		require.NoError(t, err)
+		require.False(t, ok, "multi-statement SQL cannot gain private authority")
+		grandchild, err := authorizePrivateCopyPartitionCreate(masked, childContext, c.proc.GetTxnOperator(), "db", []tree.Statement{stmt})
+		require.NoError(t, err)
+		c.proc.Ctx = grandchild
+		ok, err = c.validatePrivateAlterCopyCreate(query)
+		require.NoError(t, err)
+		require.False(t, ok, "a derived child cannot delegate parent authority")
+		return nil
+	}))
+	c.proc.Ctx = childContext
+	_, err := c.validatePrivateAlterCopyCreate(query)
+	require.Error(t, err, "a child grant cannot outlive its validated parent")
 }

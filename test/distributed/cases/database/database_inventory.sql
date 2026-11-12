@@ -35,6 +35,24 @@ insert into assertions select 7, epoch=@inventory_epoch from mo_catalog.mo_datab
 insert into assertions select 8, count(*)=1 and min(v)=10 from payload;
 select id,ok from assertions order by id;
 
+-- COPY ALTER must publish and fence private auto-increment metadata.
+create table copy_auto(id bigint primary key auto_increment, v int);
+insert into copy_auto(v) values(3);
+set @copy_epoch = (select epoch from mo_catalog.mo_database_inventory where account_id=current_account_id() and database_id=@inventory_id);
+alter table copy_auto add column marker int default 7, algorithm=copy;
+insert into copy_auto(v) values(4);
+insert into assertions select 11, count(*)=2 and count(distinct id)=2 and sum(v)=7 and min(marker)=7 and max(marker)=7 from copy_auto;
+insert into assertions select 12, epoch>@copy_epoch from mo_catalog.mo_database_inventory where account_id=current_account_id() and database_id=@inventory_id;
+
+-- The same fencing rule applies to physical partition copies.
+create table copy_partition(id int primary key, v int) partition by hash(id) partitions 2;
+insert into copy_partition values(1,10),(2,20);
+set @copy_epoch = (select epoch from mo_catalog.mo_database_inventory where account_id=current_account_id() and database_id=@inventory_id);
+alter table copy_partition add column marker int default 7, algorithm=copy;
+insert into assertions select 13, count(*)=2 and sum(v)=30 and min(marker)=7 and max(marker)=7 from copy_partition;
+insert into assertions select 14, epoch>@copy_epoch from mo_catalog.mo_database_inventory where account_id=current_account_id() and database_id=@inventory_id;
+select id,ok from assertions where id>=11 order by id;
+
 -- A committed replacement has a new identity and cannot accept the old token.
 drop database inventory_bvt;
 create database inventory_bvt;

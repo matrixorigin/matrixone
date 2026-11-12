@@ -18,15 +18,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +43,126 @@ type rebaseCrashIdentity struct {
 }
 
 var nativeRebaseCrashPhase func(*testing.T, string, string, *sql.DB, context.Context, rebaseCrashIdentity)
+
+type rebaseCrashPorts struct {
+	shared  *portlease.Lease
+	blocked []*portlease.Lease
+	private string
+}
+
+func reserveRebaseCrashPorts(allocator portlease.Allocator, root string) (_ *rebaseCrashPorts, err error) {
+	shared, err := allocator.Acquire()
+	if err != nil {
+		return nil, err
+	}
+	result := &rebaseCrashPorts{shared: shared, private: filepath.Join(root, "private-port-leases")}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, result.close())
+		}
+	}()
+	private := portlease.Allocator{Directory: result.private}
+	for base := portlease.MinPort; base < shared.Base(); base += portlease.Span {
+		var blocked *portlease.Lease
+		var acquired bool
+		blocked, acquired, err = private.TryAcquire(base)
+		if err != nil {
+			return nil, err
+		}
+		if !acquired {
+			return nil, fmt.Errorf("private recovery port range %d unexpectedly held", base)
+		}
+		result.blocked = append(result.blocked, blocked)
+	}
+	return result, nil
+}
+
+func (p *rebaseCrashPorts) close() error {
+	var err error
+	for _, lease := range p.blocked {
+		err = errors.Join(err, lease.Close())
+	}
+	return errors.Join(err, p.shared.Close())
+}
+
+func (p *rebaseCrashPorts) closeWhenReaped(children []<-chan struct{}) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		for _, child := range children {
+			<-child
+		}
+		done <- p.close()
+	}()
+	return done
+}
+
+func TestRebaseCrashPortReservation(t *testing.T) {
+	root := t.TempDir()
+	public := portlease.Allocator{Directory: filepath.Join(root, "shared")}
+	first, err := public.Acquire()
+	require.NoError(t, err)
+	defer first.Close()
+	ports, err := reserveRebaseCrashPorts(public, root)
+	require.NoError(t, err)
+	held := true
+	t.Cleanup(func() {
+		if held {
+			require.NoError(t, ports.close())
+		}
+	})
+	require.Equal(t, first.Base()+portlease.Span, ports.shared.Base())
+	other, acquired, err := public.TryAcquire(ports.shared.Base())
+	require.NoError(t, err)
+	require.False(t, acquired)
+	require.Nil(t, other)
+	private := portlease.Allocator{Directory: ports.private}
+	for range 2 {
+		child, err := private.Acquire()
+		require.NoError(t, err)
+		require.Equal(t, ports.shared.Base(), child.Base())
+		require.NoError(t, child.Close())
+	}
+	require.NoError(t, ports.close())
+	held = false
+	reused, acquired, err := public.TryAcquire(ports.shared.Base())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.NoError(t, reused.Close())
+}
+
+func TestRebaseCrashPortRetainedUntilChildReaped(t *testing.T) {
+	root := t.TempDir()
+	allocator := portlease.Allocator{Directory: filepath.Join(root, "shared")}
+	ports, err := reserveRebaseCrashPorts(allocator, root)
+	require.NoError(t, err)
+	reaped := make(chan struct{})
+	defer func() {
+		select {
+		case <-reaped:
+		default:
+			close(reaped)
+		}
+	}()
+	closed := ports.closeWhenReaped([]<-chan struct{}{reaped})
+	other, acquired, err := allocator.TryAcquire(ports.shared.Base())
+	if other != nil {
+		defer other.Close()
+	}
+	require.NoError(t, err)
+	require.False(t, acquired)
+	require.Nil(t, other)
+	close(reaped)
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("port lease was not released after the child was reaped")
+	}
+	reused, acquired, err := allocator.TryAcquire(ports.shared.Base())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.NoError(t, reused.Close())
+}
 
 // The parent owns no cluster. It kills precisely the ready child, then starts
 // a fresh process over the same service identities and volume, never Stop/Start.
@@ -60,6 +183,7 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 	if os.Getenv("MO_REBASE_CRASH_CHILD") != "" {
 		t.Fatal("parent selected in child")
 	}
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root, err := os.MkdirTemp("", "mo-rebase-crash-")
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -68,6 +192,21 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 		} else {
 			t.Logf("retained crash fixture: %s", root)
 		}
+	})
+	ports, err := reserveRebaseCrashPorts(clusterPortAllocator, root)
+	require.NoError(t, err)
+	var children []<-chan struct{}
+	t.Cleanup(func() {
+		for _, child := range children {
+			select {
+			case <-child:
+			default:
+				t.Error("crash child not reaped; retaining its port lease")
+				ports.closeWhenReaped(children)
+				return
+			}
+		}
+		require.NoError(t, ports.close())
 	})
 	binary, err := os.Executable()
 	require.NoError(t, err)
@@ -78,7 +217,9 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 		log, err := os.OpenFile(filepath.Join(root, phase+".log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		require.NoError(t, err)
 		cmd := exec.CommandContext(ctx, binary, "-test.v", "-test.timeout=210s", "-test.run=^TestRebaseCrashHelper$")
-		cmd.Env = append(os.Environ(), "MO_REBASE_CRASH_CHILD="+phase, "MO_REBASE_CRASH_ROOT="+root)
+		cmd.Env = append(os.Environ(), "MO_REBASE_CRASH_CHILD="+phase, "MO_REBASE_CRASH_ROOT="+root,
+			"MO_REBASE_CRASH_PORT_BASE="+strconv.FormatUint(ports.shared.Base(), 10),
+			"MO_REBASE_CRASH_PORT_DIR="+ports.private)
 		if native {
 			cmd.Env = append(cmd.Env, "MO_REBASE_NATIVE_CRASH=1")
 		}
@@ -94,6 +235,7 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 		require.NoError(t, err)
 		done := make(chan error, 1)
 		reaped := make(chan struct{})
+		children = append(children, reaped)
 		go func() { err := cmd.Wait(); done <- err; close(reaped) }()
 		t.Cleanup(func() {
 			select {
@@ -186,6 +328,13 @@ func TestRebaseCrashHelper(t *testing.T) {
 	require.Contains(t, []string{"prepare", "verify"}, phase)
 	root := os.Getenv("MO_REBASE_CRASH_ROOT")
 	require.NotEmpty(t, root)
+	portDir := os.Getenv("MO_REBASE_CRASH_PORT_DIR")
+	require.Equal(t, filepath.Join(root, "private-port-leases"), portDir)
+	portBase, err := strconv.ParseUint(os.Getenv("MO_REBASE_CRASH_PORT_BASE"), 10, 64)
+	require.NoError(t, err)
+	previousAllocator := clusterPortAllocator
+	clusterPortAllocator = portlease.Allocator{Directory: portDir}
+	t.Cleanup(func() { clusterPortAllocator = previousAllocator })
 	inventoryMode := os.Getenv("MO_REBASE_INVENTORY_RECOVERY")
 	if inventoryMode != "" {
 		require.Contains(t, []string{"wal", "checkpoint", "dependency-wal", "dependency-checkpoint"}, inventoryMode)
@@ -245,6 +394,7 @@ func TestRebaseCrashHelper(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
 	require.NoError(t, err)
+	require.Equal(t, portBase, c.(*cluster).portLeaseBase, "child must use its parent-reserved port range")
 	if phase == "verify" {
 		require.Equal(t, identity.PortBase, c.(*cluster).portLeaseBase, "do not change the recovered service addresses")
 	} else {

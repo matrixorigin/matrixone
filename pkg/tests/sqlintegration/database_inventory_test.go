@@ -350,20 +350,7 @@ func TestNativeRebaseInventoryPublication(t *testing.T) {
 
 				publishErr := func() error {
 					query := fmt.Sprintf("data branch rebase database %s from %s against %s between %s and %s", target, fh, uh, bf, bu)
-					rows, err := owner.QueryContext(ctx, query)
-					if rows != nil {
-						defer rows.Close()
-					}
-					if err != nil {
-						return err
-					}
-					if !rows.Next() {
-						if err := rows.Err(); err != nil {
-							return err
-						}
-						return errors.New("Rebase returned no provisional summary")
-					}
-					if err := rows.Close(); err != nil {
+					if err := readRebaseSummary(ctx, owner, query); err != nil {
 						return err
 					}
 					result, err := owner.ExecContext(ctx, "update "+meta+".registry set db='"+target+"',gen=1 where name='feature' and db='"+source+"' and gen=0")

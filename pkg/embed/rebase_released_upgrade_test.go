@@ -444,7 +444,7 @@ func releasedServiceConfiguration(cfg ServiceConfig) map[string]any {
 		"hakeeper-client": cfg.HAKeeperClient,
 		"observability":   map[string]any{"disableMetric": true, "disableTrace": true, "enable-metric-to-prom": false},
 	}
-	services := []map[string]any{}
+	services := make([]map[string]any, 0, len(cfg.FileServices))
 	for _, service := range cfg.FileServices {
 		item := map[string]any{"name": service.Name, "backend": service.Backend, "data-dir": service.DataDir}
 		if service.Backend == "S3" {

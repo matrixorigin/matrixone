@@ -186,7 +186,7 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
-	_, err := db.deleteTable(ctx, name, false, false)
+	_, err := db.deleteTable(ctx, name, false, false, false)
 	return err
 }
 
@@ -198,9 +198,13 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // 2. useAlterNote means that the batch sent to TN will be just used
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
-func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) ([]engine.TableDef, error) {
-	if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
-		return nil, err
+func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool, privateInventory bool) ([]engine.TableDef, error) {
+	if !privateInventory {
+		if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+			return nil, err
+		}
+	} else if !forAlter || useAlterNote {
+		return nil, moerr.NewInternalError(ctx, "invalid private ALTER COPY metadata replacement")
 	}
 	var id uint64
 	var rowid types.Rowid
@@ -238,6 +242,10 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	defs = toDelTbl.defs
 	id = toDelTbl.tableId
+	if privateInventory && (txn.tableOps == nil || accountId != db.accountId ||
+		!txn.tableOps.ownsPrivateInventory(accountId, db.databaseId, id)) {
+		return nil, moerr.NewInternalError(ctx, "private ALTER COPY metadata replacement has no matching owner")
+	}
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
@@ -477,7 +485,7 @@ func (db *txnDatabase) createWithID(
 		if txn.tableOps == nil {
 			return moerr.NewInternalError(ctx, "private ALTER COPY requires a transaction inventory owner")
 		}
-		txn.tableOps.addPrivateInventory(accountId, db.databaseId, txn.statementID)
+		txn.tableOps.addPrivateInventory(accountId, db.databaseId, tableId, txn.statementID)
 	} else if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
 		return err
 	}

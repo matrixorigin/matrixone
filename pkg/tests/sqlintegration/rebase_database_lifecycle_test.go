@@ -101,11 +101,7 @@ func TestNativeRebaseCommitFailure(t *testing.T) {
 		}()
 		query := fmt.Sprintf("data branch rebase database nr_commitfail_result from %s against %s between %s and %s", fh, uh, bf, bu)
 		go func() {
-			rows, queryErr := owner.QueryContext(ctx, query)
-			if rows != nil {
-				_ = rows.Close()
-			}
-			done <- queryErr
+			done <- drainRebaseQuery(ctx, owner, query)
 		}()
 		select {
 		case <-fired:
@@ -197,11 +193,7 @@ func TestNativeRebaseSourceWriteAfterSnapshot(t *testing.T) {
 		}()
 		query := fmt.Sprintf("data branch rebase database nr_write_result from %s against %s between %s and %s", fh, uh, bf, bu)
 		go func() {
-			rows, queryErr := owner.QueryContext(ctx, query)
-			if rows != nil {
-				_ = rows.Close()
-			}
-			done <- queryErr
+			done <- drainRebaseQuery(ctx, owner, query)
 		}()
 		select {
 		case <-fired:
@@ -277,11 +269,7 @@ func TestNativeRebaseBorrowedOwner(t *testing.T) {
 		rebase := func(target, policy string) error {
 			t.Helper()
 			query := fmt.Sprintf("data branch rebase database %s from %s against %s between %s and %s %s", target, fh, uh, bf, bu, policy)
-			rows, err := owner.QueryContext(ctx, query)
-			if rows != nil {
-				_ = rows.Close()
-			}
-			return err
+			return drainRebaseQuery(ctx, owner, query)
 		}
 
 		exec("begin")
@@ -425,10 +413,8 @@ func TestNativeRebaseBorrowedOwnerRollbackDisabled(t *testing.T) {
 		})
 		defer restoreApplied()
 		query := fmt.Sprintf("data branch rebase database nr_errmode_result from %s against %s between %s and %s when conflict fail", fh, uh, bf, bu)
-		rows, err := owner.QueryContext(ctx, query)
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		_, err, closeErr := readRebaseQuery(ctx, owner, query)
+		require.NoError(t, closeErr)
 		require.ErrorContains(t, err, "Rebase conflict")
 		select {
 		case <-applied:
@@ -548,16 +534,7 @@ func TestNativeRebasePartialApplySourceDrop(t *testing.T) {
 				}()
 				query := fmt.Sprintf("data branch rebase database %s from %s against %s between %s and %s", target, fh, uh, bf, bu)
 				go func() {
-					rows, err := owner.QueryContext(ctx, query)
-					if err == nil {
-						for rows.Next() {
-						}
-						err = rows.Err()
-						if closeErr := rows.Close(); err == nil {
-							err = closeErr
-						}
-					}
-					ownerDone <- err
+					ownerDone <- drainRebaseQuery(ctx, owner, query)
 				}()
 				select {
 				case <-fired:

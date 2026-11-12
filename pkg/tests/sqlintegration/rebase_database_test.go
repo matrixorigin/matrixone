@@ -717,10 +717,8 @@ func TestNativeRebasePrivileges(t *testing.T) {
 			db     *sql.DB
 			target string
 		}{{reader, "nr_priv_no_create"}, {creator, "nr_priv_no_read"}} {
-			rows, queryErr := attempt.db.QueryContext(ctx, query(attempt.target))
-			if rows != nil {
-				require.NoError(t, rows.Close())
-			}
+			_, queryErr, closeErr := readRebaseQuery(ctx, attempt.db, query(attempt.target))
+			require.NoError(t, closeErr)
 			require.Error(t, queryErr)
 			require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='"+attempt.target+"'"))
 			require.Equal(t, pinsBefore, f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'"))
@@ -737,10 +735,8 @@ func TestNativeRebasePrivileges(t *testing.T) {
 		require.Equal(t, int64(2), f.scalar("select count(*) from nr_priv_result.t"))
 		pinsBefore = f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'")
 		f.exec("alter role nr_priv_read_role add rule \"select * from nr_priv_f.t where id=1\" on table nr_priv_f.t")
-		rows, err := authorized.QueryContext(ctx, query("nr_priv_other_role"))
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		_, err, closeErr := readRebaseQuery(ctx, authorized, query("nr_priv_other_role"))
+		require.NoError(t, closeErr)
 		require.ErrorContains(t, err, "Rebase does not support rewrite rules on source tables")
 		require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='nr_priv_other_role'"))
 		require.Equal(t, pinsBefore, f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'"))
@@ -752,10 +748,8 @@ func TestNativeRebasePrivileges(t *testing.T) {
 		require.NoError(t, err)
 		_, err = session.ExecContext(ctx, `set remap_rewrites = '{"remapdb":{"nr_priv_u":"nr_priv_other"}}'`)
 		require.NoError(t, err)
-		rows, err = session.QueryContext(ctx, query("nr_priv_session"))
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		_, err, closeErr = readRebaseQuery(ctx, session, query("nr_priv_session"))
+		require.NoError(t, closeErr)
 		require.ErrorContains(t, err, "Rebase does not support active session rewrites")
 		require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='nr_priv_session'"))
 		require.Equal(t, pinsBefore, f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'"))
@@ -782,10 +776,8 @@ func TestNativeRebasePrivileges(t *testing.T) {
 		legacy := openUser("nr_priv_create_user", "nr_priv_create_role")
 		require.NoError(t, legacy.QueryRowContext(ctx, "select count(*) from nr_priv_f.t").Scan(&value))
 		require.Equal(t, 1, value, "legacy rule must actually filter the feature table")
-		rows, err = legacy.QueryContext(ctx, query("nr_priv_noncanonical"))
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		_, err, closeErr = readRebaseQuery(ctx, legacy, query("nr_priv_noncanonical"))
+		require.NoError(t, closeErr)
 		require.ErrorContains(t, err, "Rebase does not support rewrite rules on source tables")
 		require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='nr_priv_noncanonical'"))
 		require.Equal(t, pinsBefore, f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'"))
@@ -796,10 +788,8 @@ func TestNativeRebasePrivileges(t *testing.T) {
 		require.NoError(t, filtered.QueryRowContext(ctx, "select count(*) from nr_priv_f.t").Scan(&value))
 		require.Equal(t, 1, value, "role rule must actually filter the feature table")
 		pinsBefore = f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'")
-		rows, err = filtered.QueryContext(ctx, query("nr_priv_filtered"))
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		_, err, closeErr = readRebaseQuery(ctx, filtered, query("nr_priv_filtered"))
+		require.NoError(t, closeErr)
 		require.ErrorContains(t, err, "Rebase does not support rewrite rules on source tables")
 		require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='nr_priv_filtered'"))
 		require.Equal(t, pinsBefore, f.scalar("select count(*) from mo_catalog.mo_snapshots where kind='branch' and database_name='nr_priv_u'"))

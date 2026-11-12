@@ -61,7 +61,7 @@ func TestDatabaseInventoryBVTSQL(t *testing.T) {
 				continue
 			}
 			require.True(t, strings.HasSuffix(query, ";"), "BVT keeps one complete statement per line")
-			if query != "select id,ok from assertions order by id;" {
+			if query != "select id,ok from assertions order by id;" && query != "select id,ok from assertions where id>=11 order by id;" {
 				_, err := conn.ExecContext(ctx, query)
 				require.NoError(t, err, query)
 				continue
@@ -87,6 +87,7 @@ func TestDatabaseInventoryBVTSQL(t *testing.T) {
 		require.NoError(t, scanner.Err())
 		require.Equal(t, [][][2]int{
 			{{1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}, {6, 1}, {7, 1}, {8, 1}},
+			{{11, 1}, {12, 1}, {13, 1}, {14, 1}},
 			{{9, 1}, {10, 1}},
 		}, outputs)
 	})

@@ -2621,8 +2621,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			c.getLower(),
 		)
 
+		partitionCtx := c.proc.Ctx
+		if private {
+			partitionCtx, err = defines.WithPrivateCopyPartitionParent(partitionCtx, dbName, tblName)
+			if err != nil {
+				return err
+			}
+		}
 		err = ps.Create(
-			c.proc.Ctx,
+			partitionCtx,
 			qry.TableDef.TblId,
 			stmt.(*tree.CreateTable),
 			c.proc.GetTxnOperator(),

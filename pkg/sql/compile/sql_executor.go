@@ -546,6 +546,10 @@ func (exec *txnExecutor) exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	exec.ctx, retErr = authorizePrivateCopyPartitionCreate(exec.ctx, parentCtx, ownerTxn, exec.getDatabase(), stmts)
+	if retErr != nil {
+		return executor.Result{}, retErr
+	}
 	if r, _ := exec.ctx.Value(authorizedPrivateAlterCopyCreateKey{}).(*privateAlterCopyCreate); r != nil && len(stmts) != 1 {
 		return executor.Result{}, moerr.NewInvalidInputNoCtx("private ALTER COPY CREATE must contain one statement")
 	}

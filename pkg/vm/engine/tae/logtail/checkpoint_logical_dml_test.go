@@ -131,13 +131,14 @@ func TestCheckpointLogicalDMLMerge(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			data := NewCheckpointData_V2(mp, 0, fs)
 			defer data.Close()
-			inputs := []LogicalDMLCheckpoint{first, second}
+			inputs := make([]LogicalDMLCheckpoint, 0, 3)
+			inputs = append(inputs, first, second)
 			legacy := LogicalDMLCheckpoint{Version: 13, End: types.BuildTS(180, 0)}
 			switch scenario {
 			case "mixed_legacy":
 				inputs = append(inputs, legacy)
 			case "legacy_only":
-				inputs = []LogicalDMLCheckpoint{legacy}
+				inputs = append(inputs[:0], legacy)
 			case "wrong_identity":
 				inputs = append(inputs, makeInput(200, 100, 2))
 			case "wrong_coverage":

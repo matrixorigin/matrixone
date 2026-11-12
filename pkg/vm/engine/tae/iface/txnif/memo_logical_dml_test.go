@@ -97,7 +97,8 @@ func TestLogicalDMLMemoRejectsMalformed(t *testing.T) {
 		require.ErrorContains(t, err, "invalid logical DML extension header")
 		require.False(t, memo.LogicalDMLTrackingEnabled())
 	})
-	valid := []byte{1, 1, 0, 0, 0}
+	valid := make([]byte, 0, 21)
+	valid = append(valid, 1, 1, 0, 0, 0)
 	db, table := uint64(1), uint64(10)
 	valid = append(valid, types.EncodeUint64(&db)...)
 	valid = append(valid, types.EncodeUint64(&table)...)

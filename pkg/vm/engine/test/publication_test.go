@@ -346,7 +346,7 @@ func TestExecuteIteration1(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -890,7 +890,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1190,7 +1190,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// These tables are needed when creating tables in the source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, srcCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, srcCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1211,7 +1211,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// These tables are needed for system account operations
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, systemCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, systemCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1240,7 +1240,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1810,7 +1810,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -2138,7 +2138,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -2679,7 +2679,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -3075,7 +3075,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -3520,7 +3520,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -4027,6 +4027,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, srcCtxWithTimeout)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoAccountDDL)
 	require.NoError(t, err)
@@ -4038,7 +4040,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -4439,7 +4441,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -4822,7 +4824,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -5164,6 +5166,8 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 	// Create mo_indexes table for source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, srcCtxWithTimeout)
+	require.NoError(t, err)
 
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
@@ -5186,7 +5190,7 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -5622,7 +5626,7 @@ func TestCCPRSyncProtectionRetry(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	err = setupTenantDatabaseCatalogs(disttaeEngine, destCtxWithTimeout)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)

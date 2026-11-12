@@ -1978,8 +1978,28 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
 		return err
 	}
-	if err := advanceDatabaseInventory(ctx, tbl.db.op, tbl.db.databaseName, tbl.db.databaseId); err != nil {
-		return err
+	privateAutoIncrement := false
+	if c == nil && tbl.getTxn().tableOps != nil && !inventorySystemDatabase(tbl.db.databaseName) {
+		accountID, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+		privateAutoIncrement = accountID == tbl.accountId &&
+			tbl.getTxn().tableOps.ownsPrivateAutoIncrement(accountID, tbl.db.databaseId, tbl.tableId, reqs)
+	}
+	if privateAutoIncrement {
+		createdInTxn, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return err
+		}
+		if !createdInTxn {
+			return moerr.NewInternalError(ctx, "private ALTER COPY relation was not created by this transaction")
+		}
+	}
+	if !privateAutoIncrement {
+		if err := advanceDatabaseInventory(ctx, tbl.db.op, tbl.db.databaseName, tbl.db.databaseId); err != nil {
+			return err
+		}
 	}
 	var err error
 	var checkCstr []byte
@@ -2169,7 +2189,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
-	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
+	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn, privateAutoIncrement); err != nil {
 		return err
 	}
 
@@ -2192,7 +2212,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// the hidden-table name would leave the old row and insert a duplicate.
 	if err := tbl.db.createWithID(
 		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
-		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership, false,
+		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership, privateAutoIncrement,
 	); err != nil {
 		return err
 	}

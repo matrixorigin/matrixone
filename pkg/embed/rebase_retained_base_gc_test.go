@@ -28,6 +28,7 @@ import (
 // This tests existing Clone transaction retention, not a Rebase executor.
 // A dropped, unprotected object's physical deletion proves disk GC actually ran.
 func TestRebaseRetainedBaseGC(t *testing.T) {
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(WithTesting(), WithCNCount(1), WithTestAdmissionContext(t.Context()), WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() == metadata.ServiceType_TN {

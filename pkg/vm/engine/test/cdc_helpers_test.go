@@ -24,6 +24,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -176,6 +177,33 @@ func exec_sql(
 	}
 	return nil
 }
+
+// The engine test fixture bootstraps system catalogs only for the system
+// tenant. Tests simulating another account must create its private catalogs.
+func setupTenantDatabaseCatalogs(de *testutil.TestDisttaeEngine, ctx context.Context) error {
+	if err := exec_sql(de, ctx, catalog.MoDatabaseDefaultsDDL); err != nil {
+		return err
+	}
+	accountID, ok := ctx.Value(defines.TenantIDKey{}).(uint32)
+	if !ok {
+		return fmt.Errorf("missing tenant identity for catalog fixture")
+	}
+	if accountID == catalog.System_Account {
+		return nil
+	}
+	for _, ddl := range []string{
+		catalog.MoDatabaseInventoryDDL,
+		testutil.DatabaseRetirementProcedureDDL,
+		testutil.DatabaseRetirementFunctionDDL,
+		testutil.DatabaseRetirementCompatibilityDDL,
+	} {
+		if err := exec_sql(de, ctx, ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func mock_mo_indexes(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
@@ -223,8 +251,7 @@ func mock_mo_indexes(
 	if err = txn.Commit(ctx); err != nil {
 		return err
 	}
-	// CREATE DATABASE now persists defaults in this tenant catalog table.
-	return exec_sql(de, ctx, catalog.MoDatabaseDefaultsDDL)
+	return setupTenantDatabaseCatalogs(de, ctx)
 }
 func mock_mo_foreign_keys(
 	de *testutil.TestDisttaeEngine,

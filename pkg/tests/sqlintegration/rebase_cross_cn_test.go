@@ -17,6 +17,7 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -29,6 +30,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/stretchr/testify/require"
 )
+
+type rebaseQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readRebaseQuery(ctx context.Context, conn rebaseQueryer, query string) (count int, queryErr, closeErr error) {
+	rows, queryErr := conn.QueryContext(ctx, query)
+	if rows != nil {
+		defer func() { closeErr = rows.Close() }()
+	}
+	if queryErr != nil {
+		return
+	}
+	if rows == nil {
+		queryErr = errors.New("Rebase query returned no result set")
+		return
+	}
+	for rows.Next() {
+		count++
+	}
+	queryErr = rows.Err()
+	return
+}
+
+func drainRebaseQuery(ctx context.Context, conn rebaseQueryer, query string) error {
+	_, queryErr, closeErr := readRebaseQuery(ctx, conn, query)
+	return errors.Join(queryErr, closeErr)
+}
+
+func readRebaseSummary(ctx context.Context, conn rebaseQueryer, query string) error {
+	count, queryErr, closeErr := readRebaseQuery(ctx, conn, query)
+	if err := errors.Join(queryErr, closeErr); err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("Rebase returned an invalid provisional summary")
+	}
+	return nil
+}
 
 func TestNativeRebaseCrossCNSourceProtection(t *testing.T) {
 	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
@@ -128,10 +168,7 @@ func TestNativeRebaseCrossCNSourceProtection(t *testing.T) {
 			if scenario == "catalog_after_f" {
 				writer.exec("create table " + source + ".extra(id int primary key,v int)")
 				writer.exec("insert into " + source + ".extra values(9,90)")
-				rows, queryErr := owner.QueryContext(ctx, query)
-				if rows != nil {
-					require.NoError(t, rows.Close())
-				}
+				queryErr := drainRebaseQuery(ctx, owner, query)
 				require.ErrorContains(t, queryErr, "def changed")
 				_, err = owner.ExecContext(ctx, "rollback")
 				require.NoError(t, err)
@@ -174,13 +211,7 @@ func TestNativeRebaseCrossCNSourceProtection(t *testing.T) {
 					restore()
 				}()
 				go func() {
-					rows, queryErr := owner.QueryContext(ctx, query)
-					if rows != nil {
-						if closeErr := rows.Close(); queryErr == nil {
-							queryErr = closeErr
-						}
-					}
-					done <- queryErr
+					done <- drainRebaseQuery(ctx, owner, query)
 				}()
 				select {
 				case <-reached:
