@@ -82,9 +82,8 @@ func TestAttachInternalExecutorRewriteOption(t *testing.T) {
 }
 
 func TestInternalExecutorDefaultDatabase(t *testing.T) {
-	for _, database := range []string{"mapped_db", ""} {
-		ctx := attachInternalExecutorDefaultDatabase(context.Background(), database)
-		exec := &txnExecutor{ctx: ctx, database: "original_db", opts: executor.Options{}.WithDatabase("fallback_db")}
+	for _, database := range []string{"mapped_db", "", "mo_catalog"} {
+		exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithDatabase(database)}
 		require.Equal(t, database, exec.getDatabase())
 	}
 	exec := &txnExecutor{database: "original_db", opts: executor.Options{}.WithDatabase("fallback_db")}

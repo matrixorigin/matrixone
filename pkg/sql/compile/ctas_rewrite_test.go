@@ -135,7 +135,7 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 				wantSQL = "insert into `dst_db`.`physical_copy` select * from dst_db.t"
 			}
 			internalExecutor.EXPECT().Exec(gomock.Any(), wantSQL, gomock.Any()).DoAndReturn(
-				func(inner context.Context, _ string, _ executor.Options) (executor.Result, error) {
+				func(inner context.Context, _ string, opts executor.Options) (executor.Result, error) {
 					if option == nil {
 						require.Nil(t, getInternalExecutorRewriteOption(inner))
 					} else {
@@ -143,12 +143,16 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 					}
 					require.Same(t, proc.Session, getInternalExecutorSession(inner))
 					require.True(t, needInternalExecutorPrivilegeCheck(inner))
-					innerExec := &txnExecutor{ctx: inner, opts: executor.Options{}.WithDatabase("original_db")}
+					innerExec := &txnExecutor{ctx: inner, opts: opts}
 					if tc.helper {
+						require.Equal(t, tc.database, opts.Database())
 						require.Equal(t, tc.database, innerExec.getDatabase())
 					} else {
-						require.Equal(t, "original_db", innerExec.getDatabase())
+						require.Equal(t, c.db, innerExec.getDatabase())
 					}
+					// 自增等后代沿用同一 context，但显式选择系统库，不得被 CTAS 默认库覆盖。
+					nested := &txnExecutor{ctx: inner, opts: executor.Options{}.WithDatabase("mo_catalog")}
+					require.Equal(t, "mo_catalog", nested.getDatabase())
 					return executor.Result{AffectedRows: 3}, tc.err
 				})
 			err := c.populateCreatedTable(&planpb.CreateTable{CreateAsSelectSql: sql},
@@ -156,7 +160,6 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 			require.ErrorIs(t, err, tc.err)
 			require.Same(t, ctx, proc.Ctx)
 			require.Nil(t, getInternalExecutorRewriteOption(proc.Ctx))
-			require.Nil(t, proc.Ctx.Value(internalExecutorDefaultDatabaseKey{}))
 			require.False(t, needInternalExecutorPrivilegeCheck(proc.Ctx))
 			if tc.err == nil {
 				require.Equal(t, uint64(3), c.getAffectedRows())
@@ -166,6 +169,15 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 			// 非 CTAS 不调用内部执行器，也不留下前一条语句的规则。
 			require.NoError(t, c.populateCreatedTable(&planpb.CreateTable{}, false, "dst_db", "copy", "copy"))
 			require.Same(t, ctx, proc.Ctx)
+			// 后续普通内部 SQL 仍按 Compile 自己的数据库执行，不沿用 CTAS 的临时选库。
+			internalExecutor.EXPECT().Exec(gomock.Any(), "select 1", gomock.Any()).DoAndReturn(
+				func(inner context.Context, _ string, opts executor.Options) (executor.Result, error) {
+					require.Equal(t, c.db, opts.Database())
+					require.Nil(t, getInternalExecutorRewriteOption(inner))
+					return executor.Result{}, nil
+				})
+			_, err = c.runSqlWithResultAndOptions("select 1", NoAccountId, executor.StatementOption{})
+			require.NoError(t, err)
 		})
 	}
 }

@@ -736,11 +736,6 @@ func (exec *txnExecutor) rollback(err error) error {
 }
 
 func (exec *txnExecutor) getDatabase() string {
-	if exec.ctx != nil {
-		if database, ok := exec.ctx.Value(internalExecutorDefaultDatabaseKey{}).(string); ok {
-			return database
-		}
-	}
 	if exec.database != "" {
 		return exec.database
 	}

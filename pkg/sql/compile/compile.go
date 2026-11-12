@@ -7370,6 +7370,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
+	return c.runSqlWithResultAndOptionsInDatabase(sql, accountId, options, c.db)
+}
+
+// 数据库选项只属于这一次直接执行，不能通过 context 覆盖后代执行器自己的选库。
+func (c *Compile) runSqlWithResultAndOptionsInDatabase(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+	database string,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -7409,7 +7419,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
-		WithDatabase(c.db).
+		WithDatabase(database).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
