@@ -30,6 +30,7 @@ func TestDedupTargetScanIsNarrow(t *testing.T) {
 		"insert into constraint_test.emp select * from constraint_test.emp",
 		"update constraint_test.emp set empno = empno + 1",
 		"update constraint_test.emp set ename = 'x'",
+		"update ignore constraint_test.emp a join constraint_test.emp b on a.empno = b.empno set a.ename = 'x', b.job = 'y'",
 		"replace into constraint_test.emp values (1, 'a', 'b', 1, '2020-01-01', 1.0, 1.0, 1)",
 	} {
 		t.Run(sql, func(t *testing.T) {
@@ -39,17 +40,19 @@ func TestDedupTargetScanIsNarrow(t *testing.T) {
 			target := make(map[int32]bool)
 			dedups := 0
 			for _, n := range query.Nodes {
-				if n.NodeType == plan.Node_JOIN && n.JoinType == plan.Node_DEDUP {
-					dedups++
-					for _, c := range n.Children {
-						if query.Nodes[c].NodeType == plan.Node_TABLE_SCAN && query.Nodes[c].NarrowScan {
-							target[c] = true
-						}
+				if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_DEDUP {
+					continue
+				}
+				dedups++
+				narrow := false
+				for _, c := range n.Children {
+					if query.Nodes[c].NodeType == plan.Node_TABLE_SCAN && query.Nodes[c].NarrowScan {
+						target[c], narrow = true, true
 					}
 				}
+				require.True(t, narrow, "DEDUP join on %s has a narrow target scan", n.DedupColName)
 			}
 			require.NotZero(t, dedups)
-			require.NotEmpty(t, target, "each DEDUP join's target scan is narrow")
 			for i, n := range query.Nodes {
 				if n.NodeType == plan.Node_TABLE_SCAN && !target[int32(i)] {
 					require.False(t, n.NarrowScan, "scan of %s outside a DEDUP join", n.TableDef.GetName())
