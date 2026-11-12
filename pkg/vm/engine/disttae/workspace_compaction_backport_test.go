@@ -380,7 +380,7 @@ func TestBackportWorkspaceDumpPreservesCapturedPrefixAndRollbackRegion(t *testin
 type compactionPrefixCase struct {
 	onlyFirstDirty, rollback, maintenanceFailure, snapshotFailure bool
 	concurrentRollback, transferFailure, allDeleted, multiAnchor  bool
-	successfulBoundary, unknownCommit                             bool
+	successfulBoundary, unknownCommit, unsortedDeletes            bool
 }
 
 func TestReview32536CompactionCapturedPrefix(t *testing.T) {
@@ -391,6 +391,7 @@ func TestReview32536CompactionCapturedPrefix(t *testing.T) {
 		{"both_rewritten", compactionPrefixCase{}},
 		{"clean_and_rewritten", compactionPrefixCase{onlyFirstDirty: true}},
 		{"all_deleted", compactionPrefixCase{allDeleted: true}},
+		{"all_deleted_unsorted", compactionPrefixCase{allDeleted: true, unsortedDeletes: true}},
 		{"multiple_anchors", compactionPrefixCase{multiAnchor: true}},
 		{"multiple_anchors_rollback", compactionPrefixCase{multiAnchor: true, rollback: true}},
 		{"rollback_after_compaction", compactionPrefixCase{rollback: true}},
@@ -508,6 +509,9 @@ func testCompactionCapturedPrefix(t *testing.T, opts compactionPrefixCase) {
 			offsets := []int64{0}
 			if allDeleted {
 				offsets = []int64{0, 1}
+				if opts.unsortedDeletes {
+					offsets = []int64{1, 0}
+				}
 			}
 			txn.deletedBlocks.addDeletedBlocks(&info.BlockID, offsets)
 		}

@@ -2006,7 +2006,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		true,
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			deletes := blockDeletes[blk.BlockID]
+			// The compaction journal compares the original deletion sequence at
+			// settlement. Sorting the journal's backing in place would make an
+			// unchanged, unsorted snapshot look like a concurrent mutation.
+			deletes := slices.Clone(blockDeletes[blk.BlockID])
 			slices.Sort(deletes)
 			if rowsBat == nil {
 				rowsBat = batch.NewWithSize(len(tbl.seqnums))

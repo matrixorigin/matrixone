@@ -41,6 +41,60 @@ type workspaceCleanupFS struct {
 	resume  chan struct{}
 }
 
+type workspaceExclusiveDeleteFS struct {
+	fileservice.FileService
+	mu      sync.Mutex
+	calls   int
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (f *workspaceExclusiveDeleteFS) Delete(ctx context.Context, _ ...string) error {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+	if call != 1 {
+		return errors.New("duplicate concurrent delete")
+	}
+	close(f.entered)
+	select {
+	case <-f.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestBackportWorkspaceCleanupSerializesConcurrentDrains(t *testing.T) {
+	fs := &workspaceExclusiveDeleteFS{entered: make(chan struct{}), resume: make(chan struct{})}
+	e := &Engine{fs: fs}
+	e.unpublishedPending.names = []string{"object"}
+	e.unpublishedPending.nameSet = map[string]struct{}{"object": {}}
+	done := make(chan error, 1)
+	go func() { done <- e.deleteQueuedUnpublishedPendingOnce(context.Background()) }()
+	<-fs.entered
+	t.Cleanup(func() {
+		select {
+		case <-fs.resume:
+		default:
+			close(fs.resume)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, e.deleteQueuedUnpublishedPendingOnce(ctx), context.DeadlineExceeded)
+	third := make(chan error, 1)
+	go func() { third <- e.deleteQueuedUnpublishedPendingOnce(context.Background()) }()
+	close(fs.resume)
+	require.NoError(t, <-done)
+	require.NoError(t, <-third)
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	require.Equal(t, 1, fs.calls)
+	require.Empty(t, e.unpublishedPending.names)
+}
+
 func (f *workspaceCleanupFS) Delete(ctx context.Context, names ...string) error {
 	if f.entered != nil {
 		close(f.entered)

@@ -224,6 +224,7 @@ type unpublishedPendingQueue struct {
 	drainCtx           context.Context
 	drainCancel        context.CancelFunc
 	drainIdle          chan struct{}
+	drainGate          chan struct{}
 	ownedNames         map[string]map[*Transaction]struct{}
 	live               int64
 	inFlight           int64
@@ -640,6 +641,29 @@ func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 	fs := e.fs
 	if fs == nil {
 		return moerr.NewInternalErrorNoCtx("file service is unavailable")
+	}
+	// Background, explicit and shutdown drains can overlap. Only one may
+	// snapshot and delete the queue at a time; otherwise a second drain can
+	// attempt to delete an object already removed by the first. A canceled
+	// shutdown must not wait indefinitely for an in-flight storage call.
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.drainGate == nil {
+		e.unpublishedPending.drainGate = make(chan struct{}, 1)
+		e.unpublishedPending.drainGate <- struct{}{}
+	}
+	gate := e.unpublishedPending.drainGate
+	e.unpublishedPending.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-gate:
+	}
+	defer func() { gate <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	e.unpublishedPending.mu.Lock()
 	pending := slices.Clone(e.unpublishedPending.names)
