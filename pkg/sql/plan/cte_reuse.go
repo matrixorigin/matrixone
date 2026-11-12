@@ -29,12 +29,16 @@ const cteReuseEstimatedMaterializedBytesLimit = float64(32 * mpool.MB)
 // producer step and one SINK_SCAN per consumer. All uncertain shapes keep the
 // historical inline behavior.
 func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
+	return builder.reuseCTEs(rootID, false)
+}
+
+func (builder *QueryBuilder) reuseCTEs(rootID int32, scalarOnly bool) int32 {
 	if builder.isForUpdate {
 		return rootID
 	}
 
 	for _, cteRef := range builder.cteRefs {
-		if !builder.canReuseCTE(cteRef, rootID) {
+		if !builder.canReuseCTE(cteRef, rootID) || scalarOnly && !builder.cteScalarReuseSafe(rootID, cteRef.occurrences) {
 			continue
 		}
 
@@ -53,8 +57,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 }
 
 func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 ||
-		cteRef.hasNestedRef || cteRef.hasNestedUse {
+	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
 		return false
 	}
 
@@ -66,8 +69,10 @@ func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
 		}
 	}
 
-	if !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
-		return false
+	if cteRef.hasNestedRef || cteRef.hasNestedUse || !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
+		if !builder.cteScalarReuseSafe(rootID, cteRef.occurrences) {
+			return false
+		}
 	}
 
 	ReCalcNodeStats(first.rootID, builder, true, false, true)
