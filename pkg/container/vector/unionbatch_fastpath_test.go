@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnionInlineSelection(t *testing.T) {
+	for _, shape := range []string{"inline", "zero-area-noninline", "nullable", "mixed"} {
+		for _, index32 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/int32=%t", shape, index32), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				src, dst := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
+				t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+				values := []string{"a", "b", strings.Repeat("c", types.VarlenaInlineSize), "d", "e", "f", "g", "h"}
+				if shape == "zero-area-noninline" {
+					values[1] = ""
+				} else if shape == "mixed" {
+					values[1] = strings.Repeat("b", types.VarlenaInlineSize+1)
+				}
+				for row, value := range values {
+					require.NoError(t, AppendBytes(src, []byte(value), shape == "nullable" && row == 4, mp))
+				}
+				if shape == "zero-area-noninline" {
+					// Zero area bytes alone do not prove inline descriptors.
+					MustFixedColNoTypeCheck[types.Varlena](src)[1].SetOffsetLen(0, 0)
+					require.Empty(t, src.area)
+				}
+				src.GetGrouping().Add(2)
+				src.SetPrepareParamKind(PrepareParamInteger)
+				src.SetIsBinaryString(true)
+				require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
+				// Consecutive runs, gaps, repetition and reversal share one
+				// append. The expected rows do not depend on the copy helper.
+				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
+				prefix := "prefix"
+				if shape == "zero-area-noninline" {
+					prefix = strings.Repeat("p", 64)
+				}
+				for range 2 {
+					dst.CleanOnlyData()
+					require.NoError(t, AppendBytes(dst, []byte(prefix), false, mp))
+					require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
+					if index32 {
+						sels := make([]int32, len(rows))
+						for i, row := range rows {
+							sels[i] = int32(row)
+						}
+						require.NoError(t, dst.UnionInt32(src, sels, mp))
+					} else {
+						require.NoError(t, dst.Union(src, rows, mp))
+					}
+					require.Equal(t, prefix, dst.GetStringAt(0))
+					require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
+					require.Equal(t, len(rows)+1, dst.Length())
+					for i, row := range rows {
+						isNull := shape == "nullable" && row == 4
+						require.Equal(t, isNull, dst.IsNull(uint64(i+1)))
+						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
+						require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(i+1))
+						if !isNull {
+							require.Equal(t, values[row], dst.GetStringAt(i+1))
+							require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(i+1))
+							require.True(t, dst.GetIsBinaryStringAt(i+1))
+							if shape == "zero-area-noninline" && row == 1 {
+								// The ordinary copy rebases even an empty non-inline
+								// payload after the destination's existing area.
+								offset, length := MustFixedColNoTypeCheck[types.Varlena](dst)[i+1].OffsetLen()
+								require.Equal(t, uint32(len(prefix)), offset)
+								require.Zero(t, length)
+							}
+						}
+					}
+				}
+			})
+		}
+	}
+}
 
 // TestUnionBatchVarlenFastPath exercises the full-append fast path: mixed inline
 // (short) + non-inline (long) values, unioned into a non-empty target so the

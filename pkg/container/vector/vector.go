@@ -8947,11 +8947,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
 		total := 0
 		hasNull := !w.GetNulls().EmptyByFlag()
+		allInline := true
 		for _, sel := range sels {
 			if hasNull && w.nsp.Contains(uint64(sel)) {
 				continue
 			}
 			if !wCol[sel].IsSmall() {
+				allInline = false
 				_, l := wCol[sel].OffsetLen()
 				total += int(l)
 			}
@@ -8962,7 +8964,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// Reuse the area sizing pass to select an inline-copy batch. The small
 		// check still handles non-inline zero-length descriptors correctly.
 		// Mixed/area payloads and Unicode admission keep the original loops.
-		if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+		if !hasNull && allInline && !types.IsUnicodeCollation(v.typ.Charset) {
+			unionInlineSelected(vCol[oldLen:v.length], wCol, sels)
+		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
@@ -9070,6 +9074,29 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return err
 	}
 	return nil
+}
+
+// unionInlineSelected copies only the selected inline descriptors. Consecutive
+// source rows share one bulk copy. At a singleton, copy the remaining selection
+// with typed stores: short alternating runs do not amortize bulk-copy setup.
+// Splitting at every gap, repetition or reversal preserves selection order.
+func unionInlineSelected[S int32 | int64](target, source []types.Varlena, sels []S) {
+	for start := 0; start < len(sels); {
+		end := start + 1
+		for end < len(sels) && sels[end] == sels[end-1]+1 {
+			end++
+		}
+		if end == start+1 {
+			for i, sel := range sels[start:] {
+				target[start+i] = source[sel]
+			}
+			return
+		} else {
+			first := int(sels[start])
+			copy(target[start:end], source[first:first+end-start])
+		}
+		start = end
+	}
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
