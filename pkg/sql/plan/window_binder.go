@@ -189,6 +189,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil
 	}
 
+	w.WindowFunc.Typ.NotNullable = function.DeduceWindowNotNullable(w)
 	colPos := int32(len(ctx.windows))
 	ctx.windows = append(ctx.windows, &plan.Expr{
 		Typ:  w.WindowFunc.Typ,

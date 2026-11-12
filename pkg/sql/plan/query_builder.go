@@ -332,15 +332,6 @@ func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) 
 	return typ
 }
 
-// A converted literal can provide an independent fallback guarantee. Do not
-// substitute an arbitrary expression's (possibly optimistic) type annotation.
-func isNonNullLiteralFallback(expr *plan.Expr) bool {
-	if lit := expr.GetLit(); lit != nil {
-		return !lit.Isnull
-	}
-	return castPreservesNonNull(expr) && isNonNullLiteralFallback(expr.GetF().Args[0])
-}
-
 // Only the audited conversions below preserve non-NULL input as a value or
 // error. This is a nullness proof, not a precision or value-equivalence proof.
 func castPreservesNonNull(expr *plan.Expr) bool {
@@ -352,28 +343,7 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 	if fid != function.CAST || overload != 0 {
 		return false
 	}
-	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
-	textResult := to == types.T_char || to == types.T_varchar || to == types.T_text
-	numericInput := from.IsInteger() || from.IsFloat() || from.IsDecimal()
-	numericResult := to.IsInteger() || to.IsFloat() || to.IsDecimal()
-	// BOOL has no direct float/decimal CAST implementation. BIT uses the
-	// unsigned numeric conversions; its text encoding preserves nullness too.
-	if from == types.T_bool {
-		return to.IsInteger() || to == types.T_bool || to == types.T_bit || textResult
-	}
-	if from == types.T_bit {
-		return numericResult || to == types.T_bool || to == types.T_bit || textResult
-	}
-	// Numeric conversions return a value or error for non-NULL input.
-	// DECIMAL to BOOL is not implemented; numeric to BIT can fail on overflow.
-	if numericInput && (numericResult || textResult || to == types.T_bit ||
-		(to == types.T_bool && !from.IsDecimal())) {
-		return true
-	}
-	// The binder represents decimal syntax such as 0.0 as a string-to-decimal
-	// cast. strToDecimal and strToStr return a value or error for non-NULL input.
-	return (from == types.T_char || from == types.T_varchar || from == types.T_text) &&
-		(to.IsDecimal() || textResult)
+	return function.CastPreservesNonNull(types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id))
 }
 
 func isIfNullCase(fn *plan.Function) bool {
@@ -401,50 +371,26 @@ func isIfNullCase(fn *plan.Function) bool {
 // non-null inputs may now be null-extended join or UNION outputs.
 func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		// 常量折叠保留的类型标记可能仍是原函数的保守结果；以已求值的 literal 为准。
+		expr.Typ.NotNullable = impl.Lit != nil && !impl.Lit.Isnull
 	case *plan.Expr_Col:
 		expr.Typ.NotNullable = input[impl.Col.ColPos].Typ.NotNullable
 	case *plan.Expr_F:
 		for _, arg := range impl.F.Args {
 			refreshExprNullabilityFromInput(arg, input)
 		}
-		// Ordinary inference may only weaken the bind-time contract. In
-		// particular, a function argument marked NOT NULL is not proof that
-		// it cannot produce NULL itself (for example, division by zero).
-		fid, _ := function.DecodeOverloadID(impl.F.Func.Obj)
-		args := impl.F.Args
-		switch fid {
-		case function.CASE:
-			// Preserve an existing proof when only conditions became nullable.
-			// Never establish a new proof from possibly optimistic branch types.
-			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) >= 3 && len(args)%2 == 1
-			if len(args) > 0 {
-				expr.Typ.NotNullable = expr.Typ.NotNullable && args[len(args)-1].Typ.NotNullable
-			}
-			for i := 1; i < len(args)-1; i += 2 {
-				expr.Typ.NotNullable = expr.Typ.NotNullable && args[i].Typ.NotNullable
-			}
-		case function.IFF:
-			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) == 3 &&
-				args[1].Typ.NotNullable && args[2].Typ.NotNullable
-		default:
-			expr.Typ.NotNullable = expr.Typ.NotNullable &&
-				function.DeduceNotNullable(impl.F.Func.Obj, args)
+		// 子表达式已按实际输入刷新；用与绑定阶段相同的正向证明重新推导，
+		// 不能继承旧标记，也不能只因为函数参数非空就强化结果。
+		expr.Typ.NotNullable = function.DeduceNotNullable(impl.F.Func.Obj, impl.F.Args)
+		if isIfNullCase(impl.F) && impl.F.Args[1].Typ.NotNullable {
+			// IFNULL 的 CASE 改写重复求值源表达式；仍须验证源确定性和附加 CAST。
+			expr.Typ.NotNullable = true
 		}
-		if impl.F.Func.ObjName == "coalesce" {
-			for _, arg := range impl.F.Args {
-				if isNonNullLiteralFallback(arg) {
-					// A proven non-NULL constant is an independent guarantee,
-					// unlike a potentially stale argument type annotation.
-					expr.Typ.NotNullable = true
-					break
-				}
-			}
-		} else if isIfNullCase(impl.F) {
-			// IFNULL is bound as CASE WHEN x IS NULL THEN fallback ELSE x.
-			if isNonNullLiteralFallback(impl.F.Args[1]) {
-				expr.Typ.NotNullable = true
-			}
-		}
+	case *plan.Expr_W:
+		refreshExprNullabilityFromInput(impl.W.WindowFunc, input)
+		expr.Typ.NotNullable = function.DeduceWindowNotNullable(impl.W)
+		impl.W.WindowFunc.Typ.NotNullable = expr.Typ.NotNullable
 	}
 }
 
@@ -1421,6 +1367,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
+			refreshExprNullabilityFromInput(expr, childProjList)
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -5644,6 +5591,20 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				}
 
 				node.OnList = append(node.OnList, expr)
+			}
+		}
+	}
+
+	// ON/USING 使用连接前的输入类型；只有上层 binding 输出受到本次 NULL 扩展。
+	// 必须在绑定上层表达式之前更新，否则 MARK 等优化会消费基表的过强证明。
+	// binding.types 可能指向目录或派生投影，替换类型副本而不修改源类型。
+	for childIdx, childCtx := range []*BindContext{leftCtx, rightCtx} {
+		for _, binding := range childCtx.bindings {
+			for i, typ := range binding.types {
+				output := outputTypeAfterNullExtension(node, childIdx, *typ)
+				if output.NotNullable != typ.NotNullable {
+					binding.types[i] = &output
+				}
 			}
 		}
 	}

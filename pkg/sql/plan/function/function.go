@@ -63,6 +63,7 @@ func initAllSupportedFunctions() {
 		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	registerNullabilityProofs()
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -254,21 +255,22 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	fid, _ := DecodeOverloadID(overloadID)
-	// A NULL-producing function can return NULL even for non-NULL inputs.
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NULL) {
+	fid, idx := DecodeOverloadID(overloadID)
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) {
 		return false
 	}
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+	fn := &allSupportedFunctions[fid]
+	if idx < 0 || int(idx) >= len(fn.Overloads) || fn.testFlag(plan.Function_PRODUCE_NULL) {
+		return false
+	}
+	if fn.testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
-
-	for _, arg := range args {
-		if !arg.Typ.NotNullable {
-			return false
-		}
+	proof := fn.nonNullResult
+	if fn.Overloads[idx].nonNullResult != nil {
+		proof = fn.Overloads[idx].nonNullResult
 	}
-	return true
+	return proof != nil && proof(args)
 }
 
 type FuncGetResult struct {
@@ -334,6 +336,9 @@ type FuncNew struct {
 	// function type.
 	class plan.Function_FuncFlag
 
+	// 非空结果的正向证明，与 STRICT、volatile 和求值重排资格相互独立。
+	nonNullResult nonNullResultProof
+
 	// All overloads of the function.
 	Overloads []overload
 
@@ -375,6 +380,9 @@ type aggregationLogicOfOverload struct {
 // stores all information about execution logic.
 type overload struct {
 	overloadId int
+
+	// 非 nil 时细化函数级别的结果非空契约。
+	nonNullResult nonNullResultProof
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.

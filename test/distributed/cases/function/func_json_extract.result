@@ -136,8 +136,19 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 ["a1", "b1"]
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
-Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON(0)    NO        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+json_extract({"a":1}, $.a)  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from v1;
+➤ json_extract({"a":1}, $.a)[-1,2147483647,0]  𝄀
+1
+create view json_extract_missing_view as select json_extract('{"a":1}','$.missing') as v;
+desc json_extract_missing_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from json_extract_missing_view;
+➤ v[-1,2147483647,0]  𝄀
+null
+drop view json_extract_missing_view;
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null
