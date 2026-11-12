@@ -134,9 +134,9 @@ type InitWatermark struct {
 type ISCPTaskExecutor struct {
 	tables      *btree.BTreeG[*TableEntry]
 	tableMu     sync.RWMutex
-	packer      *types.Packer
 	mp          *mpool.MPool
 	cnUUID      string
+	taskID      uint64
 	txnEngine   engine.Engine
 	cnTxnClient client.TxnClient
 	// rootFS is the CN's root FileService (the one that resolves the LOCAL SSD

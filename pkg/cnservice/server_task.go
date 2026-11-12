@@ -99,7 +99,14 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 	// The account is always in the memory.
 	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
 
-	if err := s.task.holder.Create(*command); err != nil {
+	s.task.Lock()
+	_, alreadyCreated := s.task.holder.Get()
+	err := s.task.holder.Create(*command)
+	if err == nil && !alreadyCreated {
+		s.task.taskLeaseInCatalog = s.task.storageFactory == nil && command.TaskDatabase == catalog.MOTaskDB
+	}
+	s.task.Unlock()
+	if err != nil {
 		s.logger.Error("create task service failed", zap.Error(err))
 		return
 	}
@@ -266,13 +273,12 @@ func (s *service) stopTask() error {
 
 	s.task.Lock()
 	defer s.task.Unlock()
-	if s.task.holder == nil {
-		return nil
-	}
-
-	err := s.task.holder.Close()
+	var err error
 	if s.task.runner != nil {
-		err = errors.Join(err, s.task.runner.Stop())
+		err = s.task.runner.Stop()
+	}
+	if s.task.holder != nil {
+		err = errors.Join(err, s.task.holder.Close())
 	}
 	return err
 }
@@ -332,29 +338,34 @@ func (s *service) registerExecutorsLocked() {
 		},
 	)
 
-	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.CDCTaskExecutorFactory(
-			s.logger,
-			ieFactory,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			ts,
-			s.fileService,
-			s._txnClient,
-			s.storeEngine,
-		),
-	)
-
-	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
-		iscp.ISCPTaskExecutorFactory(
-			s.storeEngine,
-			s._txnClient,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			common.ISCPAllocator,
-			s.fileService,
-		),
-	)
+	if s.task.taskLeaseInCatalog {
+		s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
+			frontend.CDCTaskExecutorFactory(
+				s.logger,
+				ieFactory,
+				s.task.runner.Attach,
+				s.cfg.UUID,
+				ts,
+				s.fileService,
+				s._txnClient,
+				s.storeEngine,
+			),
+		)
+		s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
+			iscp.ISCPTaskExecutorFactory(
+				s.storeEngine,
+				s._txnClient,
+				s.task.runner.Attach,
+				s.cfg.UUID,
+				common.ISCPAllocator,
+				s.fileService,
+			),
+		)
+	} else {
+		// A runner that cannot guard the lease must not claim it at all: an
+		// executor that fails after claiming would displace a compatible CN.
+		s.logger.Warn("CDC and ISCP require the MatrixOne mo_task transaction store")
+	}
 
 	s.task.runner.RegisterExecutor(task.TaskCode_PublicationExecutor,
 		publication.PublicationTaskExecutorFactory(

@@ -160,6 +160,7 @@ func TestNewSinker(t *testing.T) {
 			if tt.args.sinkUri.SinkTyp == CDCSinkType_MySQL {
 				// Mock CreateMysqlSinker2 to avoid real DB connection
 				stub = gostub.Stub(&CreateMysqlSinker2, func(
+					_ context.Context,
 					_ UriInfo, _ uint64, _ string, _ *DbTableInfo, _ *CDCWatermarkUpdater,
 					tableDef *plan.TableDef, _ int, _ time.Duration, _ *ActiveRoutine, _ uint64, _ string,
 				) (Sinker, error) {
@@ -174,6 +175,7 @@ func TestNewSinker(t *testing.T) {
 			}
 
 			got, err := NewSinker(
+				t.Context(),
 				tt.args.sinkUri,
 				tt.args.accountId,
 				tt.args.taskId,

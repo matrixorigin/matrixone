@@ -367,6 +367,66 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	assert.Equal(t, toTs, wm)
 }
 
+func TestClosedSinkCannotAdvanceWatermark(t *testing.T) {
+	ar := NewCdcActiveRoutine()
+	sink := NewMysqlSinker2(nil, 1, "task", &DbTableInfo{SourceDbName: "db", SourceTblName: "tbl"}, nil, nil, ar)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	sink.Run(ctx, ar)
+	sink.Close()
+
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sink, updater, 1, "task", "db", "tbl")
+	from := types.TS{}
+	to := (&from).Next()
+	tm.tracker = NewTransactionTracker(from, to)
+	tm.tracker.MarkBegin()
+	require.ErrorIs(t, tm.CommitTransaction(ctx), context.Canceled)
+	require.False(t, updater.updateCalled, "a dropped commit must not advance the watermark")
+	require.True(t, tm.tracker.NeedsRollback())
+}
+
+func TestClosedSinkCannotAcknowledgeCommitWithoutBarrier(t *testing.T) {
+	sink := NewMysqlSinker2(nil, 1, "task", &DbTableInfo{SourceDbName: "db", SourceTblName: "tbl"}, nil, nil, NewCdcActiveRoutine())
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sink, updater, 1, "task", "db", "tbl")
+	from := types.TS{}
+	to := (&from).Next()
+	tm.tracker = NewTransactionTracker(from, to)
+	tm.tracker.MarkBegin()
+	accepted := make(chan *Command, 1)
+	go func() { accepted <- <-sink.cmdCh }()
+	done := make(chan error, 1)
+	go func() { done <- tm.CommitTransaction(t.Context()) }()
+	select {
+	case cmd := <-accepted:
+		require.Equal(t, CmdCommit, cmd.Type)
+		cmd.Close()
+	case <-time.After(time.Second):
+		t.Fatal("sink did not receive the commit")
+	}
+	// With no consumer left for the dummy barrier, Close must wake the sender
+	// and make the incomplete confirmation visible to the transaction owner.
+	sink.Close()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("commit did not finish after the sink closed")
+	}
+	require.False(t, updater.updateCalled)
+}
+
+func TestClosedSinkPreservesFirstError(t *testing.T) {
+	sink := NewMysqlSinker2(nil, 1, "task", &DbTableInfo{SourceDbName: "db", SourceTblName: "tbl"}, nil, nil, NewCdcActiveRoutine())
+	want := moerr.NewInternalErrorNoCtx("sink write failed")
+	sink.SetError(want)
+	sink.Close()
+	require.ErrorIs(t, sink.Error(), want)
+	sink.ClearError()
+	require.ErrorIs(t, sink.Error(), context.Canceled)
+}
+
 func TestTransactionManager_CommitTransaction_WithoutBegin(t *testing.T) {
 	ctx := context.Background()
 	sinker := &mockSinker{}

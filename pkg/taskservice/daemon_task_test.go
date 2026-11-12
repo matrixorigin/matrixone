@@ -103,6 +103,105 @@ func (r *mockFuncActiveRoutine) Restart() error {
 	return r.restart()
 }
 
+type blockingPauseRoutine struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingPauseRoutine) Pause() error {
+	close(r.entered)
+	<-r.release
+	return nil
+}
+func (*blockingPauseRoutine) Resume() error  { return nil }
+func (*blockingPauseRoutine) Cancel() error  { return nil }
+func (*blockingPauseRoutine) Restart() error { return nil }
+
+type retryCancelRoutine struct{ calls atomic.Int32 }
+
+func (*retryCancelRoutine) Pause() error   { return nil }
+func (*retryCancelRoutine) Resume() error  { return nil }
+func (*retryCancelRoutine) Restart() error { return nil }
+func (r *retryCancelRoutine) Cancel() error {
+	if r.calls.Add(1) == 1 {
+		return errors.New("first cancellation failed")
+	}
+	return nil
+}
+
+type drainableRoutine struct {
+	entered       chan struct{}
+	release       chan struct{}
+	calls         atomic.Int32
+	releaseFailed func(context.Context, error) error
+}
+
+func (r *drainableRoutine) ReleaseFailedStart(ctx context.Context, cause error) error {
+	if r.releaseFailed == nil {
+		return errors.New("test release is unavailable")
+	}
+	return r.releaseFailed(ctx, cause)
+}
+
+type retryDrainRoutine struct {
+	drainableRoutine
+	attempts atomic.Int32
+}
+
+// A canceled waiter cannot abandon cleanup, but may observe its completion.
+type shutdownDrainRoutine struct{ drainableRoutine }
+
+func (r *shutdownDrainRoutine) CancelAndWait(ctx context.Context) error {
+	select {
+	case <-r.release:
+		return nil
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.drainableRoutine.CancelAndWait(ctx)
+}
+
+type failedCompletionRoutine struct {
+	drainableRoutine
+	complete func(context.Context) error
+}
+
+func (r *failedCompletionRoutine) CompleteRestart(ctx context.Context) error {
+	return r.complete(ctx)
+}
+
+func (r *retryDrainRoutine) CancelAndWait(ctx context.Context) error {
+	if r.attempts.Add(1) == 1 {
+		return errors.New("temporary cleanup failure")
+	}
+	return r.drainableRoutine.CancelAndWait(ctx)
+}
+
+func (*drainableRoutine) Pause() error   { return nil }
+func (*drainableRoutine) Resume() error  { return nil }
+func (*drainableRoutine) Restart() error { return nil }
+func (r *drainableRoutine) Cancel() error {
+	r.calls.Add(1)
+	return nil
+}
+func (r *drainableRoutine) CancelAndWait(ctx context.Context) error {
+	if err := r.Cancel(); err != nil {
+		return err
+	}
+	select {
+	case r.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type serviceWithDaemonHook struct {
 	TaskService
 	mu             sync.RWMutex
@@ -276,10 +375,21 @@ func newDaemonTaskForTest(id uint64, status task.TaskStatus, runner string) task
 	return t
 }
 
+// The runner lifecycle tests use memory storage and exercise its scheduling
+// contract; catalog atomicity is covered by the real storage tests.
+type daemonTestStorage struct{ TaskStorage }
+
+func (s *daemonTestStorage) ClaimCDCRestart(ctx context.Context, claimed task.DaemonTask, previousRunner string, staleBefore time.Time) (bool, error) {
+	n, err := s.UpdateDaemonTask(ctx, []task.DaemonTask{claimed},
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithTaskRunnerCond(EQ, previousRunner), WithLastHeartbeat(LE, staleBefore.UnixNano()))
+	return n == 1, err
+}
+
 func newDaemonHandleTestRunner(t *testing.T) (*taskRunner, TaskStorage) {
 	t.Helper()
 	store := NewMemTaskStorage()
-	s := NewTaskService(runtime.DefaultRuntime(), store)
+	s := NewTaskService(runtime.DefaultRuntime(), &daemonTestStorage{TaskStorage: store})
 	t.Cleanup(func() {
 		require.NoError(t, s.Close())
 	})
@@ -287,6 +397,12 @@ func newDaemonHandleTestRunner(t *testing.T) (*taskRunner, TaskStorage) {
 		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
 		WithRunnerFetchInterval(time.Millisecond)).(*taskRunner)
 	return r, store
+}
+
+func (r *taskRunner) addDaemonTask(dt *daemonTask) {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	r.daemonTasks.m[dt.task.ID] = dt
 }
 
 func TestStartTaskHandleBranches(t *testing.T) {
@@ -371,6 +487,276 @@ func TestStartDaemonTaskPublishesClaimedSnapshot(t *testing.T) {
 	published, ok := r.getDaemonTask(dt.ID)
 	require.True(t, ok)
 	require.Same(t, taskRef, published)
+}
+
+func TestDaemonClaimWaitsForSupersededLocalInvocation(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	foreign := newDaemonTaskForTest(1, task.TaskStatus_Running, "other-cn")
+	foreign.Metadata.ID = "superseded-local-invocation"
+	foreign.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Minute)
+	mustAddTestDaemonTask(t, store, 1, foreign)
+
+	old := foreign
+	old.TaskRunner = r.runnerID
+	previous := &daemonTask{task: old, done: make(chan struct{})}
+	routine := newMockActiveRoutine()
+	var active ActiveRoutine = routine
+	previous.activeRoutine.Store(&active)
+	canceled := make(chan struct{})
+	var cancelPrevious sync.Once
+	previous.cancel = func() { cancelPrevious.Do(func() { close(canceled) }) }
+	r.addDaemonTask(previous)
+
+	finished := make(chan struct{})
+	var finishPrevious sync.Once
+	t.Cleanup(func() { finishPrevious.Do(func() { close(previous.done) }) })
+	go func() {
+		defer close(finished)
+		claimed, err := r.startDaemonTask(context.Background(), &daemonTask{task: foreign}, false)
+		assert.NoError(t, err)
+		assert.False(t, claimed)
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded invocation was not canceled")
+	}
+	current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, foreign.ID))
+	require.Equal(t, "other-cn", current[0].TaskRunner)
+	claimed, err := r.startDaemonTask(context.Background(), &daemonTask{task: foreign}, false)
+	require.NoError(t, err)
+	require.False(t, claimed)
+
+	finishPrevious.Do(func() { close(previous.done) })
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded invocation was not joined")
+	}
+	select {
+	case <-routine.cancelC:
+	default:
+		t.Fatal("superseded active routine was not stopped")
+	}
+	claimed, err = r.startDaemonTask(context.Background(), &daemonTask{task: foreign}, false)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	current = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, foreign.ID))
+	require.Equal(t, r.runnerID, current[0].TaskRunner)
+}
+
+func TestDaemonClaimRechecksSupersededOwner(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	local := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	local.Metadata.ID = "stale-foreign-snapshot"
+	mustAddTestDaemonTask(t, store, 1, local)
+	previous := &daemonTask{task: local, done: make(chan struct{})}
+	routine := newMockActiveRoutine()
+	var active ActiveRoutine = routine
+	previous.activeRoutine.Store(&active)
+	r.addDaemonTask(previous)
+
+	stale := local
+	stale.TaskRunner = "other-cn"
+	claimed, err := r.startDaemonTask(context.Background(), &daemonTask{task: stale}, false)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	select {
+	case <-routine.cancelC:
+		t.Fatal("a stale foreign snapshot canceled the current local owner")
+	default:
+	}
+}
+
+func TestUnregisteredRunnerDoesNotClaimDaemonTask(t *testing.T) {
+	unsupported, store := newDaemonHandleTestRunner(t)
+	compatible := NewTaskRunner("compatible-cn", unsupported.service, func(string) bool { return true }).(*taskRunner)
+	t.Cleanup(compatible.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "unregistered-iscp"
+	dt.Metadata.Executor = task.TaskCode_ISCPExecutor
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	unsupported.dispatchTaskHandle(t.Context())
+	select {
+	case <-unsupported.pendingTaskHandle:
+		t.Fatal("runner without the executor queued a claim")
+	default:
+	}
+	current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Created, current[0].TaskStatus)
+	require.Empty(t, current[0].TaskRunner)
+
+	started := make(chan struct{})
+	compatible.RegisterExecutor(task.TaskCode_ISCPExecutor, func(ctx context.Context, _ task.Task) error {
+		close(started)
+		<-ctx.Done()
+		return nil
+	})
+	compatible.dispatchTaskHandle(t.Context())
+	select {
+	case handler := <-compatible.pendingTaskHandle:
+		require.NoError(t, handler.Handle(t.Context()))
+	case <-time.After(5 * time.Second):
+		t.Fatal("compatible runner did not queue the task")
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compatible runner did not claim the task")
+	}
+	current = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, "compatible-cn", current[0].TaskRunner)
+}
+
+func TestHeartbeatStopsSupersededInvocation(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	foreign := newDaemonTaskForTest(1, task.TaskStatus_Running, "other-cn")
+	foreign.Metadata.ID = "heartbeat-superseded"
+	foreign.LastHeartbeat = time.Unix(1, 0)
+	mustAddTestDaemonTask(t, store, 1, foreign)
+
+	old := foreign
+	old.TaskRunner = r.runnerID
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	previous := &daemonTask{task: old, done: make(chan struct{}), cancel: cancel}
+	r.addDaemonTask(previous)
+	var finish sync.Once
+	t.Cleanup(func() { finish.Do(func() { close(previous.done) }); r.stopper.Stop() })
+
+	r.doSendHeartbeat(t.Context())
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded invocation was not canceled")
+	}
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, foreign.ID))
+	require.Equal(t, foreign.LastHeartbeat, got[0].LastHeartbeat)
+	finish.Do(func() { close(previous.done) })
+	require.Eventually(t, func() bool {
+		_, ok := r.getDaemonTask(foreign.ID)
+		return !ok
+	}, 5*time.Second, time.Millisecond)
+}
+
+func TestSupersededInvocationStopsLateAttachedRoutine(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "late-attached-routine"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	started := make(chan struct{})
+	routine := newMockActiveRoutine()
+	reference := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+		close(started)
+		<-ctx.Done()
+		return r.Attach(context.Background(), dt.ID, routine)
+	}}
+	t.Cleanup(r.stopper.Stop)
+	require.NoError(t, newStartTask(r, reference).Handle(t.Context()))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not start")
+	}
+	current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	current[0].TaskRunner = "other-cn"
+	mustUpdateTestDaemonTask(t, store, 1, current)
+	stopped := make(chan struct{})
+	go func() { r.stopSupersededDaemonTask(t.Context(), reference); close(stopped) }()
+	select {
+	case <-routine.cancelC:
+	case <-time.After(5 * time.Second):
+		t.Fatal("late-attached routine was not stopped")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded invocation did not finish")
+	}
+	_, ok := r.getDaemonTask(dt.ID)
+	require.False(t, ok)
+}
+
+func TestSupersededInvocationRetriesFailedRoutineCleanup(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "failed-routine-cleanup"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	mustAddTestDaemonTask(t, store, 1, dt)
+	started := make(chan struct{})
+	routine := &retryCancelRoutine{}
+	reference := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+		if err := r.Attach(ctx, dt.ID, routine); err != nil {
+			return err
+		}
+		close(started)
+		<-ctx.Done()
+		return nil
+	}}
+	require.NoError(t, newStartTask(r, reference).Handle(t.Context()))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not attach")
+	}
+	current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	current[0].TaskRunner = "other-cn"
+	mustUpdateTestDaemonTask(t, store, 1, current)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	r.stopSupersededDaemonTask(ctx, reference)
+	require.NoError(t, ctx.Err())
+	require.Equal(t, int32(2), routine.calls.Load())
+	_, ok := r.getDaemonTask(dt.ID)
+	require.False(t, ok)
+}
+
+func TestSupersededInvocationRetainsAdmissionUntilReplacementStops(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	foreign := newDaemonTaskForTest(1, task.TaskStatus_Running, "other-cn")
+	foreign.Metadata.ID = "replacement-still-draining"
+	foreign.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Minute)
+	mustAddTestDaemonTask(t, store, 1, foreign)
+
+	old := foreign
+	old.TaskRunner = r.runnerID
+	previous := &daemonTask{task: old, done: make(chan struct{}), cancel: func() {}}
+	close(previous.done) // The original paused invocation has returned.
+	routine := &drainableRoutine{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	var active ActiveRoutine = routine
+	previous.activeRoutine.Store(&active)
+	r.addDaemonTask(previous)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	finished := make(chan struct{})
+	go func() { r.stopSupersededDaemonTask(ctx, previous); close(finished) }()
+	select {
+	case <-routine.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("routine was not asked to drain")
+	}
+	claimed, err := r.startDaemonTask(t.Context(), &daemonTask{task: foreign}, false)
+	require.NoError(t, err)
+	require.False(t, claimed, "a replacement cannot reuse the local ID while the old child is active")
+	cancel()
+	<-finished
+	_, exists := r.getDaemonTask(foreign.ID)
+	require.True(t, exists, "a canceled drain must retain local admission for retry")
+
+	close(routine.release)
+	r.stopSupersededDaemonTask(t.Context(), previous)
+	_, exists = r.getDaemonTask(foreign.ID)
+	require.False(t, exists)
+	require.Equal(t, int32(2), routine.calls.Load())
+	claimed, err = r.startDaemonTask(t.Context(), &daemonTask{task: foreign}, false)
+	require.NoError(t, err)
+	require.True(t, claimed)
 }
 
 func TestTaskRunnerStopJoinsExecutorReplacementTask(t *testing.T) {
@@ -604,6 +990,244 @@ func TestRestartStartFailureReleasesClaimForRetry(t *testing.T) {
 	require.True(t, restartAdmission.Load())
 }
 
+func TestRestartStartFailureKeepsClaimUntilRoutineDrains(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	r.options.retryInterval = time.Millisecond
+	t.Cleanup(r.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+	dt.Metadata.ID = "restart-failure-drain"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+	routine := &retryDrainRoutine{drainableRoutine: drainableRoutine{
+		entered: make(chan struct{}, 1), release: make(chan struct{}),
+	}}
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(routine.release) }) })
+	ref := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+		if err := r.Attach(ctx, dt.ID, routine); err != nil {
+			return err
+		}
+		return errors.New("catalog transition unavailable")
+	}}
+	routine.releaseFailed = func(context.Context, error) error {
+		r.releaseRestartClaim(ref, errors.New("catalog transition unavailable"))
+		return nil
+	}
+	require.NoError(t, newRestartStartTask(r, ref).Handle(t.Context()))
+	select {
+	case <-routine.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed executor was not retried and drained")
+	}
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Running, got[0].TaskStatus)
+	require.Equal(t, r.runnerID, got[0].TaskRunner)
+	current, exists := r.getDaemonTask(dt.ID)
+	require.True(t, exists)
+	require.Same(t, ref, current)
+	claimed, err := r.startDaemonTask(t.Context(), &daemonTask{task: got[0]}, true)
+	require.NoError(t, err)
+	require.False(t, claimed, "the same CN must not reuse the task while cleanup is active")
+
+	release.Do(func() { close(routine.release) })
+	require.Eventually(t, func() bool {
+		rows := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		_, exists := r.getDaemonTask(dt.ID)
+		return !exists && rows[0].TaskStatus == task.TaskStatus_RestartRequested && rows[0].TaskRunner == ""
+	}, 5*time.Second, time.Millisecond)
+	require.GreaterOrEqual(t, routine.attempts.Load(), int32(2))
+}
+
+func TestCDCRestartFactoryFailureDoesNotReleaseUnattachedClaim(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "old-cn")
+	dt.Metadata.ID = "restart-before-attachment"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+	failed := make(chan struct{})
+	ref := &daemonTask{task: dt, executor: func(context.Context, task.Task) error {
+		close(failed)
+		return errors.New("factory failed before attachment")
+	}}
+	require.NoError(t, newRestartStartTask(r, ref).Handle(t.Context()))
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("factory did not run")
+	}
+	require.Eventually(t, func() bool {
+		_, exists := r.getDaemonTask(dt.ID)
+		return !exists
+	}, time.Second, time.Millisecond)
+	rows := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Running, rows[0].TaskStatus)
+	require.Equal(t, r.runnerID, rows[0].TaskRunner)
+}
+
+func TestRestartStartFailureDrainsDuringShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		supersede  task.TaskStatus
+		owner      string
+		wantStatus task.TaskStatus
+		wantOwner  string
+	}{
+		{name: "retry", wantStatus: task.TaskStatus_RestartRequested},
+		{name: "successor", supersede: task.TaskStatus_Running, owner: "r2", wantStatus: task.TaskStatus_Running, wantOwner: "r2"},
+		{name: "pause", supersede: task.TaskStatus_PauseRequested, owner: "r1", wantStatus: task.TaskStatus_PauseRequested, wantOwner: "r1"},
+		{name: "cancel", supersede: task.TaskStatus_CancelRequested, owner: "r1", wantStatus: task.TaskStatus_CancelRequested, wantOwner: "r1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+			dt.Metadata.ID = "restart-shutdown-" + tc.name
+			dt.Metadata.Executor = task.TaskCode_InitCdc
+			dt.TaskType = task.TaskType_CreateCdc
+			dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+			mustAddTestDaemonTask(t, store, 1, dt)
+
+			routine := &shutdownDrainRoutine{drainableRoutine: drainableRoutine{
+				entered: make(chan struct{}, 1), release: make(chan struct{}),
+			}}
+			var release sync.Once
+			t.Cleanup(r.stopper.Stop)
+			t.Cleanup(func() { release.Do(func() { close(routine.release) }) })
+			factoryEntered, returnFailure, stopping := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var fail sync.Once
+			proceed := func() { fail.Do(func() { close(returnFailure) }) }
+			t.Cleanup(proceed)
+			ref := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+				if err := r.Attach(ctx, dt.ID, routine); err != nil {
+					return err
+				}
+				schedule := TaskExecutorTaskSchedulerFromContext(ctx)
+				if err := schedule("test-owned-cleanup", func(ctx context.Context) {
+					<-ctx.Done()
+					close(stopping)
+					<-routine.release
+				}); err != nil {
+					return err
+				}
+				close(factoryEntered)
+				<-returnFailure
+				return errors.New("catalog transition unavailable")
+			}}
+			routine.releaseFailed = func(context.Context, error) error {
+				r.releaseRestartClaim(ref, errors.New("catalog transition unavailable"))
+				return nil
+			}
+			require.NoError(t, newRestartStartTask(r, ref).Handle(t.Context()))
+			select {
+			case <-factoryEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("executor did not attach")
+			}
+			stopped := make(chan struct{})
+			go func() { r.stopper.Stop(); close(stopped) }()
+			select {
+			case <-stopping:
+			case <-time.After(5 * time.Second):
+				t.Fatal("stopper did not cancel its tasks")
+			}
+			proceed()
+			select {
+			case <-routine.entered:
+			case <-ref.done:
+				t.Fatal("restart owner returned before cleanup was drained")
+			case <-time.After(5 * time.Second):
+				t.Fatal("cleanup did not start")
+			}
+			rows := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, task.TaskStatus_Running, rows[0].TaskStatus)
+			require.Equal(t, r.runnerID, rows[0].TaskRunner)
+			if tc.owner != "" {
+				rows[0].TaskStatus, rows[0].TaskRunner = tc.supersede, tc.owner
+				mustUpdateTestDaemonTask(t, store, 1, rows)
+			}
+			release.Do(func() { close(routine.release) })
+			select {
+			case <-stopped:
+			case <-time.After(5 * time.Second):
+				t.Fatal("stopper did not join cleanup")
+			}
+			rows = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, tc.wantStatus, rows[0].TaskStatus)
+			require.Equal(t, tc.wantOwner, rows[0].TaskRunner)
+		})
+	}
+}
+
+func TestFailedDrainPreservesCleanupErrorDuringShutdown(t *testing.T) {
+	r, _ := newDaemonHandleTestRunner(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	routine := &retryDrainRoutine{}
+	err := r.waitFailedRoutine(ctx, 1, routine)
+	require.EqualError(t, err, "temporary cleanup failure")
+	require.Equal(t, int32(1), routine.attempts.Load())
+}
+
+func TestFailedDrainDoesNotReleaseClaimDuringShutdown(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+	dt.Metadata.ID = "restart-shutdown-failed-drain"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+	routine := &retryDrainRoutine{}
+	entered, stopping, returnFailure := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var fail sync.Once
+	proceed := func() { fail.Do(func() { close(returnFailure) }) }
+	t.Cleanup(proceed)
+	ref := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+		if err := r.Attach(ctx, dt.ID, routine); err != nil {
+			return err
+		}
+		if err := TaskExecutorTaskSchedulerFromContext(ctx)("test-observe-stop", func(ctx context.Context) {
+			<-ctx.Done()
+			close(stopping)
+		}); err != nil {
+			return err
+		}
+		close(entered)
+		<-returnFailure
+		return errors.New("startup failed")
+	}}
+	require.NoError(t, newRestartStartTask(r, ref).Handle(t.Context()))
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not attach")
+	}
+	stopped := make(chan struct{})
+	go func() { r.stopper.Stop(); close(stopped) }()
+	select {
+	case <-stopping:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopper did not cancel its tasks")
+	}
+	proceed()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopper retried failed cleanup during shutdown")
+	}
+	rows := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Running, rows[0].TaskStatus)
+	require.Equal(t, r.runnerID, rows[0].TaskRunner)
+	current, exists := r.getDaemonTask(dt.ID)
+	require.True(t, exists)
+	require.Same(t, ref, current)
+	require.Equal(t, int32(1), routine.attempts.Load(), "failed cleanup must not be immediately restarted")
+}
+
 func TestRestartStartFailureDoesNotReleaseSupersedingControlRequest(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	claimed := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
@@ -622,6 +1246,101 @@ func TestRestartStartFailureDoesNotReleaseSupersedingControlRequest(t *testing.T
 	require.Len(t, got, 1)
 	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
 	require.Equal(t, r.runnerID, got[0].TaskRunner)
+}
+
+func TestFailedRestartCompletionDrainsBeforeRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status task.TaskStatus
+	}{
+		{name: "committed but acknowledgement lost", status: task.TaskStatus_Running},
+		{name: "new restart", status: task.TaskStatus_RestartRequested},
+		{name: "pause", status: task.TaskStatus_PauseRequested},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			t.Cleanup(r.stopper.Stop)
+			dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, r.runnerID)
+			dt.Metadata.ID = "restart-completion-" + tc.name
+			dt.Metadata.Executor = task.TaskCode_InitCdc
+			dt.TaskType = task.TaskType_CreateCdc
+			mustAddTestDaemonTask(t, store, 1, dt)
+			routine := &failedCompletionRoutine{drainableRoutine: drainableRoutine{
+				entered: make(chan struct{}, 1), release: make(chan struct{}),
+			}}
+			var release sync.Once
+			t.Cleanup(func() { release.Do(func() { close(routine.release) }) })
+			routine.complete = func(ctx context.Context) error {
+				_, err := r.service.UpdateDaemonTaskStatus(ctx, dt.ID, tc.status, time.Now(), time.Time{}, WithTaskStatusCond(task.TaskStatus_RestartRequested))
+				if err != nil {
+					return err
+				}
+				return errors.New("completion result unavailable")
+			}
+			_, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			ref := &daemonTask{task: dt, cancel: cancel}
+			active := ActiveRoutine(routine)
+			ref.activeRoutine.Store(&active)
+			r.addDaemonTask(ref)
+			require.Error(t, newRestartTask(r, ref).Handle(t.Context()))
+			select {
+			case <-routine.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed completion did not start cleanup")
+			}
+			current, exists := r.getDaemonTask(dt.ID)
+			require.True(t, exists)
+			require.Same(t, ref, current)
+			release.Do(func() { close(routine.release) })
+			require.Eventually(t, func() bool {
+				_, exists := r.getDaemonTask(dt.ID)
+				return !exists
+			}, 5*time.Second, time.Millisecond)
+			rows := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, tc.status, rows[0].TaskStatus)
+			require.Equal(t, r.runnerID, rows[0].TaskRunner)
+		})
+	}
+}
+
+func TestFailedRestartCompletionJoinsWhenStopperRejectsChild(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	r.stopper.Stop()
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, r.runnerID)
+	dt.Metadata.ID = "restart-completion-shutdown"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.TaskType = task.TaskType_CreateCdc
+	mustAddTestDaemonTask(t, store, 1, dt)
+	routine := &failedCompletionRoutine{drainableRoutine: drainableRoutine{
+		entered: make(chan struct{}, 1), release: make(chan struct{}),
+	}, complete: func(context.Context) error { return errors.New("completion unavailable") }}
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(routine.release) }) })
+	_, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ref := &daemonTask{task: dt, cancel: cancel}
+	active := ActiveRoutine(routine)
+	ref.activeRoutine.Store(&active)
+	r.addDaemonTask(ref)
+	done := make(chan error, 1)
+	go func() { done <- newRestartTask(r, ref).Handle(t.Context()) }()
+	select {
+	case <-routine.entered:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not take ownership of rejected cleanup")
+	}
+	_, exists := r.getDaemonTask(dt.ID)
+	require.True(t, exists)
+	release.Do(func() { close(routine.release) })
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish after cleanup completed")
+	}
+	_, exists = r.getDaemonTask(dt.ID)
+	require.False(t, exists)
 }
 
 func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
@@ -749,6 +1468,37 @@ func TestPauseTaskHandleKeepsPauseRequestedWhenActivePauseFails(t *testing.T) {
 	require.Equal(t, task.TaskStatus_PauseRequested, tasks[0].TaskStatus)
 }
 
+func TestPauseCompletionPreservesConcurrentCancel(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	observed := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, r.runnerID)
+	observed.Metadata.ID = "pause-cancel"
+	mustAddTestDaemonTask(t, store, 1, observed)
+
+	dt := &daemonTask{task: observed}
+	pause := &blockingPauseRoutine{entered: make(chan struct{}), release: make(chan struct{})}
+	var active ActiveRoutine = pause
+	dt.activeRoutine.Store(&active)
+	r.addDaemonTask(dt)
+
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(pause.release) }) })
+	done := make(chan error, 1)
+	go func() { done <- newPauseTask(r, dt).Handle(context.Background()) }()
+	select {
+	case <-pause.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not reach the active routine")
+	}
+
+	newer := observed
+	newer.TaskStatus = task.TaskStatus_CancelRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{newer})
+	release.Do(func() { close(pause.release) })
+	require.NoError(t, <-done)
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, observed.ID))
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+}
+
 func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 
@@ -806,9 +1556,10 @@ func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
 
 	removeDT := newDaemonTaskForTest(3, task.TaskStatus_Paused, r.runnerID)
 	removeDT.Metadata.ID = "pause-completed-remove-1"
-	r.addDaemonTask(&daemonTask{task: removeDT})
+	removeRef := &daemonTask{task: removeDT}
+	r.addDaemonTask(removeRef)
 	r.markPauseTaskCompleted(removeDT.ID)
-	r.removeDaemonTask(removeDT.ID)
+	r.removeDaemonTask(removeRef)
 	require.False(t, r.isPauseTaskCompleted(removeDT.ID))
 }
 
@@ -1448,6 +2199,37 @@ func TestRestartDaemonTaskPassesRestartAdmissionToExecutor(t *testing.T) {
 		}
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRestartAdmissionKeepsInvocationCancellation(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "other-cn")
+	dt.Metadata.ID = "restart-invocation-context"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Minute)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	started := make(chan context.Context, 1)
+	reference := &daemonTask{task: dt, executor: func(ctx context.Context, _ task.Task) error {
+		started <- ctx
+		<-ctx.Done()
+		return nil
+	}}
+	require.NoError(t, newRestartStartTask(r, reference).Handle(t.Context()))
+	var executorCtx context.Context
+	select {
+	case executorCtx = <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("restart executor did not start")
+	}
+	require.True(t, IsRestartAdmission(executorCtx))
+	reference.cancel()
+	select {
+	case <-executorCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("restart executor did not inherit invocation cancellation")
+	}
 }
 
 func TestRestartStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T) {

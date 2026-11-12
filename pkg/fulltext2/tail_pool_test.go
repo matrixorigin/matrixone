@@ -149,7 +149,8 @@ func TestTailReuseDistinguishesReplacementFromAppend(t *testing.T) {
 		require.NoError(t, err)
 		return TailChunk{ChunkId: id, Data: data}
 	}
-	chunks := []TailChunk{makeChunk(1, 1, "apple")}
+	chunks := make([]TailChunk, 1, 2)
+	chunks[0] = makeChunk(1, 1, "apple")
 	var dataSQL string
 	afterRE := regexp.MustCompile(`chunk_id > ([0-9]+)`)
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {

@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -824,25 +825,75 @@ func Test_floatArrayToString(t *testing.T) {
 }
 
 func Test_openDbConn(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
 		return nil, nil
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	conn, err := OpenDbConn(t.Context(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
 		return nil, moerr.NewInternalErrorNoCtx("")
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	conn, err := OpenDbConn(t.Context(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Error(t, err)
 	assert.Nil(t, conn)
+}
+
+func TestOpenDbConnCancellationStopsRetry(t *testing.T) {
+	entered := make(chan struct{})
+	var calls atomic.Int32
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		return nil, moerr.NewInternalErrorNoCtx("connection failed")
+	})
+	defer stub.Reset()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("connection attempt did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("retry did not stop when canceled")
+	}
+	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestOpenDbConnKeepsLastAttemptError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	want := moerr.NewInternalErrorNoCtx("last connection attempt failed")
+	attempts := 0
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		attempts++
+		if attempts == 3 {
+			cancel()
+		}
+		return nil, want
+	})
+	defer stub.Reset()
+	_, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.ErrorIs(t, err, want)
+	require.Equal(t, 3, attempts)
 }
 
 func Test_makeMysqlConfig(t *testing.T) {
@@ -871,7 +922,7 @@ func Test_tryConn(t *testing.T) {
 
 	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	require.NoError(t, err)
-	got, err := tryConn(cfg)
+	got, err := tryConn(t.Context(), cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, db, got)
 }
