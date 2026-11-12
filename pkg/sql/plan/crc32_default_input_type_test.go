@@ -152,7 +152,8 @@ func TestCRC32UnchangedDefaultClauseRejectsConvertedSiblingInput(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-	preserved := unchangedCRC32ColumnClauses(source, col, typ)
+	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	require.NoError(t, err)
 	require.NotNil(t, preserved.Default)
 
 	converted := []*planpb.ColDef{

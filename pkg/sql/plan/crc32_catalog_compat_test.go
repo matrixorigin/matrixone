@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -549,12 +551,200 @@ func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	source := &planpb.ColDef{Typ: typ, Default: &planpb.Default{NullAbility: true, OriginString: `(crc32(cast('{"t1":"a"}' as json)))`, Expr: legacyCRC32Expr()}}
-	preserved := unchangedCRC32ColumnClauses(source, col, typ)
+	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	require.NoError(t, err)
 	require.NotNil(t, preserved.Default)
 	require.False(t, preserved.Default.NullAbility)
 	require.True(t, source.Default.NullAbility)
 	source.Default.OriginString = "different expression"
-	require.Nil(t, unchangedCRC32ColumnClauses(source, col, typ).Default)
+	preserved, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	require.NoError(t, err)
+	require.Nil(t, preserved.Default)
+}
+
+// A folded old DEFAULT has no function identity left in Expr. Repeating its
+// SQL with different function-name casing must retain the authoritative old
+// literal; changing the JSON string is an explicit new default instead.
+func TestCRC32FoldedDefaultModifyComparison(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		preserve         bool
+	}{
+		{"lowercase", `(crc32(cast('{"t1":"a"}' as json)))`, true},
+		{"uppercase_functions", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, true},
+		{"changed_json_value_case", `(CRC32(CAST('{"t1":"A"}' AS JSON)))`, false},
+		{"changed_json_key_case", `(CRC32(CAST('{"T1":"a"}' AS JSON)))`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			typ := planpb.Type{Id: int32(types.T_uint64)}
+			source := &planpb.ColDef{Typ: typ, Default: &planpb.Default{
+				NullAbility:  true,
+				OriginString: `(crc32(cast('{"t1":"a"}' as json)))`,
+				Expr: &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 3719146973},
+				}}},
+			}}
+			stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint unsigned default `+tc.expression+`)`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+			require.NoError(t, err)
+			if !tc.preserve {
+				require.Nil(t, preserved.Default, "a changed JSON string must bind a new default")
+				return
+			}
+			require.NotNil(t, preserved.Default)
+			got, err := buildDefaultExprWithColumns(proc.Ctx, col, typ, proc, nil, preserved)
+			require.NoError(t, err)
+			require.Equal(t, uint64(3719146973), got.Expr.GetLit().GetU64Val())
+		})
+	}
+}
+
+func TestCRC32FoldedDefaultAmbiguousOriginRejected(t *testing.T) {
+	for _, origin := range []string{
+		`(crc32(cast("null" as json)))`,
+		`(crc32(cast('unterminated as json)))`,
+	} {
+		t.Run(origin, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			typ := planpb.Type{Id: int32(types.T_uint64)}
+			source := &planpb.ColDef{Typ: typ, Default: &planpb.Default{
+				OriginString: origin,
+				Expr: &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 3719146973},
+				}}},
+			}}
+			stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint unsigned default (CRC32(CAST('null' AS JSON))))`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+			require.ErrorContains(t, err, "legacy CRC32 JSON default requires an explicit table rebuild")
+			require.Equal(t, uint64(3719146973), source.Default.Expr.GetLit().GetU64Val())
+		})
+	}
+}
+
+func TestCRC32TextInOrdinaryDefaultDoesNotRejectAlter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: 20}
+	source := &planpb.ColDef{Typ: typ, Default: &planpb.Default{
+		OriginString: `"crc32"`,
+		Expr: &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "crc32"},
+		}}},
+	}}
+	stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c varchar(20) default 'crc32')`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	preserved, err := unchangedCRC32ColumnClauses(proc.Ctx, source, col, typ)
+	require.NoError(t, err)
+	require.Nil(t, preserved.Default, "ordinary strings follow the existing default binding path")
+}
+
+func TestCRC32OriginMayCallFunction(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		want   bool
+	}{
+		{`'crc32'`, false},
+		{`concat('crc32(', 'x')`, false},
+		{`CRC32(cast('null' as json))`, true},
+		{`"crc32"(j)`, true},
+		{`'unterminated CRC32(`, true},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			require.Equal(t, tc.want, crc32OriginMayCallFunction(tc.origin))
+		})
+	}
+}
+
+// The old folded literal here models catalog metadata from a predecessor. The
+// ALTER and the internal CREATE both use the normal planner and index path.
+func TestCRC32FoldedDefaultIndexedModifyCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		want             uint64
+	}{
+		{"unchanged_lowercase", `(crc32(cast('{"t1":"a"}' as json)))`, 3719146973},
+		{"unchanged_uppercase", `(CRC32(CAST('{"t1":"a"}' AS JSON)))`, 3719146973},
+		{"changed_string", `(CRC32(CAST('{"t1":"A"}' AS JSON)))`, uint64(stdcrc32.ChecksumIEEE([]byte(`{"t1": "A"}`)))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newGeneratedIndexAlterMock(t)
+			base := mock.ctxt.tables["t_on_update_gen"]
+			base.Name2ColIndex = make(map[string]int32, len(base.Cols))
+			for i, col := range base.Cols {
+				base.Name2ColIndex[col.Name] = int32(i)
+			}
+			shape, err := mysql.ParseOne(context.Background(), "create table shape(g bigint unsigned)", 1)
+			require.NoError(t, err)
+			defer shape.Free()
+			g := FindColumn(base.Cols, "g")
+			g.Typ, err = getTypeFromAst(context.Background(), shape.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			g.GeneratedCol = nil
+			g.Default = &planpb.Default{NullAbility: true, OriginString: `(crc32(cast('{"t1":"a"}' as json)))`,
+				Expr: &planpb.Expr{Typ: g.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 3719146973},
+				}}}}
+			for _, idx := range base.Indexes {
+				if idx.IndexName == "idx_generated_g" {
+					hidden := mock.ctxt.tables[idx.IndexTableName]
+					require.NotNil(t, hidden)
+					key := FindColumn(hidden.Cols, catalog.IndexTableIndexColName)
+					require.NotNil(t, key)
+					key.Typ = g.Typ
+				}
+			}
+			before := proto.Clone(base).(*planpb.TableDef)
+			built, err := runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen modify column g bigint unsigned default "+tc.expression+" first, algorithm=copy")
+			require.NoError(t, err)
+			alter := built.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+			require.Equal(t, "g", alter.CopyTableDef.Cols[0].Name)
+			indexed := false
+			for _, idx := range alter.CopyTableDef.Indexes {
+				indexed = indexed || idx.IndexName == "idx_generated_g"
+			}
+			require.True(t, indexed, "COPY must retain the index on the defaulted column")
+			require.True(t, proto.Equal(before, base), "planning must not mutate the old table")
+			assertDefault := func(col *planpb.ColDef) {
+				t.Helper()
+				require.NotNil(t, col)
+				require.NotNil(t, col.Default)
+				proc := mock.ctxt.GetProcess()
+				exec, err := colexec.NewExpressionExecutor(proc, col.Default.Expr)
+				require.NoError(t, err)
+				defer exec.Free()
+				result, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+			assertDefault(FindColumn(alter.CopyTableDef.Cols, "g"))
+			parent := mock.ctxt.GetContext()
+			mock.ctxt.SetContext(WithPersistedDDLReplay(parent, alter.TableDef, alter.CopyTableDef))
+			defer mock.ctxt.SetContext(parent)
+			// The ALTER mock handles index visibility reads only. Internal CREATE
+			// also reads database defaults, for which the legacy empty result is
+			// sufficient in this catalog fixture.
+			mock.ctxt.internalSQLExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+				return executor.Result{}, nil
+			})
+			rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+			require.NoError(t, err)
+			assertDefault(FindColumn(rebuilt.GetDdl().GetCreateTable().TableDef.Cols, "g"))
+			require.True(t, proto.Equal(before, base), "COPY replay must not mutate the old table")
+		})
+	}
 }
 
 func TestCRC32DefaultRetainsJSONTextContract(t *testing.T) {

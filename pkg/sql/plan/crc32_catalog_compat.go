@@ -310,12 +310,37 @@ func preserveCRC32Default(def *planpb.Default) bool {
 		(def.Expr.GetLit() != nil && strings.Contains(strings.ToLower(def.OriginString), "crc32")))
 }
 
+// A string literal containing "crc32" is not itself a CRC32 call. Keep the
+// existing conservative replay for such literals, but do not reject an
+// ambiguous spelling change as though it necessarily used the old algorithm.
+func crc32OriginMayCallFunction(origin string) bool {
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	previousCRC32 := false
+	for {
+		token, value := scanner.Scan()
+		if token == mysql.LEX_ERROR {
+			return true
+		}
+		if token == 0 {
+			return false
+		}
+		if previousCRC32 && token == '(' {
+			return true
+		}
+		// Double-quoted names can be identifiers under ANSI_QUOTES, even when
+		// the current scanner classifies the same spelling as a string.
+		previousCRC32 = (token == mysql.ID || token == mysql.QUOTE_ID || token == mysql.STRING) && strings.EqualFold(value, "crc32")
+	}
+}
+
 // A CHANGE/MODIFY statement repeats defaults even when only the column name or
 // position changes. Preserve an unchanged contract while allowing an explicitly
-// different definition to bind normally.
-func unchangedCRC32ColumnClauses(old *planpb.ColDef, col *tree.ColumnTableDef, typ planpb.Type) *planpb.ColDef {
+// different definition to bind normally. If historical spelling is ambiguous,
+// do not silently replace a potentially unchanged legacy default.
+func unchangedCRC32ColumnClauses(ctx context.Context, old *planpb.ColDef, col *tree.ColumnTableDef, typ planpb.Type) (*planpb.ColDef, error) {
 	if old.Typ.Id != typ.Id || old.Typ.Width != typ.Width || old.Typ.Scale != typ.Scale {
-		return nil
+		return nil, nil
 	}
 	copy := &planpb.ColDef{}
 	for _, attr := range col.Attributes {
@@ -324,7 +349,15 @@ func unchangedCRC32ColumnClauses(old *planpb.ColDef, col *tree.ColumnTableDef, t
 			if preserveCRC32Default(old.Default) {
 				fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 				fmtCtx.PrintExpr(a.Expr, a.Expr, false)
-				if fmtCtx.String() == old.Default.OriginString {
+				same := fmtCtx.String() == old.Default.OriginString
+				if !same {
+					var known bool
+					same, known = sameLegacyCRC32Expression(old.Default.OriginString, fmtCtx.String())
+					if !known && (containsLegacyCRC32(old.Default.Expr) || crc32OriginMayCallFunction(old.Default.OriginString)) {
+						return nil, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON default requires an explicit table rebuild")
+					}
+				}
+				if same {
 					value := *old.Default
 					value.NullAbility = getColumnNullAbility(col)
 					copy.Default = &value
@@ -332,5 +365,5 @@ func unchangedCRC32ColumnClauses(old *planpb.ColDef, col *tree.ColumnTableDef, t
 			}
 		}
 	}
-	return copy
+	return copy, nil
 }

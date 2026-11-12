@@ -172,13 +172,17 @@ func buildColumnAndConstraint(
 		if preserved != nil && preserved.defaultExpr != nil {
 			return preserved.defaultExpr, nil
 		}
+		unchanged, err := unchangedCRC32ColumnClauses(ctx.GetContext(), oldCol, specNewColumn, colType)
+		if err != nil {
+			return nil, err
+		}
 		return buildDefaultExprWithColumns(
 			ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
 			specNewColumn,
 			colType,
 			ctx.GetProcess(),
 			defaultScope,
-			unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType),
+			unchanged,
 		)
 	}
 
