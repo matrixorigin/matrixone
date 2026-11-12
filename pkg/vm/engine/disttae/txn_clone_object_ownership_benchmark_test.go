@@ -45,6 +45,7 @@ func BenchmarkIssue32500RegisterSingleTable64(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		txn := issue32500BenchNewTxn()
+		issue32500BenchReserve(txn, len(objects), 100)
 		for j := range objects {
 			txn.registerCNObjects(objects[j], 1, 10, 100, nil, "db", "table", 0, false)
 		}
@@ -117,12 +118,19 @@ func BenchmarkIssue32500CloneRegister64x3(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		txn := issue32500BenchNewTxn()
+		issue32500BenchReserve(txn, len(objects), 100, 200, 300)
 		for j := range objects {
 			for _, tableID := range []uint64{100, 200, 300} {
 				txn.registerCNObjects(objects[j], 1, 10, tableID, nil, "db", "table", 0, false)
 			}
 		}
 		issue32500BenchSummary = issue32500BenchLookup(txn, objects[i%len(objects)], 300)
+	}
+}
+
+func issue32500BenchReserve(txn *Transaction, n int, tableIDs ...uint64) {
+	for _, tableID := range tableIDs {
+		txn.ensureCNObjectSummaryCapacity(tableID, n)
 	}
 }
 

@@ -3485,6 +3485,20 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	return -1, false, nil
 }
 
+// ensureCNObjectSummaryCapacity reserves for a known object batch when the
+// table map is first created. Existing maps keep normal incremental growth;
+// batch callers avoid repeated initial growth without copying existing data.
+func (txn *Transaction) ensureCNObjectSummaryCapacity(tableID uint64, n int) {
+	if n <= 0 {
+		return
+	}
+	objects := txn.cnObjsSummary[tableID]
+	if objects == nil {
+		txn.cnObjsSummary[tableID] = make(map[types.Objectid]Summary, n)
+		return
+	}
+}
+
 // vec contains block infos.
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
@@ -3729,6 +3743,7 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 	if s.typ == INSERT {
 		server := colexec.MustGetServer(txn.engine.service)
 		col, area := vector.MustVarlenaRawData(s.bat.Vecs[1])
+		txn.ensureCNObjectSummaryCapacity(s.tableId, len(col))
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 			oid := stats.ObjectName().ObjectId()
@@ -5005,6 +5020,7 @@ func (txn *Transaction) publishStagedRepublicationLocked(
 
 	server := colexec.MustGetServer(txn.engine.service)
 	col, area := vector.MustVarlenaRawData(r.bat.Vecs[1])
+	txn.ensureCNObjectSummaryCapacity(r.tableId, len(col))
 	for i := range col {
 		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 		oid := stats.ObjectName().ObjectId()
