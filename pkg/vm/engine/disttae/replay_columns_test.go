@@ -25,9 +25,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/require"
 )
+
+type replayTerminalProbe struct {
+	client.TxnOperator
+	finish func(context.Context, bool)
+}
+
+func (p replayTerminalProbe) Rollback(ctx context.Context) error { p.finish(ctx, true); return nil }
+func (p replayTerminalProbe) Commit(ctx context.Context) error   { p.finish(ctx, false); return nil }
+
+func TestFinishReplayTransactionContext(t *testing.T) {
+	type contextKey struct{}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "trace"))
+	cancel()
+	called := false
+	probe := replayTerminalProbe{finish: func(cleanup context.Context, rollback bool) {
+		called = true
+		require.True(t, rollback)
+		require.NoError(t, cleanup.Err())
+		require.Equal(t, "trace", cleanup.Value(contextKey{}))
+		_, ok := cleanup.Deadline()
+		require.True(t, ok)
+	}}
+	finishReplayTransaction(ctx, time.Second, probe, context.Canceled)
+	require.True(t, called)
+
+	called = false
+	probe.finish = func(commit context.Context, rollback bool) {
+		called = true
+		require.False(t, rollback)
+		require.ErrorIs(t, commit.Err(), context.Canceled)
+	}
+	finishReplayTransaction(ctx, time.Second, probe, nil)
+	require.True(t, called)
+}
 
 func replayTestBatch(t *testing.T, mp *mpool.MPool, ids ...uint64) *batch.Batch {
 	t.Helper()

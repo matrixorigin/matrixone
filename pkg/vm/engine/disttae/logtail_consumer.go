@@ -1102,16 +1102,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	if err != nil {
 		return err
 	}
-	defer func() {
-		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeoutCause(ctx, e.Hints().CommitOrRollbackTimeout, moerr.CauseReplayCatalogCache)
-		defer cancel()
-		if err != nil {
-			_ = op.Rollback(ctx2)
-		} else {
-			_ = op.Commit(ctx2)
-		}
-	}()
+	defer func() { finishReplayTransaction(ctx, e.Hints().CommitOrRollbackTimeout, op, err) }()
 	err = e.New(ctx, op)
 	if err != nil {
 		return err
@@ -1168,6 +1159,21 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	c.dcaConfirmAndApply()
 	return nil
 
+}
+
+func finishReplayTransaction(ctx context.Context, timeout time.Duration, op client.TxnOperator, replayErr error) {
+	if replayErr != nil {
+		// Rollback must still be able to reach the transaction service when
+		// replay failed because its context was canceled.
+		ctx = context.WithoutCancel(ctx)
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseReplayCatalogCache)
+	defer cancel()
+	if replayErr != nil {
+		_ = op.Rollback(ctx)
+	} else {
+		_ = op.Commit(ctx)
+	}
 }
 
 func (c *PushClient) connect(ctx context.Context, e *Engine) {
