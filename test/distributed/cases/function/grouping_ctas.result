@@ -1134,4 +1134,84 @@ where k<previous_k;
 select count(*) from volatile_mixed_order;
 ➤ count(*)[-5,64,0]  𝄀
 6
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+create table grouping_alias_order as
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+select * from grouping_alias_order order by k,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select g v,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(v) desc,chosen;
+➤ v[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select g `KeyAlias`,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(`KeyAlias`) limit 3;
+➤ KeyAlias[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+select g k,h label,sample(v,100 percent) chosen from src group by cube(g,h)
+order by grouping(k,label) desc,chosen;
+➤ k[4,32,0]  ¦  label[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  null  ¦  5  𝄀
+null  ¦  null  ¦  7  𝄀
+null  ¦  null  ¦  9  𝄀
+null  ¦  10  ¦  5  𝄀
+null  ¦  20  ¦  7  𝄀
+null  ¦  10  ¦  9  𝄀
+1  ¦  null  ¦  5  𝄀
+1  ¦  null  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  10  ¦  9
+select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+2  ¦  0  ¦  9
+select distinct g k,grouping(g) flag,count(*) total from src group by g with rollup
+order by grouping(k) desc,k;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  1  ¦  3  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  1
+select g k,sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  5  𝄀
+1  ¦  7
+create table rejected_grouping_alias as
+select distinct g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_grouping_alias';
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database grouping_ctas_test;

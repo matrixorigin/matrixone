@@ -443,4 +443,31 @@ lag(concat(if(g is null,1,0),b)) over(order by seq) previous_k from volatile_mix
 where k<previous_k;
 select count(*) from volatile_mixed_order;
 
+-- GROUPING 的 alias 实参描述键来源，不是读取同一 PROJECT 尚未产生的 selected 值。
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+create table grouping_alias_order as
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+select * from grouping_alias_order order by k,chosen;
+select g v,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(v) desc,chosen;
+select g `KeyAlias`,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(`KeyAlias`) limit 3;
+select g k,h label,sample(v,100 percent) chosen from src group by cube(g,h)
+order by grouping(k,label) desc,chosen;
+select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+select distinct g k,grouping(g) flag,count(*) total from src group by g with rollup
+order by grouping(k) desc,k;
+
+-- 真实 NULL 不代表 subtotal；仍由 GROUPING 的原始键位决定 lineage。
+select g k,sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(k) desc,chosen;
+create table rejected_grouping_alias as
+select distinct g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_grouping_alias';
+
 drop database grouping_ctas_test;

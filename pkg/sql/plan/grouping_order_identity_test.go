@@ -102,6 +102,61 @@ func TestGroupingOrderReferenceAndStructuralFallback(t *testing.T) {
 	require.Equal(t, int32(0), got.GetCol().ColPos, "deterministic structural matching remains available")
 }
 
+func TestGroupingArgumentAliasOrigin(t *testing.T) {
+	for _, query := range []string{
+		"select n_regionkey k,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by grouping(k) desc,chosen",
+		"select n_regionkey n_nationkey,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by grouping(n_nationkey) desc,chosen",
+		"select n_regionkey `KeyAlias`,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by chosen-100*grouping(`KeyAlias`)",
+		"select n_regionkey k,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by case when grouping(k)=1 then chosen-100 else chosen end",
+		"select distinct n_regionkey k,grouping(n_regionkey) flag,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by grouping(k) desc,chosen",
+		"select n_regionkey k,n_name label,sample(n_nationkey,100 percent) chosen from nation group by cube(n_regionkey,n_name) order by grouping(k,label) desc,chosen",
+		"select n_regionkey k,sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by grouping(nation.n_regionkey) desc,chosen",
+		"select distinct n_regionkey k,grouping(n_regionkey) flag,count(*) total from nation group by n_regionkey with rollup order by grouping(k) desc,k",
+	} {
+		t.Run(query, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockOptimizer(false).CurrentContext(), false, true)
+			_, err = builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+			require.NoError(t, err)
+			seen := make(map[*groupingStage]bool)
+			found := 0
+			for _, ctx := range builder.ctxByNode {
+				if ctx == nil || ctx.groupingStage == nil || seen[ctx.groupingStage] {
+					continue
+				}
+				stage := ctx.groupingStage
+				seen[stage] = true
+				projects := stage.sampleProjects
+				if projects == nil {
+					projects = stage.projects
+				}
+				for _, expr := range projects {
+					walkGroupingExpr(expr, func(e *plan.Expr) {
+						if fn := e.GetF(); fn != nil && fn.Func.ObjName == "grouping" {
+							found++
+							for _, arg := range fn.Args {
+								col := arg.GetCol()
+								require.NotNil(t, col)
+								require.Equal(t, ctx.groupTag, col.RelPos, "GROUPING consumes the alias's grouping origin, not its future selected output")
+								require.GreaterOrEqual(t, col.ColPos, int32(0))
+								require.Less(t, int(col.ColPos), len(ctx.groups))
+							}
+						}
+					})
+				}
+			}
+			require.NotEmpty(t, seen)
+			require.Positive(t, found)
+			for _, prefix := range []string{"", "create table grouping_alias_order as "} {
+				_, err := buildSingleStmt(NewMockOptimizer(false), t, prefix+query)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestGroupingSampleMixedOrderScope(t *testing.T) {
 	for _, order := range []string{
 		"chosen-100*grouping(n_regionkey)",
