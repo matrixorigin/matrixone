@@ -1942,7 +1942,7 @@ func TestISCPExecutor1(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -1965,7 +1965,7 @@ func TestISCPExecutor1(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -1998,7 +1998,7 @@ func TestISCPExecutor1(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -2122,7 +2122,7 @@ func TestISCPRegisterUnregisterIdempotence(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		firstRegisterTarget,
-		30*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -2182,7 +2182,7 @@ func TestISCPRegisterUnregisterIdempotence(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
-		30*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -2216,7 +2216,7 @@ func TestISCPRegisterUnregisterIdempotence(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		registerTarget,
-		30*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -2359,7 +2359,7 @@ func TestISCPExecutor3(t *testing.T) {
 				return cdcExecutor.GetWatermark(accountId, tableID, indexName)
 			},
 			target,
-			30*time.Second,
+			iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 			10*time.Millisecond,
 			accountId,
 			tableID,
@@ -2386,7 +2386,7 @@ func TestISCPExecutor3(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 		},
-		30*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -2788,7 +2788,7 @@ func TestISCPExecutor5(t *testing.T) {
 				return cdcExecutor.GetWatermark(accountId, tableIDs[tableIdx], indexName)
 			},
 			target,
-			30*time.Second,
+			iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 			10*time.Millisecond,
 			accountId,
 			tableIDs[tableIdx],
@@ -2935,7 +2935,7 @@ func TestISCPExecutor6(t *testing.T) {
 			return cdcExecutor.GetWatermark(account2, tableID, "idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		account2,
 		tableID,
@@ -3054,7 +3054,7 @@ func TestISCPExecutor7(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -3140,6 +3140,44 @@ func (b *iscpFaultBarrier) Remove() {
 type iscpWatermarkSnapshot struct {
 	current types.TS
 	found   bool
+}
+
+// iscpWaitBudget derives the budget for waiting on an ISCP state transition
+// from the test's own context deadline, falling back to a fixed duration when
+// ctx carries none. A fixed seconds budget silently assumes scheduler speed:
+// the chain making a watermark visible (logtail pickup, iteration DDL,
+// durable flush, in-memory republish) consists of operations each bounded by
+// the same ctx deadline, so a slow-but-progressing executor must be judged
+// against that shared budget rather than wall clock (#30350).
+func iscpWaitBudget(ctx context.Context, fallback time.Duration) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fallback
+	}
+	if remaining := time.Until(deadline); remaining > fallback {
+		return remaining
+	}
+	return fallback
+}
+
+// iscpWaitBudget must never silently shrink back to the fallback when the
+// caller meant to wait on the test's deadline context: passing a context that
+// carries no deadline (a common WithCancel/WithValue root in these tests)
+// would otherwise reintroduce #30350 undetected by passing smoke runs.
+func TestISCPWaitBudgetHonorsContextDeadline(t *testing.T) {
+	fallback := 10 * time.Second
+
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	require.Greater(t, iscpWaitBudget(deadlineCtx, fallback), fallback)
+
+	plainCtx, cancelPlain := context.WithCancel(context.Background())
+	defer cancelPlain()
+	require.Equal(t, fallback, iscpWaitBudget(plainCtx, fallback))
+
+	shortDeadlineCtx, cancelShort := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShort()
+	require.Equal(t, fallback, iscpWaitBudget(shortDeadlineCtx, fallback))
 }
 
 func waitForISCPWatermark(
@@ -3417,7 +3455,7 @@ func TestISCPExecutor8(t *testing.T) {
 				return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 			},
 			target,
-			10*time.Second,
+			iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 			10*time.Millisecond,
 			accountId,
 			tableID,
@@ -3547,7 +3585,7 @@ func TestUpdateJobSpec(t *testing.T) {
 				return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 			},
 			target,
-			10*time.Second,
+			iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 			10*time.Millisecond,
 			accountId,
 			tableID,
@@ -3732,7 +3770,7 @@ func TestFlushWatermark(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -3848,7 +3886,7 @@ func TestGCInMemoryJob(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -3877,7 +3915,7 @@ func TestGCInMemoryJob(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4012,7 +4050,7 @@ func TestIteration(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -4133,7 +4171,7 @@ func TestDropJobsByDBName(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
 		target1,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4145,7 +4183,7 @@ func TestDropJobsByDBName(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
 		target2,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -4164,7 +4202,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4175,7 +4213,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -4301,7 +4339,7 @@ func TestInvalidTimestamp(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4638,7 +4676,7 @@ func TestStartFromNow(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4750,7 +4788,7 @@ func TestApplyISCPLog(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4774,7 +4812,7 @@ func TestApplyISCPLog(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -5288,7 +5326,7 @@ func TestStaleRead(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -5406,7 +5444,7 @@ func TestInitSql(t *testing.T) {
 			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		tableAccountID,
 		tableID,
@@ -5432,7 +5470,7 @@ func TestInitSql(t *testing.T) {
 			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		tableAccountID,
 		tableID,
@@ -5556,7 +5594,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		30*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 30*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -6006,7 +6044,7 @@ func TestISCPTableIDChange(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		initialTarget,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -6035,7 +6073,7 @@ func TestISCPTableIDChange(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		iscpWaitBudget(ctxWithTimeout, 10*time.Second),
 		10*time.Millisecond,
 		accountId,
 		tableID,
