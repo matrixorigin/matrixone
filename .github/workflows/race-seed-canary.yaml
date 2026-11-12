@@ -99,7 +99,7 @@ jobs:
     concurrency:
       group: cs-mnl2-dedicated-s3-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@177e91cf045c2dc75d8a55d359a4077e9c96fbba
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@8a4434328262ae6ed3710ff29522f1e9efddbe35
     with:
       stack: mnl2
       cache_seed: true
