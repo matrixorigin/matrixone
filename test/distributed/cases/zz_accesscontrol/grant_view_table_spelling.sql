@@ -1,7 +1,10 @@
 -- A privilege stored on a view through the TABLE spelling ("grant ... on
 -- table v") and the bare MySQL spelling ("grant ... on v") is enforced when
 -- the view is queried (issue #32444). Table-class wildcard grants stay
--- distinct from view access.
+-- distinct from view access. The case snapshots the shared global cache
+-- setting first and restores the genuine original value at the end.
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+select @saved_enable_privilege_cache;
 set global enable_privilege_cache = off;
 
 -- cleanup
@@ -347,4 +350,7 @@ drop database db_vt;
 -- @session
 
 drop account acc_vt;
-set global enable_privilege_cache = on;
+-- restore the genuine original global value captured at case start;
+-- the stable oracle below must show the same value as at case start
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+select @@global.enable_privilege_cache;

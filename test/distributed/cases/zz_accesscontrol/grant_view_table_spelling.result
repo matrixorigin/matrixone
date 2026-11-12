@@ -1,3 +1,7 @@
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+select @saved_enable_privilege_cache;
+➤ @saved_enable_privilege_cache[-1,16383,0]  𝄀
+1
 set global enable_privilege_cache = off;
 drop account if exists acc_vt;
 create account acc_vt admin_name = 'admin' identified by '111';
@@ -158,4 +162,7 @@ select * from db_vt.t1;
 internal error: do not have privilege to execute the statement
 drop database db_vt;
 drop account acc_vt;
-set global enable_privilege_cache = on;
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+select @@global.enable_privilege_cache;
+➤ @@global.enable_privilege_cache[-1,16383,0]  𝄀
+1
