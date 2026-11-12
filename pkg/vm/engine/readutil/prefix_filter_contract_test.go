@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -26,9 +27,120 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+// Exercise the actual PK reader consumers, not just decoding or PK.Valid.
+func TestPrefixInBlockFilterConstantSet(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "k", ColPos: 0}}}
+	table := &plan.TableDef{Name2ColIndex: map[string]int32{"k": 0}, Cols: []*plan.ColDef{{Name: "k", Typ: col.Typ}}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "k", Names: []string{"k"}}}
+	for _, tc := range []struct {
+		name     string
+		constant bool
+		length   int
+		prefixes []string
+	}{
+		{"empty-set", false, 0, nil},
+		{"constant-single", true, 1, []string{"abc"}},
+		{"constant-two", true, 2, []string{"abc"}},
+		{"constant-four", true, 4, []string{"abc"}},
+		{"constant-empty-prefix", true, 4, []string{""}},
+		{"flat-duplicates", false, 4, []string{"abc", "abc", "abc", "abc"}},
+		{"flat-distinct", false, 2, []string{"abc", "zzz"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var src *vector.Vector
+			if tc.constant {
+				var err error
+				src, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.prefixes[0]), tc.length, mp)
+				require.NoError(t, err)
+			} else {
+				src = vector.NewVec(types.T_varchar.ToType())
+			}
+			t.Cleanup(func() { src.Free(mp) })
+			if !tc.constant {
+				for _, prefix := range tc.prefixes {
+					require.NoError(t, vector.AppendBytes(src, []byte(prefix), false, mp))
+				}
+			}
+			src.SetSorted(true)
+			payload, err := src.MarshalBinary()
+			require.NoError(t, err)
+			expr := plan2.MakeInExpr(context.Background(), col, int32(tc.length), payload, true)
+			pk, err := ConstructBasePKFilter(expr, table, mp)
+			require.NoError(t, err)
+			if pk.Vec != nil {
+				t.Cleanup(func() { pk.Vec.Free(mp) })
+			}
+			require.True(t, pk.Valid)
+			require.NotNil(t, pk.Vec)
+			filter, err := ConstructBlockPKFilter(false, pk, nil)
+			require.NoError(t, err)
+			if filter.Cleanup != nil {
+				t.Cleanup(filter.Cleanup)
+			}
+			require.True(t, filter.Valid)
+			for _, rows := range []struct {
+				name string
+				keys []string
+			}{
+				{"partial", []string{"abc0", "zzz0"}},
+				{"all", []string{"abc0", "abc1"}},
+				{"none", []string{"aaa0", "yyy0"}},
+			} {
+				for _, sorted := range []bool{true, false} {
+					mode := "sorted"
+					if !sorted {
+						mode = "unsorted"
+					}
+					t.Run(rows.name+"/"+mode, func(t *testing.T) {
+						keys := append([]string(nil), rows.keys...)
+						if !sorted {
+							keys[0], keys[1] = keys[1], keys[0]
+						}
+						data := vector.NewVec(types.T_varchar.ToType())
+						t.Cleanup(func() { data.Free(mp) })
+						var want []int64
+						for row, key := range keys {
+							require.NoError(t, vector.AppendBytes(data, []byte(key), false, mp))
+							for _, prefix := range tc.prefixes {
+								if bytes.HasPrefix([]byte(key), []byte(prefix)) {
+									want = append(want, int64(row))
+									break
+								}
+							}
+						}
+						search := filter.DecideSearchFunc(sorted)
+						require.NotNil(t, search)
+						var got []int64
+						require.NotPanics(t, func() { got = search(containers.Vectors{*data}) })
+						if len(want) == 0 {
+							require.Empty(t, got)
+						} else {
+							require.Equal(t, want, got)
+						}
+					})
+				}
+			}
+			wantLength := tc.length
+			if tc.constant && wantLength > 1 {
+				wantLength = 1
+			}
+			require.Equal(t, wantLength, pk.Vec.Length(), "membership sets must not expose repeated logical constant rows to PK search")
+			// The decoded PK view belongs to this filter; normalization must not
+			// rewrite the plan payload or change the generic decoder's contract.
+			require.Equal(t, tc.length, src.Length())
+			again := vector.TryUnmarshalBinaryVarlena(payload)
+			require.NotNil(t, again)
+			t.Cleanup(func() { again.Free(mp) })
+			require.Equal(t, tc.length, again.Length())
+		})
+	}
+}
 
 func TestPrefixInRejectsIncompatibleVector(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
