@@ -1825,6 +1825,9 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			return err
 		}
 		keys = append(keys, s.pathToKey(path.File))
+		if s.prefetcher != nil {
+			s.prefetcher.remove(filePath)
+		}
 	}
 
 	return errors.Join(

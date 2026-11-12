@@ -1648,6 +1648,7 @@ func (d *DiskCache) DeletePaths(
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return
 		}
+		d.prefetched.forget(d.pathForFile(path))
 		// No prefetch range read before the delete caches its range after it.
 		if err = d.dropPrefetches(ctx, d.pathForFile(path)); err != nil {
 			return

@@ -30,6 +30,17 @@ const prefetchedObjectsMax = 1 << 16
 type prefetchedObjects struct {
 	m sync.Map
 	n atomic.Int64
+	// deletes counts the objects deleted; a prefetch queued before a delete does not
+	// store its size.
+	deletes atomic.Uint64
+}
+
+// forget drops the size of the object at diskPath, which is deleted.
+func (o *prefetchedObjects) forget(diskPath string) {
+	o.deletes.Add(1)
+	if _, loaded := o.m.LoadAndDelete(diskPath); loaded {
+		o.n.Add(-1)
+	}
 }
 
 func (o *prefetchedObjects) store(diskPath string, size int64) {
