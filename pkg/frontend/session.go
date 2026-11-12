@@ -1324,6 +1324,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		needCheckLock        bool
 		maxLoginAttempts     int64
 		needCheckHost        bool
+		authenticationErr    error
 	)
 
 	//Get tenant info
@@ -1354,7 +1355,18 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	err = bh.Exec(sysTenantCtx, "begin;")
 	defer func() {
-		err = finishTxn(sysTenantCtx, bh, err)
+		if authenticationErr == nil {
+			err = finishTxn(sysTenantCtx, bh, err)
+			return
+		}
+		// A rejected password is not a failed database operation. Persist the
+		// successful attempt/lock updates, but never commit after cancellation.
+		// Transaction failure takes precedence over the authentication rejection.
+		if txnErr := finishTxn(sysTenantCtx, bh, sysTenantCtx.Err()); txnErr != nil {
+			err = txnErr
+		} else {
+			err = authenticationErr
+		}
 	}()
 	if err != nil {
 		return nil, err
@@ -1661,7 +1673,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 		}
 
-		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
+		authenticationErr = moerr.NewInternalError(tenantCtx, "check password failed")
+		return nil, authenticationErr
 	}
 
 	// If the login information contains the database name, verify if the database exists

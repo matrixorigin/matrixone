@@ -21,8 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,23 +50,39 @@ func TestPrefixInRejectsIncompatibleVector(t *testing.T) {
 	empty := vector.NewVec(types.T_varchar.ToType())
 	emptyData, err := empty.MarshalBinary()
 	require.NoError(t, err)
+	miss, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("xyz"), 1, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { miss.Free(mp) })
+	missData, err := miss.MarshalBinary()
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	meta := objectio.NewBlock(objectio.NewSeqnums([]uint16{0}))
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte("abc0001"))
+	index.UpdateZM(zm, []byte("abc9999"))
+	meta.ColumnMeta(0).SetZoneMap(zm)
+	require.True(t, meta.MustGetColumn(0).ZoneMap().IsInited(), "fallback must encounter a real initialized block zonemap")
 	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "k", ColPos: 0}}}
-	table := &plan.TableDef{Name2ColIndex: map[string]int32{"k": 0}, Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar)}}}}
+	table := &plan.TableDef{Name2ColIndex: map[string]int32{"k": 0}, Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar)}}}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "k", Names: []string{"k"}}}
 	for _, tc := range []struct {
-		name string
-		data []byte
-		card int32
-		want bool
+		name     string
+		data     []byte
+		card     int32
+		want     bool
+		selected bool
 	}{
-		{"fixed-width", fixed, 1, false},
-		{"missing", nil, 0, false},
-		{"truncated", valid[:len(valid)/2], 1, false},
-		{"invalid-varlena-area", badArea, 1, false},
-		{"valid-varlena", valid, 1, true},
-		{"empty-varlena", emptyData, 0, true},
+		{"fixed-width", fixed, 1, false, true},
+		{"missing", nil, 0, false, true},
+		{"truncated", valid[:len(valid)/2], 1, false, true},
+		{"invalid-varlena-area", badArea, 1, false, true},
+		{"valid-varlena", valid, 1, true, true},
+		{"empty-varlena", emptyData, 0, true, false},
+		{"nonmatching-varlena", missData, 1, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := plan2.MakeInExpr(context.Background(), col, tc.card, tc.data, true)
+			count := plan2.AssignAuxIdForExpr(expr, 0)
 			require.NotPanics(t, func() {
 				fast, load, obj, block, seek, can, _ := CompileFilterExpr(expr, table, nil)
 				require.Equal(t, tc.want, can)
@@ -74,8 +94,43 @@ func TestPrefixInRejectsIncompatibleVector(t *testing.T) {
 					require.Nil(t, seek)
 				} else {
 					require.NotNil(t, block)
+					_, selected, err := block(0, meta, nil)
+					require.NoError(t, err)
+					require.Equal(t, tc.selected, selected)
 				}
 			}, "unsupported filter representations must decline the optimization without unsafe vector interpretation")
+			zms := make([]objectio.ZoneMap, count)
+			vecs := make([]*vector.Vector, count)
+			t.Cleanup(func() {
+				for _, v := range vecs {
+					if v != nil {
+						v.Free(mp)
+					}
+				}
+			})
+			require.NotPanics(t, func() {
+				selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+				require.Equal(t, tc.selected, selected, "fast-path rejection must remain safe and conservative in rangesOnePart's fallback")
+			})
+			if !tc.want {
+				require.False(t, zms[expr.AuxId].IsInited(), "invalid payload must produce unknown rather than false")
+			}
+			require.NotPanics(t, func() {
+				pk, err := ConstructBasePKFilter(expr, table, mp)
+				require.NoError(t, err)
+				if pk.Vec != nil {
+					t.Cleanup(func() { pk.Vec.Free(mp) })
+				}
+				require.Equal(t, tc.want, pk.Valid, "PK-reader optimization must also reject incompatible prefix payloads")
+			})
+			if tc.name == "fixed-width" {
+				cached := vector.NewVec(types.T_any.ToType())
+				require.NoError(t, cached.UnmarshalBinary(tc.data))
+				vecs[expr.GetF().Args[1].AuxId] = cached
+				require.NotPanics(t, func() {
+					require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs), "cached incompatible vectors must not prune or panic either")
+				})
+			}
 		})
 	}
 }
