@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -106,6 +106,14 @@ jobs:
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+  cs-cache-contract-probe:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'mnl2-cache-probe' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-mnl2-dedicated-s3-coverage-canary
+      cancel-in-progress: false
+    uses: matrixorigin/CI/.github/workflows/cs-cache-probe.yaml@d921abd23c29d8f333278c6f78c36481722d3db8
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
   cs-coverage-canary:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && (inputs.coverage_comparison == 'off' || inputs.coverage_comparison == '') && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.cs_s3_smoke
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
