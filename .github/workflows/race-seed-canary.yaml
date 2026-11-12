@@ -111,7 +111,7 @@ jobs:
     concurrency:
       group: cs-mnl2-dedicated-s3-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/cs-cache-probe.yaml@07ac17f264af2ea5fefe7beb5f54a266790a88c7
+    uses: matrixorigin/CI/.github/workflows/cs-cache-probe.yaml@82b4e6364263779a925595da4ad9f137b831310a
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
   cs-coverage-canary:
