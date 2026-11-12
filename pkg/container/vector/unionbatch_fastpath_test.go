@@ -26,7 +26,7 @@ import (
 )
 
 func TestUnionInlineSelection(t *testing.T) {
-	for _, shape := range []string{"inline", "zero-area-noninline", "nullable", "mixed"} {
+	for _, shape := range []string{"inline", "zero-area-noninline", "zero-area-noninline-empty-dest", "nullable", "mixed"} {
 		for _, index32 := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/int32=%t", shape, index32), func(t *testing.T) {
 				mp := mpool.MustNewZero()
@@ -34,7 +34,8 @@ func TestUnionInlineSelection(t *testing.T) {
 				src, dst := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
 				t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 				values := []string{"a", "b", strings.Repeat("c", types.VarlenaInlineSize), "d", "e", "f", "g", "h"}
-				if shape == "zero-area-noninline" {
+				emptyNonInline := strings.HasPrefix(shape, "zero-area-noninline")
+				if emptyNonInline {
 					values[1] = ""
 				} else if shape == "mixed" {
 					values[1] = strings.Repeat("b", types.VarlenaInlineSize+1)
@@ -42,7 +43,7 @@ func TestUnionInlineSelection(t *testing.T) {
 				for row, value := range values {
 					require.NoError(t, AppendBytes(src, []byte(value), shape == "nullable" && row == 4, mp))
 				}
-				if shape == "zero-area-noninline" {
+				if emptyNonInline {
 					// Zero area bytes alone do not prove inline descriptors.
 					MustFixedColNoTypeCheck[types.Varlena](src)[1].SetOffsetLen(0, 0)
 					require.Empty(t, src.area)
@@ -83,11 +84,15 @@ func TestUnionInlineSelection(t *testing.T) {
 							require.Equal(t, values[row], dst.GetStringAt(i+1))
 							require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(i+1))
 							require.True(t, dst.GetIsBinaryStringAt(i+1))
-							if shape == "zero-area-noninline" && row == 1 {
+							if emptyNonInline && row == 1 {
 								// The ordinary copy rebases even an empty non-inline
 								// payload after the destination's existing area.
 								offset, length := MustFixedColNoTypeCheck[types.Varlena](dst)[i+1].OffsetLen()
-								require.Equal(t, uint32(len(prefix)), offset)
+								expectedOffset := uint32(0)
+								if shape == "zero-area-noninline" {
+									expectedOffset = uint32(len(prefix))
+								}
+								require.Equal(t, expectedOffset, offset)
 								require.Zero(t, length)
 							}
 						}
