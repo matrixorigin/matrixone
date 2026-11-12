@@ -45,19 +45,52 @@ type markScanGuard struct {
 	producer    *Scope
 }
 
+// markGuardCandidate is a complete, private proof for one local guard. The
+// finder only reads the physical plan and copies expressions; installation
+// commits the consumer and producer together after the codec is validated.
+type markGuardCandidate struct {
+	root        *Scope
+	producer    *Scope
+	build       *hashbuild.HashBuild
+	probe       *plan.Expr
+	alternative *plan.Expr
+	tag         int32
+}
+
 // installMarkScanGuard only attaches local execution state, after physical
 // scheduling. It must never add a probe to a serialized plan or remote scope:
 // the OR arm is an essential part of the guard, not an independent PK filter.
 func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
-	if qry == nil || c.isPrepare || len(roots) != 1 || qry.StmtType != plan.Query_SELECT {
+	candidate := c.findMarkGuardCandidate(qry, roots)
+	if candidate == nil {
 		return
+	}
+	// HashBuild collects equality keys by key slot, independently of the
+	// original build input's column position. There is exactly one key here.
+	buildKey := plan2.GetColExpr(candidate.build.Conditions[0].Typ, 0, 0)
+	consumer, producer, ok := plan2.MakeExactRuntimeFilterPair(c.proc.Ctx, c.proc.GetService(), candidate.tag, false, markGuardKeyLimit, candidate.probe, buildKey, true)
+	if !ok {
+		return
+	}
+	candidate.root.DataSource.markGuard = &markScanGuard{probe: consumer, alternative: candidate.alternative, producer: candidate.producer}
+	candidate.build.RuntimeFilterSpec = producer
+	// One VARCHAR key, at most 128 distinct values, each at most 512 actual
+	// bytes: optional-key data stays below 64 KiB plus bounded vector metadata.
+	candidate.build.OptionalRuntimeFilterMaxKeyBytes = 4 * markGuardMaxWidth
+}
+
+// findMarkGuardCandidate examines eligibility and column lineage without
+// attaching a producer, consumer or changing a shared plan.
+func (c *Compile) findMarkGuardCandidate(qry *plan.Query, roots []*Scope) *markGuardCandidate {
+	if qry == nil || c.isPrepare || len(roots) != 1 || qry.StmtType != plan.Query_SELECT {
+		return nil
 	}
 	root := roots[0]
-	if root == nil || root.DataSource == nil || root.DataSource.node == nil || root.RootOp == nil || (c.proc == nil || !markGuardLocalScopes(root, c.addr, c.proc.GetMessageBoard())) {
-		return
+	if root == nil || root.DataSource == nil || root.DataSource.node == nil || root.RootOp == nil || c.proc == nil || !markGuardLocalScopes(root, c.addr, c.proc.GetMessageBoard()) {
+		return nil
 	}
 	if _, ok := vm.GetLeafOp(root.RootOp).(*table_scan.TableScan); !ok {
-		return
+		return nil
 	}
 	var mark *hashjoin.HashJoin
 	var parentFilter *filter.Filter
@@ -71,7 +104,7 @@ func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
 		return nil
 	})
 	if marks != 1 || parentFilter == nil || len(parentFilter.FilterExprs) != 1 || mark.IsShuffle || mark.CanSkipProbe || mark.NonEqCond != nil || len(mark.EqConds) != 2 || len(mark.EqConds[0]) != 1 || len(mark.EqConds[1]) != 1 {
-		return
+		return nil
 	}
 	var build *hashbuild.HashBuild
 	builds := 0
@@ -89,43 +122,43 @@ func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
 		}
 	}
 	if builds != 1 {
-		return
+		return nil
 	}
 	// The optional producer must be an independent table scan, never a
 	// channel/merge fed by the probe which would introduce a waiting cycle.
 	if _, ok := vm.GetLeafOp(buildScope.RootOp).(*table_scan.TableScan); !ok {
-		return
+		return nil
 	}
 	// A build scan with its own message dependency could wait on the probe.
 	// Do not add a reverse dependency unless the producer is independent.
 	if !markGuardIndependentProducer(buildScope) {
-		return
+		return nil
 	}
 	if !build.NeedHashMap || !build.TrackNullKeys || build.IsShuffle || build.RuntimeFilterSpec != nil || len(build.Conditions) != 1 || build.Conditions[0].GetCol() == nil {
-		return
+		return nil
 	}
 	rightKey := mark.EqConds[1][0].GetCol()
 	if rightKey == nil || rightKey.RelPos != 1 || rightKey.ColPos != build.Conditions[0].GetCol().ColPos || !guardVarcharPair(mark.EqConds[1][0].Typ, build.Conditions[0].Typ) {
-		return
+		return nil
 	}
 
 	// Only the physical filter directly above this MARK is authoritative.
 	// Optimizer node arrays can retain unreachable historical FILTER nodes.
 	filterNode := queryNode(qry, int32(parentFilter.GetOperatorBase().GetIdx()))
 	if filterNode == nil || filterNode.NodeType != plan.Node_FILTER || len(filterNode.Children) != 1 {
-		return
+		return nil
 	}
 	selected := queryNode(qry, filterNode.Children[0])
 	if selected == nil || selected.NodeType != plan.Node_JOIN || selected.JoinType != plan.Node_MARK || int(selected.NodeId) != mark.GetOperatorBase().GetIdx() || len(selected.Children) != 2 || len(selected.OnList) != 1 {
-		return
+		return nil
 	}
 	expr := parentFilter.FilterExprs[0].GetF()
 	if expr == nil || expr.Func == nil || expr.Func.ObjName != "or" || len(expr.Args) != 2 {
-		return
+		return nil
 	}
 	fid, _ := function.DecodeOverloadID(expr.Func.Obj)
 	if fid != function.OR {
-		return
+		return nil
 	}
 	var alternative *plan.Expr
 	for i := 0; i < 2; i++ {
@@ -139,37 +172,37 @@ func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
 		}
 		alt := plan2.DeepCopyExpr(expr.Args[1-i])
 		if _, ok := guardStringEquality(alt); !ok || alternative != nil {
-			return
+			return nil
 		}
 		alternative = alt
 	}
 	if alternative == nil {
-		return
+		return nil
 	}
 	left := queryNode(qry, selected.Children[0])
 	if left == nil {
-		return
+		return nil
 	}
 	var index *plan.Node
 	if left.NodeType == plan.Node_JOIN && left.JoinType == plan.Node_INDEX {
 		if len(left.Children) != 2 || left.Limit != nil || left.Offset != nil || len(left.OrderBy) != 0 || !guardDirectProjections(left, false) {
-			return
+			return nil
 		}
 		index = left
 		left = queryNode(qry, left.Children[0])
 		if left == nil {
-			return
+			return nil
 		}
 	}
 	scan := root.DataSource.node
 	if left.NodeType != plan.Node_TABLE_SCAN || left.NodeId != scan.NodeId || left.Limit != nil || left.Offset != nil || len(left.OrderBy) != 0 || len(left.AggList) != 0 || !guardDirectProjections(left, false) || selected.Limit != nil || selected.Offset != nil || !guardDirectProjections(selected, true) || scan.Stats == nil || plan2.IsDefaultStats(scan.Stats) || (math.IsNaN(scan.Stats.TableCnt) || math.IsInf(scan.Stats.TableCnt, 0) || scan.Stats.TableCnt < markGuardMinRows) {
-		return
+		return nil
 	}
 	// The guard is evaluated before ordinary row filters, so only admit a scan
 	// whose existing filters are safe to evaluate on any input row.
 	for _, f := range scan.FilterList {
 		if _, ok := guardStringEquality(f); !ok {
-			return
+			return nil
 		}
 	}
 	altCol, _ := guardStringEquality(alternative)
@@ -179,41 +212,32 @@ func (c *Compile) installMarkScanGuard(qry *plan.Query, roots []*Scope) {
 	}
 	pos, ok := mapMarkGuardColumn(selected, index, scan, altCol.ColPos, true, altType)
 	if !ok {
-		return
+		return nil
 	}
 	altCol.ColPos = pos
 	altCol.RelPos = 0
 	probe := plan2.DeepCopyExpr(mark.EqConds[0][0])
 	key := probe.GetCol()
 	if key == nil || key.RelPos != 0 {
-		return
+		return nil
 	}
 	pos, ok = mapMarkGuardColumn(selected, index, scan, key.ColPos, false, probe.Typ)
 	if !ok {
-		return
+		return nil
 	}
 	key.ColPos = pos
 	key.RelPos = 0
 	if !guardVarcharPair(probe.Typ, build.Conditions[0].Typ) || !guardHasWideProjection(scan, key.ColPos, altCol.ColPos) {
-		return
+		return nil
 	}
 	tag, ok := markGuardMessageTag(qry, root)
 	if !ok {
-		return
+		return nil
 	}
-	// HashBuild collects equality keys by key slot, independently of the
-	// original build input's column position. There is exactly one key here.
-	buildKey := plan2.GetColExpr(build.Conditions[0].Typ, 0, 0)
-	consumer, producer, ok := plan2.MakeExactRuntimeFilterPair(c.proc.Ctx, c.proc.GetService(), tag, false, markGuardKeyLimit, probe, buildKey, true)
-	if !ok {
-		return
+	return &markGuardCandidate{
+		root: root, producer: buildScope, build: build,
+		probe: probe, alternative: alternative, tag: tag,
 	}
-	// Commit the pair only after every proof above has succeeded.
-	root.DataSource.markGuard = &markScanGuard{probe: consumer, alternative: alternative, producer: buildScope}
-	build.RuntimeFilterSpec = producer
-	// One VARCHAR key, at most 128 distinct values, each at most 512 actual
-	// bytes: optional-key data stays below 64 KiB plus bounded vector metadata.
-	build.OptionalRuntimeFilterMaxKeyBytes = 4 * markGuardMaxWidth
 }
 
 // No guard dependency may cross a remote boundary or be cloned into multiple
@@ -451,31 +475,34 @@ func (s *Scope) receiveMarkScanGuard(c *Compile, guard *markScanGuard) *plan.Exp
 		// guard must not create another reader-cleanup or error path.
 		return nil
 	}
-	for _, item := range msgs {
-		msg, ok := item.(message.RuntimeFilterMessage)
-		if !ok {
-			continue
-		}
-		switch msg.Typ {
-		case message.RuntimeFilter_DROP:
-			// An empty IN branch does not eliminate rows satisfying the other arm.
-			return plan2.DeepCopyExpr(guard.alternative)
-		case message.RuntimeFilter_IN:
-			if msg.Card <= 0 || msg.Card > markGuardKeyLimit || len(msg.Data) > markGuardPayloadBytes {
-				return nil
-			}
-			in := plan2.MakeInExpr(c.proc.Ctx, plan2.DeepCopyExpr(guard.probe.Expr), msg.Card, msg.Data, false)
-			expr, bindErr := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "or", []*plan.Expr{in, plan2.DeepCopyExpr(guard.alternative)})
-			if bindErr != nil {
-				return nil
-			}
-			return expr
-		default:
-			// PASS and unrecognized optional payloads cannot narrow the scan.
+	// One producer publishes one complete terminal message per generation.
+	// Conflicting messages already visible together cannot safely narrow rows.
+	// A later duplicate is not detectable here; producer ownership still matters.
+	if len(msgs) != 1 {
+		return nil
+	}
+	msg, ok := msgs[0].(message.RuntimeFilterMessage)
+	if !ok {
+		return nil
+	}
+	switch msg.Typ {
+	case message.RuntimeFilter_DROP:
+		// An empty IN branch does not eliminate rows satisfying the other arm.
+		return plan2.DeepCopyExpr(guard.alternative)
+	case message.RuntimeFilter_IN:
+		if msg.Card <= 0 || msg.Card > markGuardKeyLimit || len(msg.Data) > markGuardPayloadBytes {
 			return nil
 		}
+		in := plan2.MakeInExpr(c.proc.Ctx, plan2.DeepCopyExpr(guard.probe.Expr), msg.Card, msg.Data, false)
+		expr, bindErr := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "or", []*plan.Expr{in, plan2.DeepCopyExpr(guard.alternative)})
+		if bindErr != nil {
+			return nil
+		}
+		return expr
+	default:
+		// PASS and unrecognized optional payloads cannot narrow the scan.
+		return nil
 	}
-	return nil
 }
 
 // applyMarkScanGuard runs after readers are built but before scan Prepare.
