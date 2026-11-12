@@ -331,7 +331,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
-			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
 			// scope is retained for reuse, so do not keep its closed reader
 			// (and the reader's snapshot) reachable until the next EXECUTE.
@@ -603,7 +603,7 @@ func (s *Scope) cancelMergeSiblingsOnError(err error) error {
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
 func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p := pipeline.New(0, nil, sp.RootOp)
-	p.Cleanup(sp.Proc, true, isPrepare, fail)
+	_ = cleanupScopePipeline(p, sp.Proc, isPrepare, fail)
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -786,7 +786,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			if isScopeCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
+			err = cleanupScopePipeline(pipeline.NewMerge(s.RootOp), s.Proc, c.isPrepare, err)
 		}
 	}()
 
@@ -1692,6 +1692,12 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	if s.DataSource != nil && s.DataSource.markGuard != nil {
+		// The scan template can survive a retry while workers reset separately.
+		if scan, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+			scan.RuntimeFilterExprs = nil
+		}
+	}
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
@@ -1919,9 +1925,22 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 		readers = newReaders
 	}
+	if !emptyScan && s.DataSource.markGuard != nil {
+		s.applyMarkScanGuard(c)
+	}
 	return
 }
 
 func (s Scope) TypeName() string {
 	return "compile.Scope"
+}
+
+func cleanupScopePipeline(p *pipeline.Pipeline, proc *process.Process, isPrepare bool, err error) error {
+	if cleanupErr := p.CleanupWithError(proc, err != nil, isPrepare, err); cleanupErr != nil {
+		if err == nil {
+			return cleanupErr
+		}
+		proc.Error(proc.Ctx, "panic during pipeline cleanup", zap.Error(cleanupErr))
+	}
+	return err
 }

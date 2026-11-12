@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -35,9 +36,13 @@ import (
 //
 //	Main goroutine → [sinkChan] → N sink workers → [syncChan] → M sync workers
 //
-// Memory is bounded globally:
+// Legacy jobs are bounded by the existing worker and queue counts:
 //
 //	(sinkChan cap + N) × 128MB raw + (syncChan cap + M) × compressed size
+//
+// Admitted imports additionally transfer a byte-counted W lease before queue
+// publication. Workers never wait for another W. The shared byte bound remains
+// in force across both encoding and upload, including queued jobs.
 type SinkPool struct {
 	sinkChan chan *poolSinkJob
 	syncChan chan *poolSyncJob
@@ -50,18 +55,43 @@ type SinkPool struct {
 }
 
 type poolSinkJob struct {
-	capacityHook UncommittedCapacityHook
-	data         []*batch.Batch
-	factory      FileSinkerFactory
-	mp           *mpool.MPool
-	fs           fileservice.FileService
-	result       *pipelineResult
+	capacityHook   UncommittedCapacityHook
+	data           []*batch.Batch
+	factory        FileSinkerFactory
+	mp             *mpool.MPool
+	fs             fileservice.FileService
+	result         *pipelineResult
+	lease          *rscthrottler.WorkspaceLease
+	ioMP           *mpool.MPool
+	uploadBytes    int64
+	sourceReleased func()
+}
+
+func (job *poolSinkJob) releaseSource() {
+	freeBatches(job.data, job.mp)
+	job.data = nil
+	if fn := job.sourceReleased; fn != nil {
+		job.sourceReleased = nil
+		fn()
+	}
+}
+
+func (job *poolSinkJob) discard() {
+	job.releaseSource()
+	if job.ioMP != nil {
+		mpool.DeleteMPool(job.ioMP)
+		job.ioMP = nil
+	}
+	job.lease.Release()
+	job.lease = nil
 }
 
 type poolSyncJob struct {
 	capacityHook UncommittedCapacityHook
 	fSinker      FileSinker
 	result       *pipelineResult
+	workspace    *rscthrottler.WorkspaceLease
+	ioMP         *mpool.MPool
 }
 
 // pipelineResult tracks accumulated results and errors for one Sinker's
@@ -143,13 +173,28 @@ func (p *SinkPool) runSinkWorker() {
 	for job := range p.sinkChan {
 		r := job.result
 		if r.hasError() {
-			freeBatches(job.data, job.mp)
+			job.discard()
 			r.pending.Done()
 			continue
 		}
 
 		sinkStart := time.Now()
-		fSinker := job.factory(job.mp, job.fs)
+		workspace, ioMP := job.lease, job.ioMP
+		factoryMP := job.mp
+		if ioMP != nil {
+			factoryMP = ioMP
+		}
+		fSinker := job.factory(factoryMP, job.fs)
+		if fs, ok := fSinker.(*FSinkerImpl); ok && workspace != nil {
+			fs.workspaceBytes = workspace.Capacity()
+			var payload int64
+			var columns int
+			for _, b := range job.data {
+				payload += int64(b.Size())
+				columns = max(columns, len(b.Vecs))
+			}
+			fs.arenaBytes = warmArenaBytes(payload, int64(columns))
+		}
 		var sinkErr error
 		for _, bat := range job.data {
 			if err := fSinker.Sink(r.ctx, bat); err != nil {
@@ -158,29 +203,58 @@ func (p *SinkPool) runSinkWorker() {
 			}
 		}
 		atomic.AddInt64(&r.sinkNs, int64(time.Since(sinkStart)))
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 
 		if sinkErr != nil {
 			fSinker.Close()
+			job.discard()
 			r.setError(sinkErr)
 			r.pending.Done()
 			continue
 		}
+		if workspace != nil {
+			if err := workspace.Shrink(job.uploadBytes); err != nil {
+				fSinker.Close()
+				job.discard()
+				r.setError(err)
+				r.pending.Done()
+				continue
+			}
+		}
 
 		// Forward to sync worker. Do NOT call r.pending.Done() here;
 		// the sync worker calls it after completing the IO.
+		forwarded := workspace.Transfer()
+		job.lease, job.ioMP = nil, nil
+		_ = p.enqueueSync(&poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP, capacityHook: job.capacityHook})
+	}
+}
+
+// The caller has already counted pending and transferred complete ownership.
+// Upload never acquires another workspace or ordinary-data grant.
+func (p *SinkPool) enqueueSync(job *poolSyncJob) (err error) {
+	r := job.result
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
+	select {
+	case <-p.done:
+		err = context.Canceled
+	default:
 		select {
-		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r, capacityHook: job.capacityHook}:
+		case p.syncChan <- job:
+			return nil
 		case <-r.ctx.Done():
-			fSinker.Close()
-			r.setError(context.Cause(r.ctx))
-			r.pending.Done()
+			err = context.Cause(r.ctx)
 		case <-p.done:
-			fSinker.Close()
-			r.setError(context.Canceled)
-			r.pending.Done()
+			err = context.Canceled
 		}
 	}
+	job.fSinker.Close()
+	mpool.DeleteMPool(job.ioMP)
+	job.workspace.Release()
+	r.setError(err)
+	r.pending.Done()
+	return err
 }
 
 func (p *SinkPool) runSyncWorker() {
@@ -189,6 +263,10 @@ func (p *SinkPool) runSyncWorker() {
 		r := job.result
 		if r.hasError() {
 			job.fSinker.Close()
+			mpool.DeleteMPool(job.ioMP)
+			if job.workspace != nil {
+				job.workspace.Release()
+			}
 			r.pending.Done()
 			continue
 		}
@@ -203,6 +281,10 @@ func (p *SinkPool) runSyncWorker() {
 			if name := activeFileSinkerObjectName(job.fSinker); name != "" {
 				if err := job.capacityHook(name); err != nil {
 					job.fSinker.Close()
+					mpool.DeleteMPool(job.ioMP)
+					if job.workspace != nil {
+						job.workspace.Release()
+					}
 					r.setError(err)
 					r.pending.Done()
 					continue
@@ -222,6 +304,10 @@ func (p *SinkPool) runSyncWorker() {
 			}
 		}
 		job.fSinker.Close()
+		mpool.DeleteMPool(job.ioMP)
+		if job.workspace != nil {
+			job.workspace.Release()
+		}
 
 		if err != nil {
 			r.setError(err)
@@ -240,7 +326,7 @@ func (p *SinkPool) runSyncWorker() {
 func (p *SinkPool) Submit(job *poolSinkJob) error {
 	r := job.result
 	if err := r.getError(); err != nil {
-		freeBatches(job.data, job.mp)
+		job.discard()
 		return err
 	}
 	r.pending.Add(1)
@@ -254,8 +340,8 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	// while any RLock is held.
 	select {
 	case <-p.done:
+		job.discard()
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
 		return context.Canceled
 	default:
 	}
@@ -263,8 +349,8 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	// Fast path: if the pipeline context is already cancelled, don't enqueue.
 	select {
 	case <-r.ctx.Done():
+		job.discard()
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
 		if err := r.getError(); err != nil {
 			return err
 		}
@@ -276,15 +362,15 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	case p.sinkChan <- job:
 		return nil
 	case <-r.ctx.Done():
+		job.discard()
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
 		if err := r.getError(); err != nil {
 			return err
 		}
 		return context.Cause(r.ctx)
 	case <-p.done:
+		job.discard()
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
 		return context.Canceled
 	}
 }
@@ -298,7 +384,9 @@ func (p *SinkPool) Close() {
 	close(p.sinkChan)
 	p.closeMu.Unlock()
 	p.sinkWg.Wait()
+	p.closeMu.Lock()
 	close(p.syncChan)
+	p.closeMu.Unlock()
 	p.syncWg.Wait()
 }
 

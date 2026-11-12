@@ -36,6 +36,7 @@ var _ vm.Operator = new(Insert)
 // )
 
 type container struct {
+	controlled          *controlledS3
 	state               vm.CtrState
 	s3Writer            *colexec.CNS3Writer
 	partitionS3Writers  []*colexec.CNS3Writer // The array is aligned with the partition number array
@@ -117,6 +118,10 @@ type InsertCtx struct {
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	insert.retainUnrecordedSinkObjects(proc)
+	if insert.ctr.controlled != nil {
+		_ = insert.ctr.controlled.close()
+		insert.ctr.controlled = nil
+	}
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
@@ -148,6 +153,10 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	insert.retainUnrecordedSinkObjects(proc)
+	if insert.ctr.controlled != nil {
+		_ = insert.ctr.controlled.close()
+		insert.ctr.controlled = nil
+	}
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil
@@ -210,10 +219,19 @@ func (insert *Insert) initBufForS3() {
 
 func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
 	insert.ctr.s3Writer.CancelPending()
+	if insert.ctr.controlled != nil && insert.ctr.controlled.writer != nil {
+		insert.ctr.controlled.writer.CancelPending()
+	}
 	for _, writer := range insert.ctr.partitionS3Writers {
 		writer.CancelPending()
 	}
 	var names []string
+	if insert.ctr.controlled != nil {
+		names = append(names, insert.ctr.controlled.unrecordedSinkNames...)
+	}
+	if insert.ctr.controlled != nil && insert.ctr.controlled.writer != nil {
+		names = append(names, insert.ctr.controlled.writer.AbandonAndRetainableNames()...)
+	}
 	if writer := insert.ctr.s3Writer; writer != nil {
 		names = append(names, writer.AbandonAndRetainableNames()...)
 	}
@@ -239,4 +257,7 @@ func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
 	}
 	retainer.RetainUnrecordedS3Objects(
 		names, "s3 insert writer unwound before its metadata record: the pipeline failed or the record was refused between persistence and mergeBlock (issue #25590 round-19 review)")
+	if insert.ctr.controlled != nil {
+		insert.ctr.controlled.unrecordedSinkNames = nil
+	}
 }

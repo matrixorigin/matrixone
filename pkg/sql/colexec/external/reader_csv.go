@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,6 +45,11 @@ type CsvReader struct {
 	prevStr    string
 	ignoreLine int
 	ignoreTag  int
+	// pending aliases the parser's current record. Never call Read while it is
+	// populated: Read reuses both LastRow and the record's backing bytes.
+	pending         []csvparser.Field
+	pendingRawBytes uint64
+	rowArea         []int
 }
 
 // NewCsvReader creates a CsvReader.
@@ -65,6 +71,9 @@ func NewCsvReader(param *ExternalParam, proc *process.Process) (*CsvReader, erro
 func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
 	r.param = param
 	r.ignoreLine = r.ignoreTag
+	r.pending = nil
+	r.pendingRawBytes = 0
+	r.prevStr = ""
 
 	// Open file and get io.ReadCloser (preserves offset read + decompression)
 	baseReader, err := readFile(param, proc)
@@ -89,6 +98,22 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		r.reader = nil
 		return false, err
 	}
+	// Preserve enough extra fields for strict LOAD's existing N/N+1 check;
+	// non-strict LOAD already ignores fields beyond every projected column.
+	retainedFields := int(param.ColumnListLen) + 2
+	for _, attr := range param.Attrs {
+		retainedFields = max(retainedFields, int(attr.ColFieldIndex)+1)
+	}
+	csvParser.RetainFields(retainedFields)
+	if proc.Base.ImportMemory != nil {
+		csvParser.LimitRecordBytes(csvRecordBytes(&param.ExParamConst, param.Extern))
+		memory := proc.Base.ImportMemory
+		if memory.GrowRecord != nil {
+			csvParser.SetRecordBudget(memory.RecordBytes, func(need int64) (int64, error) {
+				return memory.GrowRecord(proc.Ctx, need)
+			})
+		}
+	}
 	r.plh = &ParseLineHandler{csvReader: csvParser}
 	return false, nil
 }
@@ -105,6 +130,9 @@ func (r *CsvReader) ReadBatch(
 
 func (r *CsvReader) Close() error {
 	r.prevStr = ""
+	r.pending = nil
+	r.pendingRawBytes = 0
+	r.rowArea = nil
 	r.plh = nil
 	if r.reader != nil {
 		err := r.reader.Close()
@@ -126,6 +154,38 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	var curBatchSize uint64
 	var finish bool
 	var row []csvparser.Field
+	unit := param.maxBatchSize
+	if unit == 0 || unit > 64<<20 {
+		unit = 64 << 20
+	}
+	if limit := proc.GetLim().BatchSize; limit > 0 && uint64(limit) < unit {
+		unit = uint64(limit)
+	}
+	// Admission may lower the query's unit independently of the RPC batch
+	// limit. Raw records and typed capacities must use that same admitted unit.
+	if memory := proc.Base.ImportMemory; memory != nil && memory.UnitBytes > 0 {
+		unit = min(unit, uint64(memory.UnitBytes))
+	}
+	// A previous singleton is permitted to exceed the normal batching target.
+	// Do not make its oversized capacity the baseline for all following rows.
+	if bat.RowCount() == 0 && uint64(bat.Allocated()) > unit {
+		bat.FreeColumns(proc.Mp())
+	}
+	// Backing capacity is unchanged between growths. Derive this frontier
+	// afresh for every fill so Reset/reuse cannot retain stale capacity.
+	allocated, dataRows := 0, 0
+	refreshCapacity := func() {
+		allocated, dataRows = bat.Allocated(), OneBatchMaxRow
+		for _, vec := range bat.Vecs {
+			width := vec.GetType().TypeSize()
+			if width <= 0 {
+				dataRows = 0
+				break
+			}
+			dataRows = min(dataRows, cap(vec.GetData())/width)
+		}
+	}
+	refreshCapacity()
 
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
@@ -133,7 +193,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			finish = true
 		default:
 		}
-		if !finish {
+		pending := r.pending != nil
+		if !finish && pending {
+			row = r.pending
+			r.pending = nil
+		} else if !finish {
 			row, err = csvReader.Read(csvReader.LastRow)
 			csvReader.LastRow = row
 			if err != nil {
@@ -146,6 +210,8 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 
 		if finish {
+			r.pending = nil
+			r.pendingRawBytes = 0
 			closeErr := r.reader.Close()
 			if closeErr != nil {
 				logutil.Errorf("close file failed. err:%v", closeErr)
@@ -165,8 +231,14 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			}
 		}
 
-		for j := 0; j < len(row); j++ {
-			curBatchSize += uint64(len(row[j].Val))
+		var rawBytes uint64
+		if pending {
+			rawBytes = r.pendingRawBytes
+			r.pendingRawBytes = 0
+		} else {
+			for j := range row {
+				rawBytes += uint64(len(row[j].Val))
+			}
 		}
 
 		// The physical line this record starts on, for __mo_file_line. Recorded
@@ -176,7 +248,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 
 		rowIdx := i
-		if param.Extern.Format == tree.JSONLINE {
+		if !pending && param.Extern.Format == tree.JSONLINE {
 			raw := row[0].Val
 			if param.ErrorMode.Tolerate {
 				// The text this record is parsed from, so a failure reports
@@ -223,18 +295,43 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				// a run of malformed records build one batch far past
 				// maxBatchSize -- each carrying a copy of its source text in
 				// __mo_error_text -- defeating the transport and memory bound.
-				if curBatchSize >= param.maxBatchSize {
+				if uint64(bat.Size()) >= param.maxBatchSize {
 					break
 				}
 				continue
 			}
 		}
 
-		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
-			return false, err
+		// Test both raw input and the complete new typed capacities before the
+		// append. A resize's old allocation remains live while N is allocated.
+		// A single row may exceed the target; largest-entry-limit remains the
+		// existing support boundary, rather than introducing a new row limit.
+		var areaGrowth bool
+		r.rowArea, areaGrowth = csvRowAreas(r.rowArea, row, param, bat)
+		mayGrow := bat.Vecs[0].Length() >= dataRows || areaGrowth
+		peak := int64(allocated)
+		if mayGrow {
+			for j, vec := range bat.Vecs {
+				peak += vec.AppendAllocation(1, r.rowArea[j])
+			}
+		}
+		if bat.Vecs[0].Length() > 0 && (curBatchSize+rawBytes > unit || uint64(peak) > unit) {
+			r.pending = row
+			r.pendingRawBytes = rawBytes
+			break
 		}
 
-		if curBatchSize >= param.maxBatchSize {
+		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
+			r.pending = nil
+			r.pendingRawBytes = 0
+			return false, err
+		}
+		curBatchSize += rawBytes
+		if mayGrow {
+			refreshCapacity()
+		}
+
+		if curBatchSize >= unit || uint64(allocated) >= unit {
 			break
 		}
 	}
@@ -255,6 +352,59 @@ func jsonLineTruncated(err error, str string, open byte) bool {
 	}
 	trimmed := strings.TrimSpace(str)
 	return len(trimmed) > 0 && trimmed[0] == open
+}
+
+// csvRowAreas bounds the out-of-line typed payload of one row without parsing
+// it a second time. Fixed-width storage and inline varlena bytes are charged by
+// AppendAllocation. Array literals can expand from one digit to eight bytes;
+// JSON's type tags, offsets and number representation are conservatively
+// bounded here rather than treating its raw text size as its binary size.
+func csvRowAreas(dst []int, row []csvparser.Field, param *ExternalParam, bat *batch.Batch) ([]int, bool) {
+	if cap(dst) < len(bat.Vecs) {
+		dst = make([]int, len(bat.Vecs))
+	} else {
+		dst = dst[:len(bat.Vecs)]
+		clear(dst)
+	}
+	var mayGrow bool
+	for _, attr := range param.Attrs {
+		if attr.ColIndex < 0 || int(attr.ColIndex) >= len(bat.Vecs) {
+			continue
+		}
+		field := getFieldFromLine(row, attr.ColName, 0, param, attr.ColFieldIndex)
+		if field.IsNull || getNullFlag(param.Extern.NullMap, attr.ColName, field.Val) {
+			continue
+		}
+		vec := bat.Vecs[attr.ColIndex]
+		if !vec.GetType().IsVarlen() {
+			continue
+		}
+		n := len(field.Val)
+		if !param.ParallelLoad || isDirectParallelLoadType(vec.GetType().Oid) {
+			switch vec.GetType().Oid {
+			case types.T_array_float32, types.T_array_float64:
+				text := strings.TrimSpace(field.Val)
+				if text == "[]" {
+					n = 0
+				} else {
+					n = (strings.Count(text, ",") + 1) * 4
+					if vec.GetType().Oid == types.T_array_float64 {
+						n *= 2
+					}
+				}
+			case types.T_json:
+				if param.Extern.Format == tree.CSV {
+					n = 16*n + 64
+				}
+			}
+		}
+		if n > types.VarlenaInlineSize {
+			dst[attr.ColIndex] = n
+			backing := vec.GetArea()
+			mayGrow = mayGrow || n > cap(backing)-len(backing)
+		}
+	}
+	return dst, mayGrow
 }
 
 // transJson2Lines converts JSON string to CSV fields.
@@ -293,6 +443,10 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		realCnt++
 	}
 	res := make([]csvparser.Field, resultSize)
+	if config.LargestEntryLimit > 0 && len(str) > config.LargestEntryLimit-len(r.prevStr) {
+		r.prevStr = ""
+		return nil, moerr.NewInternalError(ctx, "size of row cannot exceed the max value of txn-entry-size-limit")
+	}
 	if r.prevStr != "" {
 		str = r.prevStr + str
 		r.prevStr = ""
@@ -351,6 +505,10 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		err error
 		res = make([]csvparser.Field, 0, len(attrs))
 	)
+	if config.LargestEntryLimit > 0 && len(str) > config.LargestEntryLimit-len(r.prevStr) {
+		r.prevStr = ""
+		return nil, moerr.NewInternalError(ctx, "size of row cannot exceed the max value of txn-entry-size-limit")
+	}
 	if r.prevStr != "" {
 		str = r.prevStr + str
 		r.prevStr = ""

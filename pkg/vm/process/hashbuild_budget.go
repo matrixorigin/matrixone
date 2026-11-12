@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -825,6 +826,8 @@ func (b *HashBuildBudget) resolveCNCapSample(current HashBuildCeilingInputs) (ui
 // A generation's charge is independent from every other generation, even if a
 // caller happens to reuse its numeric ID after the old generation has closed.
 type HashBuildBudgetGeneration struct {
+	// Immutable before publication; nil preserves ordinary query admission.
+	importWorkingSet                                        *rscthrottler.WorkingSet
 	budget                                                  *HashBuildBudget
 	id                                                      uint64
 	cap                                                     uint64
@@ -1169,6 +1172,9 @@ func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
 	b.aggregateUsed -= size
 	g.releaseCount++
 	b.mu.Unlock()
+	if g.importWorkingSet != nil {
+		g.importWorkingSet.ReleaseData(int64(size))
+	}
 	observeHashBuildBudget("memory", "release", "query", size)
 	observeHashBuildBudget("memory", "release", "cn", size)
 }
@@ -1177,6 +1183,27 @@ func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
 // is the only owner of the charge and releases it from MPool.Free; there is no
 // parallel estimate/reservation token.
 func (g *HashBuildBudgetGeneration) acquireMemory(size uint64) error {
+	if g == nil || g.importWorkingSet == nil {
+		return g.acquireBudgetMemory(size)
+	}
+	if size > math.MaxInt64 {
+		return newAdmissionError(size, 0, math.MaxInt64)
+	}
+	if err := g.importWorkingSet.TryAcquireData(int64(size)); err != nil {
+		if errors.Is(err, rscthrottler.ErrWorkingSetClosed) {
+			return errors.Join(mpool.ErrAllocationAccountSealed, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size})
+		}
+		snapshot := g.Snapshot()
+		return errors.Join(newAdmissionError(size, snapshot.Used, snapshot.Cap), err)
+	}
+	if err := g.acquireBudgetMemory(size); err != nil {
+		g.importWorkingSet.ReleaseData(int64(size))
+		return err
+	}
+	return nil
+}
+
+func (g *HashBuildBudgetGeneration) acquireBudgetMemory(size uint64) error {
 	if g == nil || g.budget == nil {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}
 	}
@@ -1651,8 +1678,24 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	}
 	proc.Base.hashBuildBudgetMu.Lock()
 	defer proc.Base.hashBuildBudgetMu.Unlock()
-	if proc.Base.hashBuildBudget != nil {
-		return proc.Base.hashBuildBudget, nil
+	var workingSet *rscthrottler.WorkingSet
+	if proc.Base.ImportMemory != nil {
+		workingSet = proc.Base.ImportMemory.WorkingSet
+	}
+	if previous := proc.Base.hashBuildBudget; previous != nil {
+		if previous.importWorkingSet == workingSet {
+			return previous, nil
+		}
+		// A retry may admit a different graph. Retire the old immutable policy
+		// only after its execution account and recovery owners have reached zero.
+		previous.budget.mu.Lock()
+		if previous.used != 0 {
+			previous.budget.mu.Unlock()
+			return nil, mpool.ErrAllocationAccountLive
+		}
+		previous.closed = true
+		previous.budget.mu.Unlock()
+		proc.Base.hashBuildBudget = nil
 	}
 
 	globalCap := uint64(0)
@@ -1730,6 +1773,9 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	if proc.Base.ImportMemory != nil {
+		generation.importWorkingSet = proc.Base.ImportMemory.WorkingSet
 	}
 	proc.Base.hashBuildBudget = generation
 	return generation, nil

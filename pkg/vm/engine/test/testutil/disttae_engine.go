@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -562,8 +563,12 @@ func (de *TestDisttaeEngine) CreateDatabaseAndTable(
 }
 
 func initRuntime() {
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
+	rt := runtime.ServiceRuntime("")
+	rt.SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
+	rt.SetGlobalVariables(runtime.LockService, new(mockLockService))
+	if _, ok := rt.GetGlobalVariables(runtime.CNMemoryThrottler); !ok {
+		rt.SetGlobalVariables(runtime.CNMemoryThrottler, rscthrottler.NewMemThrottler("test-cn", 1))
+	}
 }
 
 var _ clusterservice.MOCluster = new(mockMOCluster)

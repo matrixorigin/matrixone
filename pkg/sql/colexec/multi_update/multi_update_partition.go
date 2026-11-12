@@ -16,8 +16,10 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -230,6 +232,11 @@ func (op *PartitionMultiUpdate) writeTable(
 func (op *PartitionMultiUpdate) writeS3(
 	proc *process.Process,
 ) (vm.CallResult, error) {
+	// Build consumes the child once. Eval may publish many metadata frames;
+	// forward each result before asking the producer for another.
+	if op.raw.ctr.state != vm.Build {
+		return op.raw.Call(proc)
+	}
 	for {
 		input, err := vm.ChildrenCall(
 			op.GetChildren(0),
@@ -244,6 +251,16 @@ func (op *PartitionMultiUpdate) writeS3(
 		op.raw.input = input
 
 		if input.Batch == nil {
+			// Legacy replay needs D. Retire every partition's source/future D
+			// before any frame can wait; later partitions cannot run during Eval.
+			if proc.Base.ImportMemory == nil {
+				for _, writer := range op.writers {
+					writer.cleanupUnpublished = true
+					if err := writer.flushTail(proc, op.raw.OpAnalyzer); err != nil {
+						return vm.CancelResult, err
+					}
+				}
+			}
 			if _, err := op.raw.Call(proc); err != nil {
 				return input, err
 			}
@@ -337,10 +354,7 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-
-	for _, w := range op.freeWriters {
-		w.free(proc)
-	}
+	op.freePartitionWriters(proc)
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -353,6 +367,36 @@ func (op *PartitionMultiUpdate) Reset(
 	err error,
 ) {
 	op.raw.Reset(proc, pipelineFailed, err)
+	op.freePartitionWriters(proc)
+}
+
+// The wrapper owns writers in both Build and Eval. A partial execution must
+// retire both sets before its grants, temporary files or pools can be reused.
+func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
+	var cleanupCtx context.Context
+	var cancel context.CancelFunc
+	defer func() {
+		if cancel != nil {
+			cancel()
+		}
+	}()
+	free := func(w *s3WriterDelegate) {
+		if cleanupCtx == nil && w.cleanupUnpublished &&
+			!(w.metadataPass == 1 && w.metadataSpoolRead == w.metadataWritten) {
+			cleanupCtx, cancel = pendingObjectCleanupContext(proc)
+		}
+		if err := w.freeWithCleanupContext(proc, cleanupCtx); err != nil {
+			logutil.Warnf("partition writer cleanup failed: %v", err)
+		}
+	}
+	for id, w := range op.writers {
+		free(w)
+		delete(op.writers, id)
+	}
+	for _, w := range op.freeWriters {
+		free(w)
+	}
+	op.freeWriters = nil
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +37,47 @@ type workspaceAmbiguousFS struct {
 	writes  atomic.Int32
 	deletes atomic.Int32
 	failure error
+}
+
+func TestWorkspaceBorrowedWriteRespectsObjectAdmission(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sync", true: "pipeline"}[pipeline], func(t *testing.T) {
+			ctx := context.Background()
+			base := testutil.NewSharedFS()
+			defer base.Close(ctx)
+			fs := &workspaceAmbiguousFS{FileService: base}
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			src := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_int64.ToType()})
+			defer src.Clean(mp)
+			require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(7), false, mp))
+			src.SetRowCount(1)
+			const unit = int64(1 << 20)
+			peak, _, err := BatchIOEnvelope(src, unit)
+			require.NoError(t, err)
+			throttle := rscthrottler.NewMemThrottler("workspace-borrowed", 1, rscthrottler.WithConstLimit(8<<30))
+			ws, err := throttle.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: unit, IOBytes: 3 * peak}})
+			require.NoError(t, err)
+			defer ws.Close()
+			lease, err := ws.AcquireIO(ctx, peak)
+			require.NoError(t, err)
+			defer lease.Release()
+			refused := errors.New("object admission refused")
+			opts := []SinkerOption{WithMemoryWorkspace(ws), WithBufferBytes(unit), WithWorkspaceOwnedCleanup(), WithUncommittedCapacityHook(func(string) error { return refused })}
+			if pipeline {
+				opts = append(opts, WithPipelineFlush())
+			}
+			sink := NewSinker(-1, []string{"v"}, []types.Type{types.T_int64.ToType()}, NewFSinkerImplFactory([]uint16{0}, -1, false, false, 0), mp, fs, opts...)
+			defer sink.Close()
+			err = sink.WriteBorrowedToFile(ctx, src, lease)
+			if err == nil {
+				err = sink.Sync(ctx)
+			}
+			require.ErrorIs(t, err, refused)
+			require.Zero(t, fs.writes.Load(), "capacity refusal must precede persistence")
+			require.Empty(t, sink.AbandonAndRetainableNames())
+		})
+	}
 }
 
 func (fs *workspaceAmbiguousFS) Write(ctx context.Context, v fileservice.IOVector) error {

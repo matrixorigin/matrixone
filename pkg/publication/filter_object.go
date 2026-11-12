@@ -16,11 +16,13 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"go.uber.org/zap"
@@ -102,22 +105,41 @@ func FilterObject(
 	var stats objectio.ObjectStats
 	stats.UnMarshal(objectStatsBytes)
 
-	// Check if it's an appendable object
-	isAObj := stats.GetAppendable()
-	if isAObj {
-		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
-	} else {
-		// Handle non-appendable object - write directly to fileservice with new UUID
-		// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
-		newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
-		if err != nil {
-			return nil, err
+	var minimum int64
+	for {
+		result, err := func() (*FilterObjectResult, error) {
+			if ttlChecker != nil && !ttlChecker() {
+				return nil, ErrSyncProtectionTTLExpired
+			}
+			memory, release, err := reservePublicationObject(ctx, &stats, minimum, isTombstone && !stats.GetAppendable() && aobjectMap != nil)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			ctx := context.WithValue(ctx, publicationFetchMemoryKey{}, memory)
+			// Check if it's an appendable object
+			isAObj := stats.GetAppendable()
+			if isAObj {
+				// Handle appendable object
+				return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
+			} else {
+				// Handle non-appendable object - write directly to fileservice with new UUID
+				// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
+				newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
+				if err != nil {
+					return nil, err
+				}
+				// Return the new downstream stats with new object name
+				return &FilterObjectResult{
+					DownstreamStats: newStats,
+				}, nil
+			}
+		}()
+		var growth *objectMemoryGrowth
+		if !errors.As(err, &growth) {
+			return result, err
 		}
-		// Return the new downstream stats with new object name
-		return &FilterObjectResult{
-			DownstreamStats: newStats,
-		}, nil
+		minimum = growth.bytes
 	}
 }
 
@@ -150,7 +172,7 @@ func filterAppendableObject(
 	// Get object file from upstream using GETOBJECT
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return nil, errutil.Wrap(err, "failed to get object from upstream")
 	}
 
 	// Check TTL after getting object
@@ -370,7 +392,7 @@ func filterNonAppendableObject(
 	// Get object file from upstream
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return objectio.ObjectStats{}, errutil.Wrap(err, "failed to get object from upstream")
 	}
 
 	// Check TTL after getting object
@@ -416,6 +438,10 @@ var GetObjectFromUpstreamWithWorker = func(
 	subscriptionAccountName string,
 	pubName string,
 ) ([]byte, error) {
+	return fetchObjectChunks(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName, GetChunkSize)
+}
+
+func fetchObjectChunks(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, getChunkWorker GetChunkWorker, subscriptionAccountName, pubName string, chunkSize int64) ([]byte, error) {
 	if upstreamExecutor == nil {
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
@@ -428,6 +454,24 @@ var GetObjectFromUpstreamWithWorker = func(
 		return nil, err
 	}
 
+	expected, err := objectChunkCount(metaResult.TotalSize, chunkSize)
+	if err != nil {
+		return nil, err
+	}
+	if metaResult.TotalChunks != expected {
+		return nil, moerr.NewInternalErrorNoCtx("inconsistent GETOBJECT chunk count")
+	}
+	memory, ok := ctx.Value(publicationFetchMemoryKey{}).(*rscthrottler.InputLease)
+	if !ok || memory == nil {
+		return nil, moerr.NewInternalErrorNoCtx("publication fetch requires an object reservation")
+	}
+	peak, err := publicationBufferBytes(metaResult.TotalSize)
+	if err != nil {
+		return nil, err
+	}
+	if err := growPublicationObject(ctx, memory, peak); err != nil {
+		return nil, err
+	}
 	totalChunks := metaResult.TotalChunks
 	chunkCtx, cancelChunks := context.WithCancel(ctx)
 	var acceptedChunks acceptedJobBatch[*GetChunkJob]
@@ -464,8 +508,14 @@ var GetObjectFromUpstreamWithWorker = func(
 			if err != nil {
 				return nil, err
 			}
+			if int64(len(chunkData)) != min(chunkSize, metaResult.TotalSize-i*chunkSize) {
+				return nil, moerr.NewInternalErrorNoCtx("invalid GETOBJECT chunk length")
+			}
 			allChunks[i] = chunkData
 		} else {
+			if int64(len(chunkResult.ChunkData)) != min(chunkSize, metaResult.TotalSize-i*chunkSize) {
+				return nil, moerr.NewInternalErrorNoCtx("invalid GETOBJECT chunk length")
+			}
 			allChunks[i] = chunkResult.ChunkData
 		}
 	}
@@ -481,6 +531,7 @@ var GetObjectFromUpstreamWithWorker = func(
 	}
 
 	return objectContent, nil
+
 }
 
 // getMetaWithRetry gets object metadata with retry logic
