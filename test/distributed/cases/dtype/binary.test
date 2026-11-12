@@ -1,3 +1,5 @@
+set @binary_saved_mode=@@session.sql_mode;
+set session sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION';
 -- @suite
 -- @case
 -- @desc:test for binary datatype
@@ -727,4 +729,28 @@ set @__mo_stmt_var_0=1;
 execute __mo_stmt_id_1 using @__mo_stmt_var_0;
 deallocate prepare __mo_stmt_id_1;
 drop table camera_area;
+-- Assignment overflow must reject the whole batch; explicit CAST truncates first.
+create table binary_assignment_batch(id int primary key,a binary(2));
+insert into binary_assignment_batch values(1,'A'),(2,'ABC');
+select count(*) from binary_assignment_batch;
+select hex(cast('ABC' as binary(2))),hex(cast(123 as binary(2))),hex(cast(0x414243 as binary(2)));
+insert ignore into binary_assignment_batch values(1,'A'),(2,'ABC');
+select id,hex(a) from binary_assignment_batch order by id;
+drop table binary_assignment_batch;
+-- Typed numeric projections honor non-strict/IGNORE width and preserve NULLs.
+create table binary_numeric_source(id int primary key,s bigint,u bigint unsigned,f double,d64 decimal(10,2),d128 decimal(30,2),d256 decimal(65,2));
+insert into binary_numeric_source values(1,-123,123,123.5,123.50,123.50,123.50),(2,null,null,null,null,null,null);
+create table binary_numeric_target(id int primary key,s binary(2),u varbinary(2),f binary(2),d64 varbinary(2),d128 binary(2),d256 varbinary(2));
+insert ignore into binary_numeric_target select * from binary_numeric_source;
+select id,hex(s) as s,hex(u) as u,hex(f) as f,hex(d64) as d64,hex(d128) as d128,hex(d256) as d256 from binary_numeric_target order by id;
+truncate table binary_numeric_target;
+set session sql_mode='NO_ENGINE_SUBSTITUTION';
+insert into binary_numeric_target select * from binary_numeric_source;
+select id,hex(s) as s,hex(u) as u,hex(f) as f,hex(d64) as d64,hex(d128) as d128,hex(d256) as d256 from binary_numeric_target order by id;
+update binary_numeric_target t join binary_numeric_source s on t.id=s.id set t.s=s.s,t.u=s.u,t.f=s.f,t.d64=s.d64,t.d128=s.d128,t.d256=s.d256;
+select id,hex(s) as s,hex(u) as u,hex(f) as f,hex(d64) as d64,hex(d128) as d128,hex(d256) as d256 from binary_numeric_target order by id;
+drop table binary_numeric_target;
+drop table binary_numeric_source;
+set session sql_mode=@binary_saved_mode;
+set @binary_saved_mode=null;
 drop database test;

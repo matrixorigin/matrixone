@@ -478,6 +478,9 @@ message ColDef {
   ResultColumnKind result_column_kind = 23;
   // Result publication only; never persisted as a table/view schema attribute.
   IntegerResultPresentation integer_result_presentation = 24;
+  // Result publication only: the declared ENUM/SET domain of a label field.
+  // typ remains the executable string type; this is not a schema attribute.
+  Type enum_set_result_type = 25;
 }
 
 message Default {
@@ -1923,6 +1926,9 @@ message Query {
   // Rebuild from the original owner instead of reusing a physical choice.
   bool execution_dependent_access = 22;
   repeated LocalRuntimeFilterDomain local_runtime_filter_domains = 23;
+  // Output-aligned declared ENUM/SET domains, captured before optimization.
+  // Empty when absent; zero types represent outputs without field identity.
+  repeated Type enum_set_result_types = 24 [(gogoproto.nullable) = false];
 }
 
 message TransationControl {
