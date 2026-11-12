@@ -3,6 +3,10 @@ name: Race seed canary
 on:
   workflow_dispatch:
     inputs:
+      jed_s3_smoke:
+        description: Verify the dedicated JED CI bucket from a JED runner
+        type: boolean
+        default: false
       cs_s3_adaptation_smoke:
         description: Test CS S3 adaptation against temporary local MinIO
         type: boolean
@@ -44,7 +48,7 @@ permissions:
 
 jobs:
   cs-coverage-canary:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.jed_s3_smoke
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@b05be37d7d102fbf040ae45b72ff2c27ee48b720
     with:
       canary_pr_32523: true
@@ -155,6 +159,22 @@ jobs:
         if: ${{ inputs.cs_s3_adaptation_smoke }}
         working-directory: ci-contract
         run: python3 -m unittest scripts.test_cs_s3_coverage scripts.test_coverage_native_runtime scripts.test_run_coverage_ut
+  jed-s3-smoke:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.jed_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke
+    runs-on: cs-jed-medium-2c8g
+    environment: ci
+    timeout-minutes: 5
+    steps:
+      - name: Checkout probe from authorized test branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          sparse-checkout: etc/ci/jed_s3_smoke.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Verify dedicated JED S3 credentials and isolated object I/O
+        env:
+          TEST_S3FS_CS: ${{ secrets.CS_S3_JED_CONFIG }}
+        run: python3 etc/ci/jed_s3_smoke.py
   coverage-contract-smoke:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     runs-on: cs-mnl2-large-7c14g
