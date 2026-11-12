@@ -141,4 +141,19 @@ select id from null_aliases as `x.y` where `x.y`.id=2 and `x.y`.`a.v` is null;
 select id from null_aliases as `x.y` where `x.y`.id=1 and `x.y`.`a.v` is not null;
 select id from null_aliases where id=2 and `a.v` is null;
 select id from null_aliases as x where x.id=2 and x.`a.v` is null;
+-- A non-leading primary key must never borrow the first column's ZoneMap.
+create table nonleading_pk (k int, id int primary key, v int);
+insert into nonleading_pk values (100, 1, NULL), (200, 2, 2);
+select mo_ctl('dn', 'flush', 'secondary_index_null_predicates.nonleading_pk');
+select id from nonleading_pk as x where x.id=1 and x.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id=1 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id<2 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id<=1 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id>0 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id>=1 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id between 1 and 2 and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id in (1,2) and `x.y`.v is null;
+select id from nonleading_pk as `x.y` where `x.y`.id=2 and `x.y`.v is not null;
+select id from nonleading_pk as `x.y`
+where (`x.y`.id=1 and `x.y`.v is null) or (`x.y`.id=2 and `x.y`.v is not null) order by id;
 drop database secondary_index_null_predicates;

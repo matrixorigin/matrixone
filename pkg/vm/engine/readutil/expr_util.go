@@ -62,34 +62,11 @@ func ConstructInExpr(
 	)
 }
 
-func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
-	idx := strings.Index(name, ".")
-	var pos int32
-	if idx >= 0 {
-		subName := name[idx+1:]
-		pos = tableDef.Name2ColIndex[subName]
-	} else {
-		pos = tableDef.Name2ColIndex[name]
-	}
-	common.DoIfDebugEnabled(func() {
-		if name != tableDef.Cols[colPos].Name {
-			logutil.Error(
-				"Bad-ColExpr",
-				zap.String("col-name", name),
-				zap.Int32("col-actual-pos", colPos),
-				zap.Int32("col-expected-pos", pos),
-				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
-			)
-		}
-	})
-	return tableDef.Cols[pos]
-}
-
-// resolveFilterColumn requires an unambiguous schema match. ColPos is scan-local,
+// getColDefByName requires an unambiguous schema match. ColPos is scan-local,
 // not a full-schema ordinal, and flattened names do not preserve which dots came
 // from quoted aliases or column names. Missing or ambiguous identity must disable
 // metadata pruning rather than silently selecting the first column.
-func resolveFilterColumn(name string, tableDef *plan.TableDef) *plan.ColDef {
+func getColDefByName(_ *plan.Expr, name string, _ int32, tableDef *plan.TableDef) *plan.ColDef {
 	if tableDef == nil || name == "" {
 		return nil
 	}
@@ -111,6 +88,30 @@ func resolveFilterColumn(name string, tableDef *plan.TableDef) *plan.ColDef {
 		}
 		name = name[idx+1:]
 	}
+}
+
+// filterColumnsResolved is the admission check for the whole fast filter.
+// Check every reference before compiling any conjunct/disjunct, not only the
+// column of the predicate that originally enabled the optimization.
+func filterColumnsResolved(expr *plan.Expr, tableDef *plan.TableDef) bool {
+	if expr == nil {
+		return true
+	}
+	if col := expr.GetCol(); col != nil {
+		return getColDefByName(expr, col.Name, col.ColPos, tableDef) != nil
+	}
+	var children []*plan.Expr
+	if fn := expr.GetF(); fn != nil {
+		children = fn.Args
+	} else if list := expr.GetList(); list != nil {
+		children = list.List
+	}
+	for _, child := range children {
+		if !filterColumnsResolved(child, tableDef) {
+			return false
+		}
+	}
+	return true
 }
 
 func compPkCol(colName string, pkName string) bool {

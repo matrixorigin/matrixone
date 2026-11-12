@@ -114,11 +114,16 @@ func CompileFilterExprs(
 	highSelectivityHint bool,
 ) {
 	canCompile = true
+	for _, expr := range exprs {
+		if !filterColumnsResolved(expr, tableDef) {
+			return nil, nil, nil, nil, nil, false, false
+		}
+	}
 	if len(exprs) == 0 {
 		return
 	}
 	if len(exprs) == 1 {
-		return CompileFilterExpr(exprs[0], tableDef, fs)
+		return compileFilterExpr(exprs[0], tableDef, fs)
 	}
 	ops1 := make([]FastFilterOp, 0, len(exprs))
 	ops2 := make([]LoadOp, 0, len(exprs))
@@ -127,7 +132,7 @@ func CompileFilterExprs(
 	ops5 := make([]SeekFirstBlockOp, 0, len(exprs))
 
 	for _, expr := range exprs {
-		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, tableDef, fs)
+		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := compileFilterExpr(expr, tableDef, fs)
 		if !can {
 			return nil, nil, nil, nil, nil, false, false
 		}
@@ -217,6 +222,18 @@ func CompileFilterExpr(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
+) (FastFilterOp, LoadOp, ObjectFilterOp, BlockFilterOp, SeekFirstBlockOp, bool, bool) {
+	if !filterColumnsResolved(expr, tableDef) {
+		return nil, nil, nil, nil, nil, false, false
+	}
+	return compileFilterExpr(expr, tableDef, fs)
+}
+
+// compileFilterExpr only receives expressions admitted by filterColumnsResolved.
+func compileFilterExpr(
+	expr *plan.Expr,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
 ) (
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -244,7 +261,7 @@ func CompileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -337,7 +354,7 @@ func CompileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -875,11 +892,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := resolveFilterColumn(exprImpl.F.Args[0].GetCol().Name, tableDef)
-			if colDef == nil {
-				canCompile = false
-				return
-			}
+			col := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, col.Name, col.ColPos, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -905,11 +919,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := resolveFilterColumn(exprImpl.F.Args[0].GetCol().Name, tableDef)
-			if colDef == nil {
-				canCompile = false
-				return
-			}
+			col := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, col.Name, col.ColPos, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum

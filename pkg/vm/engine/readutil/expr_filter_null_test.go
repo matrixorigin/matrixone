@@ -165,6 +165,110 @@ func TestCompileFilterExprNullColumnIdentity(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprAllColumnsChecked(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	table := &plan.TableDef{Name: "t", Name2ColIndex: map[string]int32{"k": 0, "id": 1, "v": 2}, Cols: []*plan.ColDef{
+		{Name: "k", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: "id", Seqnum: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: "v", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar)}},
+	}}
+	for _, op := range []string{"=", "<", "<=", ">", ">=", "between", "in_range", "in", "prefix_eq", "prefix_between", "prefix_in_range", "prefix_in"} {
+		t.Run(op, func(t *testing.T) {
+			makePredicate := func(column string) *plan.Expr {
+				col := MakeColExprForTest(0, types.T_varchar, column)
+				if op == "in" || op == "prefix_in" {
+					expr := MakeInExprForTest(col, [][]byte{[]byte("1"), []byte("2")}, types.T_varchar, proc.Mp())
+					if op == "prefix_in" {
+						expr.GetF().Func.ObjName = "prefix_in"
+					}
+					return expr
+				}
+				value := "1"
+				if op == "<" {
+					value = "3"
+				} else if op == ">" {
+					value = "0"
+				}
+				args := []*plan.Expr{col, plan2.MakePlan2StringConstExprWithType(value)}
+				if op == "between" || op == "in_range" || op == "prefix_between" || op == "prefix_in_range" {
+					args = append(args, plan2.MakePlan2StringConstExprWithType("2"))
+				}
+				if op == "in_range" || op == "prefix_in_range" {
+					args = append(args, plan2.MakePlan2Uint8ConstExprWithType(0))
+				}
+				expr := MakeFunctionExprForTest(op, args)
+				_, err := plan2.ReplaceFoldExpr(proc, expr, &executors)
+				require.NoError(t, err)
+				require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+				return expr
+			}
+			nullExpr := MakeFunctionExprForTest("isnull", []*plan.Expr{MakeColExprForTest(2, types.T_varchar, "v")})
+			predicate := makePredicate("x.y.id")
+			pkFast, _, _, _, _, canCompile, _ := CompileFilterExpr(predicate, table, nil)
+			require.True(t, canCompile)
+			require.NotNil(t, pkFast, "the resolved column is a non-leading primary key, not k")
+			fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{predicate, nullExpr}, table, nil)
+			require.True(t, compiled)
+			require.NotNil(t, fast)
+			zm := index.NewZM(types.T_varchar, 0)
+			index.UpdateZM(zm, []byte("1"))
+			index.UpdateZM(zm, []byte("2"))
+			stats := objectio.NewObjectStats()
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+			keep, err := fast(stats)
+			require.NoError(t, err)
+			require.True(t, keep, "the first column k must not replace the non-leading primary key")
+			absent := "9"
+			if op == ">" || op == ">=" {
+				absent = "0"
+			}
+			nonmatching := index.NewZM(types.T_varchar, 0)
+			index.UpdateZM(nonmatching, []byte(absent))
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, nonmatching))
+			keep, err = fast(stats)
+			require.NoError(t, err)
+			require.False(t, keep, "known, unrelated PK ranges should still be pruned")
+
+			for _, badName := range []string{"x.y.unknown", "x.y.v.id"} {
+				badTable := *table
+				if badName == "x.y.v.id" {
+					badTable.Name2ColIndex = map[string]int32{"k": 0, "id": 1, "v": 2, "v.id": 0}
+					badTable.Cols = append([]*plan.ColDef(nil), table.Cols...)
+					badTable.Cols[0] = &plan.ColDef{Name: "v.id", Seqnum: 0}
+				}
+				bad := makePredicate(badName)
+				for _, shape := range []string{"list", "and", "or", "list_expr"} {
+					t.Run(badName+"/"+shape, func(t *testing.T) {
+						exprs := []*plan.Expr{nullExpr, bad}
+						if shape == "list_expr" {
+							// Internal admission must inspect list children even when the
+							// later compiler would reject this synthetic list shape.
+							exprs = []*plan.Expr{{Expr: &plan.Expr_List{List: &plan.ExprList{List: exprs}}}}
+						} else if shape != "list" {
+							exprs = []*plan.Expr{MakeFunctionExprForTest(shape, exprs)}
+						}
+						fast, load, object, block, seek, compiled, hint := CompileFilterExprs(exprs, &badTable, nil)
+						require.False(t, compiled, "any unproven reference must reject the complete filter")
+						require.False(t, hint)
+						require.Nil(t, fast)
+						require.Nil(t, load)
+						require.Nil(t, object)
+						require.Nil(t, block)
+						require.Nil(t, seek)
+					})
+				}
+			}
+		})
+	}
+}
+
 func TestCompileFilterExprNullObjectMetadata(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("null-filter", fileservice.CacheConfig{}, nil)

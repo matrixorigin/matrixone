@@ -90,8 +90,8 @@ UNION
 SELECT ppd.ebeln AS ebeln FROM purchase_payment_detail ppd WHERE ppd.bukrs = '1000' AND ppd.gjahr = '2025' AND ppd.belnr = '4000001024' AND ppd.ebeln IS NOT NULL AND ppd.ebeln != '') t;
 ➤ 采购订单号[12,0,0]  𝄀
 P100  𝄀
-P_ONLY  𝄀
-P300
+P300  𝄀
+P_ONLY
 SELECT COUNT(1) AS __query_sql_total_count FROM (
 SELECT DISTINCT ebeln AS `采购订单号` FROM (SELECT vld.ebeln AS ebeln FROM voucher_line_details vld WHERE vld.voucher_header_id = '4000001024-1000-2025' AND vld.ebeln IS NOT NULL AND vld.ebeln != ''
 UNION
@@ -247,5 +247,50 @@ select id from null_aliases where id=2 and `a.v` is null;
 2
 select id from null_aliases as x where x.id=2 and x.`a.v` is null;
 ➤ id[4,32,0]  𝄀
+2
+create table nonleading_pk (k int, id int primary key, v int);
+insert into nonleading_pk values (100, 1, NULL), (200, 2, 2);
+select mo_ctl('dn', 'flush', 'secondary_index_null_predicates.nonleading_pk');
+➤ mo_ctl(dn, flush, secondary_index_null_predicates.nonleading_pk)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from nonleading_pk as x where x.id=1 and x.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id=1 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id<2 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id<=1 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id>0 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id>=1 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id between 1 and 2 and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id in (1,2) and `x.y`.v is null;
+➤ id[4,32,0]  𝄀
+1
+select id from nonleading_pk as `x.y` where `x.y`.id=2 and `x.y`.v is not null;
+➤ id[4,32,0]  𝄀
+2
+select id from nonleading_pk as `x.y`
+where (`x.y`.id=1 and `x.y`.v is null) or (`x.y`.id=2 and `x.y`.v is not null) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
 2
 drop database secondary_index_null_predicates;
