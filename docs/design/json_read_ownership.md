@@ -531,3 +531,39 @@ unselected descendants and descriptors, allocation failure, and release of the
 dictionary before reading the snapshot. The dictionary source's selected rows
 are copied once and fully validated once; subsequent path queries reuse the
 published version.
+
+### Transient-only physical backing and legacy aggregate text (candidate revision 39)
+
+An input scope can have a statement transient-memory admission without an
+allocation-account selection. In that case, snapshots, private builders, row
+maps and mutable materializations use a transient allocation policy. It is a
+memory policy only: it does not attest JSON validity or make mutable bytes
+trusted. If an allocation account is present, it still takes precedence.
+
+Each new physical MPool block reserves its requested capacity plus a bounded
+allowance for registry and release metadata before allocation. Its physical
+registry entry retains the admission and release until Free or terminal pool
+cleanup. Growth and reallocation reserve the complete replacement before
+copying and freeing the old block, accounting for the temporary peak. Failure
+releases the attempted reservation and preserves the old backing. This also
+applies to bitmap/sidecar storage and to vectors materialized from either
+reader. Retained windows and selections share their owners; no admission result
+is inferred from a pointer, length, or lease. Callbacks used by independent
+readers must be safe for concurrent use.
+
+Canonical JSON admission validates UTF-8, while legacy CHAR/VARCHAR/TEXT
+values may contain malformed bytes. JSON_ARRAYAGG and JSON_OBJECTAGG retain
+the original input for aggregation and DISTINCT, then replace each invalid
+byte with U+FFFD when writing the final JSON string or object key. Object keys
+are normalized before final ordering and duplicate-key selection; the last
+entry still wins. The accounted encoder reserves normalization scratch before
+allocating it. Typed binary aggregate values retain their existing rejection;
+binary object keys still follow the existing string-key entry path. JSON
+inputs do not receive this text conversion.
+
+This amendment addresses review findings on the transient-only budget and
+legacy aggregate encoders. Independent approval of D1 and this amendment is
+still pending. Required evidence covers finite-budget refusal, growth and
+rollback, all three backing sources, retained owners, independent concurrent
+readers, aggregate values and keys, normalized-key collisions, DISTINCT,
+binary rejection and the production SQL terminal.

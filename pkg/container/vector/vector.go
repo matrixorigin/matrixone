@@ -1543,14 +1543,7 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
-			n,
-			owner,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			v.allocationAccount.dataSite,
-			v.allocationAccount.capacityClass,
-		)
+		kinds, err := makeSelectedSlice[PrepareParamKind](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return kinds, owner, err
 	}
 	if owner == nil {
@@ -1589,9 +1582,7 @@ func (v *Vector) allocateStringSources(
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		sources, err := mpool.MakeSliceAccountedWithCapacityClass[types.StringSource](
-			n, owner, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.dataSite, v.allocationAccount.capacityClass)
+		sources, err := makeSelectedSlice[types.StringSource](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return sources, owner, err
 	}
 	if owner == nil {
@@ -3638,9 +3629,7 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
+		storage, err = makeSelectedSlice[uint64](v.allocationAccount, words, mp, v.allocationAccount.nullsSite)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -11300,10 +11289,7 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			target.site, v.allocationAccount.capacityClass,
-		)
+		storage, err := makeSelectedSlice[uint64](v.allocationAccount, words, mp, target.site)
 		if err != nil {
 			for j := range i {
 				scratch[j].release(mp)

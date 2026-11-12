@@ -65,6 +65,7 @@ func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker
 		releasePin()
 		return nil, err
 	}
+	selection = vector.JSONReaderAllocationSelection(selection, admission)
 	releaseMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		if ownerMeta != nil {

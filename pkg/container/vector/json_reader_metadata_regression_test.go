@@ -140,7 +140,7 @@ func TestJSONReaderMetadataPublicationFailureReleasesOwner(t *testing.T) {
 			calls := 0
 			admission := func(capacity uint64) (func(), error) {
 				calls++
-				if calls == failAt {
+				if failAt != 0 && calls == failAt {
 					return nil, want
 				}
 				live += capacity
@@ -155,7 +155,9 @@ func TestJSONReaderMetadataPublicationFailureReleasesOwner(t *testing.T) {
 			}
 			require.NoError(t, err)
 			defer builder.Close()
+			failAt = 0
 			require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
+			failAt = calls + 1 // reject publication after backing has been admitted
 			reader, err := builder.Finish()
 			require.ErrorIs(t, err, want)
 			require.Nil(t, reader)

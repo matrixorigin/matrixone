@@ -127,6 +127,9 @@ func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPo
 }
 
 func dictionaryAccountsMatch(left, right *AllocationAccountSelection) bool {
+	if left != nil && left.transient != nil || right != nil && right.transient != nil {
+		return left == right
+	}
 	return (left == nil && right == nil) || (left != nil && right != nil && left.account == right.account)
 }
 
