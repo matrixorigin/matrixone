@@ -870,13 +870,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column '%s' does not exist", name)
 			}
-		} else if tb, ok := b.impl.(*TableBinder); ok && tb.joinOn {
-			// A JOIN ON predicate binds only the FROM bindings it already
-			// owns; a table qualifier that stays unresolved is out of clause
-			// scope there, which MySQL reports as an unknown on-clause
+		} else if tb, ok := b.impl.(*TableBinder); ok && tb.joinOn && depth == 0 {
+			// A reference this JOIN ON predicate binds directly (depth 0)
+			// resolves only against the FROM bindings the clause already
+			// owns; a table qualifier that stays unresolved there is out of
+			// clause scope, which MySQL reports as an unknown on-clause
 			// column rather than a Postgres-style missing FROM entry. The
 			// parent-correlation walk below still gets its chance before
-			// this error surfaces.
+			// this error surfaces. A lookup delegated into this binder at
+			// depth > 0 originates in another clause — a nested WHERE or
+			// SELECT inside the ON subquery — and keeps that clause's own
+			// diagnostic.
 			err = moerr.NewBadFieldError(localErrCtx, name, "on clause")
 			joinOnUnresolved = err
 		} else {

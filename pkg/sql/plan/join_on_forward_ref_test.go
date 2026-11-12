@@ -293,3 +293,48 @@ func TestJoinOnQualifiedNamespaceErrorClass(t *testing.T) {
 		require.Equal(t, "Unknown column 'nosuchdb.t4.a' in 'on clause'", err.Error())
 	})
 }
+
+// TestJoinOnSubqueryClauseDiagnosticsOwnership pins the clause origin of an
+// unresolved qualified name: a reference originating in a nested WHERE or
+// SELECT inside a JOIN ON subquery keeps its own clause's diagnostic even
+// though the correlation walk consults this ON binder at depth > 0, while a
+// valid correlation through the same delegated path still binds.
+func TestJoinOnSubqueryClauseDiagnosticsOwnership(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+
+	t.Run("nested WHERE name keeps its missing FROM diagnostic", func(t *testing.T) {
+		queryPlan, err := runOneStmt(mock, t, `
+			SELECT o.a
+			FROM bvt_test1.t1 AS o
+			JOIN bvt_test2.t2 AS j ON EXISTS (
+				SELECT s.a FROM bvt_test2.t2 AS s WHERE missing.a = s.a
+			)`)
+		require.Error(t, err, "the missing name stays rejected in every scope")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "actual: %v", err)
+		require.Equal(t, "invalid input: missing FROM-clause entry for table 'missing'", err.Error())
+		require.Nil(t, queryPlan, "the reference never becomes legal")
+	})
+
+	t.Run("nested projection name keeps its missing FROM diagnostic", func(t *testing.T) {
+		queryPlan, err := runOneStmt(mock, t, `
+			SELECT o.a
+			FROM bvt_test1.t1 AS o
+			JOIN bvt_test2.t2 AS j ON EXISTS (
+				SELECT missing.a FROM bvt_test2.t2 AS s
+			)`)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "actual: %v", err)
+		require.Equal(t, "invalid input: missing FROM-clause entry for table 'missing'", err.Error())
+		require.Nil(t, queryPlan)
+	})
+
+	t.Run("valid correlation through the same ON-delegated path still binds", func(t *testing.T) {
+		_, err := runOneStmt(mock, t, `
+			SELECT o.a
+			FROM bvt_test1.t1 AS o
+			JOIN bvt_test2.t2 AS j ON EXISTS (
+				SELECT s.a FROM bvt_test2.t2 AS s WHERE o.a = s.a
+			)`)
+		require.NoError(t, err)
+	})
+}
