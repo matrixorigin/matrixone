@@ -63,6 +63,9 @@ func TestRenameUserShowGrants(t *testing.T) {
 			columns, err := rows.Columns()
 			require.NoError(t, err, query)
 			require.Len(t, columns, 1, query)
+			for rows.Next() {
+			}
+			require.NoError(t, rows.Err(), query)
 			return columns[0]
 		}
 		grants := func(conn *sql.Conn, query string) []string {
