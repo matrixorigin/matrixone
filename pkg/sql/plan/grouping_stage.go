@@ -96,23 +96,53 @@ func (builder *QueryBuilder) appendGroupingStage(
 		stage.projects = make([]*plan.Expr, len(ctx.projects))
 		ctx.headings = make([]string, 0, len(ctx.projects))
 		payload := make([]*plan.Expr, 0, len(ctx.projects))
-		for i, expr := range ctx.projects {
-			if i >= resultLen {
-				// Keep reconstructible sort expressions, not opaque hidden slots:
-				// DISTINCT may use chosen+1 when chosen is a selected sample.
-				if order, ok := groupingOrderExpr(DeepCopyExpr(stage.sampleProjects[i]), selected, ctx.projectTag, stage.projectionInputTag, false); ok {
-					stage.projects[i] = order
-					continue
-				}
-			}
+		materialize := func(expr *plan.Expr) *plan.Expr {
 			pos := int32(len(payload))
 			payload = append(payload, expr)
 			ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", pos))
-			stage.projects[i] = &plan.Expr{
+			return &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: stage.projectionInputTag, ColPos: pos,
 				}},
+			}
+		}
+		var rebuildOrder func(*plan.Expr) *plan.Expr
+		rebuildOrder = func(expr *plan.Expr) *plan.Expr {
+			copy := DeepCopyExpr(expr)
+			if order, ok := groupingOrderExpr(copy, selected, ctx.projectTag, stage.projectionInputTag, false); ok {
+				return order
+			}
+			// A mixed expression cannot fall back wholesale into the branch:
+			// selected aliases belong to a later projection. Materialize only
+			// unavailable dependencies, preserving their pre-fold identities.
+			copy = DeepCopyExpr(expr)
+			if fn := copy.GetF(); fn != nil && fn.Func.ObjName != "grouping" {
+				for i, arg := range fn.Args {
+					fn.Args[i] = rebuildOrder(arg)
+				}
+				return copy
+			}
+			if list := copy.GetList(); list != nil {
+				for i, item := range list.List {
+					list.List[i] = rebuildOrder(item)
+				}
+				return copy
+			}
+			if sub := copy.GetSub(); sub != nil {
+				if sub.Child != nil {
+					sub.Child = rebuildOrder(sub.Child)
+				}
+				return copy
+			}
+			rewriteSampleGrouping(copy, ctx)
+			return materialize(copy)
+		}
+		for i, expr := range ctx.projects {
+			if i < resultLen {
+				stage.projects[i] = materialize(expr)
+			} else {
+				stage.projects[i] = rebuildOrder(stage.sampleProjects[i])
 			}
 		}
 		ctx.projects = payload

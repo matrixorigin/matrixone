@@ -407,4 +407,40 @@ select count(*) from (select b,lag(b) over(order by seq) previous_b from volatil
 where b>previous_b;
 select count(*) from volatile_sample_limited;
 
+-- SAMPLE 混合排序把 selected chosen 与分支 GROUPING 分别传输，不能回放进同一 PROJECT。
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+create table sample_mixed_order as
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+select * from sample_mixed_order order by chosen;
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when grouping(g)=1 then chosen-100 else chosen end limit 3;
+select sample(v,100 percent) chosen from src group by cube(g,h)
+order by chosen-100*grouping(g)-10*grouping(h) limit 3;
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when chosen in(select v from src) then chosen else 0 end-100*grouping(g) limit 3;
+select sample(v,100 percent) chosen from src group by g with rollup
+order by coalesce((select max(v) from src),0)+chosen-100*grouping(g) limit 3;
+
+-- 拆分依赖不放宽 DISTINCT 的来源要求；选出 flag 才能跨 DISTINCT 使用。
+select distinct grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+create table rejected_mixed_order as
+select distinct sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g);
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_mixed_order';
+
+-- 隐藏 branch marker 与可变 alias 混合时仍必须使用真正选出的 b，不能重新求值或偷换到 a。
+create table volatile_mixed_order as
+select row_number() over() seq,t.* from (
+select g,hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by g with rollup order by concat(grouping(g),b) limit 1000000) t;
+select count(*) from (
+select concat(if(g is null,1,0),b) k,
+lag(concat(if(g is null,1,0),b)) over(order by seq) previous_k from volatile_mixed_order) s
+where k<previous_k;
+select count(*) from volatile_mixed_order;
+
 drop database grouping_ctas_test;

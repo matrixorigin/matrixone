@@ -1069,4 +1069,69 @@ where b>previous_b;
 select count(*) from volatile_sample_limited;
 ➤ count(*)[-5,64,0]  𝄀
 3
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+create table sample_mixed_order as
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+select * from sample_mixed_order order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when grouping(g)=1 then chosen-100 else chosen end limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by cube(g,h)
+order by chosen-100*grouping(g)-10*grouping(h) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when chosen in(select v from src) then chosen else 0 end-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by coalesce((select max(v) from src),0)+chosen-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select distinct grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+➤ flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+1  ¦  9
+create table rejected_mixed_order as
+select distinct sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_mixed_order';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table volatile_mixed_order as
+select row_number() over() seq,t.* from (
+select g,hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by g with rollup order by concat(grouping(g),b) limit 1000000) t;
+select count(*) from (
+select concat(if(g is null,1,0),b) k,
+lag(concat(if(g is null,1,0),b)) over(order by seq) previous_k from volatile_mixed_order) s
+where k<previous_k;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_mixed_order;
+➤ count(*)[-5,64,0]  𝄀
+6
 drop database grouping_ctas_test;

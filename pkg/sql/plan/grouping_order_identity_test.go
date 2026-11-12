@@ -101,3 +101,63 @@ func TestGroupingOrderReferenceAndStructuralFallback(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int32(0), got.GetCol().ColPos, "deterministic structural matching remains available")
 }
+
+func TestGroupingSampleMixedOrderScope(t *testing.T) {
+	for _, order := range []string{
+		"chosen-100*grouping(n_regionkey)",
+		"abs(chosen)-100*grouping(n_regionkey)",
+		"case when grouping(n_regionkey)=1 then chosen-100 else chosen end",
+		"(chosen,grouping(n_regionkey))",
+		"case when chosen in(select r_regionkey from region) then chosen else 0 end-100*grouping(n_regionkey)",
+		"coalesce((select max(r_regionkey) from region),0)+chosen-100*grouping(n_regionkey)",
+	} {
+		query := "select sample(n_nationkey,100 percent) chosen from nation group by n_regionkey with rollup order by " + order + " limit 3"
+		t.Run(order, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockOptimizer(false).CurrentContext(), false, true)
+			_, err = builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+			require.NoError(t, err)
+			seen := make(map[*groupingStage]bool)
+			for _, ctx := range builder.ctxByNode {
+				if ctx == nil || ctx.groupingStage == nil || seen[ctx.groupingStage] {
+					continue
+				}
+				stage := ctx.groupingStage
+				seen[stage] = true
+				payloads := 0
+				for _, node := range builder.qry.Nodes {
+					if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 ||
+						builder.qry.Nodes[node.Children[0]].NodeType != plan.Node_SAMPLE ||
+						builder.ctxByNode[node.NodeId] != ctx {
+						continue
+					}
+					payloads++
+					for _, expr := range node.ProjectList {
+						walkGroupingExpr(expr, func(e *plan.Expr) {
+							if col := e.GetCol(); col != nil {
+								require.NotEqual(t, ctx.projectTag, col.RelPos, "branch payload cannot consume its own future output")
+							}
+						})
+					}
+				}
+				require.Positive(t, payloads)
+				refs := make(map[int32]bool)
+				walkGroupingExpr(stage.projects[stage.resultLen], func(e *plan.Expr) {
+					if col := e.GetCol(); col != nil {
+						require.Equal(t, stage.projectionInputTag, col.RelPos)
+						refs[col.ColPos] = true
+					}
+				})
+				require.True(t, refs[0], "sorting consumes the selected chosen output")
+				require.Greater(t, len(refs), 1, "branch-owned GROUPING is a distinct transported dependency")
+			}
+			require.NotEmpty(t, seen)
+			for _, prefix := range []string{"", "create table mixed_sample_order as "} {
+				_, err := buildSingleStmt(NewMockOptimizer(false), t, prefix+query)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
