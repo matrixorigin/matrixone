@@ -287,6 +287,14 @@ func indexKeySetWorthwhile(stats *plan.Stats, count int, forced bool) bool {
 	if hasKnownScanCardinality(stats) && stats.Cost > 0 &&
 		!math.IsNaN(stats.Cost) && !math.IsInf(stats.Cost, 0) {
 		cost = stats.Cost
+		// A non-covering key set also starts an index scan and a runtime
+		// filter/index join. Conservatively reject small tables where that
+		// fixed work plus the raw probes can dominate a scan. These are
+		// heuristic row units, not an estimate of rows actually scanned.
+		const startupRows, probeRows = 1500.0, 32.0
+		if startupRows+probeRows*float64(count) > stats.TableCnt {
+			return false
+		}
 	}
 	return float64(count) <= cost*0.1
 }

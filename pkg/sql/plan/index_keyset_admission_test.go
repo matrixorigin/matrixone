@@ -35,9 +35,16 @@ func TestIndexKeySetProbeCost(t *testing.T) {
 		count        int
 		forced, want bool
 	}{
-		{"three on a small scan", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 3, false, true},
-		{"at ten percent", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 100, false, true},
-		{"above ten percent", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 101, false, false},
+		{"small scan three", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 3, false, false},
+		{"small scan 100", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 100, false, false},
+		{"small scan 101", &planpb.Stats{TableCnt: 1000, Cost: 1000}, 101, false, false},
+		{"below startup boundary", &planpb.Stats{TableCnt: 1595, Cost: 1000}, 3, false, false},
+		{"at startup boundary", &planpb.Stats{TableCnt: 1596, Cost: 1000}, 3, false, true},
+		{"above startup boundary", &planpb.Stats{TableCnt: 1597, Cost: 1000}, 3, false, true},
+		{"filtered original shape", &planpb.Stats{TableCnt: 5000, Cost: 303.03}, 3, false, true},
+		{"single point unchanged", &planpb.Stats{TableCnt: 1, Cost: 1}, 1, false, true},
+		{"existing cost boundary", &planpb.Stats{TableCnt: 60000, Cost: 1000}, 100, false, true},
+		{"above existing cost boundary", &planpb.Stats{TableCnt: 60000, Cost: 1000}, 101, false, false},
 		{"large scan", &planpb.Stats{TableCnt: 60000, Cost: 60000}, 128, false, true},
 		{"cheap block scan", &planpb.Stats{TableCnt: 60000, Cost: 20}, 3, false, false},
 		{"default three", DefaultStats(), 3, false, true},
@@ -76,8 +83,11 @@ func TestIndexKeySetAdmissionKeepsPlansAndHints(t *testing.T) {
 		stats            *planpb.Stats
 		force, wantIndex bool
 	}{
-		{"small three", 3, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, true},
-		{"small boundary", 100, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, true},
+		{"small three", 3, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, false},
+		{"small 100", 100, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, false},
+		{"below startup boundary", 3, &planpb.Stats{TableCnt: 1595, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, false},
+		{"at startup boundary", 3, &planpb.Stats{TableCnt: 1596, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, true},
+		{"original shape", 3, &planpb.Stats{TableCnt: 5000, Cost: 303.03, Outcnt: 500, Selectivity: .5}, false, true},
 		{"small above boundary", 101, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, false},
 		{"small 128", 128, &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}, false, false},
 		{"large 128", 128, &planpb.Stats{TableCnt: 60000, Cost: 60000, Outcnt: 30000, Selectivity: .5}, false, true},
@@ -149,14 +159,18 @@ func TestIndexKeySetCostRejectionDoesNotMaskOtherCandidate(t *testing.T) {
 	f := makeKeySetRankingFixture(t, "duplicates")
 	replaceIntKeySetForTest(t, f, 128)
 	f.node.TableDef.Indexes = []*IndexDef{f.indexes[0], f.indexes[2]}
-	f.node.Stats = &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}
+	f.node.Stats = &planpb.Stats{TableCnt: 5000, Cost: 5000, Outcnt: 500, Selectivity: .5}
 	f.inB.Selectivity = 1e-8 // The rejected candidate would otherwise rank first.
 	tag := f.node.BindingTags[0]
 	result := f.builder.applyIndicesForFiltersRegularIndex(f.node.NodeId, f.node,
 		map[[2]int32]int{{tag, f.node.TableDef.Name2ColIndex["b"]}: 1, {tag, f.node.TableDef.Name2ColIndex["c"]}: 1}, map[[2]int32]*planpb.Expr{})
 	require.NotEqual(t, f.node.NodeId, result)
 	join := f.builder.qry.Nodes[result]
-	require.Equal(t, "ac", f.builder.qry.Nodes[join.Children[1]].IndexScanInfo.IndexName)
+	indexScan := f.builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, "ac", indexScan.IndexScanInfo.IndexName)
+	keyCount, ok := exactUniqueKeySetSize(indexScan.FilterList[0])
+	require.True(t, ok, "the second candidate must remain a key set")
+	require.Equal(t, 2, keyCount)
 }
 
 func TestIndexKeySetWorkBoundAndDynamicValues(t *testing.T) {
@@ -227,6 +241,20 @@ func TestIndexKeySetRevalidatesChangedInputAfterResolve(t *testing.T) {
 	require.Same(t, f.offset, f.node.Offset)
 }
 
+func TestIndexKeySetRevalidatesScanCostAfterResolve(t *testing.T) {
+	f := makeKeySetRankingFixture(t, "duplicates")
+	budget := newIndexKeySetWorkBudget()
+	positions := []int32{0, 1}
+	work, ok := budget.estimate(f.node.FilterList, positions)
+	require.True(t, ok)
+	require.True(t, budget.charge(work))
+	stats := &planpb.Stats{TableCnt: 5000, Cost: 1000}
+	require.True(t, budget.revalidate(f.node.FilterList, positions, work, stats, false))
+	stats.TableCnt = 1000
+	require.False(t, budget.revalidate(f.node.FilterList, positions, work, stats, false))
+	require.True(t, budget.revalidate(f.node.FilterList, positions, work, stats, true))
+}
+
 type canceledKeySetContext struct{ *keySetRankingContext }
 
 func (c *canceledKeySetContext) ResolveIndexTableByRef(*ObjectRef, string, *Snapshot) (*ObjectRef, *TableDef, error) {
@@ -236,21 +264,27 @@ func (c *canceledKeySetContext) ResolveIndexTableByRef(*ObjectRef, string, *Snap
 func TestIndexKeySetResolveFailureTriesOtherCandidate(t *testing.T) {
 	f := makeKeySetRankingFixture(t, "resolve_failure")
 	f.node.TableDef.Indexes = []*IndexDef{f.indexes[0], f.indexes[2]}
-	f.node.Stats = &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}
+	f.node.Stats = &planpb.Stats{TableCnt: 5000, Cost: 5000, Outcnt: 500, Selectivity: .5}
 	f.inB.Selectivity = 1e-8
-	f.ctx.beforeResolve = func(string) { require.Len(t, f.builder.qry.Nodes, 1) }
+	var resolved []string
+	f.ctx.beforeResolve = func(name string) {
+		require.Len(t, f.builder.qry.Nodes, 1)
+		resolved = append(resolved, name)
+	}
 	tag := f.node.BindingTags[0]
 	result := f.builder.applyIndicesForFiltersRegularIndex(f.node.NodeId, f.node,
 		map[[2]int32]int{{tag, f.node.TableDef.Name2ColIndex["b"]}: 1, {tag, f.node.TableDef.Name2ColIndex["c"]}: 1}, map[[2]int32]*planpb.Expr{})
 	require.NotEqual(t, f.node.NodeId, result)
 	join := f.builder.qry.Nodes[result]
 	require.Equal(t, "ac", f.builder.qry.Nodes[join.Children[1]].IndexScanInfo.IndexName)
+	require.Contains(t, resolved, "keyset_ab")
+	require.Contains(t, resolved, "keyset_ac")
 }
 
 func TestIndexKeySetCancellationIsNotADecline(t *testing.T) {
 	f := makeKeySetRankingFixture(t, "duplicates")
 	f.node.TableDef.Indexes = []*IndexDef{f.indexes[0]}
-	f.node.Stats = &planpb.Stats{TableCnt: 1000, Cost: 1000, Outcnt: 500, Selectivity: .5}
+	f.node.Stats = &planpb.Stats{TableCnt: 5000, Cost: 5000, Outcnt: 500, Selectivity: .5}
 	f.builder.compCtx = &canceledKeySetContext{f.ctx}
 	tag := f.node.BindingTags[0]
 	require.PanicsWithValue(t, context.Canceled, func() {
