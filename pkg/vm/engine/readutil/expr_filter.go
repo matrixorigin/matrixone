@@ -871,43 +871,55 @@ func CompileFilterExpr(
 			}
 			// ok
 		case "isnull", "is_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
+			if len(exprImpl.F.Args) != 1 || exprImpl.F.Args[0].GetCol() == nil {
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colExpr := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				dataMeta := meta.MustDataMeta()
+				if seqNum > uint32(dataMeta.BlockHeader().MaxSeqnum()) {
+					return true, nil // Older objects may not contain a newly added column.
+				}
 				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
+				if seqNum > uint32(blkMeta.GetMaxSeqnum()) {
+					return false, true, nil
+				}
 				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
 			}
 
 			// ok
 		case "isnotnull", "is_not_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
+			if len(exprImpl.F.Args) != 1 || exprImpl.F.Args[0].GetCol() == nil {
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colExpr := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				dataMeta := meta.MustDataMeta()
+				if seqNum > uint32(dataMeta.BlockHeader().MaxSeqnum()) {
+					return true, nil // Missing metadata cannot prove whether the column is NULL.
+				}
 				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() < dataMeta.BlockHeader().Rows(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
+				if seqNum > uint32(blkMeta.GetMaxSeqnum()) {
+					return false, true, nil
+				}
 				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() < blkMeta.GetRows(), nil
 			}
 
