@@ -364,6 +364,12 @@ func materializedViewIncrementalUnsupportedSourceReason(
 		found := false
 		for _, col := range def.Cols {
 			if col != nil && strings.EqualFold(col.Name, name) {
+				// The delta VALUES transport only retains the fixed-width ENUM
+				// ordinal, not the source column's member definitions. Casting a
+				// cell back to bare ENUM is invalid SQL. FORCE can use COMPLETE.
+				if types.T(col.Typ.Id) == types.T_enum {
+					return "MV_FAST_UNSUPPORTED_ENUM_SOURCE_TYPE"
+				}
 				isFloat := types.T(col.Typ.Id).IsFloat()
 				if hasDistinct && isFloat {
 					return "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY"

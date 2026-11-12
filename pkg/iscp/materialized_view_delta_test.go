@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -111,6 +112,28 @@ func TestReadMaterializedViewDeletedRowsFailureBoundaries(t *testing.T) {
 	require.ErrorIs(t, err, sourceErr)
 	_, err = readMaterializedViewDeletedRows(t.Context(), &controlledMVRowIDReader{}, deletes, types.BuildTS(10, 0), []string{"id"})
 	require.ErrorContains(t, err, "returned 0 rows for 1 deletes")
+}
+
+func TestMaterializedViewDeletedHistoricalJSONDelta(t *testing.T) {
+	jsonValue, err := bytejson.ParseFromString(`{"message":"O'Reilly"}`)
+	require.NoError(t, err)
+	binaryValue, err := jsonValue.Marshal()
+	require.NoError(t, err)
+	var block types.Blockid
+	reader := &controlledMVRowIDReader{rows: [][]any{{binaryValue}}}
+	deleted, err := readMaterializedViewDeletedRows(t.Context(), reader,
+		[]materializedViewChangeRow{{RowID: types.NewRowid(&block, 1)}},
+		types.BuildTS(10, 0), []string{"payload"})
+	require.NoError(t, err)
+	typ := types.T_json.ToType()
+	desc := &incrementalDescription{SourceColumns: []string{"payload"}}
+	cte, err := materializedViewDeltaSourceCTE(t.Context(), desc, []*types.Type{&typ},
+		[]materializedViewSignedRow{{values: map[string]any{"payload": deleted[0][0]}, sign: -1}})
+	require.NoError(t, err)
+	require.Contains(t, cte, "O\\'Reilly")
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "WITH "+cte+" SELECT * FROM src", 1)
+	require.NoError(t, err)
+	stmt.Free()
 }
 
 func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {

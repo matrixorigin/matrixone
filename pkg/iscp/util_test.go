@@ -280,6 +280,34 @@ func TestRowFromVector(t *testing.T) {
 
 }
 
+func TestHistoricalRowValuesConvertIntoSQL(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	bat, expected := mockUtilVector(t, proc)
+	// RowIDReader uses vector.GetAny, whereas live batches use
+	// extractRowFromVector. Both representations must produce the same SQL.
+	for _, index := range []int{0, 2, 3, 4, 5, 6, 7} {
+		value := vector.GetAny(bat.Vecs[index], 0, true)
+		got, err := convertColIntoSql(t.Context(), value, bat.Vecs[index].GetType(), nil)
+		require.NoError(t, err)
+		require.Equal(t, expected[index], string(got))
+	}
+	for _, tc := range []struct {
+		typ   types.T
+		value any
+	}{
+		{types.T_bf16, types.BF16FromFloat32(1.5)},
+		{types.T_float16, types.Float16(0x3e00)},
+		{types.T_float8, types.Float8(0)},
+		{types.T_float4, types.Float4(0)},
+	} {
+		got, err := convertColIntoSql(t.Context(), tc.value, ptrType(tc.typ.ToType()), nil)
+		require.NoError(t, err)
+		_, err = mysql.ParseOne(t.Context(), "SELECT "+string(got), 1)
+		require.NoError(t, err)
+	}
+}
+
 func TestConvertNativeDecimalAndUUIDIntoSQL(t *testing.T) {
 	uuid := types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8})
 	tests := []struct {

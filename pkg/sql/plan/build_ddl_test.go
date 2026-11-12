@@ -2581,6 +2581,39 @@ func TestMaterializedViewIncrementalRejectsFloatingDistinctInput(t *testing.T) {
 	}
 }
 
+func TestMaterializedViewIncrementalRejectsEnumSource(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+	}
+	nation := mock.ctxt.tables["nation"]
+	require.NotNil(t, nation)
+	for _, col := range nation.Cols {
+		if col.Name == "n_name" {
+			col.Typ.Id = int32(types.T_enum)
+			col.Typ.Enumvalues = "low,medium,high"
+			break
+		}
+	}
+	query := "select n_regionkey k, count(n_name) c from nation group by n_regionkey"
+	_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
+	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_ENUM_SOURCE_TYPE")
+	p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+query)
+	require.NoError(t, err)
+	def := p.GetDdl().GetCreateView().GetTableDef()
+	mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.Empty(t, mv.Incremental)
+	control, err := runOneStmt(mock, t,
+		"create materialized view mv_control refresh fast on change as select n_regionkey k, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	controlDef := control.GetDdl().GetCreateView().GetTableDef()
+	controlMV, err := mvdefinition.Decode(mvdefinition.PropertyValue(controlDef, mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.NotEmpty(t, controlMV.Incremental)
+}
+
 func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
 	parse := func(query string) *tree.Select {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)

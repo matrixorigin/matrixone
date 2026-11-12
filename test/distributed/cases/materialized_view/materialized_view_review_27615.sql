@@ -42,6 +42,36 @@ select g, avg(v) a, avg(distinct v) ad from decimal_source group by g;
 select sum(a=2)=1 and sum(ad=8.5)=1 as avg_state_has_sum_capacity from decimal_avg;
 drop materialized view decimal_avg;
 
+-- A preexisting JSON row is read back through RowIDReader when deleted or
+-- updated. Its binary storage value must survive the negative delta.
+create table json_source(id int primary key, k int, payload json);
+insert into json_source values (1, 1, '{"v":"first"}'), (2, 1, '{"v":"second"}');
+create materialized view json_counts refresh fast on change as
+select k, count(payload) c from json_source group by k;
+-- @wait_expect(2, 30)
+select count(*)=1 and min(c)=2 as json_initial from json_counts;
+delete from json_source where id=1;
+-- @wait_expect(2, 30)
+select count(*)=1 and min(c)=1 as json_after_delete from json_counts;
+update json_source set k=2, payload='{"v":"updated"}' where id=2;
+-- @wait_expect(2, 30)
+select count(*)=1 and min(k)=2 and min(c)=1 as json_after_update from json_counts;
+drop materialized view json_counts;
+
+-- FAST cannot reconstruct an ENUM domain from the delta's ordinal alone.
+create table enum_source(id int primary key, k int, e enum('low','high'));
+insert into enum_source values (1, 1, 'low');
+create materialized view enum_fast refresh fast on change as
+select k, count(e) c from enum_source group by k;
+create materialized view enum_force refresh force on change as
+select k, count(e) c from enum_source group by k;
+-- @wait_expect(2, 30)
+select count(*)=1 and min(c)=1 as enum_force_initial from enum_force;
+insert into enum_source values (2, 1, 'high');
+-- @wait_expect(2, 30)
+select count(*)=1 and min(c)=2 as enum_force_after_insert from enum_force;
+drop materialized view enum_force;
+
 -- SQL groups and DISTINCT compare floating +0 and -0 as equal. FAST must
 -- refuse byte-serialized floating keys until its state uses SQL equality.
 create table floating_source(id int primary key, g int, k double);
