@@ -1112,6 +1112,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 
+	c.installMarkScanGuard(qry, steps)
 	return steps, err
 }
 
