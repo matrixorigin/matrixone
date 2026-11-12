@@ -4757,6 +4757,7 @@ func (c *Compile) newEmptyMergeScope() *Scope {
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
+	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo.Addr)
 	rs.PreScopes = ss
 
 	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
@@ -4886,6 +4887,50 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
 			rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 		}
+	}
+	return rs
+}
+
+// groupRemoteRunDependenciesByCNIfNeeded keeps sibling-owned local receivers in
+// the same serialized remote tree. A global merge (for example, before Window)
+// must not split dependent shuffle buckets into separate RemoteRun units.
+// Independent remote inputs and dependencies confined to the local CN retain
+// their existing topology.
+func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(ss []*Scope, mergeAddr string) []*Scope {
+	if len(ss) <= 1 {
+		return ss
+	}
+	needed := false
+	for _, s := range ss {
+		if !isSameCN(s.NodeInfo.Addr, mergeAddr) && findPipelineExternalLocalReceiver(s) != nil {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return ss
+	}
+
+	// Derive groups from the actual inputs, not c.cnList: an input stage may
+	// include a CN not present in that list. Preserve every scope exactly once.
+	var groups [][]*Scope
+	for _, s := range ss {
+		idx := -1
+		for i, group := range groups {
+			if isSameCN(s.NodeInfo.Addr, group[0].NodeInfo.Addr) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			groups = append(groups, []*Scope{s})
+		} else {
+			groups[idx] = append(groups[idx], s)
+		}
+	}
+	rs := make([]*Scope, 0, len(groups))
+	for _, group := range groups {
+		rs = append(rs, c.newMergeScopeByCN(group, group[0].NodeInfo))
 	}
 	return rs
 }
