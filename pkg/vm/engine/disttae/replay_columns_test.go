@@ -16,6 +16,7 @@ package disttae
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -195,5 +196,38 @@ func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(second.Vecs[6], []byte("different"), false, mp))
 	err := consumeReplayColumns(context.Background(), []*batch.Batch{first, second}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("invalid input was published") })
 	require.Error(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+// Cancellation after a window is inserted still leaves a split table in carry.
+func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
+	mp := mpool.MustNewZero()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var inserted []uint64
+	err := consumeReplayColumns(ctx, []*batch.Batch{replayTestBatch(t, mp, 1, 2), replayTestBatch(t, mp, 2, 3)}, mp, types.TS{}, func(b *batch.Batch) {
+		inserted = append(inserted, replayKey(b, 0, 2).table)
+		cancel()
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []uint64{1}, inserted)
+	require.Zero(t, mp.CurrNB())
+
+	deadline, stop := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer stop()
+	err = consumeReplayColumns(deadline, []*batch.Batch{replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)}, mp, types.TS{}, func(*batch.Batch) {
+		t.Fatal("expired replay inserted data")
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, mp.CurrNB())
+
+	inserted = nil
+	err = consumeReplayColumns(context.Background(), []*batch.Batch{replayTestBatch(t, mp, 1, 2), replayTestBatch(t, mp, 2, 3)}, mp, types.TS{}, func(b *batch.Batch) {
+		for i := 0; i < b.RowCount(); i++ {
+			inserted = append(inserted, replayKey(b, i, 2).table)
+		}
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2, 2, 3}, inserted)
 	require.Zero(t, mp.CurrNB())
 }
