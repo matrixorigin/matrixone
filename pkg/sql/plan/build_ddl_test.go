@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -629,6 +630,89 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCTASRewriteProjectionParentheses(t *testing.T) {
+	for _, source := range []string{
+		"select * from nation",
+		"(select * from nation)",
+		"((select * from nation))",
+	} {
+		t.Run(source, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			ctx := mock.CurrentContext()
+			sql := `/*+ {"rewrites":{"tpch.nation":"select n_nationkey from tpch.nation where n_regionkey = 1"}} */ create table ctas_projection as ` + source
+			stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), stmts, sql))
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			var cols []*plan.ColDef
+			for _, col := range p.GetDdl().GetCreateTable().GetTableDef().Cols {
+				if !col.Hidden {
+					cols = append(cols, col)
+				}
+			}
+			require.Len(t, cols, 1, "列推导必须遵守投影规则，不受括号层数影响")
+			require.Equal(t, "n_nationkey", cols[0].Name)
+		})
+	}
+}
+
+func TestRewriteBindingDoesNotMutatePolicy(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext()
+	sql := `/*+ {"rewrites":{"tpch.nation":"select n_regionkey, sum(n_nationkey) as n_nationkey from tpch.nation group by n_regionkey with rollup"}} */ select * from nation`
+	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), stmts, sql))
+	option := stmts[0].(*tree.Select).RewriteOption
+	rule := option.Rewrites["tpch.nation"].Stmt.(*tree.Select).Select.(*tree.SelectClause)
+	for i, query := range []string{
+		"select * from nation",
+		"select * from nation",
+		"select l.n_nationkey, r.n_nationkey from nation l join nation r on l.n_regionkey = r.n_regionkey",
+	} {
+		if i == 1 {
+			// 程序构造规则仅有 AST 时也必须隔离每次绑定。
+			option.Rewrites["tpch.nation"].SQL = ""
+		}
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			stmt.(*tree.Select).RewriteOption = option
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			want := 2
+			if strings.Contains(query, "join") {
+				want = 4
+			}
+			groups := 0
+			for _, n := range p.GetQuery().Nodes {
+				if n.NodeType == plan.Node_AGG {
+					groups++
+				}
+			}
+			require.Equal(t, want, groups, "每次表引用只能展开一次 ROLLUP")
+			require.Len(t, rule.GroupBy.GroupByExprsList, 1, "不能修改共享策略 AST")
+		}()
+	}
+	// 解析和绑定失败均不能触碰原策略，也不能悄悄丢弃策略放行。
+	for _, sql := range []string{"select (", "select missing_column from tpch.nation"} {
+		option.Rewrites["tpch.nation"].SQL = sql
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select * from nation", 1)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			stmt.(*tree.Select).RewriteOption = option
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Len(t, rule.GroupBy.GroupByExprsList, 1)
+		}()
+	}
 }
 
 func TestCastPreservesNonNull(t *testing.T) {

@@ -345,7 +345,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 			if _, ok := rewriteOption.Rewrites[key]; ok {
 				return moerr.NewParseError(ctx, "duplicate mapping names")
 			}
-			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st}
+			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st, SQL: v}
 		}
 		if len(rewriteOption.Rewrites) > 0 {
 			switch s := stmt.(type) {

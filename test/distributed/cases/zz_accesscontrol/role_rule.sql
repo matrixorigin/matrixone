@@ -130,6 +130,40 @@ drop table db1.ctas_union;
 drop table db1.ctas_join;
 drop table db1.ctas_unrestricted;
 
+-- CTAS 多次规划不得修改 ROLLUP 策略，管理员核对真正物化的行数和金额。
+create table db1.ctas_policy_source(k int, amount int);
+insert into db1.ctas_policy_source values (1,10),(2,90);
+alter role test_rule_role add rule "select k, sum(amount) as amount from db1.ctas_policy_source where k = 1 group by k with rollup" on table db1.ctas_policy_source;
+-- @session:id=90&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source order by k;
+create table db1.ctas_rollup as select * from db1.ctas_policy_source;
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+-- @session
+select * from db1.ctas_rollup order by k;
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+drop table db1.ctas_rollup;
+
+-- 同一投影规则下，普通、单层和多层括号 CTAS 必须推导相同列数。
+alter role test_rule_role add rule "select amount from db1.ctas_policy_source where k = 1" on table db1.ctas_policy_source;
+-- @session:id=91&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source;
+create table db1.ctas_project as select * from db1.ctas_policy_source;
+create table db1.ctas_project_paren as (select * from db1.ctas_policy_source);
+create table db1.ctas_project_nested as ((select * from db1.ctas_policy_source));
+select * from db1.ctas_project;
+select * from db1.ctas_project_paren;
+select * from db1.ctas_project_nested;
+-- @session
+select * from db1.ctas_project;
+select * from db1.ctas_project_paren;
+select * from db1.ctas_project_nested;
+drop table db1.ctas_project;
+drop table db1.ctas_project_paren;
+drop table db1.ctas_project_nested;
+drop table db1.ctas_policy_source;
+
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;
 create table db2.t2(a int, age int);
