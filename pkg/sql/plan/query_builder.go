@@ -3974,11 +3974,16 @@ func (builder *QueryBuilder) bindOrderBy(
 		return
 	}
 
-	if ctx.groupingStage != nil && ctx.groupingStage.distinct {
+	if ctx.groupingStage != nil && (ctx.groupingStage.distinct || ctx.sampleFunc.hasSampleFunc) {
 		projectionBinder.orderByProjects = make(map[string]*plan.Expr, len(ctx.aliasMap))
 		for name, alias := range ctx.aliasMap {
 			if alias.astExpr != nil {
-				projectionBinder.orderByProjects[name] = ctx.projects[alias.idx]
+				projectionBinder.orderByProjects[name] = &plan.Expr{
+					Typ: ctx.projects[alias.idx].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: ctx.projectTag, ColPos: alias.idx,
+					}},
+				}
 			}
 		}
 		defer func() { projectionBinder.orderByProjects = nil }()

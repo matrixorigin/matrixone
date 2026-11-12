@@ -497,9 +497,9 @@ type ProjectionBinder struct {
 	baseBinder
 	havingBinder *HavingBinder
 
-	// Set only while binding grouping ORDER BY. Reuse an alias's bound
-	// projection, not a new subquery, and keep alias names in the source AST
-	// for CTAS/rebinding. Independent selected expressions stay independent.
+	// Set only while binding grouping DISTINCT/SAMPLE ORDER BY. Aliases name
+	// exact selected-output references, never copies of their expression trees.
+	// Keep alias names in the source AST for CTAS/rebinding.
 	orderByProjects map[string]*plan.Expr
 }
 

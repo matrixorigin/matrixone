@@ -1036,4 +1036,37 @@ select count(*) from information_schema.tables
 where table_schema='grouping_ctas_test' and table_name='rejected_scalar_order';
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table volatile_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b
+from src group by cube(g,h) order by concat(b,'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_alias_order) s
+where b<previous_b;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_alias_order;
+➤ count(*)[-5,64,0]  𝄀
+8
+create table volatile_sample_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(reverse(b),'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_alias_order) s
+where reverse(b)<reverse(previous_b);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_sample_alias_order;
+➤ count(*)[-5,64,0]  𝄀
+12
+create table volatile_sample_limited as
+select row_number() over() seq,t.* from (
+select hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(b,'') desc limit 3) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_limited) s
+where b>previous_b;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_sample_limited;
+➤ count(*)[-5,64,0]  𝄀
+3
 drop database grouping_ctas_test;

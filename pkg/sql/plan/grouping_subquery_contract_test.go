@@ -81,8 +81,8 @@ func TestGroupingAliasSubqueryIdentity(t *testing.T) {
 		stage := ctx.groupingStage
 		seen[stage] = true
 		require.Len(t, stage.projects, 4)
-		ids := make([]int32, 4)
-		for i, expr := range stage.projects {
+		ids := make([]int32, 2)
+		for i, expr := range stage.projects[:2] {
 			found := 0
 			walkGroupingExpr(expr, func(e *plan.Expr) {
 				if sub := e.GetSub(); sub != nil {
@@ -93,8 +93,18 @@ func TestGroupingAliasSubqueryIdentity(t *testing.T) {
 			require.Equal(t, 1, found)
 		}
 		require.NotEqual(t, ids[0], ids[1], "independent AST subqueries must not be merged by SQL text")
-		require.Equal(t, ids[0], ids[2], "alias a reuses only its own bound subquery")
-		require.Equal(t, ids[1], ids[3], "alias b reuses only its own bound subquery")
+		for i, expr := range stage.projects[2:] {
+			var cols []*plan.ColRef
+			walkGroupingExpr(expr, func(e *plan.Expr) {
+				require.Nil(t, e.GetSub(), "an alias consumes the selected result, not another subquery evaluation")
+				if col := e.GetCol(); col != nil {
+					cols = append(cols, col)
+				}
+			})
+			require.Len(t, cols, 1)
+			require.Equal(t, ctx.projectTag, cols[0].RelPos)
+			require.Equal(t, int32(i), cols[0].ColPos, "aliases a/b retain their own selected subquery output")
+		}
 	}
 	require.NotEmpty(t, seen)
 }

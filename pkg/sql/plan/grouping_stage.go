@@ -100,7 +100,7 @@ func (builder *QueryBuilder) appendGroupingStage(
 			if i >= resultLen {
 				// Keep reconstructible sort expressions, not opaque hidden slots:
 				// DISTINCT may use chosen+1 when chosen is a selected sample.
-				if order, ok := groupingOrderExpr(DeepCopyExpr(stage.sampleProjects[i]), selected, stage.projectionInputTag, false); ok {
+				if order, ok := groupingOrderExpr(DeepCopyExpr(stage.sampleProjects[i]), selected, ctx.projectTag, stage.projectionInputTag, false); ok {
 					stage.projects[i] = order
 					continue
 				}
@@ -201,13 +201,21 @@ func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *pla
 
 // Hidden sort expressions must be evaluated after DISTINCT using only surviving
 // output columns. This also keeps volatile sort expressions out of the keys.
-func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, tag int32) (*plan.Expr, bool) {
-	return groupingOrderExpr(expr, selected, tag, true)
+func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag int32) (*plan.Expr, bool) {
+	return groupingOrderExpr(expr, selected, selectedTag, tag, true)
 }
 
-func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, tag int32, allowGrouping bool) (*plan.Expr, bool) {
+func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag int32, allowGrouping bool) (*plan.Expr, bool) {
+	if col := expr.GetCol(); col != nil && col.RelPos == selectedTag {
+		if col.ColPos < 0 || int(col.ColPos) >= len(selected) {
+			return nil, false
+		}
+		// An alias denotes its exact output, not the first structurally equal
+		// expression. Independent volatile outputs can have identical trees.
+		return &plan.Expr{Typ: selected[col.ColPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: col.ColPos}}}, true
+	}
 	for i, project := range selected {
-		if exprStructuralEqual(expr, project) {
+		if exprStructuralEqual(expr, project) && groupingOrderCanReuse(expr) {
 			return &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: int32(i)}}}, true
 		}
 	}
@@ -219,7 +227,7 @@ func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, tag int32, allowG
 		}
 		for i, arg := range fn.Args {
 			var ok bool
-			fn.Args[i], ok = groupingOrderExpr(arg, selected, tag, allowGrouping)
+			fn.Args[i], ok = groupingOrderExpr(arg, selected, selectedTag, tag, allowGrouping)
 			if !ok {
 				return nil, false
 			}
@@ -229,7 +237,7 @@ func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, tag int32, allowG
 	if list := expr.GetList(); list != nil {
 		for i, item := range list.List {
 			var ok bool
-			list.List[i], ok = groupingOrderExpr(item, selected, tag, allowGrouping)
+			list.List[i], ok = groupingOrderExpr(item, selected, selectedTag, tag, allowGrouping)
 			if !ok {
 				return nil, false
 			}
@@ -242,6 +250,21 @@ func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, tag int32, allowG
 	default:
 		return nil, false
 	}
+}
+
+// Structural equality is only a fallback for deterministic expressions. An
+// independent volatile call (also under a deterministic wrapper) is not an alias.
+func groupingOrderCanReuse(expr *plan.Expr) bool {
+	reusable := true
+	walkGroupingExpr(expr, func(e *plan.Expr) {
+		if fn := e.GetF(); fn != nil {
+			ov, exists := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+			if !exists || ov.CannotFold() || ov.IsRealTimeRelated() {
+				reusable = false
+			}
+		}
+	})
+	return reusable
 }
 
 func (builder *QueryBuilder) finishGroupingStage(
@@ -281,7 +304,7 @@ func (builder *QueryBuilder) finishGroupingStage(
 		// subquery identities with fresh join output references.
 		resolved := make(map[int]*plan.Expr)
 		for i := stage.resultLen; i < len(ctx.projects); i++ {
-			if expr, ok := groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), ctx.projects[:stage.resultLen], distinctTag); ok {
+			if expr, ok := groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), ctx.projects[:stage.resultLen], ctx.projectTag, distinctTag); ok {
 				resolved[i] = expr
 			}
 		}
@@ -311,7 +334,7 @@ func (builder *QueryBuilder) finishGroupingStage(
 				projects[i] = expr
 			} else {
 				var ok bool
-				projects[i], ok = groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), selected, distinctTag)
+				projects[i], ok = groupingDistinctOrder(DeepCopyExpr(ctx.projects[i]), selected, ctx.projectTag, distinctTag)
 				if !ok {
 					return 0, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 				}

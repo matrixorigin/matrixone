@@ -380,4 +380,31 @@ select distinct (select max(id) from pk_src) k from src group by g with rollup o
 select count(*) from information_schema.tables
 where table_schema='grouping_ctas_test' and table_name='rejected_scalar_order';
 
+-- 独立可变输出 a/b 结构相同，但排序必须使用 b 的确切已选结果；随机文本不作 golden。
+create table volatile_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b
+from src group by cube(g,h) order by concat(b,'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_alias_order) s
+where b<previous_b;
+select count(*) from volatile_alias_order;
+
+-- SAMPLE 的分支物化同样保留别名身份，嵌套包装不能回退到 a。
+create table volatile_sample_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(reverse(b),'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_alias_order) s
+where reverse(b)<reverse(previous_b);
+select count(*) from volatile_sample_alias_order;
+
+-- 非 DISTINCT SAMPLE 与 LIMIT 也必须消费同一个 b，而不是重新求值。
+create table volatile_sample_limited as
+select row_number() over() seq,t.* from (
+select hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(b,'') desc limit 3) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_limited) s
+where b>previous_b;
+select count(*) from volatile_sample_limited;
+
 drop database grouping_ctas_test;
