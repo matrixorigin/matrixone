@@ -3887,3 +3887,21 @@ type rangesPolicyDatabase struct {
 func (db *rangesPolicyDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
 	return db.rel, nil
 }
+
+// A scan reads with the planner's read policy, and a column prefetch, asked for by policy
+// or by a narrow scan, never preloads whole objects.
+func TestScanReadPolicyTakesThePlannersPolicy(t *testing.T) {
+	cols := fileservice.Policy(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+	for _, tc := range []struct {
+		node plan.Node
+		want fileservice.Policy
+	}{
+		{plan.Node{}, 0},
+		{plan.Node{ReadPolicy: uint64(fileservice.SkipMemoryCacheWrites)}, fileservice.SkipMemoryCacheWrites},
+		{plan.Node{ReadPolicy: uint64(fileservice.ColumnPrefetch)}, cols},
+		{plan.Node{NarrowScan: true}, cols},
+		{plan.Node{NarrowScan: true, ReadPolicy: uint64(fileservice.SkipMemoryCacheWrites)}, cols | fileservice.SkipMemoryCacheWrites},
+	} {
+		require.Equal(t, tc.want, scanReadPolicy(&tc.node), "node %+v", tc.node.ReadPolicy)
+	}
+}

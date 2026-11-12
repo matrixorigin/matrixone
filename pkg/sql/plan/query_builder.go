@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1833,6 +1834,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
+		if node.NodeType == plan.Node_TABLE_SCAN && builder.scanReadsColumnRanges(node, originalCols, newTableDef.Cols) {
+			node.ReadPolicy |= uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+		}
 		node.TableDef = newTableDef
 
 		colMap := maps.Clone(internalRemapping.globalToLocal)

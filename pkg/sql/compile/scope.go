@@ -431,12 +431,17 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return err
 }
 
-// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads: the
+// planner's read policy, with a column prefetch never preloading whole objects.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	policy := fileservice.Policy(node.GetReadPolicy())
 	if node.GetNarrowScan() {
-		return fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
+		policy |= fileservice.ColumnPrefetch
 	}
-	return 0
+	if policy.Any(fileservice.ColumnPrefetch) {
+		policy |= fileservice.SkipFullFilePreloads
+	}
+	return policy
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
