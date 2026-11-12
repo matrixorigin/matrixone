@@ -20,6 +20,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// RequiresSingleStageDistinctAgg reports whether an aggregate node contains a
+// DISTINCT state that MergeGroup cannot combine exactly. COUNT(DISTINCT ...)
+// stores its canonical arguments in the aggregate state, so BatchMerge can
+// deduplicate values that appeared in different local workers. Other DISTINCT
+// aggregates keep the conservative single-worker contract until their merge
+// behavior has equivalent end-to-end coverage.
+func RequiresSingleStageDistinctAgg(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		if expr == nil {
+			continue
+		}
+		agg := expr.GetF()
+		if agg == nil || agg.Func == nil || uint64(agg.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		baseID := int64(uint64(agg.Func.Obj) & function.DistinctMask)
+		functionID, _ := function.DecodeOverloadID(baseID)
+		if functionID != function.COUNT {
+			return true
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 

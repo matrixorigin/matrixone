@@ -346,13 +346,14 @@ func newCountColumnExec(mp *mpool.MPool, aggID int64, isDistinct bool, params []
 	var exec countColumnExec
 	exec.mp = mp
 	exec.aggInfo = aggInfo{
-		aggId:      aggID,
-		isDistinct: isDistinct,
-		argTypes:   params,
-		retType:    types.T_int64.ToType(),
-		stateTypes: []types.Type{types.T_int64.ToType()},
-		emptyNull:  false,
-		saveArg:    isDistinct,
+		fixedDistinct: isDistinct,
+		aggId:         aggID,
+		isDistinct:    isDistinct,
+		argTypes:      params,
+		retType:       types.T_int64.ToType(),
+		stateTypes:    []types.Type{types.T_int64.ToType()},
+		emptyNull:     false,
+		saveArg:       isDistinct,
 	}
 	return &exec
 }
