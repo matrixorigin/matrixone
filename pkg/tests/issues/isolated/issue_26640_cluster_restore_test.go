@@ -80,15 +80,7 @@ func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
 		subscriptionDB    = "issue_26640_subscription"
 		publicationName   = "issue_26640_publication"
 	)
-	cleanup := func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+snapshotName)
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+publisherAccount+"`")
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+subscriberAccount+"`")
-	}
-	cleanup()
-	defer cleanup()
+	// This cluster is private to the test and is not restarted after Close.
 
 	execSQLRequire(t, ctx, sysDB,
 		"create account `"+publisherAccount+"` admin_name 'admin' identified by '111'")
