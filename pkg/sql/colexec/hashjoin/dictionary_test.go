@@ -26,11 +26,20 @@ import (
 )
 
 func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
-	for _, mode := range []plan.Node_JoinType{plan.Node_INNER, plan.Node_SEMI, plan.Node_ANTI} {
-		t.Run(mode.String(), func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mode     plan.Node_JoinType
+		selected bool
+	}{
+		{"INNER/selected", plan.Node_INNER, true},
+		{"INNER/flat", plan.Node_INNER, false},
+		{"SEMI/selected", plan.Node_SEMI, true},
+		{"ANTI/selected", plan.Node_ANTI, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
 			fixture := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(0, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
-			fixture.arg.JoinType, fixture.arg.NonEqCond = mode, nil
+			fixture.arg.JoinType, fixture.arg.NonEqCond = tc.mode, nil
 			t.Cleanup(func() {
 				fixture.arg.Reset(fixture.proc, false, nil)
 				fixture.barg.Reset(fixture.proc, false, nil)
@@ -49,28 +58,34 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 			})
 			mp := fixture.proc.Mp()
 			probe := batch.NewWithSize(1)
-			probe.Vecs[0] = vector.NewVec(typ)
-			require.NoError(t, vector.AppendFixedList(probe.Vecs[0], []int32{1, 2, 3, 4, 5, 6}, nil, mp))
-			probe.SetRowCount(6)
-			selected := make([]*vector.Vector, 1)
-			admitted, err := vector.TrySelectDictionaryVectors(probe.Vecs, selected, []int64{5, 1, 5, 0}, 6, mp, nil)
-			require.NoError(t, err)
-			require.True(t, admitted)
-			probe.Vecs[0].Free(mp)
-			probe.Vecs = selected
-			probe.SetRowCount(4)
 			resetChildrenWithBatch(fixture.arg, probe)
+			probe.Vecs[0] = vector.NewVec(typ)
+			values := []int32{6, 2, 6, 1}
+			if tc.selected {
+				values = []int32{1, 2, 3, 4, 5, 6}
+			}
+			require.NoError(t, vector.AppendFixedList(probe.Vecs[0], values, nil, mp))
+			probe.SetRowCount(len(values))
+			if tc.selected {
+				selected := make([]*vector.Vector, 1)
+				admitted, err := vector.TrySelectDictionaryVectors(probe.Vecs, selected, []int64{5, 1, 5, 0}, 6, mp, nil)
+				require.NoError(t, err)
+				require.True(t, admitted)
+				probe.Vecs[0].Free(mp)
+				probe.Vecs = selected
+				probe.SetRowCount(4)
+			}
 			build := batch.NewWithSize(1)
+			resetHashBuildChildrenWithBatch(fixture.barg, build)
 			build.Vecs[0] = vector.NewVec(typ)
 			require.NoError(t, vector.AppendFixedList(build.Vecs[0], []int32{2, 6}, nil, mp))
 			build.SetRowCount(2)
-			resetHashBuildChildrenWithBatch(fixture.barg, build)
 			require.NoError(t, fixture.barg.Prepare(fixture.proc))
 			require.NoError(t, fixture.arg.Prepare(fixture.proc))
 			require.True(t, fixture.arg.AcceptsDictionary(0))
 			require.True(t, fixture.arg.PrefersOwnedDictionaryInput(0))
 			require.False(t, fixture.arg.PrefersOwnedDictionaryInput(1))
-			_, err = vm.Exec(fixture.barg, fixture.proc)
+			_, err := vm.Exec(fixture.barg, fixture.proc)
 			require.NoError(t, err)
 			var got []int32
 			for {
@@ -83,11 +98,11 @@ func TestHashJoinConsumesSelectedProbeRows(t *testing.T) {
 				got = append(got, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])...)
 			}
 			want := []int32{6, 2, 6}
-			if mode == plan.Node_ANTI {
+			if tc.mode == plan.Node_ANTI {
 				want = []int32{1}
 			}
 			require.Equal(t, want, got)
-			require.True(t, probe.Vecs[0].IsDictionary())
+			require.Equal(t, tc.selected, probe.Vecs[0].IsDictionary())
 		})
 	}
 }

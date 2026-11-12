@@ -841,3 +841,34 @@ these corrections. Owning race checks and changed-package static checks passed.
 This work does not depend on #32627. Keep the corrected source local until the
 existing all-query/resource and publication gates close; the new fallback must
 be included in final qualification. Preserve C/D plans and all prior evidence.
+
+### Independent per-probe hashjoin binding — 2026-11-12
+
+The request to finish work not depending on #32627 permits local implementation
+of the already approved stateless binding: its existing factory and hashjoin
+callsite are independent of that PR's vector.unionT payload change. Bind once
+per probe invocation only for the residual-free nonunique projection path;
+unique/membership/residual paths avoid the batch scan. Recompute on every call,
+including continuation and reused headers, so no persistent field or cleanup
+protocol is added. Mixed or incomplete input keeps the generic copier.
+
+Owning hashjoin race checks pass. The existing selected-probe fixture now also
+checks the corresponding flat input, covering both bound and generic paths.
+Coverage confirms actual execution of the binding and repeated-copy callsite;
+no TPC-H speedup claim follows from these functional checks. The earlier component
+comparison remains the only isolated dispatch cost evidence. Final combined
+all-query/resource qualification and publication still follow #32627 integration.
+
+### Approved full-domain predicate diagnostic and repair — 2026-11-12
+
+The requester approved identity-predicate-scope-design.md. First establish actual
+Q1 activation of the full-domain read-only shape, then require a component
+instruction/resource win. Only then retain the narrow repair. The caller's
+canonical original-row map proves identity when earlier predicates removed no
+rows; generic repeated/reordered rows keep their existing path. Borrow original
+flat/constant columns through the same private predicate batch and current
+synchronous read-only contract, with exact source lengths and existing account/
+width invalidation. Preserve callbacks, diagnostics, compaction, ownership and
+publication; add no cache, payload copy, retained source or public interface.
+No end-to-end gain is promised from a component result. Final all-query/resource
+qualification and #32492 publication remain gated as above; preserve C/D plans.
