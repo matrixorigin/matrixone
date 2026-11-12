@@ -30,7 +30,7 @@ import (
 )
 
 func TestLoopJoinConstantGroupingProjection(t *testing.T) {
-	for _, method := range []string{"scalar-control", "range", "operator-resume"} {
+	for _, method := range []string{"scalar-control", "range", "operator-resume", "scalar-build-resume"} {
 		t.Run(method, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			typ := types.T_varchar.ToType()
@@ -59,7 +59,13 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			}()
-			if method == "operator-resume" {
+			if method == "operator-resume" || method == "scalar-build-resume" {
+				buildRows := 5
+				if method == "scalar-build-resume" {
+					buildRows = 1
+					right.SetRowCount(1)
+					right.Vecs[0].SetLength(1)
+				}
 				join.JoinType = plan.Node_INNER
 				join.ctr.resultBatchByteLimit = 144
 				join.ctr.state = Probe
@@ -75,9 +81,9 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 						batches++
 						for row := range result.Batch.RowCount() {
 							for side, v := range result.Batch.Vecs {
-								sourceRow := seen / 5
+								sourceRow := seen / buildRows
 								if side == 1 {
-									sourceRow = seen % 5
+									sourceRow = seen % buildRows
 								}
 								require.Equal(t, sourceRow == 0 || sourceRow == 2, v.GetGrouping().Contains(uint64(row)), "side %d output row %d", side, seen)
 								require.False(t, v.IsNull(uint64(row)))
@@ -93,7 +99,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 						break
 					}
 				}
-				require.Equal(t, 25, seen)
+				require.Equal(t, 5*buildRows, seen)
 				require.Greater(t, batches, 1)
 				require.Nil(t, join.ctr.probeCopy)
 				require.Nil(t, join.ctr.buildCopy)
