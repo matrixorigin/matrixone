@@ -1063,7 +1063,13 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, reader.QueryRowContext(ctx, query).Scan(&width))
 		require.Equal(t, 90, width)
+		// The setup's budget must not consume time reserved for the independent
+		// historical scenarios. Cancel it now to exercise that separation.
+		cancel()
 		t.Run("historical publication authorization and source", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
+			exec := func(q string) { t.Helper(); _, err := sys.ExecContext(ctx, q); require.NoError(t, err, q) }
 			conn, err := subscriber.Conn(ctx)
 			require.NoError(t, err)
 			defer conn.Close()
@@ -1121,7 +1127,12 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					exec(tc.revoke)
-					defer exec(tc.restore)
+					defer func() {
+						restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer restoreCancel()
+						_, restoreErr := sys.ExecContext(restoreCtx, tc.restore)
+						require.NoError(t, restoreErr, tc.restore)
+					}()
 					check(t, false)
 				})
 				check(t, true)
@@ -1195,9 +1206,13 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			})
 		})
 		t.Run("cached historical alias ignores denied current replacement", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			testHistoricalSubscriptionCachedAlias(t, ctx, sys, subscriber)
 		})
 		t.Run("cross-account snapshot metadata namespace", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			testSnapshotMetadataNamespace(t, ctx, sys, subscriber)
 		})
 		t.Run("historical foreign source remapping", func(t *testing.T) {

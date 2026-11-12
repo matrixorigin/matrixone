@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,11 @@ func testSnapshotMetadataNamespace(t *testing.T, ctx context.Context, sys, tenan
 	exec(tenant, "create database snapshot_metadata_namespace")
 	defer cleanupViewDescriptionSQL(t, tenant, "drop database snapshot_metadata_namespace")
 	exec(tenant, "create table snapshot_metadata_namespace.src(x varchar(8))")
-	exec(tenant, "insert into snapshot_metadata_namespace.src values ('old')")
+	const insert = "insert into snapshot_metadata_namespace.src values ('old')"
+	started := time.Now()
+	_, insertErr := tenant.ExecContext(ctx, insert)
+	t.Logf("snapshot metadata setup insert duration: %s", time.Since(started))
+	require.NoError(t, insertErr, insert)
 	exec(tenant, "create index snapshot_metadata_ns_idx on snapshot_metadata_namespace.src (x)")
 	exec(tenant, "create view snapshot_metadata_namespace.v as select x from snapshot_metadata_namespace.src")
 	exec(sys, "create snapshot snapshot_metadata_namespace_history for account view_description_sub")
