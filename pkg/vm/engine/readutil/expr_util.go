@@ -85,6 +85,34 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 	return tableDef.Cols[pos]
 }
 
+// resolveFilterColumn requires an unambiguous schema match. ColPos is scan-local,
+// not a full-schema ordinal, and flattened names do not preserve which dots came
+// from quoted aliases or column names. Missing or ambiguous identity must disable
+// metadata pruning rather than silently selecting the first column.
+func resolveFilterColumn(name string, tableDef *plan.TableDef) *plan.ColDef {
+	if tableDef == nil || name == "" {
+		return nil
+	}
+	var resolved *plan.ColDef
+	for {
+		if pos, ok := tableDef.Name2ColIndex[name]; ok {
+			if pos < 0 || int(pos) >= len(tableDef.Cols) {
+				return nil
+			}
+			col := tableDef.Cols[pos]
+			if col == nil || col.Name != name || resolved != nil {
+				return nil
+			}
+			resolved = col
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 {
+			return resolved
+		}
+		name = name[idx+1:]
+	}
+}
+
 func compPkCol(colName string, pkName string) bool {
 	dotIdx := strings.Index(colName, ".")
 	colName = colName[dotIdx+1:]

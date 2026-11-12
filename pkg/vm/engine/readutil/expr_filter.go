@@ -875,8 +875,11 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			colExpr := exprImpl.F.Args[0].GetCol()
-			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
+			colDef := resolveFilterColumn(exprImpl.F.Args[0].GetCol().Name, tableDef)
+			if colDef == nil {
+				canCompile = false
+				return
+			}
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -902,8 +905,11 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			colExpr := exprImpl.F.Args[0].GetCol()
-			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
+			colDef := resolveFilterColumn(exprImpl.F.Args[0].GetCol().Name, tableDef)
+			if colDef == nil {
+				canCompile = false
+				return
+			}
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum

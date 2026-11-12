@@ -99,6 +99,72 @@ func TestCompileFilterExprUnaryNull(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprNullColumnIdentity(t *testing.T) {
+	newTable := func() *plan.TableDef {
+		return &plan.TableDef{Name: "t", Name2ColIndex: map[string]int32{"id": 0, "v.part": 1, "v": 2}, Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Primary: true},
+			{Name: "v.part", Seqnum: 1},
+			{Name: "v", Seqnum: 2},
+		}}
+	}
+	for _, name := range []string{"isnull", "isnotnull"} {
+		t.Run(name, func(t *testing.T) {
+			for _, column := range []string{"v", "x.v", "x.y.v", "v.part", "x.y.v.part"} {
+				t.Run(column, func(t *testing.T) {
+					// Scan-local ColPos is deliberately not the full-schema ordinal.
+					expr := MakeFunctionExprForTest(name, []*plan.Expr{MakeColExprForTest(0, types.T_varchar, column)})
+					_, _, _, block, _, compiled, _ := CompileFilterExpr(expr, newTable(), nil)
+					require.True(t, compiled)
+					meta := objectio.NewBlock(objectio.NewSeqnums([]uint16{0, 1, 2}))
+					meta.BlockHeader().SetRows(1)
+					meta.ColumnMeta(1).SetNullCnt(1)
+					meta.ColumnMeta(2).SetNullCnt(1)
+					stop, keep, err := block(0, meta, nil)
+					require.NoError(t, err)
+					require.False(t, stop)
+					require.Equal(t, name == "isnull", keep, "must not use the non-NULL primary key's metadata")
+				})
+			}
+			for _, invalid := range []string{"unknown", "empty_name", "missing_map", "negative_index", "out_of_range", "nil_column", "wrong_name", "ambiguous_suffix", "nil_table"} {
+				t.Run(invalid, func(t *testing.T) {
+					table := newTable()
+					column := "x.y.v"
+					switch invalid {
+					case "unknown":
+						column = "x.y.unknown"
+					case "empty_name":
+						column = ""
+					case "missing_map":
+						table.Name2ColIndex = nil
+					case "negative_index":
+						table.Name2ColIndex["v"] = -1
+					case "out_of_range":
+						table.Name2ColIndex["v"] = 99
+					case "nil_column":
+						table.Cols[2] = nil
+					case "wrong_name":
+						table.Name2ColIndex["v"] = 0
+					case "ambiguous_suffix":
+						column = "x.y.v.part"
+						table.Name2ColIndex["part"] = 2
+						table.Cols[2].Name = "part"
+					case "nil_table":
+						table = nil
+					}
+					expr := MakeFunctionExprForTest(name, []*plan.Expr{MakeColExprForTest(0, types.T_varchar, column)})
+					fast, load, object, block, seek, compiled, _ := CompileFilterExpr(expr, table, nil)
+					require.False(t, compiled, "unproven column identity must retain residual row evaluation")
+					require.Nil(t, fast)
+					require.Nil(t, load)
+					require.Nil(t, object)
+					require.Nil(t, block)
+					require.Nil(t, seek)
+				})
+			}
+		})
+	}
+}
+
 func TestCompileFilterExprNullObjectMetadata(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("null-filter", fileservice.CacheConfig{}, nil)
@@ -136,7 +202,7 @@ func TestCompileFilterExprNullObjectMetadata(t *testing.T) {
 			meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 			require.NoError(t, err)
 			for _, name := range []string{"isnull", "isnotnull"} {
-				expr := MakeFunctionExprForTest(name, []*plan.Expr{MakeColExprForTest(1, types.T_varchar, "v")})
+				expr := MakeFunctionExprForTest(name, []*plan.Expr{MakeColExprForTest(0, types.T_varchar, "x.y.v")})
 				_, _, object, block, _, compiled, _ := CompileFilterExpr(expr, table, fs)
 				require.True(t, compiled)
 				keep, err := object(meta, nil)

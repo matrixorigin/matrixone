@@ -129,4 +129,16 @@ select voucher_line_id from voucher_line_details force index (idx_voucher_header
 where voucher_header_id='4000001024-1000-2025' and added is null order by voucher_line_id;
 select voucher_line_id from voucher_line_details force index (idx_voucher_header_id)
 where voucher_header_id='4000001024-1000-2025' and added is not null order by voucher_line_id;
+-- Quoted aliases and columns can both contain dots. NULL pruning must use
+-- the intended column, and ambiguous flattened names must keep residual filtering.
+create table null_aliases (id int primary key, v int, `a.v` int);
+insert into null_aliases values (1, NULL, 9), (2, 2, NULL);
+select mo_ctl('dn', 'flush', 'secondary_index_null_predicates.null_aliases');
+select id from null_aliases as x where x.id=1 and x.v is null;
+select id from null_aliases as `x.y` where `x.y`.id=1 and `x.y`.v is null;
+select id from null_aliases as `x.y` where `x.y`.id=2 and `x.y`.v is not null;
+select id from null_aliases as `x.y` where `x.y`.id=2 and `x.y`.`a.v` is null;
+select id from null_aliases as `x.y` where `x.y`.id=1 and `x.y`.`a.v` is not null;
+select id from null_aliases where id=2 and `a.v` is null;
+select id from null_aliases as x where x.id=2 and x.`a.v` is null;
 drop database secondary_index_null_predicates;
