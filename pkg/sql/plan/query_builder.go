@@ -1834,7 +1834,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
-		if node.NodeType == plan.Node_TABLE_SCAN && builder.scanReadsColumnRanges(node, originalCols, newTableDef.Cols) {
+		if node.NodeType == plan.Node_TABLE_SCAN && readsSubsetOfColumns(originalCols, newTableDef.Cols) {
 			node.ReadPolicy |= uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
 		}
 		node.TableDef = newTableDef

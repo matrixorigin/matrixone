@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,51 +63,26 @@ func TestDedupTargetScanIsNarrow(t *testing.T) {
 	}
 }
 
-// A scan reads column ranges when it leaves unread a payload column, a vector here, that
-// holds at least half of the table's bytes by its stats; it reads whole objects when it
-// reads that column, when the dominant column is not a payload type, for every visible
-// column, and without the column sizes.
-func TestScanColumnRangesSkipPayloadColumn(t *testing.T) {
-	newOptimizer := func(sizes map[string]uint64) Optimizer {
-		mock := NewMockOptimizer(false, newPlanTestProcess(t))
-		docs := mock.ctxt.tables["docs_ft"]
-		stats := NewStatsInfo()
-		stats.TableCnt = 1000
-		stats.BlockNumber = 1
-		stats.SizeMap = sizes
-		cache := NewStatsCache()
-		cache.Set(docs.TblId, stats)
-		return &updateIndexBuildTestOptimizer{ctx: &updateIndexBuildTestContext{
-			MockCompilerContext: &mock.ctxt,
-			statsCache:          cache,
-			statsByID:           map[uint64]*statspb.StatsInfo{docs.TblId: stats},
-		}}
-	}
-	vectorDominant := map[string]uint64{"id": 1000, "body": 5000, "payload": 1000, "embedding": 90000}
-	varcharDominant := map[string]uint64{"id": 1000, "body": 90000, "payload": 1000, "embedding": 5000}
+// A scan reading only some of a table's visible columns prefetches and reads just those
+// columns; a scan of every visible column, hidden columns aside, reads whole objects.
+func TestScanOfSomeColumnsReadsColumnRanges(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		sizes   map[string]uint64
 		sql     string
 		columns bool
 	}{
-		{"skips the vector", vectorDominant, "select id, payload from constraint_test.docs_ft", true},
-		{"skips the vector, filter column read", vectorDominant, "select id from constraint_test.docs_ft where payload > 1", true},
-		{"reads the vector", vectorDominant, "select id, embedding from constraint_test.docs_ft", false},
-		{"every visible column", vectorDominant, "select * from constraint_test.docs_ft", false},
-		{"dominant column is varchar", varcharDominant, "select id, payload from constraint_test.docs_ft", false},
-		{"no stats", nil, "select id, payload from constraint_test.docs_ft", false},
+		{"select id, payload from constraint_test.docs_ft", true},
+		{"select id from constraint_test.docs_ft where payload > 1", true},
+		{"select count(*) from constraint_test.docs_ft", true},
+		{"select id, body, payload, embedding from constraint_test.docs_ft", false},
+		{"select * from constraint_test.docs_ft", false},
+		{"select * from constraint_test.emp", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var opt Optimizer = NewMockOptimizer(false, newPlanTestProcess(t))
-			if tc.sizes != nil {
-				opt = newOptimizer(tc.sizes)
-			}
-			p, err := runOneStmt(opt, t, tc.sql)
+		t.Run(tc.sql, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			scans := 0
 			for _, n := range p.GetQuery().Nodes {
-				if n.NodeType != plan.Node_TABLE_SCAN || n.TableDef.GetName() != "docs_ft" {
+				if n.NodeType != plan.Node_TABLE_SCAN {
 					continue
 				}
 				scans++
