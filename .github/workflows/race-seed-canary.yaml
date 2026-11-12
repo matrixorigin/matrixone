@@ -71,7 +71,7 @@ jobs:
         with:
           token: ${{ secrets.TOKEN_ACTION }}
           repository: ${{ inputs.cs_s3_adaptation_smoke && 'Ariznawlll/matrixone' || 'iamlinjunhong/matrixone' }}
-          ref: ${{ inputs.cs_s3_adaptation_smoke && '5adc806d737f76dacb959bf6c311ae7f73aae82a' || 'b0641dbf3cb1ed67f90f9e4226f0585ba451abc0' }}
+          ref: ${{ inputs.cs_s3_adaptation_smoke && '0ca31a25c649dfbe04f2e3caf980bad6fd602c37' || 'b0641dbf3cb1ed67f90f9e4226f0585ba451abc0' }}
       - name: Set up Go
         uses: matrixorigin/CI/actions/setup-env@main
         with:
@@ -125,7 +125,10 @@ jobs:
           minio_pid=$!
           trap 'kill "$minio_pid" 2>/dev/null || true' EXIT
           curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin -X PUT http://127.0.0.1:9008/ci-test
+          curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin -X PUT --data-binary sentinel http://127.0.0.1:9008/ci-test/unrelated-sentinel
           go test -mod=readonly -short -tags matrixone_test ./pkg/fileservice -run '^(TestValidCITestS3Prefix|TestCSStorageArgumentsPreservePrefix|TestObjectStorages|TestS3FSFromSpecs)$' -v -count=1 -timeout=20m
+          test "$(curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin http://127.0.0.1:9008/ci-test/unrelated-sentinel)" = sentinel
+          curl --fail --silent --show-error --aws-sigv4 'aws:amz:us-east-1:s3' --user minioadmin:minioadmin 'http://127.0.0.1:9008/ci-test?list-type=2&prefix=ci-ut%2Flocal-smoke%2F' | grep -q '<KeyCount>0</KeyCount>'
   coverage-contract-smoke:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_contract_smoke && !inputs.cs_s3_probe
     runs-on: cs-mnl2-large-7c14g
