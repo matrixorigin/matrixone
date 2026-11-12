@@ -131,16 +131,16 @@ insert into app.t values (3);
 show grants for role reader;
 ➤ Grants for reader[12,236,0]  𝄀
 GRANT connect ON account  `reader`  𝄀
-GRANT create table ON database d `reader`  𝄀
-GRANT insert ON table d.* `reader`  𝄀
-GRANT select ON table d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT table ownership ON table d.t `reader`
+GRANT create table ON database `app` `reader`  𝄀
+GRANT select ON table `app`.`t` `reader`  𝄀
+GRANT select ON view `app`.`v` `reader`  𝄀
+GRANT select ON view `app`.`invoker_secret` `reader`  𝄀
+GRANT select ON view `app`.`creation_env_v` `reader`  𝄀
+GRANT select ON view `app`.`nested_creation_v` `reader`  𝄀
+GRANT select ON view `app`.`mixedview` `reader`  𝄀
+GRANT select ON view `app`.`lowercase_control` `reader`  𝄀
+GRANT insert ON table `app`.* `reader`  𝄀
+GRANT table ownership ON table `app`.`owned` `reader`
 create snapshot restore_priv_s2 for account restore_priv_target;
 grant select on table app.secret to reader;
 insert into app.t values (4);
@@ -181,16 +181,16 @@ mixedview  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"
 show grants for role reader;
 ➤ Grants for reader[12,236,0]  𝄀
 GRANT connect ON account  `reader`  𝄀
-GRANT create table ON database d `reader`  𝄀
-GRANT insert ON table d.* `reader`  𝄀
-GRANT select ON table d.t `reader`  𝄀
-GRANT table ownership ON table d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`  𝄀
-GRANT select ON view d.t `reader`
+GRANT create table ON database `app` `reader`  𝄀
+GRANT select ON table `app`.`t` `reader`  𝄀
+GRANT select ON view `app`.`v` `reader`  𝄀
+GRANT select ON view `app`.`invoker_secret` `reader`  𝄀
+GRANT select ON view `app`.`creation_env_v` `reader`  𝄀
+GRANT select ON view `app`.`nested_creation_v` `reader`  𝄀
+GRANT select ON view `app`.`mixedview` `reader`  𝄀
+GRANT select ON view `app`.`lowercase_control` `reader`  𝄀
+GRANT insert ON table `app`.* `reader`  𝄀
+GRANT table ownership ON table `app`.`owned` `reader`
 select count(*) as bound_table_grants from mo_catalog.mo_role_privs p
 join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id
 where p.role_name = 'reader' and p.obj_type = 'table'
