@@ -28,6 +28,7 @@ drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop database if exists db1;
 drop database if exists db2;
+drop database if exists ctas_remap_db;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
@@ -179,6 +180,61 @@ drop table db1.ctas_second;
 drop table db1.ctas_union;
 drop table db1.ctas_join;
 drop table db1.ctas_unrestricted;
+create database ctas_remap_db;
+create table db1.t_remap(a int, age int);
+insert into db1.t_remap values (1,999),(2,888);
+create table ctas_remap_db.t_remap(a int, age int);
+insert into ctas_remap_db.t_remap values (1,10),(2,999);
+alter role test_rule_role add rule "select a, age from t_remap where a = 1" on table ctas_remap_db.t_remap;
+grant create table, drop table on database ctas_remap_db to test_rule_role;
+set enable_remap_hint = 1;
+use db1;
+set remap_rewrites = '{"remapdb":{"db1":"ctas_remap_db"}}';
+select * from t_remap;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  10
+create table ctas_remap_db.copy_remapped as select * from t_remap;
+select * from ctas_remap_db.copy_remapped;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  10
+create table ctas_remap_db.copy_remapped_paren as ((select * from t_remap));
+select * from ctas_remap_db.copy_remapped_paren;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  10
+set remap_rewrites = '';
+select * from ctas_remap_db.copy_remapped;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  10
+select * from ctas_remap_db.copy_remapped_paren;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  10
+drop database ctas_remap_db;
+alter role test_rule_role add rule "select a from db1.t1 where age > 28" on table db1.t1;
+set enable_remap_hint = 1;
+create table db1.copy_projected as select * from db1.t1;
+create table db1.copy_projected_paren as (select * from db1.t1);
+create table db1.copy_projected_nested as ((select * from db1.t1));
+select * from db1.copy_projected;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.copy_projected_paren;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.copy_projected_nested;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.copy_projected;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.copy_projected_paren;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.copy_projected_nested;
+➤ a[4,32,0]  𝄀
+100
+drop table db1.copy_projected;
+drop table db1.copy_projected_paren;
+drop table db1.copy_projected_nested;
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);

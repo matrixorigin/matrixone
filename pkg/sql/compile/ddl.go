@@ -2081,6 +2081,11 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
 			// 传递外层源查询的有效规则，不从诊断 SQL 重建策略。
 			ctxWithSession = attachInternalExecutorRewriteOption(ctxWithSession, c.ctasRewriteOption())
+			if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
+				if compilerContext, ok := helper.GetCompilerContext().(interface{ DefaultDatabase() string }); ok {
+					ctxWithSession = attachInternalExecutorDefaultDatabase(ctxWithSession, compilerContext.DefaultDatabase())
+				}
+			}
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,15 +68,29 @@ func TestAttachInternalExecutorRewriteOption(t *testing.T) {
 	require.Nil(t, getInternalExecutorRewriteOption(attachInternalExecutorRewriteOption(ctx, nil)))
 
 	inner := &tree.Select{}
-	insert := &tree.Insert{Rows: &tree.Select{Select: &tree.ParenSelect{Select: inner}}}
+	middle := &tree.Select{Select: &tree.ParenSelect{Select: inner}}
+	insert := &tree.Insert{Rows: &tree.Select{Select: &tree.ParenSelect{Select: middle}}}
 	attachRewriteOptionToStatement(insert, option)
 	require.Same(t, option, insert.Rows.RewriteOption)
 	require.Same(t, option, inner.RewriteOption)
+	require.Same(t, option, middle.RewriteOption)
 	attachRewriteOptionToStatement(insert, nil)
 	require.Same(t, option, insert.Rows.RewriteOption)
 	for _, stmt := range []tree.Statement{nil, (*tree.Insert)(nil), &tree.Insert{}, &tree.Select{}} {
 		attachRewriteOptionToStatement(stmt, option)
 	}
+}
+
+func TestInternalExecutorDefaultDatabase(t *testing.T) {
+	for _, database := range []string{"mapped_db", ""} {
+		ctx := attachInternalExecutorDefaultDatabase(context.Background(), database)
+		exec := &txnExecutor{ctx: ctx, database: "original_db", opts: executor.Options{}.WithDatabase("fallback_db")}
+		require.Equal(t, database, exec.getDatabase())
+	}
+	exec := &txnExecutor{database: "original_db", opts: executor.Options{}.WithDatabase("fallback_db")}
+	require.Equal(t, "original_db", exec.getDatabase())
+	exec.database = ""
+	require.Equal(t, "fallback_db", exec.getDatabase())
 }
 
 func TestAttachInternalExecutorPrivilegeCheck(t *testing.T) {

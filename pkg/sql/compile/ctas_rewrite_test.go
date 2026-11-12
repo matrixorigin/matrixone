@@ -69,17 +69,36 @@ func TestCTASRewriteOptionCarriesEffectiveAST(t *testing.T) {
 	require.Equal(t, "insert into dst_db.copy select * from dst_db.t", tree.String(stmt, dialect.MYSQL))
 }
 
+type ctasDefaultDatabase struct{ database string }
+
+func (c ctasDefaultDatabase) DefaultDatabase() string { return c.database }
+
+type ctasSQLHelper struct{ compilerContext any }
+
+func (h ctasSQLHelper) GetCompilerContext() any               { return h.compilerContext }
+func (ctasSQLHelper) ExecSql(string) ([][]interface{}, error) { return nil, nil }
+func (ctasSQLHelper) ExecSqlWithCtx(context.Context, string) ([][]interface{}, error) {
+	return nil, nil
+}
+func (ctasSQLHelper) GetSubscriptionMeta(string) (*planpb.SubscriptionMeta, error) {
+	return nil, nil
+}
+
 func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 	injectedErr := errors.New("填充失败")
 	for _, tc := range []struct {
-		name   string
-		temp   bool
-		policy bool
-		err    error
+		name     string
+		temp     bool
+		policy   bool
+		err      error
+		helper   bool
+		database string
 	}{
 		{name: "regular", policy: true},
 		{name: "temporary", temp: true, policy: true},
-		{name: "error restores context", policy: true, err: injectedErr},
+		{name: "error restores context", policy: true, err: injectedErr, helper: true, database: "mapped_db"},
+		{name: "remapped default database", policy: true, helper: true, database: "mapped_db"},
+		{name: "empty effective database", policy: true, helper: true},
 		{name: "without policy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +112,9 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 			defer proc.Free()
 			ctx := proc.Ctx
 			proc.Session = &testInternalExecutorSession{}
+			if tc.helper {
+				proc.GetSessionInfo().SqlHelper = ctasSQLHelper{compilerContext: ctasDefaultDatabase{database: tc.database}}
+			}
 			c := NewCompile("test", "dst_db", "", "", "", nil, proc, stmt, false, nil, time.Now())
 			defer c.Release()
 			c.pn = &planpb.Plan{}
@@ -121,6 +143,12 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 					}
 					require.Same(t, proc.Session, getInternalExecutorSession(inner))
 					require.True(t, needInternalExecutorPrivilegeCheck(inner))
+					innerExec := &txnExecutor{ctx: inner, opts: executor.Options{}.WithDatabase("original_db")}
+					if tc.helper {
+						require.Equal(t, tc.database, innerExec.getDatabase())
+					} else {
+						require.Equal(t, "original_db", innerExec.getDatabase())
+					}
 					return executor.Result{AffectedRows: 3}, tc.err
 				})
 			err := c.populateCreatedTable(&planpb.CreateTable{CreateAsSelectSql: sql},
@@ -128,6 +156,7 @@ func TestCTASPopulateCarriesEffectiveRewriteOption(t *testing.T) {
 			require.ErrorIs(t, err, tc.err)
 			require.Same(t, ctx, proc.Ctx)
 			require.Nil(t, getInternalExecutorRewriteOption(proc.Ctx))
+			require.Nil(t, proc.Ctx.Value(internalExecutorDefaultDatabaseKey{}))
 			require.False(t, needInternalExecutorPrivilegeCheck(proc.Ctx))
 			if tc.err == nil {
 				require.Equal(t, uint64(3), c.getAffectedRows())

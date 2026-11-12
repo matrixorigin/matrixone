@@ -29,6 +29,7 @@ drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop database if exists db1;
 drop database if exists db2;
+drop database if exists ctas_remap_db;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
@@ -160,6 +161,47 @@ drop table db1.ctas_second;
 drop table db1.ctas_union;
 drop table db1.ctas_join;
 drop table db1.ctas_unrestricted;
+
+-- 有效默认库必须随 CTAS 策略一起传递，不能回到重映射前的同名表。
+create database ctas_remap_db;
+create table db1.t_remap(a int, age int);
+insert into db1.t_remap values (1,999),(2,888);
+create table ctas_remap_db.t_remap(a int, age int);
+insert into ctas_remap_db.t_remap values (1,10),(2,999);
+alter role test_rule_role add rule "select a, age from t_remap where a = 1" on table ctas_remap_db.t_remap;
+grant create table, drop table on database ctas_remap_db to test_rule_role;
+-- @session:id=11&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+use db1;
+set remap_rewrites = '{"remapdb":{"db1":"ctas_remap_db"}}';
+select * from t_remap;
+create table ctas_remap_db.copy_remapped as select * from t_remap;
+select * from ctas_remap_db.copy_remapped;
+create table ctas_remap_db.copy_remapped_paren as ((select * from t_remap));
+select * from ctas_remap_db.copy_remapped_paren;
+set remap_rewrites = '';
+-- @session
+select * from ctas_remap_db.copy_remapped;
+select * from ctas_remap_db.copy_remapped_paren;
+drop database ctas_remap_db;
+
+-- 部分列投影在无括号、单层与多层括号源下保持同一建表/填充契约。
+alter role test_rule_role add rule "select a from db1.t1 where age > 28" on table db1.t1;
+-- @session:id=12&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+create table db1.copy_projected as select * from db1.t1;
+create table db1.copy_projected_paren as (select * from db1.t1);
+create table db1.copy_projected_nested as ((select * from db1.t1));
+select * from db1.copy_projected;
+select * from db1.copy_projected_paren;
+select * from db1.copy_projected_nested;
+-- @session
+select * from db1.copy_projected;
+select * from db1.copy_projected_paren;
+select * from db1.copy_projected_nested;
+drop table db1.copy_projected;
+drop table db1.copy_projected_paren;
+drop table db1.copy_projected_nested;
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;

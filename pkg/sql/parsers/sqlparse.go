@@ -565,8 +565,13 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 			}
 		case *tree.CreateTable:
 			// CTAS 的源查询必须保留有效行规则，内部填充时继续传递。
-			if s.AsSource != nil {
-				s.AsSource.RewriteOption = rewriteOption
+			for source := s.AsSource; source != nil; {
+				source.RewriteOption = rewriteOption
+				paren, ok := source.Select.(*tree.ParenSelect)
+				if !ok {
+					break
+				}
+				source = paren.Select
 			}
 		case *tree.Insert:
 			// INSERT...SELECT: propagate the rewrite to the inner read-source so

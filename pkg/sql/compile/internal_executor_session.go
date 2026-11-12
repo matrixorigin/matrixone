@@ -23,6 +23,7 @@ import (
 
 type internalExecutorSessionKey struct{}
 type internalExecutorRewriteOptionKey struct{}
+type internalExecutorDefaultDatabaseKey struct{}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.
@@ -71,6 +72,11 @@ func getInternalExecutorRewriteOption(ctx context.Context) *tree.RewriteOption {
 	return option
 }
 
+// 与策略同步保存已完成重映射的默认库；空库名也有语义，不能回退到原始库。
+func attachInternalExecutorDefaultDatabase(ctx context.Context, database string) context.Context {
+	return context.WithValue(ctx, internalExecutorDefaultDatabaseKey{}, database)
+}
+
 // CTAS 生成的 INSERT 仅将规则附加到读取源，不改写写入目标。
 func attachRewriteOptionToStatement(stmt tree.Statement, option *tree.RewriteOption) {
 	if option == nil {
@@ -80,9 +86,13 @@ func attachRewriteOptionToStatement(stmt tree.Statement, option *tree.RewriteOpt
 	if !ok || insert == nil || insert.Rows == nil {
 		return
 	}
-	insert.Rows.RewriteOption = option
-	if paren, ok := insert.Rows.Select.(*tree.ParenSelect); ok && paren.Select != nil {
-		paren.Select.RewriteOption = option
+	for source := insert.Rows; source != nil; {
+		source.RewriteOption = option
+		paren, ok := source.Select.(*tree.ParenSelect)
+		if !ok {
+			break
+		}
+		source = paren.Select
 	}
 }
 

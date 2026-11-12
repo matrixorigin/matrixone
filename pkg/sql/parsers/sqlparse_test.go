@@ -475,6 +475,8 @@ func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
 	const hint = `/*+ {"rewrites":{"db1.t1":["select * from db1.t1 where tenant_id = 1","select * from db1.t1 where amount > 0"],"db1.t2":"select * from db1.t2 where tenant_id = 2"}} */ `
 	for _, source := range []string{
 		"select * from db1.t1",
+		"(select * from db1.t1)",
+		"((select * from db1.t1))",
 		"select row_number() over () as rn, src.* from (select sum(amount) as total, count(*) as n from db1.t1) src",
 		"select tenant_id from db1.t1 union all select tenant_id from db1.t2",
 	} {
@@ -488,6 +490,14 @@ func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
 			require.NotNil(t, ctas.AsSource.RewriteOption)
 			require.Len(t, ctas.AsSource.RewriteOption.Rewrites["db1.t1"], 2)
 			require.Len(t, ctas.AsSource.RewriteOption.Rewrites["db1.t2"], 1)
+			for source := ctas.AsSource; ; {
+				paren, ok := source.Select.(*tree.ParenSelect)
+				if !ok {
+					break
+				}
+				source = paren.Select
+				require.Same(t, ctas.AsSource.RewriteOption, source.RewriteOption)
+			}
 		})
 	}
 	t.Run("without source", func(t *testing.T) {
