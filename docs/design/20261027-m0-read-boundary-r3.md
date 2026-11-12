@@ -1,11 +1,16 @@
 # Restricted M0 ADD COLUMN: read boundary proposal R3
 
-## Implemented local AR-1 contract (2026-11-05)
+## Implemented AR-1 contract (2026-11-05)
 
 This addendum supersedes the implementation choice and compatibility assumptions
-of the historical R3 draft below. It records the user-selected local architecture,
-not maintainer approval or a published PR revision. Final qualification is tracked
-separately in `M0_STATUS.md` and the local evidence seal.
+of the historical R3 draft below. It records the user-selected architecture in
+PR #30816, not maintainer approval. Final qualification is tracked separately in
+`M0_STATUS.md` and the local evidence seal.
+
+**Decision required:** maintainers must explicitly accept a fixed revision of
+the AR-1 contract, including relation-owned authority, clone rebinding,
+recovery and backup source boundaries, and storage isolation from old/default
+binaries. Approval of R2 or the linter does not approve this revised contract.
 
 1. **Authority is durable and relation-owned.** `SchemaExtra.M0Evolution` records
    a format version, root identity, owner binding, root width, layout generation,
