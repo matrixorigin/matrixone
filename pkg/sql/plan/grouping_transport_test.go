@@ -15,10 +15,14 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,5 +138,67 @@ func TestGroupingSampleDistinctOrderExpression(t *testing.T) {
 		_, err := buildSingleStmt(NewMockOptimizer(false), t, prefix+
 			"select distinct n_regionkey,sample(n_nationkey,100 percent) chosen from nation group by grouping sets ((n_regionkey),(n_regionkey)) order by chosen+1")
 		require.NoError(t, err, "a sort expression built from selected sample output is legal after DISTINCT")
+	}
+}
+
+func TestGroupingSampleHiddenGroupingTransport(t *testing.T) {
+	for _, tc := range []struct {
+		selected string
+		columns  int
+	}{
+		{"sample(n_nationkey,100 percent) chosen", 2},
+		{"n_regionkey,sample(n_nationkey,100 percent) chosen", 3},
+		{"n_regionkey,grouping(n_regionkey) flag,sample(n_nationkey,100 percent) chosen", 3},
+	} {
+		t.Run(tc.selected, func(t *testing.T) {
+			p, err := buildSingleStmt(NewMockOptimizer(false), t,
+				"select "+tc.selected+" from nation group by n_regionkey with rollup order by grouping(n_regionkey) desc,chosen limit 3")
+			require.NoError(t, err)
+			found := 0
+			for _, n := range p.GetQuery().Nodes {
+				if n.NodeType == plan.Node_UNION_ALL {
+					require.Len(t, n.ProjectList, tc.columns, "GROUPING needs branch identity, not only key values")
+					found++
+				}
+			}
+			require.Positive(t, found)
+		})
+	}
+}
+
+func TestGroupingSampleLiteralSortOrigin(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select grouping(n_regionkey) flag,sample(cast(n_nationkey as signed),100 percent) chosen from nation group by n_regionkey with rollup order by chosen+0,flag desc limit 3", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockOptimizer(false).CurrentContext(), false, true)
+	_, err = builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+	require.NoError(t, err)
+	// Inspect the binding boundary before optimization can fuse away projects.
+	nodes := builder.qry.Nodes
+	var hasUnion func(int32) bool
+	hasUnion = func(id int32) bool {
+		if nodes[id].NodeType == plan.Node_UNION_ALL {
+			return true
+		}
+		for _, child := range nodes[id].Children {
+			if hasUnion(child) {
+				return true
+			}
+		}
+		return false
+	}
+	for id, n := range nodes {
+		if n.NodeType != plan.Node_PROJECT || !hasUnion(int32(id)) {
+			continue
+		}
+		for _, hidden := range n.ProjectList[min(2, len(n.ProjectList)):] {
+			walkGroupingExpr(hidden, func(e *plan.Expr) {
+				if c := e.GetCol(); c != nil {
+					require.NotEqual(t, int32(0), c.ColPos,
+						"literal zero in chosen+0 must not become the selected GROUPING flag")
+				}
+			})
+		}
 	}
 }

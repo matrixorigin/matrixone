@@ -39,6 +39,10 @@ type groupingStage struct {
 	// complete post-sample projection is transported, rather than a key list.
 	projectionInputTag int32
 	inputs             map[[2]int32]int32
+
+	// Dependency identity must precede branch-local GROUPING folding. A
+	// subtotal marker is neither a SQL literal nor a function of key values.
+	sampleProjects []*plan.Expr
 }
 
 // Walk only this expression's scope. Subquery plans keep their own bindings;
@@ -84,7 +88,7 @@ func (builder *QueryBuilder) appendGroupingStage(
 
 	if ctx.sampleFunc.hasSampleFunc {
 		stage.projectionInputTag = builder.genNewBindTag()
-		selected := ctx.projects[:resultLen]
+		selected := stage.sampleProjects[:resultLen]
 		stage.projects = make([]*plan.Expr, len(ctx.projects))
 		ctx.headings = make([]string, 0, len(ctx.projects))
 		payload := make([]*plan.Expr, 0, len(ctx.projects))
@@ -92,7 +96,7 @@ func (builder *QueryBuilder) appendGroupingStage(
 			if i >= resultLen {
 				// Keep reconstructible sort expressions, not opaque hidden slots:
 				// DISTINCT may use chosen+1 when chosen is a selected sample.
-				if order, ok := groupingDistinctOrder(DeepCopyExpr(expr), selected, stage.projectionInputTag); ok {
+				if order, ok := groupingOrderExpr(DeepCopyExpr(stage.sampleProjects[i]), selected, stage.projectionInputTag, false); ok {
 					stage.projects[i] = order
 					continue
 				}
@@ -188,15 +192,24 @@ func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *pla
 // Hidden sort expressions must be evaluated after DISTINCT using only surviving
 // output columns. This also keeps volatile sort expressions out of the keys.
 func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, tag int32) (*plan.Expr, bool) {
+	return groupingOrderExpr(expr, selected, tag, true)
+}
+
+func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, tag int32, allowGrouping bool) (*plan.Expr, bool) {
 	for i, project := range selected {
 		if exprStructuralEqual(expr, project) {
 			return &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: int32(i)}}}, true
 		}
 	}
 	if fn := expr.GetF(); fn != nil {
+		if !allowGrouping && fn.Func.ObjName == "grouping" {
+			// SAMPLE key vectors do not carry GROUPING's row-lineage bitmap.
+			// Only a selected, materialized GROUPING value can be reused.
+			return nil, false
+		}
 		for i, arg := range fn.Args {
 			var ok bool
-			fn.Args[i], ok = groupingDistinctOrder(arg, selected, tag)
+			fn.Args[i], ok = groupingOrderExpr(arg, selected, tag, allowGrouping)
 			if !ok {
 				return nil, false
 			}
@@ -206,7 +219,7 @@ func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, tag int32) (*
 	if list := expr.GetList(); list != nil {
 		for i, item := range list.List {
 			var ok bool
-			list.List[i], ok = groupingDistinctOrder(item, selected, tag)
+			list.List[i], ok = groupingOrderExpr(item, selected, tag, allowGrouping)
 			if !ok {
 				return nil, false
 			}

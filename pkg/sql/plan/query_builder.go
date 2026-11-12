@@ -4187,6 +4187,9 @@ func (builder *QueryBuilder) appendSampleNode(
 	boundHavingList []*plan.Expr,
 ) (newNodeID int32, err error) {
 	nodeID = builder.appendNode(generateSamplePlanNode(ctx, nodeID), ctx)
+	if ctx.groupingStage != nil {
+		ctx.groupingStage.sampleProjects = DeepCopyExprList(ctx.projects)
+	}
 	for _, exprs := range [][]*plan.Expr{ctx.projects, boundHavingList} {
 		for _, expr := range exprs {
 			rewriteSampleGrouping(expr, ctx)

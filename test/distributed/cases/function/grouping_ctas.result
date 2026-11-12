@@ -46,7 +46,7 @@ where table_schema='grouping_ctas_test' and table_name='r' order by ordinal_posi
 ➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 g  ¦  YES  𝄀
 h  ¦  YES  𝄀
-s  ¦  NO  𝄀
+s  ¦  YES  𝄀
 __mo_fake_pk_col  ¦  NO
 insert into r(g,h,s) values(null,null,0);
 select count(*) from r where s=0 and g is null and h is null;
@@ -79,7 +79,7 @@ where table_schema='grouping_ctas_test' and table_name='c' order by ordinal_posi
 ➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 g  ¦  NO  𝄀
 h  ¦  NO  𝄀
-s  ¦  NO  𝄀
+s  ¦  YES  𝄀
 __mo_fake_pk_col  ¦  NO
 insert into c(g,h,s) values(null,0,0);
 constraint violation: Column 'g' cannot be null
@@ -909,4 +909,81 @@ select * from ordered_sample order by chosen;
 2  ¦  9
 select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by h;
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+create table hidden_grouping_order as select sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from hidden_grouping_order order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select g,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+create table visible_grouping_key_order as select g,sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from visible_grouping_key_order order by chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g)+0 desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by grouping sets ((g),(g),())
+order by grouping(g) desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(g) desc,chosen limit 2;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7
+create table sort_big_sample(g int not null,v bigint not null);
+insert into sort_big_sample select g,v from src;
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
+create table literal_zero_sample_order as
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+select * from literal_zero_sample_order order by chosen,flag desc;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
+select grouping(g) flag,0 z,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  z[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  0  ¦  5  𝄀
+0  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7
+select distinct grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
 drop database grouping_ctas_test;

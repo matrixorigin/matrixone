@@ -320,4 +320,38 @@ select distinct g,sample(v,100 percent) chosen from src group by grouping sets (
 select * from ordered_sample order by chosen;
 select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by h;
 
+-- 隐藏 GROUPING 排序必须保留分支来源，不能把明细分支的 0 提升为全局常量。
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+create table hidden_grouping_order as select sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from hidden_grouping_order order by chosen;
+select g,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+create table visible_grouping_key_order as select g,sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from visible_grouping_key_order order by chosen;
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g)+0 desc,chosen limit 3;
+select sample(v,100 percent) chosen from src group by grouping sets ((g),(g),())
+order by grouping(g) desc,chosen limit 3;
+select sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(g) desc,chosen limit 2;
+
+-- SQL 字面量零不能与折叠后的 GROUPING 零混淆；flag 的并列排序使 LIMIT 选行确定。
+create table sort_big_sample(g int not null,v bigint not null);
+insert into sort_big_sample select g,v from src;
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+create table literal_zero_sample_order as
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+select * from literal_zero_sample_order order by chosen,flag desc;
+select grouping(g) flag,0 z,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+select distinct grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+
 drop database grouping_ctas_test;
