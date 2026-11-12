@@ -82,6 +82,32 @@ select id from ft_compound_odku where match(body) against('beta') order by id;
 select id from ft_compound_odku where match(body) against('gamma') order by id;
 drop table ft_compound_odku;
 
+-- UPDATE must route the old parent and FULLTEXT postings using every dependency.
+create table ft_compound_update(id int primary key, bucket int, salt int, body text, fulltext fti_compound_update(body)) partition by range(bucket + salt)(partition u0 values less than (10), partition u1 values less than maxvalue);
+insert into ft_compound_update values (1, 1, 20, 'route alpha');
+update ft_compound_update set salt = 0 where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('alpha') order by id;
+update ft_compound_update set bucket = 20 where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('alpha') order by id;
+update ft_compound_update set bucket = 1, salt = 20, body = 'route gamma' where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('alpha') order by id;
+select id from ft_compound_update where match(body) against('gamma') order by id;
+begin;
+update ft_compound_update set bucket = 0, salt = 1, body = 'route delta' where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('delta') order by id;
+rollback;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('gamma') order by id;
+select id from ft_compound_update where match(body) against('delta') order by id;
+update ft_compound_update set body = body where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+select id from ft_compound_update where match(body) against('gamma') order by id;
+drop table ft_compound_update;
+
 -- Compound partition routing must use old and new values for every expression
 -- dependency when REPLACE removes and inserts the parent and FULLTEXT postings.
 create table ft_compound_replace(id int primary key, bucket int, salt int, body text, fulltext fti_compound_replace(body))

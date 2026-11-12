@@ -119,6 +119,56 @@ select id from ft_compound_odku where match(body) against('gamma') order by id;
 id
 1
 drop table ft_compound_odku;
+create table ft_compound_update(id int primary key, bucket int, salt int, body text, fulltext fti_compound_update(body)) partition by range(bucket + salt)(partition u0 values less than (10), partition u1 values less than maxvalue);
+insert into ft_compound_update values (1, 1, 20, 'route alpha');
+update ft_compound_update set salt = 0 where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	1	0
+select id from ft_compound_update where match(body) against('alpha') order by id;
+id
+1
+update ft_compound_update set bucket = 20 where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	20	0
+select id from ft_compound_update where match(body) against('alpha') order by id;
+id
+1
+update ft_compound_update set bucket = 1, salt = 20, body = 'route gamma' where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	1	20
+select id from ft_compound_update where match(body) against('alpha') order by id;
+id
+select id from ft_compound_update where match(body) against('gamma') order by id;
+id
+1
+begin;
+update ft_compound_update set bucket = 0, salt = 1, body = 'route delta' where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	0	1
+select id from ft_compound_update where match(body) against('delta') order by id;
+id
+1
+rollback;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	1	20
+select id from ft_compound_update where match(body) against('gamma') order by id;
+id
+1
+select id from ft_compound_update where match(body) against('delta') order by id;
+id
+update ft_compound_update set body = body where id = 1;
+select count(*), min(bucket), min(salt) from ft_compound_update;
+count(*)	min(bucket)	min(salt)
+1	1	20
+select id from ft_compound_update where match(body) against('gamma') order by id;
+id
+1
+drop table ft_compound_update;
 create table ft_compound_replace(id int primary key, bucket int, salt int, body text, fulltext fti_compound_replace(body))
 partition by range(bucket + salt)(partition c0 values less than (10), partition c1 values less than maxvalue);
 insert into ft_compound_replace values (1, 1, 20, 'compound old alpha'), (2, 1, 1, 'compound old beta');

@@ -493,6 +493,63 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 	}
 }
 
+func TestUpdateFulltextCompoundPartitionRoutesBothDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name, partitionExpr, assignment string
+		wantRoutes                      int
+		changed                         []bool
+	}{
+		{"secondary dependency", "bucket + salt", "salt = 0", 4, []bool{false, true}},
+		{"first dependency", "bucket + salt", "bucket = 0", 4, []bool{true, false}},
+		{"both dependencies", "bucket + salt", "bucket = 0, salt = 1", 4, []bool{true, true}},
+		{"unchanged dependencies", "bucket + salt", "body = 'other'", 1, nil},
+		{"single dependency", "salt", "salt = 0", 2, []bool{true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			ddl, err := runOneStmt(mock, t, "create table constraint_test.qa_ft_compound (id int primary key, bucket int, salt int, body text, fulltext fti_compound(body)) partition by range("+tc.partitionExpr+") (partition p0 values less than (10), partition p1 values less than (maxvalue))")
+			require.NoError(t, err)
+			created := ddl.GetDdl().GetCreateTable()
+			require.NotNil(t, created)
+			for _, index := range created.TableDef.Indexes {
+				index.TableExist = true
+			}
+			for _, def := range append([]*planpb.TableDef{created.TableDef}, created.IndexTables...) {
+				def.Cols = append(def.Cols, &planpb.ColDef{Name: catalog.Row_ID, Hidden: true, Typ: planpb.Type{Id: int32(types.T_Rowid), Width: 16}, Default: &planpb.Default{NullAbility: false}})
+				def.Name2ColIndex = make(map[string]int32, len(def.Cols))
+				for i, col := range def.Cols {
+					def.Name2ColIndex[col.Name] = int32(i)
+				}
+				mock.ctxt.tables[def.Name] = def
+				mock.ctxt.objects[def.Name] = &planpb.ObjectRef{SchemaName: "constraint_test", ObjName: def.Name}
+			}
+			logicPlan, err := runOneStmt(mock, t, "update constraint_test.qa_ft_compound set "+tc.assignment+" where id = 1")
+			require.NoError(t, err)
+			var parents []*planpb.UpdateCtx
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, ctx := range node.UpdateCtxList {
+					if ctx.TableDef != nil && ctx.TableDef.Name == "qa_ft_compound" && ctx.PartitionIndexCtx == nil {
+						parents = append(parents, ctx)
+					}
+				}
+			}
+			require.Len(t, parents, 1)
+			routes := parents[0].PartitionCols
+			require.Len(t, routes, tc.wantRoutes, "parent deletion and insertion must each see the complete partition expression")
+			for i, changed := range tc.changed {
+				if changed {
+					require.NotEqual(t, routes[i].ColPos, routes[i+len(tc.changed)].ColPos, "changed dependency must retain its old input")
+				} else {
+					require.Equal(t, routes[i].ColPos, routes[i+len(tc.changed)].ColPos, "unchanged dependency may reuse its input")
+				}
+			}
+		})
+	}
+}
+
 func TestODKUCompoundPartitionRoutesBothDependencies(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
