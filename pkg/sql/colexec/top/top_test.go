@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -347,6 +349,29 @@ func TestTopSpill(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestTopSpillUsesLocalFileService(t *testing.T) {
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()},
+		int64(topSpillThreshold+1), []*plan.OrderBySpec{{Expr: newExpression(0)}})
+	tc.arg.ctr.n = 1
+	src := newBatch(tc.types, tc.proc, 32)
+	t.Cleanup(func() {
+		tc.arg.Free(tc.proc, false, nil)
+		src.Clean(tc.proc.Mp())
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	analyzer := process.NewAnalyzer(0, false, false, "top-local-spill")
+	require.NoError(t, tc.arg.ctr.spillBatch(src, tc.proc, analyzer))
+	spillFile := tc.arg.ctr.spillFile
+	require.NotNil(t, spillFile)
+	require.Equal(t, defines.SpillFileServiceName, filepath.Base(filepath.Dir(spillFile.Name())))
+	require.NoFileExists(t, spillFile.Name(), "spill file should be unlinked while open")
+	info, err := spillFile.Stat()
+	require.NoError(t, err)
+	require.Positive(t, info.Size())
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
