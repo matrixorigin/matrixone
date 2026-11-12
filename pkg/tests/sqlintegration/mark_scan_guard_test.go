@@ -41,7 +41,7 @@ func runMarkScanGuardSQL(t *testing.T, cluster embed.Cluster) {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	defer db.Close()
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(3)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	schema := strings.ToLower(testutils.GetDatabaseName(t))
@@ -176,39 +176,87 @@ func runMarkScanGuardSQL(t *testing.T, cluster embed.Cluster) {
 	remappedRows := regexp.MustCompile(`(?m)->\s+Filter\s*\n\s*Analyze:[^\n]*inputRows=(\d+)`).FindStringSubmatch(remapped.Text)
 	require.Len(t, remappedRows, 2, remapped.Text)
 	require.Equal(t, "1", remappedRows[1], remapped.Text)
-	// The row selected only by the OR alternative must still be locked. Use
-	// two dedicated connections so the timeout cannot be a connection-pool wait.
-	locker, err := db.Conn(ctx)
-	require.NoError(t, err)
-	defer locker.Close()
-	contender, err := db.Conn(ctx)
-	require.NoError(t, err)
-	defer contender.Close()
-	tx, err := locker.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	locked, err := tx.QueryContext(ctx, "select id, payload"+predicate)
-	require.NoError(t, err)
-	defer locked.Close()
-	var lockedIDs []string
-	for locked.Next() {
-		var id, payload string
-		require.NoError(t, locked.Scan(&id, &payload))
-		lockedIDs = append(lockedIDs, id)
-	}
-	require.NoError(t, locked.Err())
-	require.NoError(t, locked.Close())
-	require.Equal(t, []string{"e10"}, lockedIDs)
-	waitCtx, stop := context.WithTimeout(ctx, time.Second)
-	_, waitErr := contender.ExecContext(waitCtx, "update "+executions+" set status=status+1 where id='e10'")
-	stop()
-	require.ErrorIs(t, waitErr, context.DeadlineExceeded, "the competing update must wait for the held row lock")
-	require.NoError(t, tx.Rollback())
-	// Canceling a driver call may close its connection; reacquire one if needed.
-	_ = contender.Close()
-	_ = locker.Close()
-	_, err = db.ExecContext(ctx, "update "+executions+" set status=status+1 where id='e10'")
-	require.NoError(t, err)
+	// The row selected only by the OR alternative must still be locked. A
+	// third connection observes the actual waiter rather than a client timeout.
+	func() {
+		locker, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer locker.Close()
+		contender, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer contender.Close()
+		observer, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer observer.Close()
+		var tableID string
+		err = observer.QueryRowContext(ctx, `select cast(rel_id as char) from mo_catalog.mo_tables
+		where account_id=0 and reldatabase=? and relname='executions'`, schema).Scan(&tableID)
+		require.NoError(t, err)
+		tx, err := locker.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		locked, err := tx.QueryContext(ctx, "select id, payload"+predicate)
+		require.NoError(t, err)
+		defer locked.Close()
+		var lockedIDs []string
+		for locked.Next() {
+			var id, payload string
+			require.NoError(t, locked.Scan(&id, &payload))
+			lockedIDs = append(lockedIDs, id)
+		}
+		require.NoError(t, locked.Err())
+		require.NoError(t, locked.Close())
+		require.Equal(t, []string{"e10"}, lockedIDs)
+		type updateOutcome struct {
+			result sql.Result
+			err    error
+		}
+		waitCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+		updateDone := make(chan updateOutcome, 1)
+		go func() {
+			result, updateErr := contender.ExecContext(waitCtx, "update "+executions+" set status=status+1 where id='e10'")
+			updateDone <- updateOutcome{result: result, err: updateErr}
+		}()
+		drained := false
+		defer func() {
+			stop()
+			_ = tx.Rollback()
+			if !drained {
+				select {
+				case <-updateDone:
+				case <-time.After(10 * time.Second):
+					t.Error("competing update did not exit after cancellation and rollback")
+				}
+			}
+		}()
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		var waiters int
+		for waiters == 0 {
+			select {
+			case outcome := <-updateDone:
+				drained = true
+				t.Fatalf("competing update completed before lock waiter was observed: %v", outcome.err)
+			case <-waitCtx.Done():
+				t.Fatalf("lock waiter was not observed: %v", waitCtx.Err())
+			case <-ticker.C:
+				err = observer.QueryRowContext(waitCtx, `select count(*) from mo_catalog.mo_locks
+				where table_id=? and txn_id<>'' and lock_wait<>''`, tableID).Scan(&waiters)
+				require.NoError(t, err)
+			}
+		}
+		require.NoError(t, tx.Rollback())
+		select {
+		case outcome := <-updateDone:
+			drained = true
+			require.NoError(t, outcome.err)
+			affected, updateErr := outcome.result.RowsAffected()
+			require.NoError(t, updateErr)
+			require.Equal(t, int64(1), affected)
+		case <-waitCtx.Done():
+			t.Fatalf("competing update did not complete after rollback: %v", waitCtx.Err())
+		}
+	}()
 	exec("insert into " + cases + " values ('c1','w','e20')")
 	check("id", "e10", "e20")
 	check("id, payload", "e10", "e20")
