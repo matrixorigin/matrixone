@@ -34,6 +34,24 @@ func validCITestS3Prefix(prefix string) bool {
 	return ciTestS3PrefixPattern.MatchString(prefix)
 }
 
+// Do not log SDK error strings: they can contain signed URLs or credential data.
+// Keep the HTTP status and a known S3 error code so failures remain diagnosable.
+func ciTestS3Error(operation string, err error) error {
+	response := minio.ToErrorResponse(err)
+	code := "unknown"
+	switch response.Code {
+	case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "NoSuchBucket",
+		"RequestTimeTooSkewed", "AuthorizationHeaderMalformed", "InvalidRequest":
+		code = response.Code
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = "DeadlineExceeded"
+	} else if errors.Is(err, context.Canceled) {
+		code = "Canceled"
+	}
+	return fmt.Errorf("CS S3 %s failed (HTTP %d, code %s, type %T)", operation, response.StatusCode, code, err)
+}
+
 func listCITestPrefix(ctx context.Context, client *minio.Client, bucket, prefix string) ([]string, error) {
 	if !strings.HasSuffix(prefix, "/") || !validCITestS3Prefix(strings.TrimSuffix(prefix, "/")) {
 		return nil, errors.New("unsafe CS S3 fixture prefix")
@@ -43,7 +61,10 @@ func listCITestPrefix(ctx context.Context, client *minio.Client, bucket, prefix 
 	defer cancel()
 	var keys []string
 	for object := range client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
-		if object.Err != nil || !strings.HasPrefix(object.Key, prefix) {
+		if object.Err != nil {
+			return nil, ciTestS3Error("list fixture prefix", object.Err)
+		}
+		if !strings.HasPrefix(object.Key, prefix) {
 			return nil, errors.New("cannot safely enumerate CS S3 fixture objects")
 		}
 		keys = append(keys, object.Key)
@@ -76,10 +97,65 @@ func cleanupCITestPrefix(ctx context.Context, client *minio.Client, bucket, pref
 	}
 	for _, key := range keys {
 		if err := client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{}); err != nil {
-			return errors.New("cannot remove CS S3 fixture object")
+			return ciTestS3Error("remove fixture object", err)
 		}
 	}
 	return checkEmptyCITestPrefix(ctx, client, bucket, prefix)
+}
+
+func TestCSStoragePrefixScopedInitialization(t *testing.T) {
+	t.Setenv("MO_CI_S3_PREFIX", "ci-ut/run-123")
+	headCalls, listCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			headCalls++
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/ci-test/" ||
+			!strings.HasPrefix(r.URL.Query().Get("prefix"), "ci-ut/run-123/") {
+			t.Errorf("request escaped the permitted fixture scope: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		listCalls++
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
+	}))
+	defer server.Close()
+	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint="+server.URL+",region=us-east-1,bucket=ci-test,key-id=id,key-secret=secret,is-minio=true,no-default-credentials=true")
+	for _, args := range objectStorageArgumentsForTest("test", t) {
+		if args.Name != "cs-s3" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		sdk, err := NewMinioSDK(ctx, args, nil)
+		if err != nil {
+			t.Fatal(ciTestS3Error("initialize fixture", err))
+		}
+		if err := checkEmptyCITestPrefix(ctx, sdk.client, args.Bucket, args.KeyPrefix+"/"); err != nil {
+			t.Fatal(err)
+		}
+		if headCalls != 0 || listCalls != 1 {
+			t.Fatalf("expected prefix-only validation; HEAD=%d LIST=%d", headCalls, listCalls)
+		}
+		return
+	}
+	t.Fatal("CS test storage was not configured")
+}
+
+func TestCITestS3ErrorRedactsDetails(t *testing.T) {
+	err := minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden, Message: "secret-token", BucketName: "private-bucket", Key: "private-key", RequestID: "private-request"}
+	message := ciTestS3Error("initialize fixture", err).Error()
+	if !strings.Contains(message, "HTTP 403, code AccessDenied") {
+		t.Fatal("missing safe S3 failure classification")
+	}
+	for _, secret := range []string{"secret-token", "private-bucket", "private-key", "private-request"} {
+		if strings.Contains(message, secret) {
+			t.Fatal("S3 failure leaked private details")
+		}
+	}
 }
 
 func TestValidCITestS3Prefix(t *testing.T) {

@@ -74,7 +74,7 @@ func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
 	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint=https://example.invalid,bucket=test,key-id=id,key-secret=secret,is-minio=true")
 	for _, args := range objectStorageArgumentsForTest("test", t) {
 		if args.Name == "cs-s3" {
-			if !strings.HasPrefix(args.KeyPrefix, "ci-ut/run-123/") || !args.IsMinio {
+			if !strings.HasPrefix(args.KeyPrefix, "ci-ut/run-123/") || !args.IsMinio || !args.NoBucketValidation {
 				t.Fatal("CS test storage is not isolated under the run prefix")
 			}
 			return
@@ -96,7 +96,7 @@ func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
 	sdk, err := NewMinioSDK(ctx, args, nil)
 	if err != nil {
 		cancel()
-		t.Fatal("cannot initialize CS S3 fixture")
+		t.Fatal(ciTestS3Error("initialize fixture", err))
 	}
 	if err := checkEmptyCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
 		cancel()
@@ -210,6 +210,11 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 			}
 			args.Name = "cs-s3"
 			args.KeyPrefix = path.Join(prefix, args.KeyPrefix)
+			// CI credentials deliberately allow ListBucket only with a ci-ut/
+			// prefix. HeadBucket has no prefix and is therefore denied. Validate
+			// the exact fixture prefix in prepareCITestStorage instead, without
+			// granting bucket-wide access or changing production SDK defaults.
+			args.NoBucketValidation = true
 		}
 
 		ret = append(ret, args)
