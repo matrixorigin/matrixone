@@ -680,4 +680,3 @@ where a=1 and b in ('alpha','beta') order by id;
 2  ¦  20  𝄀
 3  ¦  30
 drop database mysql_compat_index_hint;
-

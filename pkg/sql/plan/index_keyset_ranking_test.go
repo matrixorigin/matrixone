@@ -326,8 +326,8 @@ func TestBoundedUniqueKeySetRankingMatchesExhaustive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fast := makeKeySetRankingFixture(t, tc.mode)
 			slow := makeKeySetRankingFixture(t, tc.mode)
-			fastResult, fastScan := fast.builder.applyBoundedUniqueKeySet(fast.indexes, fast.node, &Snapshot{}, tc.sorted)
-			slowResult, slowScan := slow.builder.applyBoundedUniqueKeySetExhaustive(slow.indexes, slow.node, &Snapshot{}, tc.sorted)
+			fastResult, fastScan := fast.builder.applyBoundedUniqueKeySet(fast.indexes, fast.node, &Snapshot{}, tc.sorted, newIndexKeySetWorkBudget(), nil)
+			slowResult, slowScan := slow.builder.applyBoundedUniqueKeySetExhaustive(slow.indexes, slow.node, &Snapshot{}, tc.sorted, newIndexKeySetWorkBudget(), nil)
 			if tc.want == "" {
 				require.Equal(t, int32(-1), fastResult)
 				require.Equal(t, int32(-1), fastScan)
@@ -368,7 +368,7 @@ func TestBoundedUniqueKeySetCountMismatchFallsBackBeforePublish(t *testing.T) {
 			f.inB.GetF().Args[1].GetVec().Data = data
 		}
 	}
-	result, scan := f.builder.applyBoundedUniqueKeySet(f.indexes, f.node, &Snapshot{}, 1)
+	result, scan := f.builder.applyBoundedUniqueKeySet(f.indexes, f.node, &Snapshot{}, 1, newIndexKeySetWorkBudget(), nil)
 	require.GreaterOrEqual(t, result, int32(0))
 	require.GreaterOrEqual(t, scan, int32(0))
 	require.GreaterOrEqual(t, calls, 4) // one ranked attempt plus exhaustive candidates
@@ -505,8 +505,8 @@ func TestBoundedUniqueKeySetRankingDifferentialMatrix(t *testing.T) {
 					f.ctx.fail[name] = failBits&(1<<j) != 0
 				}
 			}
-			fid, fs := fast.builder.applyBoundedUniqueKeySet(fast.indexes, fast.node, &Snapshot{}, sorted)
-			sid, ss := slow.builder.applyBoundedUniqueKeySetExhaustive(slow.indexes, slow.node, &Snapshot{}, sorted)
+			fid, fs := fast.builder.applyBoundedUniqueKeySet(fast.indexes, fast.node, &Snapshot{}, sorted, newIndexKeySetWorkBudget(), nil)
+			sid, ss := slow.builder.applyBoundedUniqueKeySetExhaustive(slow.indexes, slow.node, &Snapshot{}, sorted, newIndexKeySetWorkBudget(), nil)
 			require.Equal(t, fid >= 0, sid >= 0)
 			if fid < 0 {
 				require.Len(t, fast.builder.qry.Nodes, 1)

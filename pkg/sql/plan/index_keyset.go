@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"hash/maphash"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,7 +26,270 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
+
+// This is an optimizer work budget, separate from the existing wire-size
+// limit. It bounds conservatively charged key encoding work for one scan, not
+// the query's total allocation or peak memory.
+const (
+	maxIndexKeySetPlanningWork uint64 = 1 << 20
+	indexKeySetEncodingPasses  uint64 = 3
+	indexKeySetTupleOverhead   uint64 = 128
+)
+
+type indexKeySetInputBound struct {
+	column int32
+	count  int
+	bytes  uint64
+	ok     bool
+}
+
+type indexKeySetWorkBudget struct {
+	remaining uint64
+	inputs    map[*plan.Expr]indexKeySetInputBound
+}
+
+func newIndexKeySetWorkBudget() *indexKeySetWorkBudget {
+	return &indexKeySetWorkBudget{remaining: maxIndexKeySetPlanningWork}
+}
+
+// inputBound is shared by candidates using the same IN filter. Reject a large
+// wire input before decoding or hashing it, and count each logical row even
+// when the vector stores a single constant value.
+func (budget *indexKeySetWorkBudget) inputBound(expr *plan.Expr) indexKeySetInputBound {
+	if budget.inputs != nil {
+		if bound, ok := budget.inputs[expr]; ok {
+			return bound
+		}
+	} else {
+		budget.inputs = make(map[*plan.Expr]indexKeySetInputBound)
+	}
+	bound := indexKeySetInputBound{}
+	defer func() { budget.inputs[expr] = bound }()
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 ||
+		fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetVec() == nil {
+		return bound
+	}
+	data := fn.Args[1].GetVec().GetData()
+	if len(data) == 0 || uint64(len(data)) > maxIndexKeySetPlanningWork/indexKeySetEncodingPasses {
+		return bound
+	}
+	column, count, ok := indexKeySetFilter(expr)
+	if !ok {
+		return bound
+	}
+	vec := vector.NewVec(makeTypeByPlan2Type(fn.Args[0].Typ))
+	if err := vec.UnmarshalBinary(data); err != nil {
+		return bound
+	}
+	var total uint64
+	for row := 0; row < count; row++ {
+		size, err := function.SerialEncodedValueSizeBound(vec, row)
+		if err != nil || size > maxIndexKeySetPlanningWork/indexKeySetEncodingPasses-total {
+			return bound
+		}
+		total += size
+		if vec.IsConst() {
+			if total > maxIndexKeySetPlanningWork/indexKeySetEncodingPasses/uint64(count) {
+				return bound
+			}
+			total *= uint64(count)
+			break
+		}
+	}
+	bound = indexKeySetInputBound{column: column, count: count, bytes: total, ok: true}
+	return bound
+}
+
+// literalBound follows the literal variant used by the expression executor,
+// which can differ from the expression's declared type after parameter binding.
+func indexKeySetLiteralBound(expr *plan.Expr) (uint64, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.Src != nil {
+		return 0, false
+	}
+	var typ types.T
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		// The executor materializes Sval as bytes even when Typ is numeric.
+		if !compositePointType(expr.Typ) {
+			return 0, false
+		}
+		size := uint64(len(value.Sval))
+		if size > (maxIndexKeySetPlanningWork-3)/2 {
+			return 0, false
+		}
+		return 2*size + 3, true
+	case *plan.Literal_Bval, *plan.Literal_Defaultval:
+		typ = types.T_bool
+	case *plan.Literal_I8Val:
+		typ = types.T_int8
+	case *plan.Literal_I16Val:
+		typ = types.T_int16
+	case *plan.Literal_I32Val:
+		typ = types.T_int32
+	case *plan.Literal_I64Val:
+		typ = types.T_int64
+	case *plan.Literal_U8Val:
+		typ = types.T_uint8
+	case *plan.Literal_U16Val:
+		typ = types.T_uint16
+	case *plan.Literal_U32Val:
+		typ = types.T_uint32
+	case *plan.Literal_U64Val:
+		typ = types.T_uint64
+	case *plan.Literal_Fval:
+		typ = types.T_float32
+	case *plan.Literal_Dval:
+		typ = types.T_float64
+	case *plan.Literal_Dateval:
+		typ = types.T_date
+	case *plan.Literal_Timeval:
+		typ = types.T_time
+	case *plan.Literal_Datetimeval:
+		typ = types.T_datetime
+	case *plan.Literal_Timestampval:
+		typ = types.T_timestamp
+	case *plan.Literal_Decimal64Val:
+		typ = types.T_decimal64
+	case *plan.Literal_Decimal128Val:
+		typ = types.T_decimal128
+	case *plan.Literal_EnumVal:
+		typ = types.T_enum
+	default:
+		return 0, false
+	}
+	// These executor variants use the declared type to allocate their fixed
+	// vector; reject inconsistent metadata instead of guessing its layout.
+	switch lit.Value.(type) {
+	case *plan.Literal_Timeval, *plan.Literal_Datetimeval, *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
+		if types.T(expr.Typ.Id) != typ {
+			return 0, false
+		}
+	}
+	return function.SerialEncodedTypeSizeBound(typ.ToType())
+}
+
+// estimate rejects unproved or dynamic equality operands instead of freezing
+// their current values into a key vector. It charges three passes to cover the
+// first tuple, a fast attempt, and a possible full folding fallback.
+func (budget *indexKeySetWorkBudget) estimate(filters []*plan.Expr, positions []int32) (uint64, bool) {
+	var input indexKeySetInputBound
+	var equalityBytes uint64
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(filters) || filters[pos] == nil {
+			return 0, false
+		}
+		fn := filters[pos].GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil {
+			return 0, false
+		}
+		switch fn.Func.ObjName {
+		case "in":
+			if input.ok {
+				return 0, false
+			}
+			input = budget.inputBound(filters[pos])
+			if !input.ok {
+				return 0, false
+			}
+		case "=":
+			value := fn.Args[1]
+			if !compositePointScalar(value) || !rule.IsConstant(value, false) {
+				return 0, false
+			}
+			var size uint64
+			var ok bool
+			if value.GetLit() != nil {
+				size, ok = indexKeySetLiteralBound(value)
+			} else {
+				size, ok = compositePointValueSize(value)
+			}
+			if !ok || size > maxIndexKeySetPlanningWork/indexKeySetEncodingPasses-equalityBytes {
+				return 0, false
+			}
+			equalityBytes += size
+		default:
+			return 0, false
+		}
+	}
+	if !input.ok {
+		return 0, false
+	}
+	singlePassLimit := budget.remaining / indexKeySetEncodingPasses
+	if singlePassLimit < indexKeySetTupleOverhead || input.bytes > singlePassLimit ||
+		equalityBytes > singlePassLimit-indexKeySetTupleOverhead {
+		return 0, false
+	}
+	perRow := equalityBytes + indexKeySetTupleOverhead
+	if perRow > (singlePassLimit-input.bytes)/uint64(input.count) {
+		return 0, false
+	}
+	return (input.bytes + perRow*uint64(input.count)) * indexKeySetEncodingPasses, true
+}
+
+func (budget *indexKeySetWorkBudget) charge(work uint64) bool {
+	if work > budget.remaining {
+		return false
+	}
+	budget.remaining -= work
+	return true
+}
+
+// revalidate runs after index resolution and before lowering. The resolver can
+// change plan expressions, so a previously cached bound must not be reused to
+// materialize a different input. The initial reservation is never refunded.
+func (budget *indexKeySetWorkBudget) revalidate(filters []*plan.Expr, positions []int32, reserved uint64, stats *plan.Stats, forced bool) bool {
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(filters) || filters[pos] == nil {
+			return false
+		}
+		delete(budget.inputs, filters[pos])
+	}
+	if budget.remaining > maxIndexKeySetPlanningWork || reserved > maxIndexKeySetPlanningWork-budget.remaining {
+		return false
+	}
+	remaining := budget.remaining
+	budget.remaining += reserved
+	actual, ok := budget.estimate(filters, positions)
+	budget.remaining = remaining
+	if !ok {
+		return false
+	}
+	for _, pos := range positions {
+		fn := filters[pos].GetF()
+		if fn != nil && fn.Func != nil && fn.Func.ObjName == "in" {
+			bound := budget.inputBound(filters[pos])
+			if !bound.ok || !indexKeySetWorthwhile(stats, bound.count, forced) {
+				return false
+			}
+		}
+	}
+	return actual <= reserved || budget.charge(actual-reserved)
+}
+
+// Restore plans use DefaultHugeStats as a placeholder, not as a measured
+// scan cost. Treat it as unknown for this optional key-set cost decision.
+func (builder *QueryBuilder) indexKeySetCostStats(stats *plan.Stats) *plan.Stats {
+	if builder.isRestore {
+		return nil
+	}
+	return stats
+}
+
+func indexKeySetWorthwhile(stats *plan.Stats, count int, forced bool) bool {
+	if forced || count <= 1 {
+		return true
+	}
+	cost := DefaultStats().Cost
+	if hasKnownScanCardinality(stats) && stats.Cost > 0 &&
+		!math.IsNaN(stats.Cost) && !math.IsInf(stats.Cost, 0) {
+		cost = stats.Cost
+	}
+	return float64(count) <= cost*0.1
+}
 
 // indexKeySetFilter recognizes a constant, non-NULL IN list that can be one
 // dimension of a composite-key point set. The other key parts must be equality
@@ -156,7 +420,7 @@ func keySetIndexSupported(idxDef *IndexDef) bool {
 // completeUniqueKeySetFilters finds one IN dimension and equality predicates
 // for every other user part. The returned positions still need lowering before
 // their cardinality can be used as an exact index-candidate bound.
-func completeUniqueKeySetFilters(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
+func completeUniqueKeySetFilters(idxDef *IndexDef, node *plan.Node, budget *indexKeySetWorkBudget) ([]int32, bool) {
 	if idxDef == nil || !idxDef.Unique || len(idxDef.Parts) < 2 ||
 		node == nil || node.TableDef == nil || len(node.BindingTags) == 0 || !keySetIndexSupported(idxDef) {
 		return nil, false
@@ -173,8 +437,10 @@ func completeUniqueKeySetFilters(idxDef *IndexDef, node *plan.Node) ([]int32, bo
 			equalities[col.ColPos] = int32(i)
 			continue
 		}
-		if pos, _, ok := indexKeySetFilter(expr); ok && fn.Args[0].GetCol().RelPos == node.BindingTags[0] {
-			sets[pos] = int32(i)
+		if fn.Func.ObjName == "in" {
+			if bound := budget.inputBound(expr); bound.ok && fn.Args[0].GetCol().RelPos == node.BindingTags[0] {
+				sets[bound.column] = int32(i)
+			}
 		}
 	}
 	filters := make([]int32, 0, len(idxDef.Parts))

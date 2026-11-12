@@ -398,4 +398,3 @@ select id,payload from keyset_duplicates force index(ix_ab)
 where a=1 and b in ('alpha','beta') order by id;
 
 drop database mysql_compat_index_hint;
-
