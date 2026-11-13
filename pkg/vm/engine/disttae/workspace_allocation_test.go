@@ -95,7 +95,7 @@ func TestWorkspaceAllocationStatementRollbackRetainsEarlierWrites(t *testing.T) 
 			txn.tableCache = new(sync.Map)
 			txn.tablesInVain = make(map[uint64]int)
 			txn.batchSelectList = make(map[*batch.Batch][]int64)
-			txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 			txn.writeWorkspaceThreshold, txn.commitWorkspaceThreshold = 1<<40, 1<<40
 			op := newTxnOperatorForTestWithWorkspace(t, txn)

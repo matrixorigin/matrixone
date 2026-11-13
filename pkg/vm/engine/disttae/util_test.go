@@ -633,25 +633,26 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 }
 
 func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
+	const tableID uint64 = 42
 	delBlks := deletedBlocks{
-		offsets: map[types.Blockid][]int64{},
+		offsets: map[uint64]map[types.Blockid][]int64{},
 	}
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
 		bid, offset := row.Decode()
 
-		delBlks.offsets[*bid] = append(delBlks.offsets[*bid], int64(offset))
+		delBlks.addDeletedBlocks(tableID, bid, []int64{int64(offset)})
 	}
 
 	rowIds := make([]types.Rowid, 0)
 
-	delBlks.getDeletedRowIDs(func(row types.Rowid) {
+	delBlks.getDeletedRowIDs(tableID, func(row types.Rowid) {
 		rowIds = append(rowIds, row)
 	})
 
 	for i := range rowIds {
 		bid, offset := rowIds[i].Decode()
-		have, ok := delBlks.offsets[*bid]
+		have, ok := delBlks.offsets[tableID][*bid]
 		require.True(t, ok)
 		require.NotEqual(t, 0, len(have))
 
@@ -660,14 +661,20 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 	}
 
 	selected := rowIds[0].CloneBlockID()
-	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selected]))
-	delBlks.getDeletedRowIDsForBlocks([]types.Blockid{selected}, func(row types.Rowid) {
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[tableID][selected]))
+	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
 		scoped = append(scoped, row)
 	})
-	require.Len(t, scoped, len(delBlks.offsets[selected]))
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 	for i := range scoped {
 		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
 	}
+
+	otherTableRows := make([]types.Rowid, 0)
+	delBlks.getDeletedRowIDs(tableID+1, func(row types.Rowid) {
+		otherTableRows = append(otherTableRows, row)
+	})
+	require.Empty(t, otherTableRows)
 }
 
 func TestConcurrentExecutor_Run(t *testing.T) {
