@@ -47,9 +47,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type remoteCatalogTestEngine struct {
+	engine.Engine
+	activate func(context.Context, uint32) error
+}
+
+func (e *remoteCatalogTestEngine) ActivateTenantCatalog(ctx context.Context, accountID uint32) error {
+	return e.activate(ctx, accountID)
+}
+
+func TestActivateRemoteTenantCatalog(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 42)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	wantErr := errors.New("catalog activation failed")
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+		calls   int
+	}{
+		{name: "tenant", ctx: ctx, calls: 1},
+		{name: "system bootstrap", ctx: defines.AttachAccountId(t.Context(), catalog.System_Account)},
+		{name: "activation error", ctx: ctx, wantErr: wantErr, calls: 1},
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled, calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			e := &remoteCatalogTestEngine{activate: func(got context.Context, accountID uint32) error {
+				calls++
+				require.Equal(t, uint32(42), accountID)
+				require.Same(t, tc.ctx, got)
+				return tc.wantErr
+			}}
+			proc := testutil.NewProcess(t)
+			proc.Ctx = tc.ctx
+			c := &Compile{e: e, proc: proc}
+			require.ErrorIs(t, c.activateRemoteTenantCatalog(), tc.wantErr)
+			require.Equal(t, tc.calls, calls)
+		})
+	}
+	t.Run("missing account", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = context.Background()
+		c := &Compile{e: &remoteCatalogTestEngine{activate: func(context.Context, uint32) error {
+			t.Fatal("activation requires an account")
+			return nil
+		}}, proc: proc}
+		require.Error(t, c.activateRemoteTenantCatalog())
+	})
+	t.Run("engine without lazy catalog", func(t *testing.T) {
+		c := &Compile{e: mock_frontend.NewMockEngine(gomock.NewController(t))}
+		require.NoError(t, c.activateRemoteTenantCatalog())
+	})
+}
 
 func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 	const gib = uint64(1 << 30)
@@ -319,43 +375,79 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 }
 
 func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	messageCenter := &message.MessageCenter{
-		StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
-		RwMutex:       &sync.Mutex{},
+	activationErr := errors.New("catalog unavailable")
+	for _, tc := range []struct {
+		name          string
+		account       uint32
+		activationErr error
+		stop          bool
+	}{
+		{name: "decode error", account: catalog.System_Account},
+		{name: "catalog activation error", account: 42, activationErr: activationErr},
+		{name: "stop during activation", account: 42, activationErr: context.Canceled, stop: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(t.Context(), tc.account)
+			mockEngine := mock_frontend.NewMockEngine(ctrl)
+			messageCenter := &message.MessageCenter{
+				StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
+				RwMutex:       &sync.Mutex{},
+			}
+			mockEngine.EXPECT().GetMessageCenter().Return(messageCenter).AnyTimes()
+			server := colexec.NewServer("")
+			t.Cleanup(func() { server.RemoveRelatedPipeline(nil, 0) })
+			calls := 0
+			eng := &remoteCatalogTestEngine{Engine: mockEngine, activate: func(got context.Context, accountID uint32) error {
+				calls++
+				require.Equal(t, tc.account, accountID)
+				if tc.stop {
+					server.CancelPipelineSending(nil, 0)
+					require.ErrorIs(t, context.Cause(got), process.ErrPipelineStopped)
+					return got.Err()
+				}
+				return tc.activationErr
+			}}
+			testTxnID := make([]byte, 16)
+			copy(testTxnID, "decode-error-txn")
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
+			txnOperator.EXPECT().GetWorkspace().Return(nil).AnyTimes()
+			receiver := &messageReceiverOnServer{
+				colexecServer: server,
+				messageCtx:    ctx,
+				connectionCtx: ctx,
+				messageTyp:    pipeline.Method_PipelineMessage,
+				cnInformation: cnInformation{
+					cnAddr:      "test-addr",
+					storeEngine: eng,
+				},
+				procBuildHelper: processHelper{
+					id:          "test-proc-id",
+					accountId:   tc.account,
+					unixTime:    time.Now().Unix(),
+					txnOperator: txnOperator,
+				},
+				scopeData:    []byte{0xff},
+				needNotReply: true,
+			}
+			if tc.activationErr != nil {
+				var err error
+				receiver.scopeData, err = (&pipeline.Pipeline{PipelineType: pipeline.Pipeline_Normal}).Marshal()
+				require.NoError(t, err)
+			}
+			err := handlePipelineMessage(receiver)
+			if tc.activationErr != nil {
+				require.ErrorIs(t, err, tc.activationErr)
+				require.Equal(t, 1, calls)
+			} else {
+				require.Error(t, err)
+				require.Zero(t, calls)
+			}
+			require.NoError(t, ctx.Err(), "stopping one pipeline must not cancel its message context")
+			require.Empty(t, messageCenter.StmtIDToBoard, "failed admission must unregister the remote message board")
+		})
 	}
-	mockEngine.EXPECT().GetMessageCenter().Return(messageCenter).AnyTimes()
-
-	testTxnID := make([]byte, 16)
-	copy(testTxnID, "decode-error-txn")
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
-
-	receiver := &messageReceiverOnServer{
-		colexecServer: colexec.GetServer(""),
-		messageCtx:    ctx,
-		connectionCtx: ctx,
-		messageTyp:    pipeline.Method_PipelineMessage,
-		cnInformation: cnInformation{
-			cnAddr:      "test-addr",
-			storeEngine: mockEngine,
-		},
-		procBuildHelper: processHelper{
-			id:          "test-proc-id",
-			accountId:   catalog.System_Account,
-			unixTime:    time.Now().Unix(),
-			txnOperator: txnOperator,
-		},
-		scopeData: []byte{0xff},
-	}
-
-	err := handlePipelineMessage(receiver)
-	require.Error(t, err)
-	require.Empty(t, messageCenter.StmtIDToBoard, "compile cleanup should unregister the remote message board on decode errors")
 }
 
 // TestGenerateProcessHelper_WithSnapshot tests process helper generation from snapshot.

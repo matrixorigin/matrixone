@@ -119,7 +119,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 					workspace = cli.op.GetWorkspace().(*Transaction)
 					t.Cleanup(workspace.proc.Free)
 				}
-				if query == catalog.MoColumnsBatchQuery {
+				if query == catalog.BuildMoColumnsBatchQuery([]uint32{0}) {
 					if replayErr != nil {
 						if tc.canceled {
 							cancel()

@@ -294,20 +294,13 @@ func insertCatalogTableForResetTest(
 ) {
 	t.Helper()
 
-	packer := types.NewPacker()
-	defer packer.Close()
-	bat, err := catalog.GenCreateTableTuple(catalog.Table{
+	insertCatalogTableForTest(t, eng, txn, catalog.Table{
 		AccountId:    accountID,
 		DatabaseId:   databaseID,
 		DatabaseName: databaseName,
 		TableId:      tableID,
 		TableName:    tableName,
-	}, txn.proc.Mp(), packer)
-	require.NoError(t, err)
-	defer bat.Clean(txn.proc.Mp())
-	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
-	require.NoError(t, err)
-	eng.GetLatestCatalogCache().InsertTable(bat)
+	}, types.TS{})
 }
 
 func TestReusableRelationHandleResetDoesNotMutateSharedTable(t *testing.T) {

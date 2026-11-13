@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +64,8 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
 			for _, q := range []string{
+				"drop snapshot if exists lazy_remote_snapshot",
+				"drop account if exists lazy_remote_owner",
 				"drop snapshot if exists lazy_admission_snapshot",
 				"drop account if exists lazy_snapshot_owner",
 				"drop account if exists lazy_quota_owner",
@@ -102,6 +106,60 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			require.NoError(t, restored.QueryRowContext(ctx, "select count(*) from lazy_admission_db.t").Scan(&count))
 			require.Equal(t, 1, count)
 			require.NoError(t, restored.Close())
+		})
+
+		t.Run("remote execution activates a cold catalog", func(t *testing.T) {
+			cn0, err := cluster.GetCNService(0)
+			require.NoError(t, err)
+			service0 := cn0.RawService().(cnservice.Service)
+			eng0 := service0.GetEngine().(*disttae.Engine)
+			service1 := cn1.RawService().(cnservice.Service)
+			require.Eventually(t, func() bool {
+				for _, service := range []cnservice.Service{service0, service1} {
+					clusterservice.GetMOCluster(service.ID()).ForceRefresh(true)
+					nodes, err := service.GetEngine().Nodes(false, "sys", "dump", nil)
+					if err != nil || len(nodes) != 2 {
+						return false
+					}
+				}
+				return true
+			}, 15*time.Second, 100*time.Millisecond)
+
+			execSQLRequire(t, ctx, sys0, "create account lazy_remote_owner admin_name 'admin' identified by '111'")
+			tenant := open(t, 0, "lazy_remote_owner#admin#accountadmin")
+			for _, q := range []string{
+				"create database lazy_remote_db",
+				"create table lazy_remote_db.src(id int primary key)",
+				"create table lazy_remote_db.dst(id int auto_increment primary key, v int)",
+				"insert into lazy_remote_db.src values(1)",
+			} {
+				execSQLRequire(t, ctx, tenant, q)
+			}
+			sourceID := accountID(t, "lazy_remote_owner")
+			require.False(t, eng1.PushClient().CanServeAccount(sourceID, types.MaxTs().ToTimestamp()))
+			oldForce := plan2.GetForceScanOnMultiCN()
+			plan2.SetForceScanOnMultiCN(true)
+			defer plan2.SetForceScanOnMultiCN(oldForce)
+			execSQLRequire(t, ctx, tenant, "insert into lazy_remote_db.dst(v) select id from lazy_remote_db.src")
+			require.True(t, eng1.PushClient().CanServeAccount(sourceID, types.MaxTs().ToTimestamp()),
+				"the remote pipeline must activate its own catalog")
+			var id, value int
+			require.NoError(t, tenant.QueryRowContext(ctx, "select id,v from lazy_remote_db.dst").Scan(&id, &value))
+			require.Equal(t, 1, id)
+			require.Equal(t, 1, value)
+
+			execSQLRequire(t, ctx, sys1, "create snapshot lazy_remote_snapshot for account lazy_remote_owner")
+			require.NoError(t, tenant.Close())
+			execSQLRequire(t, ctx, sys1, "drop account lazy_remote_owner")
+			execSQLRequire(t, ctx, sys1, "restore account lazy_remote_owner {snapshot=lazy_remote_snapshot}")
+			targetID := accountID(t, "lazy_remote_owner")
+			require.NotEqual(t, sourceID, targetID)
+			require.True(t, eng0.PushClient().CanServeAccount(targetID, types.MaxTs().ToTimestamp()),
+				"restore must activate the recreated account on the remote CN before login")
+			restored := open(t, 0, "lazy_remote_owner#admin#accountadmin")
+			require.NoError(t, restored.QueryRowContext(ctx, "select id,v from lazy_remote_db.dst").Scan(&id, &value))
+			require.Equal(t, 1, id)
+			require.Equal(t, 1, value)
 		})
 
 		t.Run("cold CN cannot overrun branch quota", func(t *testing.T) {
