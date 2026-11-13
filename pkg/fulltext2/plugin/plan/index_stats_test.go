@@ -27,7 +27,7 @@ import (
 func TestMoIndexStatsFulltext2Configuration(t *testing.T) {
 	source := &pbplan.TableDef{Pkey: &pbplan.PrimaryKeyDef{PkeyColName: "id"}}
 	for _, tc := range []struct{ params, parser string }{
-		{"", "ngram"}, {`{"parser":"default"}`, "ngram"}, {`{"parser":"JSON","async":"false"}`, "json"},
+		{"", "ngram"}, {`{"parser":"default"}`, "ngram"}, {`{"parser":"JSON","async":"false","token_filter":"stop"}`, "json"},
 	} {
 		defs := []*pbplan.IndexDef{
 			{IndexAlgoTableType: catalog.FullText2Index_TblType_Metadata, IndexTableName: "meta", Parts: []string{"body", "title"}, IndexAlgoParams: tc.params},
@@ -39,6 +39,9 @@ func TestMoIndexStatsFulltext2Configuration(t *testing.T) {
 		require.Equal(t, int64(2), cfg.FullTextVersion)
 		require.True(t, cfg.Async)
 		require.Equal(t, tc.parser, cfg.Parser)
+		if tc.parser == "json" {
+			require.Equal(t, []string{"stop"}, cfg.TokenFilters)
+		}
 		require.Equal(t, []string{"body", "title"}, cfg.Columns)
 		require.Equal(t, "meta", cfg.Metadata)
 		require.Equal(t, "segments", cfg.Entries)

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,12 +45,12 @@ const (
 )
 
 const (
-	ISCPJobState_Invalid int8 = iota
-	ISCPJobState_Pending
-	ISCPJobState_Running
-	ISCPJobState_Completed
-	ISCPJobState_Error
-	ISCPJobState_Canceled
+	ISCPJobState_Invalid   = iscpmeta.StateInvalid
+	ISCPJobState_Pending   = iscpmeta.StatePending
+	ISCPJobState_Running   = iscpmeta.StateRunning
+	ISCPJobState_Completed = iscpmeta.StateCompleted
+	ISCPJobState_Error     = iscpmeta.StateError
+	ISCPJobState_Canceled  = iscpmeta.StateCanceled
 )
 
 type DataRetriever interface {

@@ -24,6 +24,7 @@ type Config struct {
 	FullTextVersion                            int64
 	Columns                                    []string
 	Parser                                     string
+	TokenFilters                               []string
 	Database, Table, Index, Column, PrimaryKey string
 	Metadata, Centroids, Entries               string
 	OpType, Quantization                       string

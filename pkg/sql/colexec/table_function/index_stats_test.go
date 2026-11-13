@@ -164,17 +164,17 @@ func TestMoIndexStatsZeroGeometryIsPresentButUnavailableGeometryIsOmitted(t *tes
 	require.Equal(t, "incomplete_vectors", metrics["status"])
 }
 
-func TestMoIndexStatsEntrySQLUsesOriginalQuantizedVectorsAndSafeIdentifiers(t *testing.T) {
-	cfg := indexstats.Config{Database: "db`name", Table: "source", Entries: "entries`name", Column: "vec`name", PrimaryKey: "id"}
-	query := buildIndexStatsEntriesSQL(cfg, 3, true, true)
+func TestMoIndexStatsEntrySQLUsesBoundedIndexReads(t *testing.T) {
+	cfg := indexstats.Config{Database: "db`name", Table: "source", Entries: "entries`name"}
+	query := buildIndexStatsEntriesSQL(cfg, 3, true)
 	require.Contains(t, query, "`db``name`.`entries``name`")
-	require.Contains(t, query, "`src`.`vec``name`")
-	require.Contains(t, query, "LEFT JOIN `db``name`.`source`")
-	require.NotContains(t, query, "__mo_index_centroid_fk_entry")
-	require.Contains(t, query, "WHERE `e`.`__mo_index_centroid_fk_version` = 3")
-	query = buildIndexStatsEntriesSQL(cfg, 0, false, true)
 	require.NotContains(t, query, "JOIN")
-	require.NotContains(t, query, "vec``name")
+	require.Contains(t, query, "`e`.`__mo_index_centroid_fk_entry`")
+	require.Contains(t, query, "WHERE `e`.`__mo_index_centroid_fk_version` = 3")
+	query = buildIndexStatsEntriesSQL(cfg, 0, false)
+	require.Contains(t, query, "COUNT(*)")
+	require.Contains(t, query, "GROUP BY `e`.`__mo_index_centroid_fk_id`")
+	require.NotContains(t, query, "__mo_index_centroid_fk_entry")
 }
 
 func TestMoIndexStatsStreamingPropagatesErrorsAndReleasesBatches(t *testing.T) {
@@ -293,4 +293,35 @@ func TestMoIndexStatsBlockScaledVectorDecoding(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMoIndexStatsCountOnlyUsesAggregates(t *testing.T) {
+	proc := testutil.NewProc(t)
+	oldSQL, oldStream, oldStorage := indexStatsRunSQL, indexStatsRunStreaming, indexStatsReadStorage
+	t.Cleanup(func() {
+		indexStatsRunSQL, indexStatsRunStreaming, indexStatsReadStorage = oldSQL, oldStream, oldStorage
+	})
+	indexStatsReadStorage = func(*process.Process, *sqlexec.SqlProcess, indexstats.Config) (map[string]any, error) {
+		return nil, nil
+	}
+	indexStatsRunSQL = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "`meta`") {
+			return statsTestBatch(proc.Mp(), statsTestInts(t, proc.Mp(), 7)), nil
+		}
+		return statsTestBatch(proc.Mp(), statsTestInts(t, proc.Mp(), 1, 2), statsTestVectors(t, proc.Mp(), []float64{0}, []float64{1})), nil
+	}
+	indexStatsRunStreaming = func(ctx context.Context, _ *sqlexec.SqlProcess, sql string, results chan executor.Result, _ chan error) (executor.Result, error) {
+		require.Contains(t, sql, "COUNT(*)")
+		require.Contains(t, sql, "GROUP BY")
+		results <- statsTestBatch(proc.Mp(), statsTestInts(t, proc.Mp(), 1), statsTestInts(t, proc.Mp(), 1000000))
+		return executor.Result{}, nil
+	}
+	tf := &TableFunction{}
+	state := &indexStatsState{config: indexstats.Config{Metadata: "meta", OpType: "vector_cosine_ops"}}
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.Equal(t, int64(1000000), state.summary.Count)
+	require.Equal(t, int64(1), state.summary.Empty)
+	require.Equal(t, "center_stats_unsupported_distance", state.rowMetrics(nil)["status"])
+	state.free(tf, proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
 }

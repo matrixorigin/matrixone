@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -154,17 +153,20 @@ func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProces
 	}
 	query := fmt.Sprintf("SELECT CAST(job_state AS BIGINT), watermark, CAST(job_status AS VARCHAR) "+
 		"FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d AND job_name = %s "+
-		"AND drop_at IS NULL ORDER BY job_id DESC LIMIT 1", accountID, cfg.TableID, sqlquote.String("index_"+cfg.Index))
-	// The log is owned by sys. Only the execution identity changes; its tenant
-	// filter above and the historical timestamp remain bound to the source read.
-	systemSQL := *sqlproc
-	systemSQL.WithExecutionIdentity(catalog.System_Account, catalog.MO_CATALOG)
-	res, err := indexStatsRunSQL(&systemSQL, query)
+		"AND drop_at IS NULL ORDER BY job_id DESC LIMIT 1", accountID, cfg.TableID, sqlquote.String(iscpmeta.IndexJobName(cfg.Index)))
+	metrics := map[string]any{"status": "task_missing", "caught_up": nil, "lag_seconds": nil}
+	// Tenant snapshots do not retain sys-owned job history. Observe the task
+	// in a fresh system transaction, keeping its tenant/table/index filter.
+	res, err := indexStatsRunCurrentSQL(proc.Ctx, proc.GetService(), catalog.System_Account, catalog.MO_CATALOG, query)
 	if err != nil {
-		return nil, err
+		if proc.Ctx.Err() != nil {
+			return nil, proc.Ctx.Err()
+		}
+		metrics["status"] = "task_status_unavailable"
+		return metrics, nil
 	}
 	defer res.Close()
-	metrics := map[string]any{"status": "task_missing", "caught_up": nil, "lag_seconds": nil}
+
 	for _, bat := range res.Batches {
 		if bat.RowCount() == 0 {
 			continue
@@ -176,19 +178,12 @@ func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProces
 		}
 		if !bat.Vecs[2].IsNull(0) {
 			if err := json.Unmarshal(bat.Vecs[2].GetBytesAt(0), &status); err != nil {
-				return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: invalid async job status")
+				metrics["status"] = "job_status_unavailable"
+				return metrics, nil
 			}
 		}
 		state := vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
-		taskState := "running"
-		if state == int64(catalog.MoISCPJobStateError) {
-			taskState = "stopped"
-		} else if state == int64(iscp.ISCPJobState_Canceled) {
-			taskState = "canceled"
-		} else if status.ErrorCode != 0 {
-			taskState = "retrying"
-		}
-		metrics["task_state"] = taskState
+		metrics["task_state"] = iscpmeta.StateName(int8(state), status.ErrorCode)
 		if status.ErrorCode != 0 {
 			metrics["error_code"] = status.ErrorCode
 		}
@@ -226,18 +221,4 @@ func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProces
 	return metrics, nil
 }
 
-func indexStatsWatermark(value string) (types.TS, bool) {
-	physical, logical, ok := strings.Cut(value, "-")
-	if !ok {
-		return types.TS{}, false
-	}
-	p, err := strconv.ParseInt(physical, 10, 64)
-	if err != nil || p <= 0 || p == math.MaxInt64 {
-		return types.TS{}, false
-	}
-	l, err := strconv.ParseUint(logical, 10, 32)
-	if err != nil {
-		return types.TS{}, false
-	}
-	return types.BuildTS(p, uint32(l)), true
-}
+func indexStatsWatermark(value string) (types.TS, bool) { return iscpmeta.ParseWatermark(value) }

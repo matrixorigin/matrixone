@@ -23,21 +23,21 @@ import (
 )
 
 type Bucket struct {
-	ID        int64
-	Count     int64
-	Valid     int64
-	Center    []float64
-	meanDelta []float64
-	residual  float64
-	squared   float64
+	ID, Count, Valid int64
+	Center           []float64
+	// Resolution is the per-coordinate reconstruction uncertainty (zero for exact input).
+	Resolution     float64
+	meanDelta      []float64
+	scale, squared float64
+	status         string
 }
 
 func NewBucket(id int64, center []float64) *Bucket {
 	return &Bucket{ID: id, Center: center, meanDelta: make([]float64, len(center))}
 }
 
-// Add counts every entry. A missing vector is counted but cannot contribute
-// geometry. A NULL center is the untrained-index placeholder.
+// Add counts entries independently of geometry. Scaled squares avoid overflow
+// in a dimensionless measurement; unrepresentable subtraction disables only geometry.
 func (b *Bucket) Add(x []float64) error {
 	if x != nil && b.Center != nil && len(x) != len(b.Center) {
 		return moerr.NewInvalidInputNoCtxf("centroid %d: vector dimension %d differs from center dimension %d", b.ID, len(x), len(b.Center))
@@ -48,49 +48,72 @@ func (b *Bucket) Add(x []float64) error {
 		}
 	}
 	b.Count++
-	if x == nil || len(b.Center) == 0 {
+	if x == nil || len(b.Center) == 0 || b.status != "" {
 		return nil
 	}
 	b.Valid++
-	var squared float64
+	n := float64(b.Valid)
 	for i, v := range x {
 		delta := v - b.Center[i]
-		// Average residual vectors rather than subtracting two large means.
-		b.meanDelta[i] += (delta - b.meanDelta[i]) / float64(b.Valid)
-		squared += delta * delta
-	}
-	b.squared += squared
-	b.residual += math.Sqrt(squared)
-	if math.IsInf(b.squared, 0) || math.IsInf(b.residual, 0) {
-		return moerr.NewInvalidInputNoCtxf("centroid %d: residual overflow", b.ID)
+		if math.IsInf(delta, 0) {
+			b.status = "center_stats_overflow"
+			return nil
+		}
+		b.meanDelta[i] = b.meanDelta[i]*(1-1/n) + delta/n
+		if math.IsInf(b.meanDelta[i], 0) || math.IsNaN(b.meanDelta[i]) {
+			b.status = "center_stats_overflow"
+			return nil
+		}
+		a := math.Abs(delta)
+		if a > b.scale {
+			r := b.scale / a
+			b.squared = b.squared * r * r
+			b.scale = a
+		}
+		if b.scale > 0 {
+			r := delta / b.scale
+			b.squared += r * r
+		}
 	}
 	return nil
 }
 
-// Geometry contains L2 distances in the original vector's units. Mismatch is
-// n*||mean-center||^2 / sum(||x-center||^2), NOT an estimate of recall loss.
-type Geometry struct {
-	MeanResidual, RMSResidual, CenterShift, Mismatch float64
+// Geometry contains only the dimensionless fixed-partition L2 mismatch.
+// It does not estimate recall or reconstruction of clipped original vectors.
+type Geometry struct{ Mismatch float64 }
+
+func (b *Bucket) GeometryStatus() string {
+	if b.status != "" {
+		return b.status
+	}
+	if b.Resolution > 0 && b.Count > 0 && b.Valid == b.Count && len(b.Center) > 0 {
+		if b.scale == 0 {
+			return "center_stats_quantization_limited"
+		}
+		r := b.Resolution / b.scale
+		if b.squared <= float64(b.Count)*float64(len(b.Center))*r*r {
+			return "center_stats_quantization_limited"
+		}
+	}
+	return ""
 }
 
 func (b *Bucket) Geometry() (Geometry, bool) {
-	if b.Count == 0 || b.Valid != b.Count {
+	if b.Count == 0 || b.Valid != b.Count || b.GeometryStatus() != "" {
 		return Geometry{}, false
 	}
-	shiftSquared := float64(0)
-	for _, delta := range b.meanDelta {
-		shiftSquared += delta * delta
+	var shift float64
+	if b.scale > 0 {
+		for _, v := range b.meanDelta {
+			r := v / b.scale
+			shift += r * r
+		}
 	}
 	ratio := float64(0)
 	if b.squared > 0 {
-		ratio = math.Min(1, float64(b.Count)*shiftSquared/b.squared)
+		ratio = math.Min(1, float64(b.Count)*shift/b.squared)
 	}
-	return Geometry{
-		MeanResidual: b.residual / float64(b.Count),
-		RMSResidual:  math.Sqrt(b.squared / float64(b.Count)),
-		CenterShift:  math.Sqrt(shiftSquared),
-		Mismatch:     ratio,
-	}, true
+	return Geometry{Mismatch: ratio}, true
 }
 
 type Summary struct {
@@ -98,11 +121,12 @@ type Summary struct {
 	CV                                float64
 	Geometry                          Geometry
 	HasGeometry                       bool
+	Status                            string
 }
 
 func Summarize(buckets []*Bucket) Summary {
 	s := Summary{Centroids: int64(len(buckets))}
-	var mean, m2, squared, residual, shiftSquared float64
+	var mean, m2, scale, squared, numerator float64
 	complete := true
 	for i, b := range buckets {
 		s.Count += b.Count
@@ -121,22 +145,29 @@ func Summarize(buckets []*Bucket) Summary {
 		}
 		g, ok := b.Geometry()
 		complete = complete && ok
-		residual += b.residual
-		squared += b.squared
-		shiftSquared += float64(b.Count) * g.CenterShift * g.CenterShift
+		if status := b.GeometryStatus(); s.Status == "" {
+			s.Status = status
+		}
+		if b.scale > scale {
+			r := scale / b.scale
+			squared *= r * r
+			numerator *= r * r
+			scale = b.scale
+		}
+		if scale > 0 {
+			r := b.scale / scale
+			weight := b.squared * r * r
+			squared += weight
+			numerator += weight * g.Mismatch
+		}
 	}
 	if mean > 0 {
 		s.CV = math.Sqrt(m2/float64(len(buckets))) / mean
 	}
 	if complete && s.Count > 0 {
 		s.HasGeometry = true
-		s.Geometry = Geometry{
-			MeanResidual: residual / float64(s.Count),
-			RMSResidual:  math.Sqrt(squared / float64(s.Count)),
-			CenterShift:  math.Sqrt(shiftSquared / float64(s.Count)),
-		}
 		if squared > 0 {
-			s.Geometry.Mismatch = math.Min(1, shiftSquared/squared)
+			s.Geometry.Mismatch = math.Min(1, numerator/squared)
 		}
 	}
 	return s

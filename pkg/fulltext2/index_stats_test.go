@@ -17,9 +17,16 @@ package fulltext2
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,4 +85,52 @@ func TestMoIndexStatsFulltext2EmptyAndCancellation(t *testing.T) {
 	cancel()
 	_, err = idx.Stats(ctx)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestMoIndexStatsFulltext2DFUsesHeader(t *testing.T) {
+	seg := loadedHeaderOnlySegment(t, 7)
+	idx := &Index{segments: []*Segment{seg}, liveOrd: [][]bool{nil}, globalN: 7}
+	stats, err := idx.Stats(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), stats.Terms)
+	require.Equal(t, int64(7), stats.MinDF)
+	require.Equal(t, float64(7), stats.MeanDF)
+}
+
+func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
+	oldSQL, oldCache := runSql, veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache.Destroy(); veccache.Cache = oldCache; runSql = oldSQL })
+	reader := loadedSearch(t)
+	reader.genValid = true
+	reader.loadedTs = 11
+	reader.loadedTail = 22
+	entry := &veccache.VectorIndexSearch{Algo: reader}
+	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	entry.Status.Store(1)
+	veccache.Cache.IndexMap.Store("stats_warm", entry)
+	n := 0
+	mp := mpool.MustNewZero()
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		n++
+		v := int64(11)
+		if n%2 == 0 {
+			v = 22
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+	}
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(t.Context(), "", nil, 0, nil))
+	got, err := ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
+	require.NoError(t, err)
+	want, err := reader.Stats(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, 2, n)
+	reader.loadedTail = 99
+	_, err = ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
+	require.ErrorContains(t, err, "read snapshot is unavailable", "a different generation must never serve the statement")
 }
