@@ -18,8 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +43,8 @@ type closeErrorListener struct {
 
 type testMOServerBaseService struct {
 	MockBaseService
-	id string
+	id              string
+	sessionMgrPanic error
 }
 
 func (s *testMOServerBaseService) ID() string {
@@ -48,6 +52,9 @@ func (s *testMOServerBaseService) ID() string {
 }
 
 func (s *testMOServerBaseService) SessionMgr() *queryservice.SessionManager {
+	if s.sessionMgrPanic != nil {
+		panic(s.sessionMgrPanic)
+	}
 	return nil
 }
 
@@ -129,6 +136,69 @@ func TestMOServerEmptyUnixAddressUsesTCPOnly(t *testing.T) {
 	rebound, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	require.NoError(t, rebound.Close())
+}
+
+func TestMOServerConstructorFailureReleasesResources(t *testing.T) {
+	for _, network := range []string{"session-manager", "tcp", "unix"} {
+		t.Run(network, func(t *testing.T) {
+			address := "127.0.0.1:0"
+			var occupied net.Listener
+			if network != "session-manager" {
+				var err error
+				occupied, err = net.Listen("tcp", address)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = occupied.Close() })
+				address = occupied.Addr().String()
+			}
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 1
+			pu.SV.UnixSocketAddress = ""
+			if network == "unix" {
+				require.NoError(t, occupied.Close())
+				// Filesystem preflight succeeds; only the Unix bind must fail.
+				pu.SV.UnixSocketAddress = filepath.Join(t.TempDir(), strings.Repeat("s", 160))
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel() // Also retires old-code workers in the negative control.
+			service := &testMOServerBaseService{id: t.Name()}
+			if network == "session-manager" {
+				service.sessionMgrPanic = errors.New("injected session manager panic")
+			}
+			var failure any
+			func() {
+				defer func() { failure = recover() }()
+				NewMOServer(ctx, address, pu, nil, service)
+			}()
+			require.NotNil(t, failure)
+			if network == "session-manager" {
+				require.Same(t, service.sessionMgrPanic, failure, "cleanup must preserve the original panic")
+			} else {
+				require.Contains(t, fmt.Sprint(failure), "listen "+network)
+			}
+			if network == "unix" {
+				require.Contains(t, fmt.Sprint(failure), pu.SV.UnixSocketAddress)
+			}
+			require.NoError(t, ctx.Err(), "constructor cleanup must not cancel its caller")
+			manager := getRtMgr(service.id)
+			require.NotNil(t, manager)
+			if !assert.ErrorIs(t, manager.ctx.Err(), context.Canceled) {
+				cancel() // Release old-code workers before checking the listener.
+			}
+			joined := make(chan struct{})
+			go func() { manager.workerWG.Wait(); close(joined) }()
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Fatal("frontend constructor left its routine manager worker running")
+			}
+			if network == "unix" {
+				rebound, err := net.Listen("tcp", address)
+				require.NoError(t, err, "Unix bind failure must release the earlier TCP listener")
+				require.NoError(t, rebound.Close())
+			}
+		})
+	}
 }
 
 func TestMOServerStopJoinsConnectionCleanup(t *testing.T) {

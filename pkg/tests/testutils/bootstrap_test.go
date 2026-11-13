@@ -16,6 +16,7 @@ package testutils
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -40,25 +41,54 @@ func TestWaitSystemBootstrapReturnsAfterAllTaskTablesExist(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestWaitSystemBootstrapRetriesAfterRowScanError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mock.ExpectQuery("show tables from mo_task").
-		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).AddRow(nil)).
-		RowsWillBeClosed()
-	mock.ExpectQuery("show tables from mo_task").
-		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).
-			AddRow("sys_async_task").
-			AddRow("sys_cron_task").
-			AddRow("sys_daemon_task").
-			AddRow("sql_task").
-			AddRow("sql_task_run")).
-		RowsWillBeClosed()
-
-	require.NoError(t, WaitSystemBootstrap(context.Background(), db))
-	require.NoError(t, mock.ExpectationsWereMet())
+func TestWaitSystemBootstrapRequiresCompleteObservation(t *testing.T) {
+	allTables := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"table_name"}).
+			AddRow("sys_async_task").AddRow("sys_cron_task").
+			AddRow("sys_daemon_task").AddRow("sql_task").AddRow("sql_task_run")
+	}
+	withoutAsync := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"table_name"}).
+			AddRow("sys_cron_task").AddRow("sys_daemon_task").
+			AddRow("sql_task").AddRow("sql_task_run")
+	}
+	for _, tc := range []struct {
+		name         string
+		observations []*sqlmock.Rows
+	}{
+		{"scan_error", []*sqlmock.Rows{
+			sqlmock.NewRows([]string{"table_name"}).AddRow(nil),
+		}},
+		{"partial_scan_error", []*sqlmock.Rows{
+			sqlmock.NewRows([]string{"table_name"}).AddRow("sys_async_task").AddRow(nil),
+			withoutAsync(),
+		}},
+		{"partial_iteration_error", []*sqlmock.Rows{
+			sqlmock.NewRows([]string{"table_name"}).
+				AddRow("sys_async_task").AddRow("ignored").
+				RowError(1, errors.New("interrupted table enumeration")),
+			withoutAsync(),
+		}},
+		{"disjoint_successful_observations", []*sqlmock.Rows{
+			sqlmock.NewRows([]string{"table_name"}).AddRow("sys_async_task"),
+			withoutAsync(),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			for _, observation := range tc.observations {
+				mock.ExpectQuery("show tables from mo_task").
+					WillReturnRows(observation).RowsWillBeClosed()
+			}
+			// Only this complete observation can establish readiness.
+			mock.ExpectQuery("show tables from mo_task").
+				WillReturnRows(allTables()).RowsWillBeClosed()
+			require.NoError(t, WaitSystemBootstrap(t.Context(), db))
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestWaitSystemBootstrapReturnsContextErrorWhenCanceled(t *testing.T) {
