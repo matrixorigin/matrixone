@@ -759,9 +759,11 @@ func (s *Scanner) scanBindVar() (int, string) {
 func (s *Scanner) scanNumber() (int, string) {
 	start := s.Pos
 	token := INTEGRAL
+	canPromoteToIdentifier := true
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 		goto exponent
@@ -803,6 +805,7 @@ func (s *Scanner) scanNumber() (int, string) {
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 	}
@@ -811,18 +814,24 @@ exponent:
 	if s.cur() == 'e' || s.cur() == 'E' {
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
+			canPromoteToIdentifier = false
 			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
 			s.inc()
 		} else {
+			if !canPromoteToIdentifier {
+				// A dotted mantissa cannot leave an invalid exponent as an alias.
+				s.inc()
+				return LEX_ERROR, s.buf[start:s.Pos]
+			}
 			goto exit
 		}
 		s.scanMantissa(10)
 	}
 
 exit:
-	if isLetter(s.cur()) {
+	if canPromoteToIdentifier && isLetter(s.cur()) {
 		// TODO: optimize
 		token = ID
 		s.scanIdentifier(false)
