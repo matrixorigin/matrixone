@@ -38,6 +38,13 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
   deleted elsewhere, as by TN garbage collection, are no longer read, and their entries
   are evicted.
 
+## Limits
+
+- **The index-file cache is sized for the indexes it serves.** As for HNSW and fulltext
+  index files, a CN's index-file cache is assumed to hold the entries objects its searches
+  read. When the objects one search holds exceed the cache, each further object is read
+  whole and evicted at once, and the search reads its ranges again from object storage.
+
 ## Alternatives
 
 - **Make the index-file cache the disk tier of index tables.** The read and prefetch path
