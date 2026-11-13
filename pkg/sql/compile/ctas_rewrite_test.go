@@ -75,8 +75,9 @@ func (c ctasDefaultDatabase) DefaultDatabase() string { return c.database }
 
 type ctasSQLHelper struct{ compilerContext any }
 
-func (h ctasSQLHelper) GetCompilerContext() any               { return h.compilerContext }
-func (ctasSQLHelper) ExecSql(string) ([][]interface{}, error) { return nil, nil }
+func (h ctasSQLHelper) GetCompilerContext() any                        { return h.compilerContext }
+func (ctasSQLHelper) CheckDatabaseWrite(context.Context, string) error { return nil }
+func (ctasSQLHelper) ExecSql(string) ([][]interface{}, error)          { return nil, nil }
 func (ctasSQLHelper) ExecSqlWithCtx(context.Context, string) ([][]interface{}, error) {
 	return nil, nil
 }
