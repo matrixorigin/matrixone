@@ -724,8 +724,8 @@ Table    Create Table
 enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL,\n  `name` enum('A','B','C') DEFAULT NULL\n)
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null        
-name    ENUM('A','B','C')    YES        null        
+id    int    YES        null        
+name    enum('A','B','C')    YES        null        
 select * from enum01;
 id    name
 1    null

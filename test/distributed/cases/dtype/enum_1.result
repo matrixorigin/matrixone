@@ -162,7 +162,7 @@ table03  ¦  CREATE TABLE `table03` (
 )
 desc table03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-type  ¦  ENUM('1','2','3','4','5')  ¦  NO  ¦    ¦  null  ¦    ¦  type
+type  ¦  enum('1','2','3','4','5')  ¦  NO  ¦    ¦  null  ¦    ¦  type
 drop table table03;
 create table t3 (id int);
 insert into t3 values (1);

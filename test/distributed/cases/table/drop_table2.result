@@ -9,7 +9,7 @@ Tables_in_drop_table2
 t1
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 drop table t1;
 show tables;
 Tables_in_drop_table2
@@ -19,8 +19,8 @@ Tables_in_drop_table2
 t1
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    INT(32)    YES        null        
+a    int    YES        null        
+b    int    YES        null        
 create table t2(a int);
 show tables;
 Tables_in_drop_table2
@@ -28,21 +28,21 @@ t1
 t2
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 rollback;
 show tables;
 Tables_in_drop_table2
 t1
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 begin;
 show tables;
 Tables_in_drop_table2
 t1
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 drop table t1;
 show tables;
 Tables_in_drop_table2
@@ -52,8 +52,8 @@ Tables_in_drop_table2
 t1
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    INT(32)    YES        null        
+a    int    YES        null        
+b    int    YES        null        
 create table t2(a int);
 show tables;
 Tables_in_drop_table2

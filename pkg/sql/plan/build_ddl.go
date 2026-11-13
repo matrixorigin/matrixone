@@ -137,7 +137,8 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
-	validate := func(query *Query) error {
+	var domainTypes map[int]*plan.Type
+	validate := func(query *Query, bindCtx *BindContext) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
@@ -151,6 +152,15 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				tableName = node.TableDef.Name
 			}
 			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		// ENUM/SET are projected as display strings. Preserve their exact
+		// logical provenance before optimization remaps those projections;
+		// explicit casts and other string expressions have no such provenance.
+		domainTypes = make(map[int]*plan.Type)
+		for i := range bindCtx.headings {
+			if typ := bindCtx.mysqlSpecialOrderTypeForProject(int32(i)); typ != nil {
+				domainTypes[i] = typ
+			}
 		}
 		return nil
 	}
@@ -194,6 +204,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				Expr:         nil,
 				OriginString: "",
 			},
+		}
+		if typ := domainTypes[idx]; typ != nil {
+			cols[idx].Typ = *typ
+			cols[idx].Typ.NotNullable = expr.Typ.NotNullable
 		}
 	}
 	tableDef.Cols = cols

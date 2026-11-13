@@ -181,8 +181,14 @@ func constructCreateTableSQLWithFormat(
 		}
 
 		typeStr := formatColType(col.Typ, !legacySchemaHash, noBackslashEscapes)
-		if strings.HasPrefix(typeStr, "ENUM") {
-			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		if strings.HasPrefix(typeStr, "ENUM") || (!legacySchemaHash && strings.HasPrefix(typeStr, "SET")) {
+			prefix := strings.IndexByte(typeStr, '(')
+			if prefix < 0 {
+				// Legacy 4.2 schema hashes spell a single-empty-member ENUM
+				// without a domain suffix. Retain that spelling for hashes.
+				prefix = len(typeStr)
+			}
+			typeStr = strings.ToLower(typeStr[:prefix]) + typeStr[prefix:]
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
@@ -1146,7 +1152,7 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
-	return formatColType(colType, false, false)
+	return formatColType(colType, true, false)
 }
 
 func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) string {
@@ -1155,6 +1161,14 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 	}
 
 	typ := types.T(colType.Id).ToType()
+	if replayableEnum && !isSetPlanType(&colType) {
+		// Public metadata must spell SQL types replayably. The 4.2 schema-hash
+		// renderer retains the historical spelling below.
+		typ.Width, typ.Scale = colType.Width, colType.Scale
+		if formatted, ok := types.FormatSQLColumnType(typ); ok {
+			return formatted
+		}
+	}
 
 	ts := typ.String()
 	// after decimal fix, remove this
@@ -1181,7 +1195,7 @@ func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) s
 	case types.T_enum:
 		fallthrough
 	case types.T_uint64:
-		if !isEnumOrSetPlanType(&colType) {
+		if !isEnumOrSetPlanType(&colType) && !(replayableEnum && typ.Oid == types.T_enum) {
 			break
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")

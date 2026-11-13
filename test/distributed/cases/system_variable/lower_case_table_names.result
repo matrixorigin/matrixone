@@ -206,7 +206,7 @@ Table    Create Table
 t1    CREATE TABLE `t1` (\n  `Id` int DEFAULT NULL\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-Id    INT(32)    YES        null        
+Id    int    YES        null        
 insert into t1 (`Id`) values (1);
 insert into t1 (id) values (1);
 insert into t1 (Id) values (1);
