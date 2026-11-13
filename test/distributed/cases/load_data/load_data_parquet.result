@@ -218,8 +218,22 @@ select * from ts_test;
 ➤ id[-5,64,0]  ¦  ts_no_tz_micros[93,64,0]  ¦  ts_no_tz_millis[93,64,0]  𝄀
 1  ¦  2023-10-27 10:00:00  ¦  2025-12-25 08:30:00  𝄀
 2  ¦  1960-01-01 12:00:00  ¦  2000-01-01 00:00:00  𝄀
-3  ¦  null  ¦  2023-12-31 23:59:59
+3  ¦  null  ¦  2024-01-01 00:00:00
 drop table ts_test;
+create table ts_test_ctl(id bigint, v datetime);
+insert into ts_test_ctl values (1, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+➤ id[-5,64,0]  ¦  v[93,64,0]  𝄀
+1  ¦  2024-01-01 00:00:00
+set @ts_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+insert into ts_test_ctl values (2, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+➤ id[-5,64,0]  ¦  v[93,64,0]  𝄀
+1  ¦  2024-01-01 00:00:00  𝄀
+2  ¦  2023-12-31 23:59:59
+set session sql_mode = @ts_saved_sql_mode;
+drop table ts_test_ctl;
 drop table if exists none_compression;
 CREATE TABLE none_compression (
 id BIGINT,
