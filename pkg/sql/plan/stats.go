@@ -2500,10 +2500,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = false
 			break
 		}
+		leftBuildRows := leftChild.Stats.Outcnt
+		if node.JoinType == plan.Node_ANTI && leftChild.NodeType == plan.Node_JOIN && leftChild.JoinType == plan.Node_INNER {
+			if selectivity, known := builder.getJoinActiveDomainSelectivity(leftChild.NodeId); known {
+				// The legacy INNER estimate can apply a dimension's historical
+				// filter fraction instead of its coverage of the fact key domain.
+				// Do not choose a wide ANTI build solely from that lower estimate.
+				leftBuildRows = max(leftBuildRows, builder.qry.Nodes[leftChild.Children[0]].Stats.Outcnt*selectivity)
+				node.IsRightJoin = false
+			}
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
+		} else if builder.IsEquiJoin(node) && leftBuildRows*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 
