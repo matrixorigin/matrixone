@@ -207,7 +207,7 @@ def _build_csv_export_sql(
             UserWarning,
         )
 
-    return f"{query_sql}\n{' '.join(sql_parts)}"
+    return query_sql + '\n' + ' '.join(sql_parts)
 
 
 def _build_jsonl_export_sql(
@@ -229,6 +229,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
+    # End any trailing SELECT line comment before appending executable SQL.
     return f"{query_sql}\nINTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
