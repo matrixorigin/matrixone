@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -222,4 +223,74 @@ func TestMoIndexStatsVectorDecodingCopiesInputAndRejectsInvalidValues(t *testing
 	require.ErrorContains(t, err, "non-finite")
 	v.Free(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMoIndexStatsBlockScaledVectorDecoding(t *testing.T) {
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		for _, dim := range []int{1, 17, 33, 65} {
+			t.Run(fmt.Sprintf("%s/%d", oid, dim), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				format, _ := oid.BlockScaledFormat()
+				source := make([]float32, dim)
+				want := make([]float64, dim)
+				for i := range source {
+					source[i] = float32(uint64(1) << (3 * (i / 32)))
+					if i%2 != 0 {
+						source[i] = -source[i]
+					}
+					want[i] = float64(source[i])
+				}
+				cell, err := types.AppendBlockScaled(nil, format, source)
+				require.NoError(t, err)
+				v := vector.NewVec(types.New(oid, int32(dim), 0))
+				defer v.Free(proc.Mp())
+				require.NoError(t, vector.AppendBytes(v, cell, false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(v, nil, true, proc.Mp()))
+
+				scratch := make([]float64, dim+4)
+				got, err := indexStatsVectorInto(v, 0, scratch)
+				require.NoError(t, err)
+				require.InDeltaSlice(t, want, got, 1e-5)
+				require.Same(t, &scratch[0], &got[0])
+				got[0] = 99
+				require.Equal(t, cell, v.GetBytesAt(0))
+				got, err = indexStatsVector(v, 0)
+				require.NoError(t, err)
+				require.InDeltaSlice(t, want, got, 1e-5)
+				got, err = indexStatsVectorInto(v, 1, scratch)
+				require.NoError(t, err)
+				require.Nil(t, got)
+				dynamic := vector.NewVec(oid.ToType())
+				require.NoError(t, vector.AppendBytes(dynamic, cell, false, proc.Mp()))
+				got, err = indexStatsVector(dynamic, 0)
+				dynamic.Free(proc.Mp())
+				require.NoError(t, err)
+				require.InDeltaSlice(t, want, got, 1e-5)
+
+				badScale := append([]byte(nil), cell...)
+				badScale[types.BlockScaledHeaderSize] = 0xff
+				otherFormat := types.BlockScaledMXFP8
+				if format == otherFormat {
+					otherFormat = types.BlockScaledNVFP4
+				}
+				wrongFormat, err := types.AppendBlockScaled(nil, otherFormat, source)
+				require.NoError(t, err)
+				for _, invalid := range []struct {
+					cell  []byte
+					width int32
+				}{
+					{cell[:len(cell)-1], int32(dim)},
+					{badScale, int32(dim)},
+					{wrongFormat, int32(dim)},
+					{cell, int32(dim + 1)},
+				} {
+					bad := vector.NewVec(types.New(oid, invalid.width, 0))
+					require.NoError(t, vector.AppendBytes(bad, invalid.cell, false, proc.Mp()))
+					_, err = indexStatsVector(bad, 0)
+					bad.Free(proc.Mp())
+					require.Error(t, err)
+				}
+			})
+		}
+	}
 }
