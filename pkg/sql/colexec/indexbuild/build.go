@@ -373,6 +373,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	// NULLs are irrelevant for IN-filter: clear bitmap before sort.
 	vec.GetNulls().Reset()
 	vec.InplaceSort()
+	vec.SetSorted(true)
 	data, release, err := runtimefilter.MarshalExactFilterVector(
 		vec,
 		proc.Mp(),
