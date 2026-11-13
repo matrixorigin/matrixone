@@ -927,10 +927,9 @@ func isPublicationSequenceFunction(name string) bool {
 // argument-resolved sources.
 func isPublicationIncompatibleTableFunction(name string) bool {
 	switch name {
-	case "table_changes":
-		// buildTableChanges resolves (database, table) string literals
-		// through the compiler context of the executing account, and
-		// validateTableChangesSource rejects subscription sources.
+	case "table_changes", "mo_index_stats":
+		// Both binders resolve (database, table) string literals through the
+		// executing account and reject subscription sources.
 		return true
 	case "metadata_scan":
 		// buildMetadataScan exposes a static schema without source
