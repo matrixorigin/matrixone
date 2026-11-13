@@ -249,7 +249,7 @@ way each time.
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
 | Buffers of MemoryPrefetchObjects under way | the disk cache | 10% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
-| FilePrefetchObjects under way | the prefetcher's workers | the worker count; the object-storage connections they hold count with whole-object downloads |
+| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
 

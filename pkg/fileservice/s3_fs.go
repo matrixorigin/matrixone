@@ -1690,8 +1690,14 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		default:
 		}
 	}
+	// A delete of the object or a close of the cache stops the download, not the read,
+	// which then reads its ranges.
+	stopped := func(err error) bool { return errors.Is(err, context.Canceled) && ctx.Err() == nil }
 	if admitted.download == nil {
 		if err := waitSet(); err != nil {
+			if stopped(err) {
+				return false, nil
+			}
 			return true, err
 		}
 		// SetFile may skip an existing file or a busy publication reservation.
@@ -1728,6 +1734,12 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		}
 	}
 	if err := waitSet(); err != nil && !(captured && s.asyncUpdate) {
+		if stopped(err) {
+			if captured {
+				return true, read.fillVector(ctx, s, file)
+			}
+			return false, nil
+		}
 		return true, err
 	}
 	if err := ctx.Err(); err != nil {

@@ -991,6 +991,42 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
+	if _, ok := d.cache.Get(ctx, diskPath); ok {
+		if _, err := os.Stat(diskPath); err == nil {
+			return false, nil
+		}
+	}
+	// A download holds its object-storage connections for long; it reserves them so
+	// range reads keep theirs, before it holds the path, so its wait for a connection
+	// holds nothing else.
+	var bounds []int64
+	var conns int64
+	if fill == storageFill || fill == rangeFill {
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
+			if size, splitAt, err := objectSize(ctx); err == nil {
+				bounds = d.objectSplit.bounds(size, splitAt)
+			}
+		}
+		conns = max(int64(len(bounds))-1, 1)
+		if conns > 1 && !d.reserveDownloadConns(conns) {
+			bounds, conns = nil, 1
+		}
+		if conns == 1 && !d.reserveDownloadConns(1) {
+			// Without a connection to hold, the download is skipped; otherwise it waits for one.
+			if d.maxDownloadConns < 1 {
+				metric.FSDiskCacheDownloadSkippedCounter.Inc()
+				return false, nil
+			}
+			if err := d.waitDownloadConns(ctx, 1); err != nil {
+				return false, err
+			}
+		}
+	}
+	releaseConns := func() {
+		d.releaseDownloadConns(conns)
+		conns = 0
+	}
+	defer releaseConns()
 	asyncSlotOwned := false
 	if asyncFinalize {
 		if !d.tryReserveAsyncFileFinalize(diskPath) {
@@ -1045,37 +1081,6 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
 		return false, nil
 	}
-
-	// A download holds its object-storage connections for long; it reserves them so
-	// range reads keep theirs, and past the cap the read reads its ranges.
-	var bounds []int64
-	var conns int64
-	if fill == storageFill || fill == rangeFill {
-		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
-			if size, splitAt, err := objectSize(ctx); err == nil {
-				bounds = d.objectSplit.bounds(size, splitAt)
-			}
-		}
-		conns = max(int64(len(bounds))-1, 1)
-		if conns > 1 && !d.reserveDownloadConns(conns) {
-			bounds, conns = nil, 1
-		}
-		if conns == 1 && !d.reserveDownloadConns(1) {
-			// Without a connection to hold, the download is skipped; otherwise it waits for one.
-			if d.maxDownloadConns < 1 {
-				metric.FSDiskCacheDownloadSkippedCounter.Inc()
-				return false, nil
-			}
-			if err := d.waitDownloadConns(ctx, 1); err != nil {
-				return false, err
-			}
-		}
-	}
-	releaseConns := func() {
-		d.releaseDownloadConns(conns)
-		conns = 0
-	}
-	defer releaseConns()
 
 	// write data
 	f, err := d.createCacheTempFile(filepath.Dir(diskPath))
@@ -1233,16 +1238,6 @@ func (d *DiskCache) finalizeFile(
 func (d *DiskCache) Flush(ctx context.Context) {
 	// OnWritten callbacks are post-publication notifications and deliberately
 	// outside this barrier, so a callback may safely reenter Flush or Close.
-	// The prefetch objects under way cache their bytes before they end.
-	done := make(chan struct{})
-	go func() {
-		d.prefetchObjects.reads.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
 	d.flushAsyncUpdates(ctx)
 }
 

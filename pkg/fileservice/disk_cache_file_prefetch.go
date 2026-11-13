@@ -24,12 +24,28 @@ import (
 // download to their cache file, which reads of them join while it downloads.
 type filePrefetchObject struct {
 	start, end int64
+	ctx        context.Context // of its download
 	cancelRead context.CancelFunc
 	endedCh    chan struct{}
+	ready      chan struct{} // closed once reads can join its download, or it ended
+	readyOnce  sync.Once
 
 	mu       sync.Mutex
 	download *objectDownload // set once the download is registered
 	endErr   error           // why it cached nothing, once ended
+	// holds counts the reads using one a read started, which is stopped when none uses it
+	// before its download is registered.
+	holds       int
+	readStarted bool
+}
+
+// newFilePrefetchObject returns a FilePrefetchObject of the bytes [start, end), whose
+// download runs under ctx without its cancellation.
+func newFilePrefetchObject(ctx context.Context, start, end int64) *filePrefetchObject {
+	p := &filePrefetchObject{start: start, end: end, endedCh: make(chan struct{}), ready: make(chan struct{})}
+	ctx, p.cancelRead = context.WithCancel(ctx)
+	p.ctx = context.WithValue(ctx, fileDownloadKey{}, p)
+	return p
 }
 
 func (p *filePrefetchObject) joinableDownload() *objectDownload {
@@ -37,6 +53,8 @@ func (p *filePrefetchObject) joinableDownload() *objectDownload {
 	defer p.mu.Unlock()
 	return p.download
 }
+
+func (p *filePrefetchObject) markReady() { p.readyOnce.Do(func() { close(p.ready) }) }
 
 type fileDownloadKey struct{}
 
@@ -46,6 +64,7 @@ func fileDownloadStarted(ctx context.Context, o *objectDownload) {
 		p.mu.Lock()
 		p.download = o
 		p.mu.Unlock()
+		p.markReady()
 	}
 }
 
@@ -53,20 +72,44 @@ func fileDownloadStarted(ctx context.Context, o *objectDownload) {
 // object at objectPath. It returns the context of its download, which a delete of the
 // object cancels, and the function ending it with why it cached nothing.
 func (d *DiskCache) startFilePrefetch(ctx context.Context, objectPath string, start, end int64) (context.Context, func(error)) {
-	ctx, cancel := context.WithCancel(ctx)
-	p := &filePrefetchObject{start: start, end: end, cancelRead: cancel, endedCh: make(chan struct{})}
+	p := newFilePrefetchObject(ctx, start, end)
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	f.registerLocked(objectPath, p)
 	f.mu.Unlock()
-	return context.WithValue(ctx, fileDownloadKey{}, p), func(err error) {
+	return p.ctx, d.endFilePrefetch(objectPath, p)
+}
+
+// endFilePrefetch returns the function ending the registered FilePrefetchObject p of the
+// object at objectPath with why it cached nothing.
+func (d *DiskCache) endFilePrefetch(objectPath string, p *filePrefetchObject) func(error) {
+	return func(err error) {
+		f := &d.prefetchObjects
 		f.mu.Lock()
 		f.forgetLocked(objectPath, p)
 		f.mu.Unlock()
-		cancel()
+		p.cancelRead()
+		p.mu.Lock()
 		p.endErr = err
+		p.mu.Unlock()
 		close(p.endedCh)
+		p.markReady()
 	}
+}
+
+// fileObjectLocked returns the FilePrefetchObject of the object at objectPath holding the
+// bytes [start, end), registering a new one for a read, whose download runs under ctx,
+// when none does; created reports which.
+func (f *prefetchObjects) fileObjectLocked(ctx context.Context, objectPath string, start, end int64) (p *filePrefetchObject, created bool) {
+	for _, o := range f.m[objectPath] {
+		if p, ok := o.(*filePrefetchObject); ok && p.start <= start && end <= p.end {
+			return p, false
+		}
+	}
+	p = newFilePrefetchObject(ctx, start, end)
+	p.readStarted = true
+	f.registerLocked(objectPath, p)
+	return p, true
 }
 
 // prefetchFile downloads, as a FilePrefetchObject, the bytes [start, end) of the object
@@ -74,6 +117,12 @@ func (d *DiskCache) startFilePrefetch(ctx context.Context, objectPath string, st
 // it is not cached after a delete counted since it began.
 func (d *DiskCache) prefetchFile(ctx context.Context, filePath string, start, end int64, open rangeOpener) (bool, error) {
 	ctx, done := d.startFilePrefetch(ctx, d.pathForFile(filePath), start, end)
+	return d.downloadFile(ctx, filePath, start, end, open, done)
+}
+
+// downloadFile downloads under ctx, the context of a FilePrefetchObject, its bytes [start,
+// end) of the object at filePath through open, then ends it through done.
+func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, end int64, open rangeOpener, done func(error)) (bool, error) {
 	var written bool
 	var err error
 	defer func() { done(err) }()

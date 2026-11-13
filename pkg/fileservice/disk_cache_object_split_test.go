@@ -253,6 +253,7 @@ func TestS3FSDownloadWaitsForConn(t *testing.T) {
 		return d.connsFreed != nil
 	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
 	require.False(t, d.cache.Contains(d.pathForFile("object")))
+	require.False(t, d.isUpdating(d.pathForFile("object")), "waiting for a connection holds no update of the path")
 	d.releaseDownloadConns(1)
 	require.Equal(t, data[100:110], <-done)
 	require.True(t, d.cache.Contains(d.pathForFile("object")))

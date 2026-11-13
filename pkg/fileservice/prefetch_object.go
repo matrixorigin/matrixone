@@ -30,8 +30,10 @@ type prefetchObject interface {
 	span() (start, end int64)
 	// joinable reports whether reads can join it yet.
 	joinable() bool
-	// eta estimates how long after now its bytes up to end arrive.
-	eta(now time.Time, end int64) time.Duration
+	// eta estimates how long after now its bytes [lo, hi) arrive.
+	eta(now time.Time, lo, hi int64) time.Duration
+	// caches reports whether it caches its bytes.
+	caches() bool
 	// hold keeps its bytes readable for a read until release. Holds are taken while it
 	// is registered.
 	hold()
@@ -40,6 +42,8 @@ type prefetchObject interface {
 	// returns fn's error, the error it failed with, ctx's, or errPrefetchMissed when it
 	// ended without them.
 	use(ctx context.Context, off, n int64, fn func([]byte) error) error
+	// readAt reads its bytes [off, off+len(dst)) of the object into dst, as use does.
+	readAt(ctx context.Context, off int64, dst []byte) error
 	// stop cancels it. ended is closed once it ended, when err is why it cached nothing.
 	stop()
 	ended() <-chan struct{}
@@ -58,6 +62,8 @@ func (f *memoryPrefetchObject) span() (int64, int64) { return f.start, f.end }
 
 func (f *memoryPrefetchObject) joinable() bool { return true }
 
+func (f *memoryPrefetchObject) caches() bool { return !f.skipCache }
+
 func (f *memoryPrefetchObject) use(ctx context.Context, off, n int64, fn func([]byte) error) error {
 	content, ok := f.waitFor(ctx, off+n)
 	if !ok {
@@ -73,6 +79,13 @@ func (f *memoryPrefetchObject) use(ctx context.Context, off, n int64, fn func([]
 	return fn(content[off-f.start : off-f.start+n])
 }
 
+func (f *memoryPrefetchObject) readAt(ctx context.Context, off int64, dst []byte) error {
+	return f.use(ctx, off, int64(len(dst)), func(bs []byte) error {
+		copy(dst, bs)
+		return nil
+	})
+}
+
 func (f *memoryPrefetchObject) stop() { f.cancelRead() }
 
 func (f *memoryPrefetchObject) ended() <-chan struct{} { return f.endedCh }
@@ -83,33 +96,62 @@ func (p *filePrefetchObject) span() (int64, int64) { return p.start, p.end }
 
 func (p *filePrefetchObject) joinable() bool { return p.joinableDownload() != nil }
 
-func (p *filePrefetchObject) eta(_ time.Time, end int64) time.Duration {
+func (p *filePrefetchObject) eta(_ time.Time, lo, hi int64) time.Duration {
 	o := p.joinableDownload()
 	if o == nil {
 		return time.Duration(1<<63 - 1)
 	}
-	_, wait := o.estimate(0, end-p.start)
+	_, wait := o.estimate(lo-p.start, hi-p.start)
 	return wait
 }
 
-// hold and release do nothing: a read of a filePrefetchObject holds its file while it
-// copies from it.
-func (p *filePrefetchObject) hold()    {}
-func (p *filePrefetchObject) release() {}
+func (p *filePrefetchObject) caches() bool { return true }
+
+func (p *filePrefetchObject) hold() {
+	p.mu.Lock()
+	p.holds++
+	p.mu.Unlock()
+}
+
+// release stops one a read started when no read uses it and its download is not
+// registered yet.
+func (p *filePrefetchObject) release() {
+	p.mu.Lock()
+	p.holds--
+	stop := p.readStarted && p.holds == 0 && p.download == nil
+	p.mu.Unlock()
+	if stop {
+		p.cancelRead()
+	}
+}
 
 func (p *filePrefetchObject) use(ctx context.Context, off, n int64, fn func([]byte) error) error {
+	buf := make([]byte, n)
+	if err := p.readAt(ctx, off, buf); err != nil {
+		return err
+	}
+	return fn(buf)
+}
+
+// readAt waits until reads can join its download, then reads from its file as the bytes
+// arrive.
+func (p *filePrefetchObject) readAt(ctx context.Context, off int64, dst []byte) error {
+	select {
+	case <-p.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	o := p.joinableDownload()
 	if o == nil {
 		return errPrefetchMissed
 	}
-	buf := make([]byte, n)
-	if !readDownload(ctx, o, off-p.start, buf) {
+	if !readDownload(ctx, o, off-p.start, dst) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return errPrefetchMissed
 	}
-	return fn(buf)
+	return nil
 }
 
 func (p *filePrefetchObject) stop() { p.cancelRead() }

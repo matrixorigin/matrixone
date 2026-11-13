@@ -256,7 +256,7 @@ func (d *DiskCache) prefetchRead(
 			if b.state != blockMissing {
 				continue
 			}
-			if o := f.fastestLocked(diskPath, b.start, b.end, now, d.downloadMaxExtraWait); o != nil {
+			if o := f.fastestLocked(diskPath, b.start, b.end, now, d.downloadMaxExtraWait, true); o != nil {
 				b.state, b.object = blockInFlight, o
 				o.hold()
 				held = append(held, o)
@@ -329,6 +329,24 @@ func (d *DiskCache) prefetchRead(
 		held = append(held, fl)
 		runs = append(runs, run{first: p[0], last: p[1], flight: fl})
 	}
+	// A run past the bytes of a MemoryPrefetchObject joins the FilePrefetchObject holding
+	// it, or registers one, so concurrent reads download it once.
+	var started []*filePrefetchObject
+	for _, p := range files {
+		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
+		o, created := f.fileObjectLocked(context.WithoutCancel(ctx), diskPath, start, end)
+		o.hold()
+		held = append(held, o)
+		if created {
+			f.reads.Add(1)
+			started = append(started, o)
+		}
+		for j := p[0]; j <= p[1]; j++ {
+			if blocks[j].needed {
+				blocks[j].state, blocks[j].object = blockInFlight, o
+			}
+		}
+	}
 	f.mu.Unlock()
 
 	// Read the runs. A run serves its bytes to waiting reads as they arrive and stays
@@ -342,17 +360,8 @@ func (d *DiskCache) prefetchRead(
 			}
 		}
 	}
-	for _, p := range files {
-		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
-		o := d.startFileRun(ctx, closing, filePath, start, end, open)
-		if o == nil {
-			return nil, len(runs), false
-		}
-		for j := p[0]; j <= p[1]; j++ {
-			if blocks[j].needed {
-				blocks[j].state, blocks[j].object = blockInFlight, o
-			}
-		}
+	for _, o := range started {
+		d.startFileRun(closing, filePath, diskPath, o, open)
 	}
 
 	// Assemble the bytes.
@@ -366,10 +375,7 @@ func (d *DiskCache) prefetchRead(
 		dst := out[b.start-lo : b.end-lo]
 		switch b.state {
 		case blockInFlight:
-			if err := b.object.use(ctx, b.start, int64(len(dst)), func(bs []byte) error {
-				copy(dst, bs)
-				return nil
-			}); err != nil {
+			if err := b.object.readAt(ctx, b.start, dst); err != nil {
 				return nil, len(runs), false
 			}
 		case blockCached:
@@ -390,36 +396,15 @@ func (d *DiskCache) prefetchRead(
 	return out, len(runs), true
 }
 
-// startFileRun starts, as a FilePrefetchObject that outlives the read and ends when the
-// cache closes, the download of the bytes [start, end) of the object at filePath, and
-// returns it once reads can join it, or nil if it downloads nothing.
-func (d *DiskCache) startFileRun(ctx, closing context.Context, filePath string, start, end int64, open rangeOpener) prefetchObject {
-	joinable := make(chan struct{})
-	mark := sync.OnceFunc(func() { close(joinable) })
-	runCtx, cancel := context.WithCancel(withDownloadStarted(context.WithoutCancel(ctx), mark))
-	stop := context.AfterFunc(closing, cancel)
-	d.prefetchObjects.reads.Add(1)
+// startFileRun downloads the registered FilePrefetchObject o of the object at filePath,
+// which outlives the read and ends when the cache closes. The caller counted it in reads.
+func (d *DiskCache) startFileRun(closing context.Context, filePath, diskPath string, o *filePrefetchObject, open rangeOpener) {
+	stop := context.AfterFunc(closing, o.cancelRead)
 	go func() {
 		defer d.prefetchObjects.reads.Done()
 		defer stop()
-		defer cancel()
-		defer mark()
-		_, _ = d.prefetchFile(runCtx, filePath, start, end, open)
+		_, _ = d.downloadFile(o.ctx, filePath, o.start, o.end, open, d.endFilePrefetch(diskPath, o))
 	}()
-	select {
-	case <-joinable:
-	case <-ctx.Done():
-		return nil
-	}
-	f := &d.prefetchObjects
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, o := range f.m[d.pathForFile(filePath)] {
-		if p, ok := o.(*filePrefetchObject); ok && p.start == start && p.end == end && p.joinable() {
-			return p
-		}
-	}
-	return nil
 }
 
 // readDownload reads the bytes of download o from off into dst, once they are written.
@@ -454,7 +439,6 @@ func (d *DiskCache) fetchRange(
 		return nil, false, false, err
 	}
 	diskPath := d.pathForFile(filePath)
-	out := make([]byte, end-start)
 	f := &d.prefetchObjects
 	budget := d.flightBytes()
 	f.mu.Lock()
@@ -470,7 +454,7 @@ func (d *DiskCache) fetchRange(
 			return nil, false, false, nil
 		}
 		now := time.Now()
-		if o = f.fastestLocked(diskPath, start, end, now, d.downloadMaxExtraWait); o != nil {
+		if o = f.fastestLocked(diskPath, start, end, now, d.downloadMaxExtraWait, false); o != nil {
 			o.hold()
 			break
 		}
@@ -509,20 +493,14 @@ func (d *DiskCache) fetchRange(
 	}
 	// A prefetch object that failed to read the bytes fails the read; one that ended
 	// without them leaves the read to the caller.
-	if err := o.use(ctx, start, end-start, func(bs []byte) error {
-		copy(out, bs)
-		return nil
-	}); err != nil {
+	out := make([]byte, end-start)
+	if err := o.readAt(ctx, start, out); err != nil {
 		if errors.Is(err, errPrefetchMissed) {
 			return nil, false, false, nil
 		}
 		return nil, false, false, err
 	}
-	cached = true
-	if m, isMemory := o.(*memoryPrefetchObject); isMemory {
-		cached = !m.skipCache
-	}
-	return out, true, cached, nil
+	return out, true, o.caches(), nil
 }
 
 // runFlight reads the flight fl of the object at filePath through open, caches the range
@@ -590,7 +568,7 @@ func (d *DiskCache) readRanges(
 		missing, waits = missing[:0], waits[:0]
 		var need int64
 		for _, r := range ranges {
-			if fl := f.fastestLocked(diskPath, r.Offset, r.Offset+r.Size, now, d.downloadMaxExtraWait); fl != nil {
+			if fl := f.fastestLocked(diskPath, r.Offset, r.Offset+r.Size, now, d.downloadMaxExtraWait, true); fl != nil {
 				waits = append(waits, fl)
 				continue
 			}
@@ -650,7 +628,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	now := time.Now()
 	for i := range vector.Entries {
 		if e := &vector.Entries[i]; !e.done && e.Size > 0 {
-			if fl := f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait); fl != nil {
+			if fl := f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait, true); fl != nil {
 				fl.hold()
 				flights[i], found = fl, true
 			}
@@ -941,8 +919,8 @@ func (f *memoryPrefetchObject) content() []byte {
 }
 
 // eta estimates how long after now the bytes of the flight up to end arrive.
-func (f *memoryPrefetchObject) eta(now time.Time, end int64) time.Duration {
-	return max(rangeReadCosts.cost(end-f.start)-now.Sub(f.began), 0)
+func (f *memoryPrefetchObject) eta(now time.Time, _, hi int64) time.Duration {
+	return max(rangeReadCosts.cost(hi-f.start)-now.Sub(f.began), 0)
 }
 
 // waitFor returns the bytes read once they reach end, or false if the flight finished
@@ -1005,16 +983,17 @@ func (d *DiskCache) closePrefetches(ctx context.Context) {
 }
 
 // fastestLocked returns the prefetch object of diskPath holding [lo, hi) whose bytes reach
-// hi first, of the ones reads can join. A FilePrefetchObject is joined only when its bytes
-// arrive no more than extraWait later than a range read could fetch them.
-func (f *prefetchObjects) fastestLocked(diskPath string, lo, hi int64, now time.Time, extraWait time.Duration) prefetchObject {
+// hi first, of the ones reads can join and, when cached is set, that cache their bytes. A
+// FilePrefetchObject is joined only when its bytes arrive no more than extraWait later
+// than a range read could fetch them.
+func (f *prefetchObjects) fastestLocked(diskPath string, lo, hi int64, now time.Time, extraWait time.Duration, cached bool) prefetchObject {
 	var best prefetchObject
 	var bestETA time.Duration
 	for _, o := range f.m[diskPath] {
-		if start, end := o.span(); start > lo || end < hi || !o.joinable() {
+		if start, end := o.span(); start > lo || end < hi || !o.joinable() || cached && !o.caches() {
 			continue
 		}
-		eta := o.eta(now, hi)
+		eta := o.eta(now, lo, hi)
 		if _, ok := o.(*filePrefetchObject); ok && eta > rangeReadCosts.cost(hi-lo)+extraWait {
 			continue
 		}
@@ -1032,8 +1011,8 @@ func (d *DiskCache) fastestPrefetch(diskPath string, lo, hi int64) (time.Duratio
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now()
-	if fl := f.fastestLocked(diskPath, lo, hi, now, d.downloadMaxExtraWait); fl != nil {
-		return fl.eta(now, hi), true
+	if fl := f.fastestLocked(diskPath, lo, hi, now, d.downloadMaxExtraWait, true); fl != nil {
+		return fl.eta(now, lo, hi), true
 	}
 	return 0, false
 }
