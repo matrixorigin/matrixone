@@ -26,13 +26,15 @@ def relation_for(engine, query_timeout=1):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-async def test_direct_close_deadline_retains_one_drop_and_joins_retry(tmp_path, interruption):
+async def test_direct_close_deadline_retains_one_drop_and_joins_retry(interruption):
     from sqlalchemy import event
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import AsyncAdaptedQueuePool
 
+    # This case owns one physical connection and checks pool/cleanup lifecycle.
+    # Persistence is irrelevant; disk fsync must not consume its retry deadline.
     engine = create_async_engine(
-        'sqlite+aiosqlite:///' + str(tmp_path / 'cleanup.db'),
+        'sqlite+aiosqlite:///:memory:',
         poolclass=AsyncAdaptedQueuePool,
         pool_size=1,
         max_overflow=0,
