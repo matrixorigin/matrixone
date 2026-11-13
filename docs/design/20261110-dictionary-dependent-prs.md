@@ -892,3 +892,24 @@ must use the already tested persistent memory.peak file descriptor, uncompressed
 owned disk clones with the unchanged CPU/spill/swap gates, and accounting scope
 that includes pkg/vectorize/shuffle on both sides. Preserve the old observations;
 old peak figures and incomplete copy counts are not new-head acceptance.
+
+### Approved concurrent mixed-bucket traversal — 2026-11-14
+
+The requester approved next-bucket-order-design.md after current-head profiles
+showed higher shuffle-pool waiting despite lower instructions. Keep the append,
+range and prefix work. Test actual concurrent mixed writers before retaining a
+scheduling fix; the earlier producer-tail component invoked producers serially.
+
+Mixed writes now begin at their existing producer's bucket and traverse at most
+two ascending physical ranges. Keep wrap arithmetic outside the hot bucket loop.
+The existing pending integer records a mixed visit ordinal; whole-bucket mode
+retains its explicit physical destination. Credit refusal returns the same visit
+and row offset, and resume reconstructs the physical destination. No new buffer,
+copy, lock, lane, queue capacity, public API or concurrent Vector mutation.
+
+Concurrent uniform/skew controls qualify this experiment; serial and hot-bucket
+controls remain visible. Deterministic tiny tests force blocked retries on both
+sides of wrap, closed destinations and a nonzero whole-bucket destination.
+The unchanged per-query all22 wall/CPU/instruction/resource gates against main
+still determine publication. Component gains do not establish TPC-H acceptance,
+and Q7's separate elapsed/cache observation remains open. Preserve C/D scope.

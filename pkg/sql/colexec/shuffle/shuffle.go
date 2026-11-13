@@ -462,16 +462,16 @@ func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
 		shuffle.CurrentShuffleIdx,
-		shuffle.ctr.pendingBucket,
+		shuffle.ctr.pendingPosition,
 		shuffle.ctr.pendingOffset,
 		shuffle.ctr.pendingWholeBucket,
 		proc,
 	)
-	shuffle.ctr.pendingBucket = nextBucket
+	shuffle.ctr.pendingPosition = nextBucket
 	shuffle.ctr.pendingOffset = nextOffset
 	if done || err != nil {
 		shuffle.ctr.pendingBat = nil
-		shuffle.ctr.pendingBucket = 0
+		shuffle.ctr.pendingPosition = 0
 		shuffle.ctr.pendingOffset = 0
 		shuffle.ctr.pendingWholeBucket = false
 	}
@@ -480,7 +480,7 @@ func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct
 
 func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) error {
 	shuffle.ctr.pendingBat = bat
-	shuffle.ctr.pendingBucket = 0
+	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0
 	_, _, err := shuffle.flushPending(proc)
 	return err
@@ -689,7 +689,7 @@ func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, pr
 
 func (shuffle *Shuffle) enqueueWholeBucket(bat *batch.Batch, shuffleIdx int32, proc *process.Process) error {
 	shuffle.ctr.pendingBat = bat
-	shuffle.ctr.pendingBucket = int(shuffleIdx)
+	shuffle.ctr.pendingPosition = int(shuffleIdx)
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.pendingWholeBucket = true
 	_, _, err := shuffle.flushPending(proc)
