@@ -708,6 +708,7 @@ def test_decimal_query_compilation_keeps_exact_values(text):
     assert format(value, 'f') in sql
     assert params == []
 
+
 @pytest.mark.parametrize('comment', ['-- trailing comment', '# trailing comment'])
 @pytest.mark.parametrize('format_name', ['csv', 'jsonl'])
 def test_export_clause_survives_trailing_line_comments(comment, format_name):
