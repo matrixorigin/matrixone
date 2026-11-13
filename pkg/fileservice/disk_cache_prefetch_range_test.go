@@ -677,3 +677,25 @@ func TestMemoryPrefetchObjectUseErrors(t *testing.T) {
 	require.Equal(t, []byte{2, 3}, got)
 	require.ErrorIs(t, short.use(ctx, 0, 10, noop), errPrefetchMissed)
 }
+
+// A range read of a read that caches whole objects, not its entries, takes its bytes
+// from a prefetch object that does not cache them.
+func TestS3FSRangeReadOfFullFilePolicyCachesNoRange(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
+	read := func(policy Policy) {
+		vec := &IOVector{FilePath: "object", Policy: policy | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: 5000, Size: 10}}}
+		require.NoError(t, fs.read(context.Background(), vec, true))
+		fs.diskCache.prefetchObjects.reads.Wait()
+		require.Equal(t, data[5000:5010], vec.Entries[0].Data)
+		vec.Release()
+	}
+	read(0)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 5000, 10)
+	require.False(t, cached)
+	require.Equal(t, int64(1), storage.reads.Load())
+
+	read(SkipFullFilePreloads | ExactRead)
+	_, cached = fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 5000, 10)
+	require.True(t, cached, "a read that caches its entries caches its range")
+}

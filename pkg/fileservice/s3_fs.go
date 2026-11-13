@@ -1339,7 +1339,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}
-		cache := !vector.Policy.Any(SkipDiskCacheWrites)
+		// The prefetch object caches the bytes only for a read that would cache its entries.
+		cache := vector.Policy.CacheIOEntry() && !vector.Policy.Any(SkipDiskCacheWrites)
 		content, ok, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open, cache)
 		if err != nil {
 			return err
