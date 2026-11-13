@@ -131,6 +131,8 @@ type prefetchEntry struct {
 	// started is closed once reads can join the download, or it ended.
 	started chan struct{}
 	once    sync.Once
+	// joiners counts the reads that wait for the download to start.
+	joiners int
 }
 
 // start marks the download joinable.
@@ -140,6 +142,9 @@ func (e *prefetchEntry) start() {
 
 // live reports whether a read the download is for has not ended.
 func (e *prefetchEntry) live() bool {
+	if e.joiners > 0 {
+		return true
+	}
 	for _, s := range e.scans {
 		if s.live() {
 			return true
@@ -190,14 +195,12 @@ func (q *prefetchQueue) Pop() any {
 }
 
 // fetchQueue is a queue of downloads and its workers, which run at most max of them at
-// once. A download whose reads all ended is dropped when it would start, unless
-// keepEnded: a read waits for each download of the queue.
+// once. A download whose reads all ended is dropped when it would start.
 type fetchQueue struct {
-	queue     prefetchQueue
-	bytes     int64
-	max       int
-	running   int
-	keepEnded bool
+	queue   prefetchQueue
+	bytes   int64
+	max     int
+	running int
 }
 
 func (q *fetchQueue) push(e *prefetchEntry) {
@@ -239,7 +242,7 @@ func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bo
 	return &prefetcher{
 		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
 		prefetch: fetchQueue{max: workers},
-		live:     fetchQueue{max: workers, keepEnded: true},
+		live:     fetchQueue{max: workers},
 		entries:  make(map[string]*prefetchEntry),
 	}
 }
@@ -355,7 +358,7 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 		e := q.queue[0]
 		q.remove(e)
 		p.queued.Add(-1)
-		if !q.keepEnded && !e.live() {
+		if !e.live() {
 			p.forgetLocked(e)
 			e.start()
 			metric.FSPrefetchEndedCounter.Inc()
@@ -402,25 +405,38 @@ func (p *prefetcher) remove(filePath string) bool {
 }
 
 // join returns, when want accepts the request of the download of filePath, a channel
-// closed once reads can join the download, or it ended. A download still waiting in the
-// prefetch queue moves to the live queue.
-func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (<-chan struct{}, bool) {
+// closed once reads can join the download, or it ended, and leave, to call once when the
+// read stops waiting. A download still waiting in the prefetch queue moves to the live
+// queue. A queued download is dropped when its last read leaves and its scans have ended.
+func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (started <-chan struct{}, leave func(), ok bool) {
 	if p.known.Load() == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
 	if !ok || !want(e.req) {
-		return nil, false
+		return nil, nil, false
 	}
 	if e.queue == &p.prefetch {
 		metric.FSPrefetchMissedCounter.Inc()
 		p.prefetch.remove(e)
 		p.live.push(e)
-		p.startLocked()
 	}
-	return e.started, true
+	e.joiners++
+	p.startLocked()
+	var once sync.Once
+	return e.started, func() {
+		once.Do(func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			e.joiners--
+			if e.queue != nil && !e.live() {
+				p.dropLocked(e)
+				p.startLocked()
+			}
+		})
+	}, true
 }
 
 // close drops the queued downloads, cancels the running ones and waits for them, or ctx.

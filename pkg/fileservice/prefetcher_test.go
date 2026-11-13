@@ -324,10 +324,10 @@ func TestPrefetcherJoin(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "b", Size: 20})
 	columns := func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 }
 
-	_, ok := p.join("a", func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 })
+	_, _, ok := p.join("a", func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 })
 	require.False(t, ok)
 	require.True(t, p.isQueued("a"))
-	started, ok := p.join("a", columns)
+	started, _, ok := p.join("a", columns)
 	require.True(t, ok)
 	require.Equal(t, "a", <-r.started, "a live worker starts it")
 	require.False(t, p.isQueued("a"))
@@ -339,14 +339,14 @@ func TestPrefetcherJoin(t *testing.T) {
 	}
 	close(joinable)
 	<-started
-	again, ok := p.join("a", columns)
+	again, _, ok := p.join("a", columns)
 	require.True(t, ok, "a running download is joined")
 	<-again
 
 	close(r.release)
 	require.Equal(t, "b", <-r.started)
 	p.close(context.Background())
-	_, ok = p.join("a", columns)
+	_, _, ok = p.join("a", columns)
 	require.False(t, ok, "an ended download is not joined")
 }
 
@@ -368,10 +368,10 @@ func TestPrefetcherLiveQueueGoesFirst(t *testing.T) {
 		p.add(ObjectPrefetch{FilePath: path, Size: 10})
 	}
 	all := func(ObjectPrefetch) bool { return true }
-	_, ok := p.join("b", all)
+	_, _, ok := p.join("b", all)
 	require.True(t, ok)
 	require.Equal(t, "b", <-started)
-	waiting, ok := p.join("c", all)
+	waiting, _, ok := p.join("c", all)
 	require.True(t, ok)
 
 	close(release["first"])
@@ -407,10 +407,10 @@ func TestPrefetcherLiveQueueKeepsEndedReads(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "b", Size: 10})
 	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Scan: scan})
 	all := func(ObjectPrefetch) bool { return true }
-	_, ok := p.join("b", all)
+	_, _, ok := p.join("b", all)
 	require.True(t, ok)
 	require.Equal(t, "b", <-started)
-	waiting, ok := p.join("a", all)
+	waiting, _, ok := p.join("a", all)
 	require.True(t, ok)
 	scan.End()
 
@@ -418,6 +418,50 @@ func TestPrefetcherLiveQueueKeepsEndedReads(t *testing.T) {
 	require.Equal(t, "a", <-started, "the live download starts")
 	<-waiting
 	p.close(context.Background())
+}
+
+// A download in the live queue whose reads all left and whose scans ended is dropped
+// before it starts, and the prefetch queue goes on.
+func TestPrefetcherLiveQueueDropsLeftReads(t *testing.T) {
+	started := make(chan string, 8)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	scan := new(PrefetchScan)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 10})
+	require.Equal(t, "first", <-started)
+	p.add(ObjectPrefetch{FilePath: "b", Size: 10})
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Scan: scan})
+	p.add(ObjectPrefetch{FilePath: "c", Size: 10})
+	all := func(ObjectPrefetch) bool { return true }
+	_, leaveB, ok := p.join("b", all)
+	require.True(t, ok)
+	require.Equal(t, "b", <-started)
+	leaveB()
+	waiting, leave, ok := p.join("a", all)
+	require.True(t, ok)
+	scan.End()
+	require.True(t, p.isQueued("a"), "a read still waits for it")
+	leave()
+	leave()
+	select {
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a download no read waits for is still queued")
+	}
+	require.False(t, p.isQueued("a"), "dropped once its last read left")
+
+	close(release)
+	require.Equal(t, "c", <-started, "the prefetch queue goes on")
+	p.close(context.Background())
+	select {
+	case path := <-started:
+		t.Fatalf("%s started", path)
+	default:
+	}
 }
 
 // Closing the prefetcher wakes the reads waiting for downloads it drops.
@@ -429,10 +473,10 @@ func TestPrefetcherCloseWakesJoins(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "a", Size: 10})
 	p.add(ObjectPrefetch{FilePath: "b", Size: 10})
 	all := func(ObjectPrefetch) bool { return true }
-	_, ok := p.join("a", all)
+	_, _, ok := p.join("a", all)
 	require.True(t, ok)
 	require.Equal(t, "a", <-r.started)
-	waiting, ok := p.join("b", all)
+	waiting, _, ok := p.join("b", all)
 	require.True(t, ok)
 	closed := make(chan struct{})
 	go func() {
