@@ -40,6 +40,10 @@ message UnsubscribeRequest {
 // asynchronous response with its caller.
 message ReadBarrierRequest {
     uint64 barrier_id = 1;
+    // If set, request a conservative target for this table's contents and
+    // catalog identity rather than a published FIFO frontier. Send only to a
+    // peer that advertises supports_table_read_target.
+    api.TableID table_read_target = 2;
 }
 
 // TableLogtail describes total or additional logtail for a table.
@@ -73,6 +77,7 @@ message SubscribeResponse {
     // The TN serving this stream advertises read-barrier support. Older TNs
     // omit the field; false or absent means there is no advertisement.
     bool supports_read_barrier = 2;
+    bool supports_table_read_target = 3;
 }
 
 // UpdateResponse is the response for additional logtail
@@ -90,9 +95,10 @@ message UnSubscribeResponse {
     api.TableID table = 1;
 }
 
-// ReadBarrierResponse is sent only after every logtail event ordered before
-// the corresponding request has been admitted to this stream's response
-// sequence. The CN must still wait until it has applied this timestamp.
+// For a FIFO barrier, the response follows all earlier logtail events on the
+// stream. A table-read target may arrive before the corresponding logtail; it
+// is never itself applied progress. In both cases the CN must await actual
+// application of the returned timestamp.
 message ReadBarrierResponse {
     uint64 barrier_id              = 1;
     timestamp.Timestamp timestamp  = 2;

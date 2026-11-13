@@ -187,5 +187,21 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		syncCommit()
 		deny(reader, combined)
 
+		// A covering grant on one object must not admit the other object's
+		// requirement, even when an inherited sibling role has that grant.
+		exec(admin, "grant all on table app.t to reader")
+		syncCommit()
+		exec(reader, "select id from app.t")
+		deny(reader, combined)
+		exec(admin, "grant select on table app.other to reader")
+		syncCommit()
+		exec(reader, combined)
+		exec(admin, "revoke select on table app.other from reader")
+		exec(admin, "grant all on table app.other to reader")
+		syncCommit()
+		exec(reader, combined)
+		exec(admin, "revoke all on table app.other from reader")
+		syncCommit()
+		deny(reader, combined)
 	})
 }

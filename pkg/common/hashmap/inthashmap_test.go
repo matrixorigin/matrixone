@@ -24,6 +24,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntHashMapInsertAfterFind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+
+	keys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(keys, []int64{1, 2}, nil, mp))
+	defer keys.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	values, _, err := iterator.Insert(0, 1, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+
+	values, _, err = iterator.Find(0, 1, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+
+	values, _, err = iterator.Insert(1, 1, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{2}, values)
+	require.Equal(t, uint64(2), hashMap.GroupCount())
+
+	values, _, err = iterator.Find(1, 1, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{2}, values)
+}
+
 func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewIntHashMap(false, mp)

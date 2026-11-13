@@ -59,10 +59,6 @@ func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Tim
 	if err := ctx.Err(); err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	reader, ok := getPu(ses.GetService()).TxnClient.(client.ReadSnapshotClient)
-	if !ok {
-		return timestamp.Timestamp{}, nil
-	}
 	var execution *ExecCtx
 	if compiler := ses.GetTxnCompileCtx(); compiler != nil {
 		compiler.mu.Lock()
@@ -72,14 +68,31 @@ func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Tim
 	if execution != nil && (execution.ses != ses || execution.reqCtx == nil) {
 		execution = nil
 	}
-	if execution != nil && !execution.authorizationSnapshot.IsEmpty() {
-		return execution.authorizationSnapshot, nil
+	if execution != nil {
+		execution.authorizationMu.Lock()
+		defer execution.authorizationMu.Unlock()
 	}
-	snapshot, err := reader.ReadSnapshot(ctx, ses.getLastCommitTS())
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	snapshot, err := authorizationReadSnapshotLocked(ctx, ses, execution)
 	if err == nil && execution != nil {
 		execution.authorizationSnapshot = snapshot
 	}
 	return snapshot, err
+}
+
+// The caller holds execution.authorizationMu when execution is non-nil.
+// Unlike authorizationReadSnapshot, this does not publish a newly read view.
+func authorizationReadSnapshotLocked(ctx context.Context, ses *Session, execution *ExecCtx) (timestamp.Timestamp, error) {
+	reader, ok := getPu(ses.GetService()).TxnClient.(client.ReadSnapshotClient)
+	if !ok {
+		return timestamp.Timestamp{}, nil
+	}
+	if execution != nil && !execution.authorizationSnapshot.IsEmpty() {
+		return execution.authorizationSnapshot, nil
+	}
+	return reader.ReadSnapshot(ctx, ses.getLastCommitTS())
 }
 
 func newAuthorizationBackgroundExec(ctx context.Context, ses *Session) (BackgroundExec, timestamp.Timestamp, error) {

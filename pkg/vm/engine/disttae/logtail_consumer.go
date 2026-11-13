@@ -145,8 +145,12 @@ type PushClient struct {
 	connector *connector
 
 	// initialized is true means that it is not the first time to init push client.
-	initialized   bool
-	replayVersion atomic.Uint64 // invalidates read proofs across replay resets
+	initialized        bool
+	replayVersion      atomic.Uint64 // invalidates read proofs across replay resets
+	tableReadAdmission struct {
+		once  sync.Once
+		slots chan struct{}
+	}
 
 	mu struct {
 		sync.Mutex
@@ -264,6 +268,89 @@ func (c *PushClient) AcquirePeerLogtailReadBarrier(
 		return timestamp.Timestamp{}, supported, err
 	}
 	return frontier, supported, nil
+}
+
+// AcquirePeerTableReadSnapshot validates the actual apply watermark of the
+// same logtail generation that served the target. The shared transaction
+// timestamp waiter is monotone across reconnects and cannot prove this alone.
+func (c *PushClient) AcquirePeerTableReadSnapshot(ctx context.Context, table api.TableID, min timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error) {
+	if c.subscriber == nil {
+		return timestamp.Timestamp{}, 0, false, moerr.NewInternalError(ctx, "logtail subscriber is not initialized")
+	}
+	c.tableReadAdmission.once.Do(func() { c.tableReadAdmission.slots = make(chan struct{}, 100) })
+	select {
+	case c.tableReadAdmission.slots <- struct{}{}:
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, 0, false, context.Cause(ctx)
+	}
+	defer func() { <-c.tableReadAdmission.slots }()
+
+	peer, err := c.subscriber.waitReadyClient(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, 0, false, err
+	}
+	supported, err := peer.PeerSupportsTableReadTarget(ctx)
+	if err != nil || !supported {
+		return timestamp.Timestamp{}, 0, supported, err
+	}
+	generation := c.replayVersion.Load()
+	if generation == 0 {
+		return timestamp.Timestamp{}, 0, true, moerr.NewStreamClosedNoCtx()
+	}
+	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
+		return timestamp.Timestamp{}, 0, true, err
+	}
+	target, err := peer.ReadTableTarget(ctx, table)
+	if err != nil {
+		return timestamp.Timestamp{}, 0, true, err
+	}
+	if min.Greater(target) {
+		target = min
+	}
+	snapshot, err := c.waitPeerAppliedSnapshot(ctx, target, peer, generation)
+	if err != nil {
+		return timestamp.Timestamp{}, 0, true, err
+	}
+	return snapshot, generation, true, nil
+}
+
+// WaitLogtailAppliedSnapshot is independent of the peer's optional table
+// target capability. The transaction waiter alone may retain a watermark
+// from an earlier replay generation.
+func (c *PushClient) WaitLogtailAppliedSnapshot(ctx context.Context, min timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if c.subscriber == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "logtail subscriber is not initialized")
+	}
+	peer, err := c.subscriber.waitReadyClient(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	generation := c.replayVersion.Load()
+	if generation == 0 {
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+	}
+	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	return c.waitPeerAppliedSnapshot(ctx, min, peer, generation)
+}
+
+func (c *PushClient) waitPeerAppliedSnapshot(ctx context.Context, target timestamp.Timestamp, peer *service.LogtailClient, generation uint64) (timestamp.Timestamp, error) {
+	applied, err := c.receivedLogTailTime.waitForApplied(ctx, target, peer, &c.replayVersion, generation)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if c.replayVersion.Load() != generation {
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+	}
+	if err = c.checkPeerReadBarrierReady(ctx, peer); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	snapshot := applied.Next()
+	if !snapshot.Greater(applied) {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "logtail applied snapshot overflow")
+	}
+	return snapshot, nil
 }
 
 // checkPeerReadBarrierReady is a point-in-time check, not a connection lease.
@@ -402,6 +489,7 @@ var nextReplayVersion atomic.Uint64
 func (c *PushClient) invalidateReadContinuity() {
 	c.receivedLogTailTime.ready.Store(false)
 	c.replayVersion.Store(nextReplayVersion.Add(1))
+	c.receivedLogTailTime.signalProgress()
 }
 
 func (c *PushClient) init(
@@ -1906,6 +1994,9 @@ type syncLogTailTimestamp struct {
 	tList                  []atomic.Value
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
 	e                      *Engine
+	progressWaiters        atomic.Int32
+	progressMu             sync.Mutex
+	progressChanged        chan struct{}
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1948,10 +2039,72 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 		v2.LogTailApplyNotifyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 	r.tList[index].Store(newTimestamp)
+	r.signalProgress()
 	if r.ready.Load() {
 		ts := r.getTimestamp()
 		r.timestampWaiter.NotifyLatestCommitTS(ts)
 	}
+}
+
+func (r *syncLogTailTimestamp) waitForApplied(
+	ctx context.Context,
+	target timestamp.Timestamp,
+	peer *service.LogtailClient,
+	generation *atomic.Uint64,
+	wantGeneration uint64,
+) (timestamp.Timestamp, error) {
+	if !r.ready.Load() || generation.Load() != wantGeneration {
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+	}
+	if applied := r.getTimestamp(); applied.GreaterEq(target) {
+		return applied, nil
+	}
+	for {
+		r.progressMu.Lock()
+		if r.progressChanged == nil {
+			r.progressChanged = make(chan struct{})
+		}
+		changed := r.progressChanged
+		r.progressWaiters.Add(1)
+		if !r.ready.Load() || generation.Load() != wantGeneration {
+			r.progressWaiters.Add(-1)
+			r.progressMu.Unlock()
+			return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+		}
+		applied := r.getTimestamp()
+		if applied.GreaterEq(target) {
+			r.progressWaiters.Add(-1)
+			r.progressMu.Unlock()
+			return applied, nil
+		}
+		r.progressMu.Unlock()
+
+		select {
+		case <-changed:
+			r.progressWaiters.Add(-1)
+		case <-ctx.Done():
+			r.progressWaiters.Add(-1)
+			return timestamp.Timestamp{}, context.Cause(ctx)
+		case <-peer.Done():
+			r.progressWaiters.Add(-1)
+			return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+		case <-peer.Broken():
+			r.progressWaiters.Add(-1)
+			return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+		}
+	}
+}
+
+func (r *syncLogTailTimestamp) signalProgress() {
+	if r.progressWaiters.Load() == 0 {
+		return
+	}
+	r.progressMu.Lock()
+	if r.progressWaiters.Load() > 0 {
+		close(r.progressChanged)
+		r.progressChanged = make(chan struct{})
+	}
+	r.progressMu.Unlock()
 }
 
 type logTailSubscriber struct {
