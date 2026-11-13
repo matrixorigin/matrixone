@@ -2002,40 +2002,78 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 				const table = uint64(26645)
 				txnA := []byte("ordinary-cancel-a")
 				txnB := []byte("ordinary-cancel-b")
-				sharedRows := newTestRowSharedOptions()
-				_, err := s.Lock(ctx, table, newTestRows(1, 2), txnA, sharedRows)
-				require.NoError(t, err)
-				_, err = s.Lock(ctx, table, newTestRows(1), txnB, sharedRows)
-				require.NoError(t, err)
-
-				waitCtx, waitCancel := context.WithTimeout(ctx, time.Millisecond*50)
+				caseCtx, cancelCase := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelCase()
+				waitCtx, waitCancel := context.WithCancel(context.Background())
 				defer waitCancel()
-				done := make(chan error, 1)
+				var acquiredA, acquiredB bool
+				var done chan struct{}
+				t.Cleanup(func() {
+					waitCancel()
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if done != nil {
+						select {
+						case <-done:
+						case <-cleanupCtx.Done():
+							t.Errorf("lock waiter did not exit during cleanup: %v", cleanupCtx.Err())
+							return
+						}
+					}
+					if acquiredB {
+						if err := s.Unlock(cleanupCtx, txnB, timestamp.Timestamp{}); err != nil {
+							t.Errorf("unlock txnB: %v", err)
+						}
+					}
+					if acquiredA {
+						if err := s.Unlock(cleanupCtx, txnA, timestamp.Timestamp{}); err != nil {
+							t.Errorf("unlock txnA: %v", err)
+						}
+					}
+				})
+				sharedRows := newTestRowSharedOptions()
+				_, err := s.Lock(caseCtx, table, newTestRows(1, 2), txnA, sharedRows)
+				require.NoError(t, err)
+				acquiredA = true
+				_, err = s.Lock(caseCtx, table, newTestRows(1), txnB, sharedRows)
+				require.NoError(t, err)
+				acquiredB = true
+
+				done = make(chan struct{})
+				var lockErr error
 				go func() {
-					_, lockErr := s.Lock(
+					defer close(done)
+					_, lockErr = s.Lock(
 						waitCtx,
 						table,
 						newTestRows(1, 4),
 						txnA,
 						newTestRangeSharedOptions(),
 					)
-					done <- lockErr
 				}()
 				waitWaiters(t, s, table, newTestRows(1)[0], 1)
-				require.ErrorIs(t, <-done, context.DeadlineExceeded)
+				waitCancel()
+				timer := time.NewTimer(10 * time.Second)
+				defer timer.Stop()
+				select {
+				case <-done:
+					require.ErrorIs(t, lockErr, context.Canceled)
+				case <-timer.C:
+					t.Fatal("cancelled lock waiter did not exit")
+				}
+				waitWaiters(t, s, table, newTestRows(1)[0], 0)
 
 				lt := s.tableGroups.get(0, table).(*localLockTable)
 				checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA, txnB}, nil, nil)
 				checkLock(t, lt, newTestRows(2)[0], [][]byte{txnA}, nil, nil)
 				active := s.activeTxnHolder.getActiveTxn(txnA, false, "")
 				require.NotNil(t, active)
-				active.RLock()
-				require.Equal(t, 2,
-					active.lockHolders[0].tableKeys[table].mustGet().len())
-				active.RUnlock()
-
-				require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
-				require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
+				keys := func() int {
+					active.RLock()
+					defer active.RUnlock()
+					return active.lockHolders[0].tableKeys[table].mustGet().len()
+				}()
+				require.Equal(t, 2, keys)
 			})
 		},
 	)

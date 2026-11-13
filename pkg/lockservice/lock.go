@@ -323,10 +323,10 @@ func (l Lock) IterHolders(fn func(holder pb.WaitTxn) bool) {
 	}
 }
 
-// IterHolders iter which txn is waiting for this lock
+// IterWaiters visits transactions waiting for this lock until fn returns false.
 func (l Lock) IterWaiters(fn func(waiter pb.WaitTxn) bool) {
 	l.waiters.iter(func(w *waiter) bool {
-		return !fn(w.txn)
+		return fn(w.txn)
 	})
 }
 

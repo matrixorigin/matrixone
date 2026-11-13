@@ -1029,7 +1029,7 @@ func allocationAccountLiveDiagnostic(
 	var site AllocationSite
 	var count uint64
 	record := func(lease allocationLease) {
-		if lease.account != account {
+		if lease.account() != account {
 			return
 		}
 		if count == 0 {
@@ -1042,7 +1042,9 @@ func allocationAccountLiveDiagnostic(
 		shard := &globalPtrShards[i]
 		shard.mu.Lock()
 		for _, metadata := range shard.accounted {
-			record(metadata.lease)
+			if metadata.hdr.isAccounted() {
+				record(metadata.lease)
+			}
 		}
 		shard.mu.Unlock()
 	}
@@ -1057,7 +1059,9 @@ func allocationAccountLiveDiagnostic(
 			return true
 		}
 		for _, metadata := range mp.accountedPtrs {
-			record(metadata.lease)
+			if metadata.hdr.isAccounted() {
+				record(metadata.lease)
+			}
 		}
 		return true
 	})
@@ -1264,25 +1268,18 @@ func (r allocationAccountRequest) validate() error {
 	return nil
 }
 
-type allocationLease struct {
-	account       *AllocationAccount
-	owner         AllocationOwner
-	site          AllocationSite
-	profiled      bool
-	capacityClass AllocationCapacityClass
-}
-
 func (l allocationLease) release(capacity uint64) {
-	if l.account == nil || l.account.registry == nil {
+	account := l.account()
+	if account == nil || account.registry == nil {
 		panic("invalid allocation account lease")
 	}
 	// Retire backing observation before its policy charge. A concurrent sample
 	// may count the released bytes conservatively, but must not count them as
 	// backing for another still-pending admission.
-	l.account.registry.releaseCommittedCapacity(capacity)
+	account.registry.releaseCommittedCapacity(capacity)
 	// Return finite metadata first. account.release retains the local charge
 	// until controller cleanup completes, so exact zero is a complete-release
 	// boundary.
-	l.account.registry.releaseMetadata()
-	l.account.releaseWithCapacityClass(capacity, l.capacityClass, l.owner)
+	account.registry.releaseMetadata()
+	account.releaseWithCapacityClass(capacity, l.capacityClass, l.owner)
 }
