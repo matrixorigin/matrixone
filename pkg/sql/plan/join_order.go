@@ -859,6 +859,12 @@ func (builder *QueryBuilder) getJoinActiveDomainSelectivityOnSide(
 		return 0, false
 	}
 	activeDomain := min(parentNDV, dimensionNDV, parent.Stats.Outcnt)
+	if node.JoinType == plan.Node_ANTI {
+		// A smaller build domain cannot cover every probe key. Measuring its
+		// keys against itself would make every unfiltered unique ANTI build
+		// look like a complete rejection, regardless of the probe key count.
+		activeDomain = min(parentNDV, parent.Stats.Outcnt)
+	}
 	if activeDomain <= 0 || math.IsNaN(activeDomain) || math.IsInf(activeDomain, 0) {
 		return 0, false
 	}

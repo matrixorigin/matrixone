@@ -8429,13 +8429,18 @@ type FixedSourceRow struct {
 	Row int64
 }
 
-// TryUnionFlatFixedRows copies rows across source vectors without changing their
-// order. A false result leaves v untouched, allowing the caller to use UnionOne.
+// TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
+// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// false result leaves v untouched, allowing the caller to use UnionOne.
 // A true result transfers no source ownership; v owns every copied payload.
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
-	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() ||
+	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings ||
 		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
 		v.preflightStringSourceReady {
+		return false, nil
+	}
+	if inlineStrings && (types.IsUnicodeCollation(v.typ.Charset) || v.AreaBackingKind() != OwnedMPoolUnique) {
 		return false, nil
 	}
 	size := v.typ.TypeSize()
@@ -8456,6 +8461,10 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 			return false, nil
 		}
 		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		if inlineStrings && (w.AreaBackingKind() != OwnedMPoolUnique ||
+			!isNull && w.data[int(row.Row)*size] > types.VarlenaInlineSize) {
+			return false, nil
+		}
 		hasNulls = hasNulls || isNull
 		hasValues = hasValues || !isNull
 	}
@@ -8469,6 +8478,9 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 		for i, row := range rows {
 			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
 				nulls.Add(&v.nsp, uint64(oldLen+i))
+				if inlineStrings {
+					clear(v.data[(oldLen+i)*size : (oldLen+i+1)*size])
+				}
 				continue
 			}
 			dst, src := (oldLen+i)*size, int(row.Row)*size
