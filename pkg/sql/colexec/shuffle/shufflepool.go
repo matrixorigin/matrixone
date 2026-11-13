@@ -884,6 +884,17 @@ func (sp *ShufflePool) tryWrite(
 	startOffset int,
 	proc *process.Process,
 ) (nextBucket int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+	return sp.tryWriteMode(srcBatch, sels, producer, startBucket, startOffset, false, proc)
+}
+
+func (sp *ShufflePool) tryWriteMode(
+	srcBatch *batch.Batch,
+	sels [][]int32,
+	producer int32,
+	startBucket, startOffset int,
+	wholeBucket bool,
+	proc *process.Process,
+) (nextBucket int, nextOffset int, wait <-chan struct{}, done bool, err error) {
 	if producer < 0 || len(sp.batchSets) == 0 {
 		return startBucket, startOffset, nil, false, moerr.NewInternalErrorf(
 			proc.Ctx,
@@ -899,26 +910,34 @@ func (sp *ShufflePool) tryWrite(
 		lane = int32(max(1, int(sp.maxHolders)))
 		maxRows = objectio.BlockMaxRows
 	}
-	for bucket := startBucket; bucket < len(sp.batchSets); bucket++ {
+	endBucket := len(sp.batchSets)
+	if wholeBucket {
+		endBucket = startBucket + 1
+	}
+	for bucket := startBucket; bucket < endBucket; bucket++ {
 		offset := 0
 		if bucket == startBucket {
 			offset = startOffset
 		}
-		current := sels[bucket]
-		for offset < len(current) {
+		var current []int32
+		count := srcBatch.RowCount()
+		if !wholeBucket {
+			current = sels[bucket]
+			count = len(current)
+		}
+		for offset < count {
 			// BatchSet historically assumed its maximum was at least the input
 			// batch size. Producer-local lanes deliberately use a smaller maximum
 			// at high DOP, so split selections at that boundary before Union. This
 			// keeps ReadyDeltaFor and the batches actually published in lockstep.
-			end := min(offset+maxRows, len(current))
-			chunk := current[offset:end]
+			end := min(offset+maxRows, count)
 			sp.batchLocks[bucket].Lock()
 			if sp.closed[bucket] {
 				sp.batchLocks[bucket].Unlock()
 				break
 			}
 			batchSet := sp.batchSets[bucket][lane]
-			readyDelta := batchSet.ReadyDeltaFor(srcBatch, len(chunk))
+			readyDelta := batchSet.ReadyDeltaFor(srcBatch, end-offset)
 			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 			if !ok {
 				sp.batchLocks[bucket].Unlock()
@@ -928,7 +947,13 @@ func (sp *ShufflePool) tryWrite(
 			oldReady := batchSet.ReadyCount()
 			oldLength := batchSet.Length()
 			buf := sp.getBatchFromPool(producer)
-			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
+			var consumed bool
+			var writeErr error
+			if wholeBucket {
+				consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
+			} else {
+				consumed, writeErr = batchSet.Union(proc.Mp(), srcBatch, current[offset:end], buf)
+			}
 			if !consumed && buf != nil {
 				sp.putBatchToPool(buf, proc.Mp())
 			}

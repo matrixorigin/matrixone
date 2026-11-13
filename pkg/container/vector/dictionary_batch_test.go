@@ -18,8 +18,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
 )
+
+func TestDictionaryRangeReservesLiveStringAreaOnce(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	values := []string{strings.Repeat("a", 256), strings.Repeat("dead", 256), strings.Repeat("c", 700)}
+	for _, value := range values {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	source.SetNull(1)
+	base, err := FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := NewRowSelection([]int64{2, 1, 0, 2, 0}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	selected, err := NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { selected.Free(mp) })
+	for _, tc := range []struct {
+		name    string
+		flags   []uint8
+		count   int
+		logical []int
+	}{
+		{"range", nil, 4, []int{1, 2, 3, 4}},
+		{"flags", []uint8{1, 0, 1, 1}, 3, []int{1, 3, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := NewOffHeapVecWithType(types.T_varchar.ToType())
+			defer target.Free(mp)
+			seed := strings.Repeat("s", 64)
+			require.NoError(t, AppendBytes(target, []byte(seed), false, mp))
+			require.NoError(t, target.PreExtend(1+len(tc.logical), mp))
+			require.NoError(t, target.PreExtendNulls(1+len(tc.logical), mp))
+			before := mp.Stats().NumAlloc.Load()
+			require.NoError(t, target.UnionBatch(selected, 1, tc.count, tc.flags, mp))
+			require.Equal(t, int64(1), mp.Stats().NumAlloc.Load()-before, "live string payload must be reserved in one allocation")
+			require.Equal(t, seed, target.GetStringAt(0))
+			liveBytes := len(seed)
+			for out, logical := range tc.logical {
+				isNull := selected.IsNull(uint64(logical))
+				require.Equal(t, isNull, target.IsNull(uint64(out+1)))
+				if !isNull {
+					value := selected.GetStringAt(logical)
+					require.Equal(t, value, target.GetStringAt(out+1))
+					liveBytes += len(value)
+				}
+			}
+			require.Len(t, target.GetArea(), liveBytes, "NULL backing payload must not be copied")
+		})
+	}
+}
 
 func TestDictionaryColumnsShareMappingsAndBacking(t *testing.T) {
 	mp := mpool.MustNewZero()

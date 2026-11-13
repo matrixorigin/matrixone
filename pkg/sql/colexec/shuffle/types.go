@@ -134,6 +134,7 @@ func (shuffle *Shuffle) Release() {
 type container struct {
 	dictionaryBoundary   vm.DictionaryOutputState
 	ending               bool
+	pendingWholeBucket   bool
 	sels                 [][]int32
 	buf                  *batch.Batch
 	pendingBat           *batch.Batch
@@ -307,6 +308,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.pendingBucket = 0
 	shuffle.ctr.pendingOffset = 0
+	shuffle.ctr.pendingWholeBucket = false
 	shuffle.ctr.runtimeFilterHandled = false
 	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
@@ -376,6 +378,9 @@ func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err err
 	shuffle.freeKeyScratch(proc)
 	shuffle.ctr.buf = nil
 	shuffle.ctr.pendingBat = nil
+	shuffle.ctr.pendingBucket = 0
+	shuffle.ctr.pendingOffset = 0
+	shuffle.ctr.pendingWholeBucket = false
 	shuffle.ctr.shufflePool = nil
 	if shuffle.ctr.exprExec != nil {
 		shuffle.ctr.exprExec.Free()

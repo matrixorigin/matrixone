@@ -248,6 +248,33 @@ func dictionarySelectedAreaBytes(source *Vector, offset int, flags []uint8) (int
 	return total, nil
 }
 
+func dictionaryRangeAreaBytes(source *Vector, offset, count int) (int, error) {
+	view := ResolveVarlenaReadView(source)
+	if view.AllNull {
+		return 0, nil
+	}
+	total := 0
+	for row := offset; row < offset+count; row++ {
+		if view.Nulls.Contains(uint64(row)) {
+			continue
+		}
+		physical := int(view.Selection[row])
+		if view.Constant {
+			physical = 0
+		}
+		value := view.Values[physical]
+		if value.IsSmall() {
+			continue
+		}
+		_, length := value.OffsetLen()
+		if int(length) > math.MaxInt-total {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+		total += int(length)
+	}
+	return total, nil
+}
+
 // Return false only for an unrecognized physical width, leaving the established
 // generic path intact. Type-width, validity and constant decisions are per batch.
 func copyDictionaryFixedBatch(dst, src *Vector, start, count int, flags []uint8, offset, added int) bool {
@@ -525,6 +552,25 @@ func (v *Vector) admitDictionaryBatch(
 	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
+		if preflighted {
+			if selectedAreaBytes > cap(v.area)-len(v.area) {
+				return allocationAccountInvalid("preflighted vector area capacity is insufficient")
+			}
+		} else {
+			var total int
+			var err error
+			if flags == nil {
+				total, err = dictionaryRangeAreaBytes(w, int(offset), cnt)
+			} else {
+				total, err = dictionarySelectedAreaBytes(w, int(offset), flags)
+			}
+			if err != nil {
+				return err
+			}
+			if err := pregrowVarlenaArea(v, total, mp); err != nil {
+				return err
+			}
+		}
 	}
 
 	return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)

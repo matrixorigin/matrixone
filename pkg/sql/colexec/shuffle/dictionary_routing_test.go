@@ -203,10 +203,15 @@ func TestDictionarySortedRangeUsesEndpointsWithoutEnumerating(t *testing.T) {
 			for _, sel := range arg.ctr.sels {
 				total += len(sel)
 			}
+			require.Zero(t, total, "same-bucket input must not build identity routing selections")
 			if nullable {
-				require.Equal(t, 4, total)
-			} else {
-				require.Zero(t, total, "sorted same-bucket input must not build per-row routing selections")
+				// Equal non-NULL endpoint buckets do not prove the NULL rows' bucket.
+				arg.ShuffleColMin, arg.ShuffleColMax = -100, 0
+				partition := bucketSelections{sels: arg.clearSels()}
+				dictionaryIntegerSels[int64](arg, selected, true, &partition)
+				require.True(t, partition.mixed)
+				require.Equal(t, []int32{1, 2}, partition.sels[0])
+				require.Equal(t, []int32{0, 3}, partition.sels[3])
 			}
 		})
 	}
