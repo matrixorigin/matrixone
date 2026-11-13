@@ -1302,9 +1302,11 @@ install-static-check-tools:
 .PHONY: static-check static-check-analysis
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
-STATIC_CHECK_VET = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
-STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+STATIC_CHECK_PACKAGES ?= ./...
+STATIC_CHECK_VET = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
 
+static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
 	$(STATIC_CHECK_VET)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
@@ -1314,7 +1316,22 @@ static-check: config err-check
 # CI runs the license checks separately. Bound Go's package/build concurrency
 # as well as golangci-lint's workers when a concurrency limit is supplied.
 static-check-analysis: export GOFLAGS := $(strip $(GOFLAGS) $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),-p=$(strip $(GOLANGCI_LINT_CONCURRENCY))))
-static-check-analysis: config err-check
+static-check-analysis: err-check
+	@set -e; packages='./...'; \
+	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
+		$(MAKE) --no-print-directory config; \
+	fi; \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
+.PHONY: static-check-selected
+static-check-selected:
 	$(STATIC_CHECK_VET)
 	$(STATIC_CHECK_GOLANGCI)
 
