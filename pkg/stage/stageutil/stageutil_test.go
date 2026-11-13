@@ -90,6 +90,23 @@ func TestStageFail(t *testing.T) {
 	require.NotNil(t, err)
 }
 
+func TestStageLoadCatalogUninitializedProcess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		proc *process.Process
+	}{
+		{name: "nil process"},
+		{name: "nil base", proc: &process.Process{}},
+		{name: "nil stage cache", proc: &process.Process{Base: &process.BaseProcess{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := StageLoadCatalog(tc.proc, "a")
+			require.ErrorContains(t, err, "stage catalog lookup requires an initialized process")
+			require.Equal(t, stage.StageDef{}, got)
+		})
+	}
+}
+
 func setStage(t *testing.T, proc *process.Process, name, rawurl string) {
 	setStageWithStatus(t, proc, name, rawurl, "")
 }
