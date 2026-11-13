@@ -21,8 +21,44 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRestoreSnapshotPreflightUsesAuthorizedTimestampAcrossAccounts(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	const sourceAccount = uint32(17)
+	const ts = int64(100)
+	const dbName = "branch_source"
+	const snapshotName = "sys_owned_snapshot"
+	showSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	definitionSQL := fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d", ts, dbName, sourceAccount)
+	primary := fmt.Errorf("snapshot name is owned by sys, not the source account")
+	for _, failDefinition := range []bool{false, true} {
+		t.Run(fmt.Sprint("source_read_failure=", failDefinition), func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2err["show databases {snapshot = '"+snapshotName+"'}"] = primary
+			bh.sql2result[showSQL] = newMrsForRestoreStringRows([]string{"Database"}, [][]interface{}{{dbName}})
+			bh.sql2result[definitionSQL] = newMrsForRestoreStringRows(
+				[]string{"datname", "dat_createsql", "dat_type"},
+				[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+			)
+			if failDefinition {
+				bh.sql2err[definitionSQL] = primary
+			}
+			err := preflightRestoreSnapshotEntry(ctx, &Session{}, bh,
+				&tree.RestoreSnapShot{Level: tree.RESTORELEVELACCOUNT},
+				snapshotRecord{level: "account", objId: uint64(sourceAccount), ts: ts, snapshotName: snapshotName})
+			if failDefinition {
+				require.ErrorIs(t, err, primary)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, []string{showSQL, definitionSQL}, bh.executedSQLs)
+		})
+	}
+}
 
 func TestMarkedDatabaseRestorePreservesIdentity(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
