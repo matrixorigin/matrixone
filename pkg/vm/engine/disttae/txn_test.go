@@ -1084,7 +1084,7 @@ func TestRebaseSnapshotDependencySurvivesDropAndPrecedesCatalogWrites(t *testing
 		proc:            proc,
 		tablesInVain:    map[uint64]int{42: 1},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	insert := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 43, bat: insert})
