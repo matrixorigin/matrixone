@@ -3581,15 +3581,9 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		probe := expr.GetF().Args[0]
-		col := serializedRuntimeFilterComponentCol(probe)
+		col := expr.GetF().Args[0].GetCol()
 		if col == nil || len(leftChild.BindingTags) == 0 || col.RelPos != leftChild.BindingTags[0] ||
 			col.ColPos < 0 || int(col.ColPos) >= len(leftChild.TableDef.Cols) || leftChild.TableDef.Cols[col.ColPos] == nil {
-			hashSlot++
-			continue
-		}
-		if fn := probe.GetF(); fn != nil && !safeRuntimeFilterIntegerCast(
-			types.T(fn.Args[0].Typ.Id), types.T(probe.Typ.Id), false) {
 			hashSlot++
 			continue
 		}
@@ -3669,11 +3663,6 @@ selectIndex:
 				continue
 			}
 			if (len(condIdx) == numKeyParts) != completeKey {
-				continue
-			}
-			// The scalar exact-filter contract accepts only a raw build column;
-			// widening-cast normalization below requires the tuple contract.
-			if numParts == 1 && node.OnList[condIdx[0].exprIdx].GetF().Args[0].GetF() != nil {
 				continue
 			}
 

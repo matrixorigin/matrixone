@@ -669,8 +669,7 @@ execute force_index_range using @a,@lo,@hi;
 deallocate prepare force_index_range;
 explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
 join t force index(ix_ab) on t.a=k.a order by t.id;
--- @regex("Runtime Filter Build: serial_full.*cast", true)
--- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+-- @regex("Index Table Scan.*ix_ab", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -678,7 +677,6 @@ Project  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (cast(t.a AS BIGINT) = k.a)  𝄀
-              Runtime Filter Build: serial_full(cast(#[-1,0] AS INT))  𝄀
               ->  Join  𝄀
                     Join Type: INDEX  𝄀
                     Join Cond: (t.id = __mo_index_pri_col)  𝄀
@@ -686,7 +684,6 @@ Project  𝄀
                     ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
                           Runtime Filter Probe: t.id  𝄀
                     ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
-                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
               ->  Project  𝄀
                     ->  Values Scan "*VALUES*"
 select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
