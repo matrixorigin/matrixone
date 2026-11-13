@@ -15,6 +15,7 @@
 package status
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -130,4 +131,10 @@ func TestServeHTTPPartitions(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, "cn1", payload.CNUUID)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req.WithContext(ctx))
+	require.Equal(t, http.StatusRequestTimeout, resp.Code)
 }

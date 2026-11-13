@@ -106,6 +106,7 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			check("select count(*) from mo_catalog.mo_database where account_id=%d and datname='lazy_catalog_reader_db'", 1)
 			check("select count(*) from mo_catalog.mo_tables where account_id=%d and reldatabase='lazy_catalog_reader_db' and relname='one'", 1)
 			check("select count(*) from mo_catalog.mo_columns where account_id=%d and att_database='lazy_catalog_reader_db' and att_relname='one' and attname='id'", 1)
+			check("select count(*) from mo_catalog.mo_tables where (account_id=0 or account_id=%d) and reldatabase='lazy_catalog_reader_db' and relname='one'", 1)
 			execSQLRequire(t, ctx, tenant, "create table lazy_catalog_reader_db.two(id int)")
 			check("select count(*) from mo_catalog.mo_tables where account_id=%d and reldatabase='lazy_catalog_reader_db' and relname='two'", 1)
 			execSQLRequire(t, ctx, tenant, "drop table lazy_catalog_reader_db.two")

@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -380,10 +381,13 @@ func (e *Engine) DebugCatalogActivationHistory(
 	return e.PushClient().DebugCatalogActivationHistory(accountFilter, limit)
 }
 
-func (e *Engine) DebugPartitions(dbFilter, tableFilter *uint64, limit int) DebugPartitionsState {
+func (e *Engine) DebugPartitions(ctx context.Context, dbFilter, tableFilter *uint64, limit int) (DebugPartitionsState, error) {
 	state := DebugPartitionsState{}
+	if err := ctx.Err(); err != nil {
+		return state, err
+	}
 	if e == nil {
-		return state
+		return state, nil
 	}
 
 	state.LatestLogtailAppliedTS = e.PushClient().LatestLogtailAppliedTime()
@@ -447,14 +451,18 @@ func (e *Engine) DebugPartitions(dbFilter, tableFilter *uint64, limit int) Debug
 
 	state.Partitions = make([]DebugPartitionInfo, 0, len(refs))
 	for _, ref := range refs {
+		header, known, err := ref.part.SnapshotTableInfo(ctx)
+		if err != nil {
+			return DebugPartitionsState{}, err
+		}
 		info := DebugPartitionInfo{
 			DatabaseID:         ref.dbID,
 			DatabaseName:       debugPartitionDatabaseName(ref.dbID),
 			TableID:            ref.tblID,
 			CheckpointConsumed: ref.part.CheckpointConsumed(),
 		}
-		if ref.part.TableInfoOK && ref.part.TableInfo.Name != "" {
-			info.TableName = ref.part.TableInfo.Name
+		if known && header.Name != "" {
+			info.TableName = header.Name
 			info.TableInfoKnown = true
 		} else if name := debugPartitionFallbackTableName(ref.tblID); name != "" {
 			info.TableName = name
@@ -467,7 +475,7 @@ func (e *Engine) DebugPartitions(dbFilter, tableFilter *uint64, limit int) Debug
 		state.Partitions = append(state.Partitions, info)
 	}
 
-	return state
+	return state, nil
 }
 
 func debugCanServeAccountAt(e *Engine, accountID uint32, ts timestamp.Timestamp) bool {

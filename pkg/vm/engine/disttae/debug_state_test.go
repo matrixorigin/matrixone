@@ -15,16 +15,59 @@
 package disttae
 
 import (
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDebugPartitionsConcurrentLogtailPublication(t *testing.T) {
+	const count = 128
+	eng := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, count)},
+	}
+	for i := range count {
+		eng.GetOrCreateLatestPart(t.Context(), 0, 100, uint64(1000+i))
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		<-start
+		for i := range count {
+			tail := &logtail.TableLogtail{Table: &api.TableID{
+				DbId: 100, TbId: uint64(1000 + i), DbName: "debug_race", TbName: fmt.Sprintf("table_%d", i),
+			}}
+			assert.NoError(t, updatePartitionOfPush(t.Context(), eng, tail, true, time.Now(), true, true, timestamp.Timestamp{}))
+		}
+	})
+	wg.Go(func() {
+		<-start
+		for range count {
+			_, err := eng.DebugPartitions(t.Context(), nil, nil, count)
+			assert.NoError(t, err)
+		}
+	})
+	close(start)
+	wg.Wait()
+	state, err := eng.DebugPartitions(t.Context(), nil, nil, count)
+	require.NoError(t, err)
+	require.Len(t, state.Partitions, count)
+	for i, partition := range state.Partitions {
+		require.True(t, partition.TableInfoKnown)
+		require.Equal(t, fmt.Sprintf("table_%d", i), partition.TableName)
+	}
+}
 
 func TestLazyCatalogDebugState(t *testing.T) {
 	state := newLazyCatalogCNState()

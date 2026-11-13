@@ -119,14 +119,18 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 
 回退时 `loadTableFromStorage` → `execReadSql` → catalog reader。共享 push
 `PartitionState` 缺少冷租户的后续 row delta，不能作为任意 sys catalog SQL 的完整数据源。
-reader 保留已有订阅、pending logtail 和 snapshot coverage 检查；普通 sys SQL 以及未就绪
-租户的 catalog 读取，复用 TN `OpGetLogTail`，按事务 snapshot TS 获取完整 checkpoint + delta。
+reader 保留已有订阅、pending logtail 和 snapshot coverage 检查。普通 sys SQL 若能从 scan
+谓词证明结果只属于已就绪账户，则复用已订阅的分区，不逐次拉取全局快照。证明识别规范列名
+（ColPos 已由 scan 重排）、整数常量及 uint32 folded 常量；AND 有一个限定项即可，OR 每个分支
+都必须限定。检查 readiness 与取得分区快照期间持有同一账户状态读锁，避免 reconnect 混用代次。
+其余普通 sys SQL 以及未就绪租户的 catalog 读取，复用 TN `OpGetLogTail`，按事务 snapshot TS
+获取完整 checkpoint + delta。
 结果仅属于本次 reader，不写回共享 push partition，不发布 cache ready，也不添加 wanted account。
 CN 仅额外保留三张表的固定 bootstrap 基线；其 COW fork 在 engine 锁内串行，RPC/I/O 在锁外。
 历史 snapshot 仍走原有 checkpoint coverage 路径；同事务写入仍由 workspace 合并。
 
-只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以跳过
-这个读取回退；普通 SQL 不得借用 replay 标记。系统表的物理 `accountId=0` 不代表调用方
+只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以使用
+内部 replay 标记；普通 SQL 的快路径只依赖谓词证明，不得借用该标记。系统表的物理 `accountId=0` 不代表调用方
 具有完整 catalog，判断使用实际 caller account。
 
 ---
