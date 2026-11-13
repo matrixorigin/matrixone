@@ -168,7 +168,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        server: ['4.2.5', 'current-source']
+        server: ['4.2.8', 'current-source']
     environment: matrixone-sdk-${{ matrix.server }}
     defaults:
       run:
@@ -218,7 +218,7 @@ jobs:
           MO_SDK_TARGET: ${{ matrix.server }}
         run: |
           python -m pip install -e '.[analytics]'
-          python -m pytest tests/online tests/analytics --ignore=tests/online/test_sdk_quality_contracts.py --ignore=tests/online/test_sdk_manager_contracts.py --ignore=tests/online/test_sdk_search_contracts.py --ignore=tests/online/test_sdk_wave2_contracts.py -o addopts='' -q --tb=short --junitxml=online-extended.xml
+          python -m pytest tests/online tests/analytics --ignore=tests/online/test_sdk_quality_contracts.py --ignore=tests/online/test_sdk_manager_contracts.py --ignore=tests/online/test_sdk_search_contracts.py --ignore=tests/online/test_sdk_wave2_contracts.py --ignore=tests/online/test_sdk_release_contracts.py -o addopts='' -q --tb=short --junitxml=online-extended.xml
       - name: Report actual integration coverage
         if: always()
         run: |

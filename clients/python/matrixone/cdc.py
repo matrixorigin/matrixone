@@ -421,7 +421,9 @@ class BaseCDCManager:
                 value_str = "true" if value else "false"
             else:
                 value_str = str(value)
-            option_pairs.append(sql_string_token(key_str, context='CDC') + '=' + sql_string_token(value_str, context='CDC'))
+            option_pairs.append(
+                sql_string_token(key_str, context='CDC') + '=' + sql_string_token(value_str, context='CDC')
+            )
 
         return "{" + ", ".join(option_pairs) + "}"
 
@@ -537,7 +539,9 @@ class BaseCDCManager:
             )
         return tasks
 
-    def _rows_to_watermarks(self, rows: Iterable[Sequence[Any]], task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
+    def _rows_to_watermarks(
+        self, rows: Iterable[Sequence[Any]], task_name: Optional[str] = None
+    ) -> List[CDCWatermarkInfo]:
         watermarks: List[CDCWatermarkInfo] = []
         for task in self._rows_to_tasks(rows, task_name):
             for database, table, watermark, err_msg in self._parse_watermarks(task.checkpoint):

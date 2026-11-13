@@ -41,7 +41,15 @@ def test_success_requires_authenticated_query(monkeypatch):
 def test_sync_auto_connect_forwards_disabled_auto_commit(monkeypatch):
     connect = Mock()
     monkeypatch.setattr(Client, 'connect', connect)
-    Client(host='localhost', port=6001, user='test', password='synthetic', database='test', auto_commit=False, logger=Mock())
+    Client(
+        host='localhost',
+        port=6001,
+        user='test',
+        password='synthetic',
+        database='test',
+        auto_commit=False,
+        logger=Mock(),
+    )
     assert connect.call_args.kwargs['auto_commit'] is False
 
 

@@ -69,6 +69,17 @@ uncommitted. No write is retried during cleanup.
 
 Driver-parameter migration warnings describe the list form of executemany
 without rendering any bound values, including collection-valued parameters.
+Session error reporting also preserves the database exception when either
+query or error logging itself fails. Cancellation remains outside that
+secondary `Exception` guard.
+
+## Portable pagination
+
+OFFSET without a user LIMIT uses MySQL's unlimited unsigned row count,
+`LIMIT 18446744073709551615 OFFSET n`. This preserves the requested slice on
+released grammar which rejects standalone OFFSET. Explicit LIMIT 0 remains
+empty; omitting both arguments adds neither clause. ORM/index SQL and both
+direct fulltext renderers share the same constant-time compiler helper.
 
 ## Export quote boundaries
 
@@ -155,3 +166,87 @@ Optional TLS/S3/HNSW, multi-CN topologies and async Arrow are separate qualifica
 surfaces; passing this matrix does not certify them. Direct registered
 `matrixone://` engine URLs still lack a DBAPI entrypoint in the baseline and are
 not qualified here; use SDK connect or adopt a configured MySQL driver engine.
+
+## 2026-11-13 release and main validation
+
+The selected targets are official **v4.2.8**, revision **10d204b**, and main
+**1064837ae2648aa20e5e1abb7edd0564493e6b4d**, rechecked against the remote.
+The release image is pinned to
+`matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`.
+Main's version banner is v1.3.0; the git revision identifies the source build.
+Each disposable target has two CNs, shared server/client export paths and its
+own data. This does not certify other historical releases.
+
+The full online/analytics sweeps use Python 3.12.16, SQLAlchemy 2.0.43,
+PyMySQL 1.2.4 and aiomysql 0.3.2. Final native pool/export/error checks also
+pass 34 cases on SQLAlchemy 1.4.54/release and 2.1.8/main. The offline matrix
+does not imply a full online cross-product of all dependency versions.
+
+| Evidence | Result |
+|---|---|
+| Full offline, Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | 3351 / 3347 / 3355 passed; no skips |
+| Full offline, Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | 3351 / 3347 passed; no skips |
+| Full offline, Python 3.11 / SQLAlchemy 2.1.8 | 3355 passed; no skips |
+| Full offline, Python 3.12 / SQLAlchemy 2.0.57 | 3347 passed; no skips |
+| Exact regression tuple, Python 3.12 / SQLAlchemy 2.0.43 / PyMySQL 1.2.3 / aiomysql 0.3.2 | 3347 passed; no skips |
+| Installed core without Arrow, Python 3.8 / SQLAlchemy 1.4 and Python 3.9 / SQLAlchemy 2.0 | Import and portable query compilation passed; 119 runtime checks passed per profile |
+| Complete main online sweep | 1273 passed, no skips |
+| Final changed-owner online selection, main and release | 227 passed on each; release functional checks explicitly use the plain CN |
+| Complete analytics, main | 319 passed, no skips |
+| Complete analytics, release plain CN | 235 passed, 84 Arrow-dependent positive cases unvalidated |
+| Complete release online sweep using a TLS-capable primary | 1254 passed, 7 failures, 8 setup errors, 4 unsupported vector skips; **not green** |
+| Distributions and static checks | Wheel/sdist build, `twine check`, fatal flake8 and diff checks passed |
+
+The complete sweeps preceded the last error-logging, pagination and fixture
+corrections. The final 227-case selection rechecks their owners and public
+consumers; all eight offline profiles use the final Python source. Broad source
+manifests record edits during investigation rather than concealing drift.
+The final online selection's SDK, scripts and online inputs are unchanged;
+only unselected offline SQL-text assertions changed during its main run.
+The current collection has 1285 online and 319 analytics cases. Its case-by-case
+inventory is accounted for by the complete sweeps plus final owner validation:
+1285 main online cases have passing evidence; release has 1281 passing case
+oracles and four explicitly unvalidated vector cases. Native-error oracles
+below do not certify the unavailable positive feature.
+
+### Coverage decisions
+
+| Earlier scenario | Retained or strengthened oracle |
+|---|---|
+| Abandoned, rolled-back and committed transactions | Independent observer reads, failed-reset disposal, explicit AUTOCOMMIT and next-checkout mode; sync/async real drivers and three SQLAlchemy series |
+| Export literals, comments and callable binds | Dollar/numeric token controls; default and NO_BACKSLASH modes; actual one-slot checkout identity; exact CSV/JSONL bytes; failure/cancel/timeout cleanup and one callable evaluation |
+| Multiple predicates, joins and CTEs | Grouping and atomic invalid calls; explicit raw binding; native RIGHT JOIN; executed CTEs and complete row/value oracles replace unused CTEs and permissive fallback assertions |
+| Metadata, labels and CLI indexes | Original unique label controls retained; exact decimals, result names/processors, FULLTEXT-only catalog selection and logical index counts |
+| CLONE, branch and historical sources | Missing-source non-mutation, existing-target no-op, populated branch deletion and source preservation, dropped-source snapshot clones |
+| Analytics lifecycle and cross-CN conflicts | Original Arrow positives remain on main; file variants retain released-server conflict, rollback and session restoration; the same 20000-row/127-row streaming boundary uses Parquet preparation |
+| OFFSET None/0/nonzero and LIMIT None/0/positive | All three fulltext facades plus sync/async ORM slices; unlimited SQL spelling changes without imposing a smaller row limit |
+
+### Release limitations and unresolved observations
+
+* **TLS remains blocked in official 4.2.8.** An independent coalesced SSLRequest/
+  ClientHello times out; main completes TLS 1.3. Ordinary TLS controls pass both.
+  Main includes [the buffered-handshake fix #29996](https://github.com/matrixorigin/matrixone/pull/29996);
+  the released binary still hands TLS the raw socket without unread buffer bytes.
+  Plain functional results cannot certify TLS, and no SDK retry or TLS fallback
+  was added.
+* Native Arrow LOAD returns 20300. The 84 positive write cases are skipped only
+  for the verified exact release and a definite unsupported observation. A
+  separate native/public negative control verifies the error, no committed
+  table, no staging files and pool release. Unknown/current versions run the
+  positive cases. Native VECF8/VECF4 absence accounts for four online skips.
+* Empty database branch deletion, particular fulltext identifier generation,
+  standalone numeric/dollar aliases, standard MySQL view/BOOL reflection and
+  ENUM/SET SHOW CREATE replay have native incompatibilities. Named differential
+  cases record native error/metadata outcomes and preserve source data. Main
+  retains positive coverage; these are not SDK-provided server fixes.
+* One earlier release TLS analytics run reported a missing S3 stage during
+  source validation. Its cause remains unproven. Targeted S3 checks and the
+  complete plain analytics run passed without a retry workaround; this
+  observation is retained rather than described as repaired.
+
+The online CI target is updated to 4.2.8/current-source with the same two jobs.
+Its required and extended selections are disjoint: 207 and 1397 cases cover the
+1604-case collection with no omissions or duplicates. The release-contract
+file previously ran in both phases. Configuration must identify the selected
+isolated server and shared paths; a skipped/unconfigured workflow is not online
+validation. No job wall-time reduction is inferred from checkout/build costs.
