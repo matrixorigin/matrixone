@@ -844,13 +844,6 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	setRtMgr(service, rm)
-	rm.setBaseService(baseService)
-	if baseService != nil {
-		rm.setSessionMgr(baseService.SessionMgr())
-	}
-	// TODO asyncFlushBatch
-	unixAddr := pu.SV.GetUnixSocketAddress()
 	mo := &MOServer{
 		addr:    addr,
 		uaddr:   pu.SV.UnixSocketAddress,
@@ -859,6 +852,21 @@ func NewMOServer(
 		handler: rm.Handler,
 		service: service,
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if err := mo.Stop(); err != nil {
+				logutil.Errorf("failed to stop partially constructed frontend: %v", err)
+			}
+		}
+	}()
+	setRtMgr(service, rm)
+	rm.setBaseService(baseService)
+	if baseService != nil {
+		rm.setSessionMgr(baseService.SessionMgr())
+	}
+	// TODO asyncFlushBatch
+	unixAddr := pu.SV.GetUnixSocketAddress()
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -871,6 +879,7 @@ func NewMOServer(
 		}
 		mo.listeners = append(mo.listeners, listenerUnix)
 	}
+	constructed = true
 	return mo
 }
 

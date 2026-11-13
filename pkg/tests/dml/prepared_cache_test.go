@@ -31,9 +31,12 @@ import (
 )
 
 func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
+	previousForceMultiCN := plan.GetForceScanOnMultiCN()
+	plan.SetForceScanOnMultiCN(false)
+	defer plan.SetForceScanOnMultiCN(previousForceMultiCN)
 	var fixtureInvalidationErr error
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -66,35 +69,41 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 		execSQLDB(t, ctx, db, "use `"+name+"`")
 		execSQLDB(t, ctx, db, "create table src (id bigint primary key)")
 		execSQLDB(t, ctx, db, "insert into src values (1),(2)")
+		cancel() // Setup owns no later scenario deadline.
 
 		for _, remoteOnly := range []bool{false, true} {
-			t.Run(fmt.Sprintf("remote-only=%t", remoteOnly), func(t *testing.T) {
+			if !t.Run(fmt.Sprintf("remote-only=%t", remoteOnly), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				runQueries := func() {
 					tx, err := db.BeginTx(ctx, nil)
 					require.NoError(t, err)
 					defer tx.Rollback()
 					// The existing test hook selects AP with two committed rows.
 					// Never force fixture DDL, transaction writes, or cleanup to AP.
+					previous := plan.GetForceScanOnMultiCN()
+					defer plan.SetForceScanOnMultiCN(previous)
 					plan.SetForceScanOnMultiCN(true)
-					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src") //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
-					plan.SetForceScanOnMultiCN(false)
+					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src")
 					require.NoError(t, err)
 					defer stmt.Close()
-					query := func(value int64) (int64, error) {
+					plan.SetForceScanOnMultiCN(false)
+					query := func(stmt *sql.Stmt, value int64) (int64, error) {
+						previous := plan.GetForceScanOnMultiCN()
 						plan.SetForceScanOnMultiCN(true)
-						defer plan.SetForceScanOnMultiCN(false)
+						defer plan.SetForceScanOnMultiCN(previous)
 						var sum int64
 						err := stmt.QueryRowContext(ctx, value).Scan(&sum)
 						return sum, err
 					}
-					sum, err := query(-1)
+					sum, err := query(stmt, -1)
 					require.NoError(t, err)
 					require.Equal(t, int64(5), sum)
 					_, err = tx.ExecContext(ctx, "insert into src values (3)")
 					require.NoError(t, err)
 					// The unchanged binary parameter category hits the runtime cache.
 					// A writable ingress must participate, or scheduling must fail.
-					sum, err = query(-2)
+					sum, err = query(stmt, -2)
 					if remoteOnly {
 						require.ErrorContains(t, err, schedule.ReasonCurrentCNDraining)
 					} else {
@@ -121,16 +130,26 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 					runQueries,
 				)
 				require.NoError(t, stateErr)
-			})
+			}) {
+				return
+			}
 			if fixtureInvalidationErr != nil {
 				return
 			}
 		}
-		var sum int64
-		require.NoError(t, db.QueryRowContext(ctx, "select sum(id) from src").Scan(&sum))
-		require.Equal(t, int64(3), sum, "the uncommitted write must be rolled back")
+		if !t.Run("committed state", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			var sum int64
+			require.NoError(t, db.QueryRowContext(ctx, "select sum(id) from src").Scan(&sum))
+			require.Equal(t, int64(3), sum, "the uncommitted write must be rolled back")
+		}) {
+			return
+		}
 
 		t.Run("ordered pagination across CNs", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			execSQLDB(t, ctx, db, "insert into src values (3),(4),(5)")
 			execSQLDB(t, ctx, db, "select mo_ctl('dn','flush','"+name+".src')")
 			previous := plan.GetForceScanOnMultiCN()
@@ -178,6 +197,10 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 			require.Contains(t, strings.ToLower(physical), "top", "prepared pagination must use bounded Top")
 
 			t.Run("both CNs contribute", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
+				previous := plan.GetForceScanOnMultiCN()
+				defer plan.SetForceScanOnMultiCN(previous)
 				// A single insert and flush produce one persisted object. Creating
 				// a separate table keeps the setup independent of earlier writes.
 				plan.SetForceScanOnMultiCN(false)

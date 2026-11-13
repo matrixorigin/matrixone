@@ -43,9 +43,16 @@ func TestCheckpointColdSnapshotSurvivesDatabaseDrop(t *testing.T) {
 		defer func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
-			_, _ = conn0.ExecContext(cleanup, "rollback")
-			_, _ = conn0.ExecContext(cleanup, "drop database if exists "+database)
-			_, _ = conn0.ExecContext(cleanup, "drop snapshot if exists "+snapshot)
+			for _, statement := range []string{
+				"rollback",
+				"drop database if exists " + database,
+				"drop snapshot if exists " + snapshot,
+			} {
+				if _, err := conn0.ExecContext(cleanup, statement); err != nil {
+					t.Errorf("snapshot fixture cleanup %q: %v", statement, err)
+					return // Quarantine owns the remaining state after an uncertain result.
+				}
+			}
 		}()
 		for _, q := range []string{
 			"set role moadmin",
