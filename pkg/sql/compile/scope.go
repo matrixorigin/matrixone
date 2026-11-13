@@ -1979,6 +1979,12 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSupported bool, err error) {
+	if s.DataSource != nil && s.DataSource.markGuard != nil {
+		// The scan template can survive a retry while workers reset separately.
+		if scan, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+			scan.RuntimeFilterExprs = nil
+		}
+	}
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
@@ -2191,6 +2197,9 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSup
 			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
 		}
 		readers = newReaders
+	}
+	if !emptyScan && s.DataSource.markGuard != nil {
+		s.applyMarkScanGuard(c)
 	}
 	return
 }

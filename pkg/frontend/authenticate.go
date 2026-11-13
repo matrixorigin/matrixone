@@ -5327,6 +5327,9 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	var objId int64
 	var privType PrivilegeType
 	var sql string
+	if err = checkNoPrivilegeColumnList(ctx, rp.Privileges); err != nil {
+		return err
+	}
 	err = normalizeNamesOfRoles(ctx, rp.Roles)
 	if err != nil {
 		return err
@@ -6069,6 +6072,24 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 	return err
 }
 
+// checkNoPrivilegeColumnList fails closed on column-qualified privileges.
+// MatrixOne stores whole-object grants: doGrantPrivilege and
+// doRevokePrivilege consume only the privilege type of a parsed privilege
+// and the mo_role_privs object key has no column dimension. Silently
+// dropping the list would widen an intended column-restricted grant into a
+// full-object grant (every account inherits a PUBLIC grantee), and a
+// column-qualified REVOKE would remove a whole-object grant the statement
+// never named. The check runs before any role lookup or privilege
+// mutation, so a mixed privilege list cannot leave a partial grant behind.
+func checkNoPrivilegeColumnList(ctx context.Context, privileges []*tree.Privilege) error {
+	for _, priv := range privileges {
+		if len(priv.ColumnList) > 0 {
+			return moerr.NewNotSupportedf(ctx, "column-level privilege %s", priv.Type.ToString())
+		}
+	}
+	return nil
+}
+
 // doGrantPrivilege accomplishes the GrantPrivilege statement
 func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege, bh BackgroundExec) (err error) {
 	var erArray []ExecResult
@@ -6079,6 +6100,9 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	var sql string
 	var userId uint32
 
+	if err = checkNoPrivilegeColumnList(ctx, gp.Privileges); err != nil {
+		return err
+	}
 	err = normalizeNamesOfRoles(ctx, gp.Roles)
 	if err != nil {
 		return err
@@ -8469,9 +8493,38 @@ func verifyViewPrivilegeForRole(
 	return false, nil
 }
 
+// newCompoundPrivilegeChecks retains complete table-access checks across inherited
+// roles for one authorization attempt, independently of the session cache.
+func newCompoundPrivilegeChecks(priv *privilege) map[*compoundEntry][]bool {
+	if priv.needMatchedRole {
+		return nil
+	}
+	var checks map[*compoundEntry][]bool
+	for _, entry := range priv.entries {
+		if entry.privilegeEntryTyp != privilegeEntryTypeCompound || entry.compound == nil || len(entry.compound.items) < 2 {
+			continue
+		}
+		canCombine := true
+		for _, item := range entry.compound.items {
+			if item.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser ||
+				(item.objType != objectTypeTable && item.objType != objectTypeView) {
+				canCombine = false
+				break
+			}
+		}
+		if canCombine {
+			if checks == nil {
+				checks = make(map[*compoundEntry][]bool)
+			}
+			checks[entry.compound] = make([]bool, len(entry.compound.items))
+		}
+	}
+	return checks
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, int64, error) {
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool, compoundChecks map[*compoundEntry][]bool) (bool, int64, error) {
 	var err error
 	var pls []privilegeLevelType
 	var yes bool
@@ -8517,8 +8570,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 				allTrue := true
 				matchedRoleID := int64(0)
-				// multi privileges take effect together
-				for _, mi := range entry.compound.items {
+				checked := compoundChecks[entry.compound]
+				// All items are required, but different inherited roles may satisfy
+				// them. Each view chain remains a complete check in its own context.
+				for itemIndex, mi := range entry.compound.items {
+					if checked != nil && checked[itemIndex] {
+						continue
+					}
 					if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 						yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 						if err != nil {
@@ -8626,7 +8684,11 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					}
 					if !yes {
 						allTrue = false
-						break
+						if checked == nil {
+							break
+						}
+					} else if checked != nil {
+						checked[itemIndex] = true
 					}
 				}
 
@@ -8886,7 +8948,8 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 
 	// Call the algorithm 2.
 	// If the result of the algorithm 2 is true, Then return true;
-	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
+	compoundChecks := newCompoundPrivilegeChecks(priv)
+	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache, compoundChecks)
 	if err != nil {
 		return false, stats, err
 	}
@@ -8981,7 +9044,7 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 
 		// Call the algorithm 2.
 		// If the result of the algorithm 2 is true, Then return true;
-		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
+		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache, compoundChecks)
 		if err != nil {
 			return false, stats, err
 		}
