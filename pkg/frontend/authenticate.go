@@ -5505,6 +5505,9 @@ func resolveViewChainPrivilegeContext(
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
 			currentRoleId = viewInfo.definerRoleId
+			// The session cache contains effective-role union grants, not
+			// grants belonging to this definer, even if the role IDs match.
+			enableCache = false
 		}
 	}
 
@@ -7738,7 +7741,10 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								if skipBaseCheck {
 									yes = true
 								} else {
-									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
+									// A view chain may enter a DEFINER and later return to
+									// the caller's role ID. Equality does not make the
+									// role-unaware session cache safe for its base objects.
+									useCache := usePrivilegeCache && cache != nil && len(viewChain) == 0
 									cacheToUse := cache
 									if !useCache {
 										cacheToUse = nil

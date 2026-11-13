@@ -67,6 +67,47 @@ set role compound_a;
 set secondary role all;
 -- @session
 
+-- DEFINER 与 active role 同 ID 时，不能借用其它角色预热的基表权限。
+grant connect on account * to compound_b;
+grant create view on database compound_role_db to compound_b;
+grant select on table compound_role_db.a to compound_b;
+-- @session:id=4&user=sys:compound_reader&password=123456
+set role compound_b;
+set secondary role none;
+use compound_role_db;
+set view_security_type = 'INVOKER';
+create view invoker_a as select * from a;
+set view_security_type = 'DEFINER';
+create view definer_a as select * from a;
+create view nested_a as select * from invoker_a;
+-- @session
+revoke select on table compound_role_db.a from compound_b;
+grant select on view compound_role_db.invoker_a to compound_a;
+grant select on view compound_role_db.definer_a to compound_a;
+grant select on view compound_role_db.nested_a to compound_a;
+grant select on view compound_role_db.invoker_a to compound_b;
+-- @session:id=5&user=sys:compound_reader&password=123456
+set secondary role all;
+set enable_privilege_cache = on;
+select sum(amount) from compound_role_db.a;
+select sum(amount) from compound_role_db.definer_a;
+select sum(amount) from compound_role_db.nested_a;
+select sum(amount) from compound_role_db.invoker_a;
+set clear_privilege_cache = on;
+select sum(a.amount + v.amount + b.amount) from compound_role_db.a a cross join compound_role_db.definer_a v cross join compound_role_db.b b;
+set enable_privilege_cache = off;
+select sum(amount) from compound_role_db.definer_a;
+-- @session
+-- 真正授予 DEFINER 底层权限后，直接与嵌套视图均应成功。
+grant select on table compound_role_db.a to compound_b;
+-- @session:id=6&user=sys:compound_reader&password=123456
+set secondary role all;
+set enable_privilege_cache = on;
+select sum(amount) from compound_role_db.definer_a;
+select sum(amount) from compound_role_db.nested_a;
+-- @session
+revoke select on table compound_role_db.a from compound_b;
+
 -- 移除直接授予的角色，改为经主角色继承；权限必须跨继承层合并。
 revoke compound_b from compound_reader;
 grant compound_b to compound_parent;

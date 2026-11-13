@@ -89,6 +89,50 @@ select sum(amount) from compound_role_db.a;
 internal error: do not have privilege to execute the statement
 set role compound_a;
 set secondary role all;
+grant connect on account * to compound_b;
+grant create view on database compound_role_db to compound_b;
+grant select on table compound_role_db.a to compound_b;
+set role compound_b;
+set secondary role none;
+use compound_role_db;
+set view_security_type = 'INVOKER';
+create view invoker_a as select * from a;
+set view_security_type = 'DEFINER';
+create view definer_a as select * from a;
+create view nested_a as select * from invoker_a;
+revoke select on table compound_role_db.a from compound_b;
+grant select on view compound_role_db.invoker_a to compound_a;
+grant select on view compound_role_db.definer_a to compound_a;
+grant select on view compound_role_db.nested_a to compound_a;
+grant select on view compound_role_db.invoker_a to compound_b;
+set secondary role all;
+set enable_privilege_cache = on;
+select sum(amount) from compound_role_db.a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+select sum(amount) from compound_role_db.definer_a;
+internal error: do not have privilege to execute the statement
+select sum(amount) from compound_role_db.nested_a;
+internal error: do not have privilege to execute the statement
+select sum(amount) from compound_role_db.invoker_a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+set clear_privilege_cache = on;
+select sum(a.amount + v.amount + b.amount) from compound_role_db.a a cross join compound_role_db.definer_a v cross join compound_role_db.b b;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
+select sum(amount) from compound_role_db.definer_a;
+internal error: do not have privilege to execute the statement
+grant select on table compound_role_db.a to compound_b;
+set secondary role all;
+set enable_privilege_cache = on;
+select sum(amount) from compound_role_db.definer_a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+select sum(amount) from compound_role_db.nested_a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+revoke select on table compound_role_db.a from compound_b;
 revoke compound_b from compound_reader;
 grant compound_b to compound_parent;
 grant compound_parent to compound_a;

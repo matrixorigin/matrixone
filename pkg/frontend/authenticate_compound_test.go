@@ -119,18 +119,39 @@ func TestCompoundPrivilegesKeepViewSecurityContext(t *testing.T) {
 			name     string
 			security string
 			baseRole int64
+			definer  int64
+			prewarm  bool
+			nested   bool
 			want     bool
 		}{
 			{name: "definer", security: viewSecurityDefiner, baseRole: 9, want: true},
 			{name: "caller_cannot_supply_definer_grant", security: viewSecurityDefiner, baseRole: 5},
 			{name: "invoker", security: viewSecurityInvoker, baseRole: 5, want: true},
 			{name: "definer_cannot_supply_invoker_grant", security: viewSecurityInvoker, baseRole: 9},
+			{name: "cold_definer_equals_active_role", security: viewSecurityDefiner, baseRole: 5, definer: 7},
+			{name: "warm_definer_equals_active_role", security: viewSecurityDefiner, baseRole: 5, definer: 7, prewarm: true},
+			{name: "active_definer_has_grant", security: viewSecurityDefiner, baseRole: 7, definer: 7, want: true},
+			{name: "nested_invoker_after_active_definer", security: viewSecurityDefiner, baseRole: 5, definer: 7, nested: true, prewarm: true},
+			{name: "nested_invoker_with_definer_grant", security: viewSecurityDefiner, baseRole: 7, definer: 7, nested: true, want: true},
 		} {
 			t.Run(fmt.Sprintf("cache_%t/%s", cacheEnabled, tc.name), func(t *testing.T) {
 				ctx := defines.AttachAccountId(context.Background(), 0)
 				priv := compoundTablePrivileges("a", "b")
+				if tc.definer == 7 && tc.baseRole == 5 {
+					// Warm a only after the first view check fails.
+					priv = compoundTablePrivileges("a", "b", "a")
+				}
 				priv.entries[0].compound.items[0].originViews = []string{"compound_db.v"}
-				ses, bh := newCompoundPrivilegeSession(t, priv, map[int64][]string{tc.baseRole: {"a"}, 7: {"b"}}, nil, cacheEnabled)
+				if tc.nested {
+					priv.entries[0].compound.items[0].originViews = append(priv.entries[0].compound.items[0].originViews, "compound_db.inner_v")
+				}
+				definer := tc.definer
+				if definer == 0 {
+					definer = 9
+				}
+				grants := map[int64][]string{7: {"b"}}
+				grants[tc.baseRole] = append(grants[tc.baseRole], "a")
+				ses, bh := newCompoundPrivilegeSession(t, priv, grants, nil, cacheEnabled)
 				ses.GetTenantInfo().SetUseSecondaryRole(true)
 				for _, role := range []int64{5, 7} {
 					for _, typ := range []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
@@ -142,7 +163,7 @@ func TestCompoundPrivilegesKeepViewSecurityContext(t *testing.T) {
 							sql, err := getSqlForPrivilege(ctx, role, entry, level)
 							require.NoError(t, err)
 							var rows [][]interface{}
-							if role == 5 && typ == PrivilegeTypeSelect && (level == privilegeLevelDatabaseTable || level == privilegeLevelTable) {
+							if typ == PrivilegeTypeSelect && (level == privilegeLevelDatabaseTable || level == privilegeLevelTable) {
 								rows = [][]interface{}{{role, false}}
 							}
 							bh.sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
@@ -156,10 +177,40 @@ func TestCompoundPrivilegesKeepViewSecurityContext(t *testing.T) {
 					col.SetColumnType(typ)
 					meta.AddColumn(col)
 				}
-				meta.AddRow([]interface{}{fmt.Sprintf(`{"security_type":%q}`, tc.security), int64(9)})
+				meta.AddRow([]interface{}{fmt.Sprintf(`{"security_type":%q}`, tc.security), definer})
 				sql, err := getSqlForCheckViewMeta(ctx, "compound_db", "v")
 				require.NoError(t, err)
 				bh.sql2result[sql] = meta
+				if tc.nested {
+					innerMeta := &MysqlResultSet{Columns: meta.Columns}
+					innerMeta.AddRow([]interface{}{fmt.Sprintf(`{"security_type":%q}`, viewSecurityInvoker), int64(9)})
+					innerSQL, err := getSqlForCheckViewMeta(ctx, "compound_db", "inner_v")
+					require.NoError(t, err)
+					bh.sql2result[innerSQL] = innerMeta
+					// A cached caller grant must not authorize an inner view
+					// after entering a DEFINER, even with the same role ID.
+					for _, typ := range []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+						entry := privilegeEntriesMap[typ]
+						entry.objType, entry.databaseName, entry.tableName = objectTypeView, "compound_db", "inner_v"
+						levels, err := getPrivilegeLevelsOfObjectType(ctx, objectTypeView)
+						require.NoError(t, err)
+						for _, level := range levels {
+							sql, err := getSqlForPrivilege(ctx, definer, entry, level)
+							require.NoError(t, err)
+							var rows [][]interface{}
+							if tc.baseRole == definer && typ == PrivilegeTypeSelect && (level == privilegeLevelDatabaseTable || level == privilegeLevelTable) {
+								rows = [][]interface{}{{definer, false}}
+							}
+							bh.sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+						}
+					}
+					ses.GetPrivilegeCache().add(objectTypeView, privilegeLevelDatabaseTable, "compound_db", "inner_v", PrivilegeTypeSelect)
+				}
+				if tc.prewarm {
+					ok, _, err := determineUserHasPrivilegeSet(ctx, ses, compoundTablePrivileges("a"))
+					require.NoError(t, err)
+					require.True(t, ok)
+				}
 				ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, ok)
