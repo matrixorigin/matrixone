@@ -1214,4 +1214,108 @@ select count(*) from information_schema.tables
 where table_schema='grouping_ctas_test' and table_name='rejected_grouping_alias';
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table branch_source(g int not null,v int);
+insert into branch_source values(1,10);
+create table branch_rhs(x int not null);
+insert into branch_rhs values(2);
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+create table branch_having as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_having order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,count(*) c from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(cast(g as signed) in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having g+0<>all(select x from branch_rhs) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0=any(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+create table branch_fallback as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(coalesce(g,0) in(select x from branch_rhs));
+select * from branch_fallback order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by grouping sets((g),(g)) having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
+delete from branch_rhs;
+create table branch_empty_rhs as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_empty_rhs order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+create table branch_null_rhs(x int);
+insert into branch_null_rhs values(null),(2);
+create table branch_unknown as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_null_rhs));
+select * from branch_unknown order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]
+create table branch_types as select g+0 k,coalesce(g,0) fallback,sample(v,100 percent) chosen from src group by g with rollup;
+select * from branch_types order by k,chosen;
+➤ k[-5,64,0]  ¦  fallback[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  0  ¦  5  𝄀
+null  ¦  0  ¦  7  𝄀
+null  ¦  0  ¦  9  𝄀
+1  ¦  1  ¦  5  𝄀
+1  ¦  1  ¦  7  𝄀
+2  ¦  2  ¦  9
+select column_name,is_nullable from information_schema.columns where table_schema='grouping_ctas_test' and table_name='branch_types' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+k  ¦  YES  𝄀
+fallback  ¦  NO  𝄀
+chosen  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+create table distinct_lineage(g int,v int not null);
+insert into distinct_lineage values(null,10),(1,10);
+select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+create table rejected_lineage as select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+create table rejected_sample_lineage as select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables where table_schema='grouping_ctas_test' and table_name in('rejected_lineage','rejected_sample_lineage');
+➤ count(*)[-5,64,0]  𝄀
+0
+select distinct g from branch_source group by grouping sets((g),(g)) order by grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g from branch_source group by g with rollup order by case when grouping(g)=1 then 0 else 1 end;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g from distinct_lineage group by cube(g) order by (g,grouping(g));
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  0  𝄀
+null  ¦  0
+create table selected_lineage as select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g limit 1;
+select * from selected_lineage;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  1
+create table selected_sample_lineage as select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(k) desc,k is null,k limit 1;
+select * from selected_sample_lineage;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  10
+create table selected_composite_lineage as select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_composite_lineage;
+➤ g[4,32,0]  ¦  marker[-5,64,0]  𝄀
+null  ¦  2
+create table selected_sample_composite as select distinct g,grouping(g)+1 marker,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_sample_composite;
+➤ g[4,32,0]  ¦  marker[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  2  ¦  10
+select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by chosen+1,g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
 drop database grouping_ctas_test;

@@ -110,7 +110,7 @@ func (builder *QueryBuilder) appendGroupingStage(
 		var rebuildOrder func(*plan.Expr) *plan.Expr
 		rebuildOrder = func(expr *plan.Expr) *plan.Expr {
 			copy := DeepCopyExpr(expr)
-			if order, ok := groupingOrderExpr(copy, selected, ctx.projectTag, stage.projectionInputTag, false); ok {
+			if order, ok := groupingOrderExpr(copy, selected, ctx.projectTag, stage.projectionInputTag); ok {
 				return order
 			}
 			// A mixed expression cannot fall back wholesale into the branch:
@@ -176,8 +176,8 @@ func (builder *QueryBuilder) appendGroupingStage(
 				}
 				stage.inputs[key] = int32(len(ctx.projects))
 				typ := expr.Typ
-				if input.tag == ctx.groupTag && i < len(ctx.groupingFlag) && !ctx.groupingFlag[i] {
-					typ.NotNullable = false
+				if input.tag == ctx.groupTag {
+					typ = groupingOutputType(ctx.groups, ctx.groupingFlag, i)
 				}
 				ctx.headings = append(ctx.headings, fmt.Sprintf("__grouping_%d", len(ctx.projects)))
 				ctx.projects = append(ctx.projects, &plan.Expr{
@@ -232,10 +232,10 @@ func rebindGroupingExpr(expr *plan.Expr, branch, output *BindContext, union *pla
 // Hidden sort expressions must be evaluated after DISTINCT using only surviving
 // output columns. This also keeps volatile sort expressions out of the keys.
 func groupingDistinctOrder(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag int32) (*plan.Expr, bool) {
-	return groupingOrderExpr(expr, selected, selectedTag, tag, true)
+	return groupingOrderExpr(expr, selected, selectedTag, tag)
 }
 
-func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag int32, allowGrouping bool) (*plan.Expr, bool) {
+func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag int32) (*plan.Expr, bool) {
 	if col := expr.GetCol(); col != nil && col.RelPos == selectedTag {
 		if col.ColPos < 0 || int(col.ColPos) >= len(selected) {
 			return nil, false
@@ -250,14 +250,15 @@ func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag 
 		}
 	}
 	if fn := expr.GetF(); fn != nil {
-		if !allowGrouping && fn.Func.ObjName == "grouping" {
-			// SAMPLE key vectors do not carry GROUPING's row-lineage bitmap.
-			// Only a selected, materialized GROUPING value can be reused.
+		if fn.Func.ObjName == "grouping" {
+			// Key values do not establish lineage after DISTINCT; equal actual
+			// and subtotal NULLs can have different masks. Both AGG and SAMPLE
+			// must reuse a selected complete expression or materialized slot.
 			return nil, false
 		}
 		for i, arg := range fn.Args {
 			var ok bool
-			fn.Args[i], ok = groupingOrderExpr(arg, selected, selectedTag, tag, allowGrouping)
+			fn.Args[i], ok = groupingOrderExpr(arg, selected, selectedTag, tag)
 			if !ok {
 				return nil, false
 			}
@@ -267,7 +268,7 @@ func groupingOrderExpr(expr *plan.Expr, selected []*plan.Expr, selectedTag, tag 
 	if list := expr.GetList(); list != nil {
 		for i, item := range list.List {
 			var ok bool
-			list.List[i], ok = groupingOrderExpr(item, selected, selectedTag, tag, allowGrouping)
+			list.List[i], ok = groupingOrderExpr(item, selected, selectedTag, tag)
 			if !ok {
 				return nil, false
 			}

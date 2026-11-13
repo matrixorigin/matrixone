@@ -346,11 +346,11 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 	return function.CastPreservesNonNull(types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id))
 }
 
-// Grouping sets synthesize NULL in the aggregate output, not in the input
-// expression evaluated and encoded by the aggregator.
-func groupingOutputType(node *plan.Node, index int) plan.Type {
-	typ := node.GroupBy[index].Typ
-	if index < len(node.GroupingFlag) && !node.GroupingFlag[index] {
+// Publish branch output proofs before HAVING/projection binding can consume
+// them. The source expressions retain their AGG/SAMPLE input encoding types.
+func groupingOutputType(groups []*plan.Expr, flags []bool, index int) plan.Type {
+	typ := groups[index].Typ
+	if index < len(flags) && !flags[index] {
 		typ.NotNullable = false
 	}
 	return typ
@@ -1006,7 +1006,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: groupingOutputType(node, idx),
+				Typ: groupingOutputType(node.GroupBy, node.GroupingFlag, idx),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1051,7 +1051,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: groupingOutputType(node, 0),
+					Typ: groupingOutputType(node.GroupBy, node.GroupingFlag, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -3784,7 +3784,7 @@ func (builder *QueryBuilder) bindGroupBy(
 
 		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
 		boundTimeWindowGroupBy = &plan.Expr{
-			Typ: groupBinder.ctx.groups[colPos].Typ,
+			Typ: groupingOutputType(ctx.groups, ctx.groupingFlag, int(colPos)),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: groupBinder.ctx.groupTag,

@@ -80,24 +80,22 @@ func TestGroupingOrderReferenceAndStructuralFallback(t *testing.T) {
 	require.NoError(t, err)
 	for _, project := range []*plan.Expr{volatile, wrapped} {
 		selected := []*plan.Expr{DeepCopyExpr(project), DeepCopyExpr(project)}
-		for _, allowGrouping := range []bool{false, true} {
-			for _, pos := range []int32{0, 1, 2, -1} {
-				ref := &plan.Expr{Typ: project.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 11, ColPos: pos}}}
-				got, ok := groupingOrderExpr(ref, selected, 11, 12, allowGrouping)
-				require.Equal(t, pos == 0 || pos == 1, ok)
-				if ok {
-					require.Equal(t, int32(12), got.GetCol().RelPos)
-					require.Equal(t, pos, got.GetCol().ColPos)
-				}
+		for _, pos := range []int32{0, 1, 2, -1} {
+			ref := &plan.Expr{Typ: project.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 11, ColPos: pos}}}
+			got, ok := groupingOrderExpr(ref, selected, 11, 12)
+			require.Equal(t, pos == 0 || pos == 1, ok)
+			if ok {
+				require.Equal(t, int32(12), got.GetCol().RelPos)
+				require.Equal(t, pos, got.GetCol().ColPos)
 			}
-			independent, ok := groupingOrderExpr(DeepCopyExpr(project), selected, 11, 12, allowGrouping)
-			require.True(t, ok)
-			require.NotNil(t, independent.GetF(), "an independent volatile call cannot be identified with either selected result")
-			require.True(t, exprStructuralEqual(independent, project))
 		}
+		independent, ok := groupingOrderExpr(DeepCopyExpr(project), selected, 11, 12)
+		require.True(t, ok)
+		require.NotNil(t, independent.GetF(), "an independent volatile call cannot be identified with either selected result")
+		require.True(t, exprStructuralEqual(independent, project))
 	}
 	constant := MakePlan2Int64ConstExprWithType(8)
-	got, ok := groupingOrderExpr(DeepCopyExpr(constant), []*plan.Expr{constant}, 11, 12, true)
+	got, ok := groupingOrderExpr(DeepCopyExpr(constant), []*plan.Expr{constant}, 11, 12)
 	require.True(t, ok)
 	require.Equal(t, int32(0), got.GetCol().ColPos, "deterministic structural matching remains available")
 }

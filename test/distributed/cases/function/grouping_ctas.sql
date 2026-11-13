@@ -470,4 +470,57 @@ order by grouping(k) desc,chosen;
 select count(*) from information_schema.tables
 where table_schema='grouping_ctas_test' and table_name='rejected_grouping_alias';
 
+-- 分支输出的NULL证明必须先于HAVING子查询；不能等到最终UNION再刷新。
+create table branch_source(g int not null,v int);
+insert into branch_source values(1,10);
+create table branch_rhs(x int not null);
+insert into branch_rhs values(2);
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+create table branch_having as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_having order by g;
+select g,count(*) c from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(cast(g as signed) in(select x from branch_rhs)) order by g;
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having g+0<>all(select x from branch_rhs) order by g;
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0=any(select x from branch_rhs)) order by g;
+create table branch_fallback as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(coalesce(g,0) in(select x from branch_rhs));
+select * from branch_fallback order by g;
+select g,sample(v,100 percent) chosen from branch_source group by grouping sets((g),(g)) having not(g+0 in(select x from branch_rhs)) order by g;
+-- 空RHS的NOT IN为真；包含NULL的RHS不能让UNKNOWN进入结果。
+delete from branch_rhs;
+create table branch_empty_rhs as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_empty_rhs order by g;
+create table branch_null_rhs(x int);
+insert into branch_null_rhs values(null),(2);
+create table branch_unknown as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_null_rhs));
+select * from branch_unknown order by g;
+-- 分组输出与原始SAMPLE值不能共享可空证明；非空fallback也保持非空。
+create table branch_types as select g+0 k,coalesce(g,0) fallback,sample(v,100 percent) chosen from src group by g with rollup;
+select * from branch_types order by k,chosen;
+select column_name,is_nullable from information_schema.columns where table_schema='grouping_ctas_test' and table_name='branch_types' order by ordinal_position;
+
+-- DISTINCT只按用户输出去重，不能依赖任意保留行的隐藏GROUPING来源。
+create table distinct_lineage(g int,v int not null);
+insert into distinct_lineage values(null,10),(1,10);
+select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+create table rejected_lineage as select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+create table rejected_sample_lineage as select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+select count(*) from information_schema.tables where table_schema='grouping_ctas_test' and table_name in('rejected_lineage','rejected_sample_lineage');
+-- 准入不依赖当前数据、NOT NULL或当前集合是否省略键。
+select distinct g from branch_source group by grouping sets((g),(g)) order by grouping(g);
+select distinct g from branch_source group by g with rollup order by case when grouping(g)=1 then 0 else 1 end;
+select distinct g from distinct_lineage group by cube(g) order by (g,grouping(g));
+-- 已选出的完整标记/表达式及别名仍合法；不能反解复合表达式来恢复lineage。
+select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g;
+create table selected_lineage as select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g limit 1;
+select * from selected_lineage;
+create table selected_sample_lineage as select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(k) desc,k is null,k limit 1;
+select * from selected_sample_lineage;
+create table selected_composite_lineage as select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_composite_lineage;
+create table selected_sample_composite as select distinct g,grouping(g)+1 marker,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_sample_composite;
+select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g);
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by chosen+1,g;
+
 drop database grouping_ctas_test;
