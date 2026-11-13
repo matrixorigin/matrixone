@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -67,12 +68,17 @@ type DiskCache struct {
 	downloadMaxExtraWait time.Duration
 	prefetchRange        prefetchRangeConfig
 	objectSplit          objectSplitConfig
-	prefetched           prefetchedObjects
+	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
+	memoryPrefetchMax int64
+	prefetched        prefetchedObjects
 	// downloadConns counts the object-storage connections whole-object downloads hold,
 	// at most maxDownloadConns.
 	downloadConns    atomic.Int64
 	maxDownloadConns int64
-	prefetchFlights  prefetchFlights
+	// connsFreed, when set, is closed once reserved connections are freed.
+	connsMu         sync.Mutex
+	connsFreed      chan struct{}
+	prefetchObjects prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -112,8 +118,10 @@ type DiskCache struct {
 	beforeEvictionStart func(path string)
 	// deletes counts the deletes of objects; see objectDeletes.
 	deletes objectDeletes
-	// prefetchFlightBytes is the most bytes of prefetch range runs under way.
+	// prefetchFlightBytes, when set, is the most bytes of prefetch range runs under way,
+	// instead of flightBudget.
 	prefetchFlightBytes int64
+	flightBudget        flightBudget
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -176,6 +184,9 @@ type diskCacheOptions struct {
 	prefetchRange prefetchRangeConfig
 	// objectSplit sets the parts a whole-object download reads at once.
 	objectSplit objectSplitConfig
+	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject; 0 is
+	// DefaultDiskPrefetchMemoryMax.
+	memoryPrefetchMax int64
 }
 
 func newDiskCache(
@@ -222,9 +233,9 @@ func newDiskCache(
 		downloadMaxExtraWait: opts.downloadMaxExtraWait,
 		prefetchRange:        opts.prefetchRange,
 		objectSplit:          opts.objectSplit,
+		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
 		preloads:             newPreloadUsage(),
 		maxDownloadConns:     int64(maxConnsPerHost / 2),
-		prefetchFlightBytes:  prefetchFlightBytesMax,
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
@@ -980,6 +991,42 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
+	if _, ok := d.cache.Get(ctx, diskPath); ok {
+		if _, err := os.Stat(diskPath); err == nil {
+			return false, nil
+		}
+	}
+	// A download holds its object-storage connections for long; it reserves them so
+	// range reads keep theirs, before it holds the path, so its wait for a connection
+	// holds nothing else.
+	var bounds []int64
+	var conns int64
+	if fill == storageFill || fill == rangeFill {
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
+			if size, splitAt, err := objectSize(ctx); err == nil {
+				bounds = d.objectSplit.bounds(size, splitAt)
+			}
+		}
+		conns = max(int64(len(bounds))-1, 1)
+		if conns > 1 && !d.reserveDownloadConns(conns) {
+			bounds, conns = nil, 1
+		}
+		if conns == 1 && !d.reserveDownloadConns(1) {
+			// Without a connection to hold, the download is skipped; otherwise it waits for one.
+			if d.maxDownloadConns < 1 {
+				metric.FSDiskCacheDownloadSkippedCounter.Inc()
+				return false, nil
+			}
+			if err := d.waitDownloadConns(ctx, 1); err != nil {
+				return false, err
+			}
+		}
+	}
+	releaseConns := func() {
+		d.releaseDownloadConns(conns)
+		conns = 0
+	}
+	defer releaseConns()
 	asyncSlotOwned := false
 	if asyncFinalize {
 		if !d.tryReserveAsyncFileFinalize(diskPath) {
@@ -1035,31 +1082,6 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		return false, nil
 	}
 
-	// A download holds its object-storage connections for long; it reserves them so
-	// range reads keep theirs, and past the cap the read reads its ranges.
-	var bounds []int64
-	var conns int64
-	if fill == storageFill {
-		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < objectSplitMaxDownloads {
-			if size, splitAt, err := objectSize(ctx); err == nil {
-				bounds = d.objectSplit.bounds(size, splitAt)
-			}
-		}
-		conns = max(int64(len(bounds))-1, 1)
-		if conns > 1 && !d.reserveDownloadConns(conns) {
-			bounds, conns = nil, 1
-		}
-		if conns == 1 && !d.reserveDownloadConns(1) {
-			metric.FSDiskCacheDownloadSkippedCounter.Inc()
-			return false, nil
-		}
-	}
-	releaseConns := func() {
-		d.downloadConns.Add(-conns)
-		conns = 0
-	}
-	defer releaseConns()
-
 	// write data
 	f, err := d.createCacheTempFile(filepath.Dir(diskPath))
 	if err != nil {
@@ -1074,7 +1096,8 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var download *objectDownload
 	var dst io.Writer = f
 	if fill != notWholeFill {
-		download = d.startDownload(diskPath, f.Name(), fill == storageFill, bounds)
+		download = d.startDownload(diskPath, f.Name(), fill != contentFill, bounds)
+		fileDownloadStarted(ctx, download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
 		endUpdate := doneUpdate
@@ -1128,7 +1151,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		return false, err
 	}
 
-	if download != nil {
+	if download != nil && fill != rangeFill {
 		d.noteWholeFile(n)
 	}
 
@@ -1636,6 +1659,8 @@ const (
 	contentFill
 	// storageFill downloads a whole object from object storage.
 	storageFill
+	// rangeFill downloads a range of an object from object storage.
+	rangeFill
 )
 
 // fillFile caches the whole object of filePath read through openReader; objectSize, when
@@ -1683,14 +1708,15 @@ func (d *DiskCache) DeletePaths(
 		diskPath := d.pathForFile(path)
 		// Counted first: an entry read before it and cached after it is retracted.
 		d.deletes.deleted(diskPath)
+		// No prefetch object of the object caches its bytes after the delete; one under
+		// way is canceled rather than waited for.
+		if err = d.dropPrefetches(ctx, diskPath); err != nil {
+			return
+		}
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return
 		}
 		d.prefetched.forget(diskPath)
-		// No prefetch range read before the delete caches its range after it.
-		if err = d.dropPrefetches(ctx, diskPath); err != nil {
-			return
-		}
 		if err = d.removeRangeFiles(ctx, path); err != nil {
 			return
 		}

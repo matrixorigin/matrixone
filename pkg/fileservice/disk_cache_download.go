@@ -405,6 +405,9 @@ type objectSplitConfig struct {
 	// parts is how many ranges the download of an object of at least min bytes reads.
 	parts int
 	min   int64
+	// downloads is the most downloads in flight with which another is split; 0 is
+	// DefaultDiskPrefetchObjectSplitDownloads.
+	downloads int
 }
 
 // objectLayout returns the size of an object to download, and the offset, or 0, a read
@@ -585,8 +588,48 @@ func (d *DiskCache) prefetchWorkers() int {
 	return int(max(limit/4, min(limit, 4), 1))
 }
 
-// reserveDownloadConns reserves n of the connections whole-object downloads may hold,
-// half the connections to the object storage host, or reports that they are taken.
+// waitDownloadConns reserves n of the connections downloads may hold, waiting until they
+// are free or ctx ends.
+func (d *DiskCache) waitDownloadConns(ctx context.Context, n int64) error {
+	for {
+		freed := d.downloadConnsFreed()
+		if d.reserveDownloadConns(n) {
+			return nil
+		}
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// releaseDownloadConns frees n connections reserved, and wakes the downloads waiting for
+// them.
+func (d *DiskCache) releaseDownloadConns(n int64) {
+	if n == 0 {
+		return
+	}
+	d.downloadConns.Add(-n)
+	d.connsMu.Lock()
+	if d.connsFreed != nil {
+		close(d.connsFreed)
+		d.connsFreed = nil
+	}
+	d.connsMu.Unlock()
+}
+
+func (d *DiskCache) downloadConnsFreed() chan struct{} {
+	d.connsMu.Lock()
+	defer d.connsMu.Unlock()
+	if d.connsFreed == nil {
+		d.connsFreed = make(chan struct{})
+	}
+	return d.connsFreed
+}
+
+// reserveDownloadConns reserves n of the connections downloads may hold, half the
+// connections to the object storage host, or reports that they are taken.
 func (d *DiskCache) reserveDownloadConns(n int64) bool {
 	limit := d.maxDownloadConns
 	for {
@@ -609,12 +652,16 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 // fetch them, or are more than an eighth of what the download writes before them. It
 // reports whether a download covers the object, and whether it filled entry.
 func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
-	o := d.download(diskPath)
-	if o == nil {
-		return false, false, nil
-	}
 	end := entry.Offset + entry.Size
-	behind, wait := o.estimate(entry.Offset, end)
+	// The download of the object, or of a FilePrefetchObject holding the entry's bytes,
+	// whose bytes start at base in the object.
+	o, base := d.download(diskPath), int64(0)
+	if o == nil {
+		if o, base = d.fileDownload(diskPath, entry.Offset, end); o == nil {
+			return false, false, nil
+		}
+	}
+	behind, wait := o.estimate(entry.Offset-base, end-base)
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
@@ -635,7 +682,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 			}
 		}
 		// The read waits for the download it chose until its bytes are written or it ends.
-		if _, ok := o.waitFor(ctx, entry.Offset, end, maxIOWaitDuration); !ok {
+		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
 		}
@@ -646,7 +693,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	defer o.release()
-	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
+	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset-base, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}
 	// Only bytes delivered successfully count toward read share. Eviction accounting
@@ -662,10 +709,6 @@ const (
 	// downloadRateMinBytes is written by a part before its own rate is used, and each
 	// part's rate at that point is a sample of the recent downloads' rate.
 	downloadRateMinBytes = 256 << 10
-	// objectSplitMaxDownloads is the most whole-object downloads in flight with which
-	// another download is split: beyond them the link is shared and a split adds no
-	// bandwidth.
-	objectSplitMaxDownloads = 4
 	// rangeReadSmall is the largest range read whose time counts as latency.
 	rangeReadSmall = 256 << 10
 	costWeight     = 0.1

@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v1, 2026-11-10. Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v4, 2026-11-13 (v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -59,6 +59,48 @@ prefetches for table scans.
 
 A file service without a prefetcher keeps the IO-pipeline prefetch.
 
+### Prefetch objects (decision 2026-11-13)
+
+Every prefetch the prefetcher runs is one of two kinds of prefetch object:
+- A **MemoryPrefetchObject** holds ranges of at most `disk-prefetch-memory-max` bytes in
+  all (default 32 MiB, at least 8 MiB). Each run of adjacent ranges is read into a buffer, which readers
+  copy their bytes from as they arrive, and is then cached as a range file.
+- A **FilePrefetchObject** downloads to a file: an object read whole, or each run of
+  ranges of more than `disk-prefetch-memory-max` bytes. Its bytes are written to the
+  temporary file that becomes its cache file, which readers read as the bytes arrive; it
+  holds no memory buffer.
+
+The choice is made from the request, before any byte is downloaded. Every range read
+that misses the cache takes its bytes from a prefetch object under way, or starts a
+MemoryPrefetchObject of its own when its range is at most `disk-prefetch-memory-max`; a
+larger read reads directly. A MemoryPrefetchObject a read starts caches nothing: the read
+caches its entries as its policy says, unless the prefetch object it joined caches its
+bytes (decision 2026-11-13: with 8 concurrent TPC-H sessions on a 4 GB disk cache, caching
+the read's whole span took about 80 s against about 68 s). Both kinds:
+- are joined by every read of their bytes, which waits for its own bytes, not for the
+  whole prefetch object. A FilePrefetchObject is joined only when its bytes arrive no more
+  than `disk-download-max-extra-wait` later than a range read could fetch them;
+- leave a read to fetch its bytes itself when they end without them, as when stopped by
+  another query, a delete or a close; a failed read of object storage fails the reads
+  waiting on it;
+- wait in the prefetch queue and move to the live queue when a read reaches them before
+  they start (below);
+- end the same way on a delete of their object: the delete cancels them before it
+  removes the object's files, and none is cached after a delete counted since it began.
+
+The prefetcher has two queues of one type, run by the same code with the same number of
+workers: the prefetch queue, for downloads ahead of the reads, and the live queue, for
+downloads a read waits for. A read that reaches an object whose prefetch object still
+waits moves it to the live queue and waits until reads can join it. The prefetch queue
+starts nothing while the live queue waits. The live queue keeps a prefetch object whose
+scans all ended, as a read waits for it; the prefetch queue drops it.
+
+The buffers of MemoryPrefetchObjects under way hold at most 10% of the memory available
+on the node, measured at most once a second, and at least `disk-prefetch-memory-max`. A
+prefetch object past that bound waits until it fits, or until none is under way.
+Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
+prefetch object ended and no read copies from it.
+
 ### What a scan tells the prefetcher (decision)
 
 For each object in its prefetch window, a scan passes:
@@ -100,8 +142,8 @@ loses little by reading its ranges.
   keep the whole object.
 - A read of an object that is being downloaded takes its bytes from the download, as
   the cache-ownership design specifies.
-- A read that reaches an object whose download is still queued drops that download and
-  reads only its own ranges. The object is not downloaded whole for that read.
+- A read that reaches an object whose prefetch object is still queued moves it to the
+  live queue and joins it.
 - A full-object read does not wait for another read of the same object to finish. It
   looks in the disk cache again once, because that other read's download may have
   started by then.
@@ -124,8 +166,8 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
 ### Scans end; the file service closes (decision)
 
 - When a scan closes, its token ends. A queued download whose scans have all ended is
-  dropped before it starts. A download that has started runs to the end, because
-  another reader may already be using its bytes.
+  dropped before it starts, unless a read waits for it in the live queue. A download that
+  has started runs to the end, because another reader may already be using its bytes.
 - Closing the file service drops every queued download, cancels the downloads that
   are running and waits for them, bounded by the caller's context. Closing the disk
   cache also cancels running prefetch downloads, and the reads of prefetch ranges,
@@ -145,10 +187,9 @@ A row fetch never downloads a whole object on a read. Ahead of the scan, for eac
   whatever share of the object they are.
 - When the object records no column ranges, or stores none of the columns, as for
   columns added after it was written, it prefetches nothing.
-- A read that reaches an object before its column ranges are downloaded takes their
-  queued request and downloads them first, as a read of a queued whole object takes it
-  over. A read that misses otherwise reads each of its entries apart when the range
-  around them holds other bytes.
+- A read that reaches an object before its ranges are downloaded joins their prefetch
+  object through the live queue. A read that misses otherwise reads each of its entries
+  apart when the range around them holds other bytes.
 
 Every read made under a row fetch's context, including the block pruning's reads, reads
 exactly its entries and never a whole object. Object metadata and bloom filter loads read
@@ -157,8 +198,8 @@ columns of the object. Probes that read a few columns of an object to check keys
 visibility, as the CN's insert and upsert dedup, the TN's precommit dedup and MVCC loads,
 read exactly their entries and never the whole object. A
 row fetch never reads the bytes of a column it does not read, such as the vector column
-(decision 2026-11-12). A read made inside another read, as the take-over's downloads are,
-logs its slow events apart from the outer read.
+(decision 2026-11-12). The reads a prefetch object makes for itself join no prefetch
+object.
 
 A row fetch exists to skip the columns it does not read, chiefly the vector column. With
 a share rule, a table whose scalar columns read outweigh its vector column would download
@@ -185,7 +226,8 @@ way each time.
 - A whole-object download of an object of at least `disk-prefetch-object-split-min`
   (default 16 MiB) reads `disk-prefetch-object-split` parts at once (default 2, at most
   4), aligned to 64 KiB, into one cache file. This happens only when the object's size
-  is known and fewer than 4 whole-object downloads are in flight.
+  is known and fewer than `disk-prefetch-object-split-downloads` (default 8) downloads
+  are in flight.
 - A read-started download splits at the read's first needed block, so that read does
   not wait for the bytes before it.
 - A read of the object waits only for the part that holds its bytes.
@@ -193,10 +235,10 @@ way each time.
   download is one stream and makes no size request.
 - The last part reads to the object's end, so a wrong size makes the download fail.
   Any failed part fails the whole download, which publishes nothing.
-- Whole-object downloads hold at most half of the host's object-storage connections,
-  so range reads always keep connections of their own. A download that cannot
-  reserve its parts runs as one stream. A download that cannot reserve even one
-  connection is skipped, and its read reads ranges.
+- Downloads hold at most half of the host's object-storage connections, so range
+  reads always keep connections of their own. A download that cannot reserve its
+  parts runs as one stream; one that cannot reserve even one connection waits until
+  a connection is free (decision 2026-11-13).
 
 ## Bounds and ownership of resources
 
@@ -206,9 +248,10 @@ way each time.
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
-| Prefetch range runs under way | the disk cache | 256 MiB of buffers in all; past it a read reads its own entries |
+| Buffers of MemoryPrefetchObjects under way | the disk cache | 10% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
+| FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
-| Object-storage connections held by whole-object downloads | the disk cache | half the host's connections |
+| Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
 
 ## Alternatives
 
@@ -261,7 +304,10 @@ way each time.
 
 - No persisted format changes.
 - **Configuration** (`[fileservice.cache]`): `disk-prefetch-object-split` (default 2;
-  1 turns splitting off) and `disk-prefetch-object-split-min` (default 16 MiB).
+  1 turns splitting off), `disk-prefetch-object-split-min` (default 16 MiB),
+  `disk-prefetch-object-split-downloads` (default 8), the most downloads in flight with
+  which another is split, and `disk-prefetch-memory-max` (default 32 MiB, at least
+  8 MiB), the most bytes of a MemoryPrefetchObject.
 - **Metrics:** `mo_fs_prefetch_object_total{result}` counts prefetch requests and
   their outcomes: queued, merged, cached, downloaded, failed, missed (a read reached
   the object first), ended and dropped. A warning is logged, at most once per
@@ -288,7 +334,8 @@ way each time.
   - split downloads read their parts and publish one file;
   - a read waits only for its own part;
   - a wrong size caches nothing;
-  - no split while 4 downloads are in flight.
+  - no split while `disk-prefetch-object-split-downloads` downloads are in flight;
+  - a download waits for a connection, and a prefetch object for buffer memory.
 - Each regression test fails without its fix. The new tests pass 100 runs under the
   race detector.
 - **Performance acceptance.** The benchmark is TPC-H SF10, then wiki_all 1M, then
@@ -301,7 +348,4 @@ way each time.
 
 - The scan pace starts from the average of earlier scans, which may not fit a scan
   much faster or slower than the others. Non-blocking.
-- Range reads of an object queued for prefetch are not tied to its download, so a
-  read that reaches many queued objects issues many range reads. Measured faster than
-  downloading those objects whole. Revisit on a real remote deployment.
 - The prefetcher has no runtime switch. Owner: the PR author, if an operator needs one.

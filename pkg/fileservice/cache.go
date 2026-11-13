@@ -58,9 +58,16 @@ type CacheConfig struct {
 	// DiskPrefetchObjectSplitMin is the size of the smallest object whose download is
 	// split. Default DefaultDiskPrefetchObjectSplitMin.
 	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
-	RemoteCacheEnabled         bool           `toml:"remote-cache-enabled"`
-	RPC                        morpc.Config   `toml:"rpc"`
-	CheckOverlaps              bool           `toml:"check-overlaps"`
+	// DiskPrefetchObjectSplitDownloads is the most downloads in flight with which another
+	// download is split. Default DefaultDiskPrefetchObjectSplitDownloads.
+	DiskPrefetchObjectSplitDownloads *int `toml:"disk-prefetch-object-split-downloads"`
+	// DiskPrefetchMemoryMax is the most bytes a prefetch downloads into memory, as a
+	// MemoryPrefetchObject; a larger one downloads to a file, as a FilePrefetchObject.
+	// Default DefaultDiskPrefetchMemoryMax, at least minDiskPrefetchMemoryMax.
+	DiskPrefetchMemoryMax *toml.ByteSize `toml:"disk-prefetch-memory-max"`
+	RemoteCacheEnabled    bool           `toml:"remote-cache-enabled"`
+	RPC                   morpc.Config   `toml:"rpc"`
+	CheckOverlaps         bool           `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -190,6 +197,7 @@ func newFileServiceCaches(
 				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
 				prefetchRange:        prefetchRangeConfig{on: true},
 				objectSplit:          config.diskObjectSplit(),
+				memoryPrefetchMax:    config.diskPrefetchMemoryMax(),
 			},
 		)
 		if err != nil {
@@ -243,15 +251,32 @@ const (
 	DefaultDiskPrefetchObjectSplitMin = 16 << 20
 	// diskPrefetchObjectSplitMax is the most ranges a whole-object download reads at once.
 	diskPrefetchObjectSplitMax = 4
+	// DefaultDiskPrefetchObjectSplitDownloads is the default
+	// DiskPrefetchObjectSplitDownloads.
+	DefaultDiskPrefetchObjectSplitDownloads = 8
+	// DefaultDiskPrefetchMemoryMax is the default DiskPrefetchMemoryMax.
+	DefaultDiskPrefetchMemoryMax = 32 << 20
+	// minDiskPrefetchMemoryMax is the least DiskPrefetchMemoryMax.
+	minDiskPrefetchMemoryMax = 8 << 20
 )
 
+func (c *CacheConfig) diskPrefetchMemoryMax() int64 {
+	if c.DiskPrefetchMemoryMax != nil && *c.DiskPrefetchMemoryMax > 0 {
+		return max(int64(*c.DiskPrefetchMemoryMax), minDiskPrefetchMemoryMax)
+	}
+	return DefaultDiskPrefetchMemoryMax
+}
+
 func (c *CacheConfig) diskObjectSplit() objectSplitConfig {
-	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin}
+	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin, downloads: DefaultDiskPrefetchObjectSplitDownloads}
 	if c.DiskPrefetchObjectSplit != nil {
 		split.parts = min(max(*c.DiskPrefetchObjectSplit, 1), diskPrefetchObjectSplitMax)
 	}
 	if c.DiskPrefetchObjectSplitMin != nil {
 		split.min = int64(*c.DiskPrefetchObjectSplitMin)
+	}
+	if c.DiskPrefetchObjectSplitDownloads != nil && *c.DiskPrefetchObjectSplitDownloads > 0 {
+		split.downloads = *c.DiskPrefetchObjectSplitDownloads
 	}
 	return split
 }
