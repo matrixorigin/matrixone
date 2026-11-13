@@ -19,7 +19,8 @@ import (
 	"container/heap"
 	"fmt"
 	"io"
-	"os"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -330,7 +331,11 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	}
 
 	if ctr.spillFile == nil {
-		f, err := os.CreateTemp("", "mo-top-spill-*")
+		spillFS, err := proc.GetSpillFileService()
+		if err != nil {
+			return err
+		}
+		f, err := spillFS.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("top_%s", uuid.NewString()))
 		if err != nil {
 			return err
 		}
