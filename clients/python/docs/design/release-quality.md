@@ -227,6 +227,7 @@ below do not certify the unavailable positive feature.
   ClientHello times out; main completes TLS 1.3. Ordinary TLS controls pass both.
   Main includes [the buffered-handshake fix #29996](https://github.com/matrixorigin/matrixone/pull/29996);
   the released binary still hands TLS the raw socket without unread buffer bytes.
+  The 4.2-dev backport is tracked in [#32723](https://github.com/matrixorigin/matrixone/pull/32723).
   Plain functional results cannot certify TLS, and no SDK retry or TLS fallback
   was added.
 * Native Arrow LOAD returns 20300. The 84 positive write cases are skipped only
@@ -239,10 +240,13 @@ below do not certify the unavailable positive feature.
   ENUM/SET SHOW CREATE replay have native incompatibilities. Named differential
   cases record native error/metadata outcomes and preserve source data. Main
   retains positive coverage; these are not SDK-provided server fixes.
-* One earlier release TLS analytics run reported a missing S3 stage during
-  source validation. Its cause remains unproven. Targeted S3 checks and the
-  complete plain analytics run passed without a retry workaround; this
-  observation is retained rather than described as repaired.
+* The earlier missing S3 stage came from overlapping validation runs on one
+  disposable cluster. The online manager suite executed `RESTORE CLUSTER`
+  while analytics created a stage after the snapshot. Restore rewound
+  `mo_catalog.mo_stages`; an independent native control reproduced the same
+  20300 error. Suites sharing a cluster that can restore account or cluster
+  state must run exclusively, including preflight and teardown. Separate
+  databases do not isolate this global catalog state.
 
 The online CI target is updated to 4.2.8/current-source with the same two jobs.
 Its required and extended selections are disjoint: 207 and 1397 cases cover the
