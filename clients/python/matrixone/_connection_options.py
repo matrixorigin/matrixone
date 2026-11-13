@@ -25,6 +25,17 @@ def resolve_auto_commit(value, inherited):
     return resolved
 
 
+def _explicit_begin(connection):
+    connection.exec_driver_sql('BEGIN')
+
+
+def preserve_transactions_with_autocommit(engine):
+    """Keep SQLAlchemy transaction boundaries effective on autocommit DBAPI connections."""
+    from sqlalchemy import event
+
+    event.listen(engine, 'begin', _explicit_begin)
+
+
 def redact_error(error, password):
     message = str(error)
     if not password:

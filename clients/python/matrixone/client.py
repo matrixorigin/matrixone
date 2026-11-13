@@ -772,7 +772,7 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        from ._connection_options import tls_options
+        from ._connection_options import preserve_transactions_with_autocommit, tls_options
         from ._local_infile import connection_options, configure_engine
 
         connect_args = {
@@ -815,6 +815,8 @@ class Client(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine)
+        if connect_args['autocommit']:
+            preserve_transactions_with_autocommit(engine)
 
         return engine
 

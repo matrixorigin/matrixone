@@ -703,6 +703,7 @@ class AsyncClient(BaseMatrixOneClient):
             query={"charset": self._connection_params["charset"]},
         )
 
+        from ._connection_options import preserve_transactions_with_autocommit
         from ._local_infile import connection_options, configure_engine
 
         # Create async engine with connection pooling
@@ -727,6 +728,8 @@ class AsyncClient(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine.sync_engine)
+        if self._connection_params.get('autocommit', self.auto_commit):
+            preserve_transactions_with_autocommit(engine.sync_engine)
 
         return engine
 
