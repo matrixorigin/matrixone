@@ -1281,6 +1281,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	// under way, reading only the missing blocks around it.
 	var prefetchContent []byte
 	var prefetchReads int
+	var fetchedUncached bool
 	if !readFullObject && s.diskCache != nil && min != nil && max != nil {
 		if unit, ok := s.diskCache.prefetchUnit(vector); ok {
 			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
@@ -1339,14 +1340,13 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}
-		// The prefetch object caches the bytes only for a read that would cache its entries.
-		cache := vector.Policy.CacheIOEntry() && !vector.Policy.Any(SkipDiskCacheWrites)
-		content, ok, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open, cache)
+		// The read caches its entries unless the prefetch object caches its bytes.
+		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open)
 		if err != nil {
 			return err
 		}
 		if ok {
-			prefetchContent, prefetchReads = content, 1
+			prefetchContent, prefetchReads, fetchedUncached = content, 1, !cached
 		}
 	}
 	if prefetchContent != nil {
@@ -1505,7 +1505,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			return err
 		}
 
-		entry.inPrefetchRange = prefetchContent != nil
+		entry.inPrefetchRange = prefetchContent != nil && !fetchedUncached
 		vector.Entries[i] = entry
 	}
 

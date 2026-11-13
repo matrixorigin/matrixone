@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v3, 2026-11-13 (v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v4, 2026-11-13 (v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -71,9 +71,12 @@ Every prefetch the prefetcher runs is one of two kinds of prefetch object:
   holds no memory buffer.
 
 The choice is made from the request, before any byte is downloaded. Every range read
-that misses the cache takes its bytes from a prefetch object, joining one under way or
-starting one; only a read that must not write the disk cache and is larger than
-`disk-prefetch-memory-max` reads directly. Both kinds:
+that misses the cache takes its bytes from a prefetch object under way, or starts a
+MemoryPrefetchObject of its own when its range is at most `disk-prefetch-memory-max`; a
+larger read reads directly. A MemoryPrefetchObject a read starts caches nothing: the read
+caches its entries as its policy says, unless the prefetch object it joined caches its
+bytes (decision 2026-11-13: with 8 concurrent TPC-H sessions on a 4 GB disk cache, caching
+the read's whole span took about 80 s against about 68 s). Both kinds:
 - are joined by every read of their bytes, which waits for its own bytes, not for the
   whole prefetch object. A FilePrefetchObject is joined only when its bytes arrive no more
   than `disk-download-max-extra-wait` later than a range read could fetch them;

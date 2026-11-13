@@ -437,23 +437,21 @@ func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte)
 }
 
 // fetchRange returns the bytes [start, end) of the object at filePath from a prefetch
-// object holding them: a MemoryPrefetchObject under way, or one it starts and runs itself,
-// or, past disk-prefetch-memory-max, a FilePrefetchObject it starts. A MemoryPrefetchObject
-// it starts caches its bytes when cache is set; a FilePrefetchObject always does, so a
-// read that must not cache takes false past that size.
+// object holding them: one under way, or a MemoryPrefetchObject of at most
+// disk-prefetch-memory-max bytes it starts and runs itself, which caches nothing. It
+// reports whether it returned them, and whether the prefetch object caches them.
 func (d *DiskCache) fetchRange(
 	ctx context.Context,
 	filePath string,
 	policy Policy,
 	start, end int64,
 	open rangeOpener,
-	cache bool,
-) ([]byte, bool, error) {
+) (content []byte, ok, cached bool, err error) {
 	if start < 0 || end <= start {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	diskPath := d.pathForFile(filePath)
 	out := make([]byte, end-start)
@@ -466,10 +464,10 @@ func (d *DiskCache) fetchRange(
 		started *memoryPrefetchObject
 	)
 	for {
-		var ok bool
-		if closing, ok = f.openLocked(); !ok {
+		var isOpen bool
+		if closing, isOpen = f.openLocked(); !isOpen {
 			f.mu.Unlock()
-			return nil, false, nil
+			return nil, false, false, nil
 		}
 		now := time.Now()
 		if o = f.fastestLocked(diskPath, start, end, now, d.downloadMaxExtraWait); o != nil {
@@ -481,7 +479,7 @@ func (d *DiskCache) fetchRange(
 		}
 		if need := flightBufSize(end - start); f.bytes == 0 || f.bytes+need <= budget {
 			started = d.startFlightLocked(ctx, diskPath, start, end, now)
-			started.skipCache = !cache
+			started.skipCache = true
 			started.hold()
 			o = started
 			break
@@ -495,7 +493,7 @@ func (d *DiskCache) fetchRange(
 		select {
 		case <-freed:
 		case <-ctx.Done():
-			return nil, false, ctx.Err()
+			return nil, false, false, ctx.Err()
 		}
 		budget = d.flightBytes()
 		f.mu.Lock()
@@ -503,12 +501,7 @@ func (d *DiskCache) fetchRange(
 	f.mu.Unlock()
 
 	if o == nil {
-		if !cache {
-			return nil, false, nil
-		}
-		if o = d.startFileRun(ctx, closing, filePath, start, end, open); o == nil {
-			return nil, false, ctx.Err()
-		}
+		return nil, false, false, nil
 	}
 	defer o.release()
 	if started != nil {
@@ -521,11 +514,15 @@ func (d *DiskCache) fetchRange(
 		return nil
 	}); err != nil {
 		if errors.Is(err, errPrefetchMissed) {
-			return nil, false, nil
+			return nil, false, false, nil
 		}
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return out, true, nil
+	cached = true
+	if m, isMemory := o.(*memoryPrefetchObject); isMemory {
+		cached = !m.skipCache
+	}
+	return out, true, cached, nil
 }
 
 // runFlight reads the flight fl of the object at filePath through open, caches the range

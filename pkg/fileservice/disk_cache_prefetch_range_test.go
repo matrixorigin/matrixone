@@ -18,7 +18,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -678,24 +681,44 @@ func TestMemoryPrefetchObjectUseErrors(t *testing.T) {
 	require.ErrorIs(t, short.use(ctx, 0, 10, noop), errPrefetchMissed)
 }
 
-// A range read of a read that caches whole objects, not its entries, takes its bytes
-// from a prefetch object that does not cache them.
-func TestS3FSRangeReadOfFullFilePolicyCachesNoRange(t *testing.T) {
+// A range read takes its bytes from a prefetch object that caches nothing: a read that
+// caches its entries caches them, and one that caches whole objects caches no byte.
+func TestS3FSRangeReadCachesItsEntriesNotItsPrefetchObject(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	read := func(policy Policy) {
+	read := func(policy Policy, rangeRead bool) {
 		vec := &IOVector{FilePath: "object", Policy: policy | SkipMemoryCache,
-			Entries: []IOEntry{{Offset: 5000, Size: 10}}}
-		require.NoError(t, fs.read(context.Background(), vec, true))
+			Entries: []IOEntry{{Offset: 5000, Size: 10}, {Offset: 5010, Size: 10}}}
+		if rangeRead {
+			// A read that caches whole objects reads ranges when it does not download one.
+			require.NoError(t, fs.read(context.Background(), vec, true))
+		} else {
+			require.NoError(t, fs.Read(context.Background(), vec))
+		}
 		fs.diskCache.prefetchObjects.reads.Wait()
 		require.Equal(t, data[5000:5010], vec.Entries[0].Data)
+		require.Equal(t, data[5010:5020], vec.Entries[1].Data)
 		vec.Release()
 	}
-	read(0)
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 5000, 10)
-	require.False(t, cached)
-	require.Equal(t, int64(1), storage.reads.Load())
+	cacheFiles := func() []string {
+		var files []string
+		require.NoError(t, filepath.Walk(fs.diskCache.path, func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(p, cacheFileSuffix) {
+				files = append(files, filepath.Base(p))
+			}
+			return err
+		}))
+		slices.Sort(files)
+		return files
+	}
 
-	read(SkipFullFilePreloads | ExactRead)
-	_, cached = fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 5000, 10)
-	require.True(t, cached, "a read that caches its entries caches its range")
+	read(0, true)
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Empty(t, cacheFiles())
+
+	read(SkipFullFilePreloads|ExactRead, false)
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.Equal(t, []string{
+		filepath.Base(fs.diskCache.pathForIOEntry("object", IOEntry{Offset: 5000, Size: 10})),
+		filepath.Base(fs.diskCache.pathForIOEntry("object", IOEntry{Offset: 5010, Size: 10})),
+	}, cacheFiles(), "the entries, not the prefetch object's range")
 }
