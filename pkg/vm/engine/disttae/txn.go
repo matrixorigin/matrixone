@@ -3485,6 +3485,20 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	return -1, false, nil
 }
 
+// ensureCNObjectSummaryCapacity reserves for a known object batch when the
+// table map is first created. Existing maps keep normal incremental growth;
+// batch callers avoid repeated initial growth without copying existing data.
+func (txn *Transaction) ensureCNObjectSummaryCapacity(tableID uint64, n int) {
+	if n <= 0 {
+		return
+	}
+	objects := txn.cnObjsSummary[tableID]
+	if objects == nil {
+		txn.cnObjsSummary[tableID] = make(map[types.Objectid]Summary, n)
+		return
+	}
+}
+
 // vec contains block infos.
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
@@ -3496,7 +3510,12 @@ func (txn *Transaction) registerCNObjects(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) {
-	txn.cnObjsSummary[objId] = Summary{
+	objects := txn.cnObjsSummary[tableId]
+	if objects == nil {
+		objects = make(map[types.Objectid]Summary)
+		txn.cnObjsSummary[tableId] = objects
+	}
+	objects[objId] = Summary{
 		objBat:             objBat,
 		accountId:          accountId,
 		databaseId:         databaseId,
@@ -3506,6 +3525,22 @@ func (txn *Transaction) registerCNObjects(
 		autoIncrEpoch:      autoIncrEpoch,
 		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
+}
+
+// cnObjectSummaryReader reuses the current table's object map during one
+// locked compaction pass. Its zero value is ready to use and it owns no state
+// beyond that pass.
+type cnObjectSummaryReader struct {
+	tableID uint64
+	objects map[types.Objectid]Summary
+}
+
+func (r *cnObjectSummaryReader) get(txn *Transaction, tableID uint64, objectID types.Objectid) Summary {
+	if r.objects == nil || r.tableID != tableID {
+		r.tableID = tableID
+		r.objects = txn.cnObjsSummary[tableID]
+	}
+	return r.objects[objectID]
 }
 
 func (txn *Transaction) WriteFileLocked(
@@ -3708,6 +3743,7 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 	if s.typ == INSERT {
 		server := colexec.MustGetServer(txn.engine.service)
 		col, area := vector.MustVarlenaRawData(s.bat.Vecs[1])
+		txn.ensureCNObjectSummaryCapacity(s.tableId, len(col))
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 			oid := stats.ObjectName().ObjectId()
@@ -4450,7 +4486,7 @@ func (txn *Transaction) deleteBatch(
 		rowOffset := rowid.GetRowOffset()
 
 		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
-			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
+			txn.deletedBlocks.addDeletedBlocks(tableId, &blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
@@ -4912,9 +4948,10 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	for {
 		var missing []lookup
 		seen := make(map[tableKey]bool)
+		var summaries cnObjectSummaryReader
 		txn.deletedBlocks.iter(
-			func(blkId *types.Blockid, offsets []int64) bool {
-				summary := txn.cnObjsSummary[*blkId.Object()]
+			func(key deletedBlockKey, offsets []int64) bool {
+				summary := summaries.get(txn, key.tableID, *key.blockID.Object())
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -4983,6 +5020,7 @@ func (txn *Transaction) publishStagedRepublicationLocked(
 
 	server := colexec.MustGetServer(txn.engine.service)
 	col, area := vector.MustVarlenaRawData(r.bat.Vecs[1])
+	txn.ensureCNObjectSummaryCapacity(r.tableId, len(col))
 	for i := range col {
 		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 		oid := stats.ObjectName().ObjectId()
@@ -5032,28 +5070,41 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		return nil
 	}
 
-	// object --> blk id --> deletion
-	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
-	objTables := make(map[objectio.ObjectId]workspaceTableKey)
+	// Logical table + object --> block --> deletion. A shared physical object
+	// must still be rewritten independently for each affected table.
+	objBlkDeletion := make(map[cnObjectKey]map[objectio.Blockid][]int64)
+	objTables := make(map[cnObjectKey]workspaceTableKey)
 
-	affectedBats := make(map[*batch.Batch]struct{})
+	type affectedBatchKey struct {
+		tableID uint64
+		bat     *batch.Batch
+	}
+	affectedBats := make(map[affectedBatchKey]struct{})
+	var summaries cnObjectSummaryReader
 
 	txn.deletedBlocks.iter(
-		func(blkId *types.Blockid, offsets []int64) bool {
-			summary := txn.cnObjsSummary[*blkId.Object()]
+		func(key deletedBlockKey, offsets []int64) bool {
+			objectKey := cnObjectKey{
+				objectID: *key.blockID.Object(),
+				tableID:  key.tableID,
+			}
+			summary := summaries.get(txn, objectKey.tableID, objectKey.objectID)
 
-			affectedBats[summary.objBat] = struct{}{}
+			affectedBats[affectedBatchKey{
+				tableID: key.tableID,
+				bat:     summary.objBat,
+			}] = struct{}{}
 
-			blkDel := objBlkDeletion[*blkId.Object()]
+			blkDel := objBlkDeletion[objectKey]
 			if blkDel == nil {
-				objBlkDeletion[*blkId.Object()] = make(map[objectio.Blockid][]int64)
-				blkDel = objBlkDeletion[*blkId.Object()]
+				objBlkDeletion[objectKey] = make(map[objectio.Blockid][]int64)
+				blkDel = objBlkDeletion[objectKey]
 			}
 
-			blkDel[*blkId] = offsets
+			blkDel[key.blockID] = offsets
 
-			if _, ok := objTables[*blkId.Object()]; !ok {
-				objTables[*blkId.Object()] = workspaceTableKey{
+			if _, ok := objTables[objectKey]; !ok {
+				objTables[objectKey] = workspaceTableKey{
 					tableKey: tableKey{
 						accountId: summary.accountId,
 						dbName:    summary.dbName,
@@ -5089,6 +5140,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	// (and the physically persisted replacement leaked with no cleanup
 	// owner).
 	type compactRewrite struct {
+		objectKey cnObjectKey
 		tbl       *txnTable
 		tbKey     workspaceTableKey
 		writeName string
@@ -5103,6 +5155,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	rewrites := make([]compactRewrite, 0, 8)
 
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+	dirtyObjectKeys := make([]cnObjectKey, 0, 1)
 
 	// Metadata entries whose objects this pass fully classified are retired
 	// only after the tail below published every staged re-publication AND
@@ -5149,7 +5202,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			continue
 		}
 
-		if _, ok := affectedBats[entry.bat]; !ok {
+		if _, ok := affectedBats[affectedBatchKey{
+			tableID: entry.tableId,
+			bat:     entry.bat,
+		}]; !ok {
 			if injected, _ := objectio.LogWorkspaceInjected(
 				entry.databaseName, entry.tableName); !injected {
 				continue
@@ -5171,7 +5227,11 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		for j := range len(col) {
 			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
 
-			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
+			objectKey := cnObjectKey{
+				objectID: *stats.ObjectName().ObjectId(),
+				tableID:  entry.tableId,
+			}
+			if objBlkDeletion[objectKey] == nil {
 				// clean object, no deletion on it: stage its metadata as
 				// its own single-object batch. Every step from here on is
 				// fallible (the fault window, mpool allocations, the
@@ -5230,6 +5290,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				})
 			} else {
 				dirtyObject = append(dirtyObject, stats)
+				dirtyObjectKeys = append(dirtyObjectKeys, objectKey)
 			}
 
 			offset += int(stats.BlkCnt())
@@ -5246,9 +5307,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	// record's write shapes, so a worker owns nothing but its own
 	// result slot and its filesystem reader/writer.
 	for i := range dirtyObject {
-		stats := dirtyObject[i]
-		objId := stats.ObjectName().ObjectId()
-		tbKey := objTables[*objId]
+		objectKey := dirtyObjectKeys[i]
+		tbKey := objTables[objectKey]
 
 		// resolveCompactTablesLocked guarantees every table referenced by
 		// txn.deletedBlocks is in the map
@@ -5263,6 +5323,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			writeName = tbKey.name
 		}
 		rewrites = append(rewrites, compactRewrite{
+			objectKey: objectKey,
 			tbl:       tbl,
 			tbKey:     tbKey,
 			writeName: writeName,
@@ -5279,7 +5340,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		for i := range rewrites {
 			waiter.Add(1)
 			stats := dirtyObject[i]
-			blkDeletion := objBlkDeletion[*dirtyObject[i].ObjectName().ObjectId()]
+			blkDeletion := objBlkDeletion[rewrites[i].objectKey]
 			txn.compactWorker.Submit(func() {
 				defer waiter.Done()
 				tbl := rewrites[i].tbl
@@ -6308,9 +6369,9 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
-			offsets: map[types.Blockid][]int64{},
+			offsets: map[uint64]map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:   map[types.Objectid]Summary{},
+		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
