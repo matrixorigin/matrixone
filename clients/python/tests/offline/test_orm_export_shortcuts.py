@@ -32,7 +32,7 @@ def test_export_shortcuts_execute_compiled_query(route, format, transaction):
     query.select('id').filter('name = ?', "O'Reilly")
     assert export(query, route, format=format) is result
     path = 'stage://archive/output' if 'stage' in route else '/tmp/output'
-    expected = f"SELECT id FROM items WHERE name = 'O''Reilly' INTO OUTFILE '{path}' FORMAT '{format.lower()}'"
+    expected = f"SELECT id FROM items WHERE name = 'O''Reilly'\nINTO OUTFILE '{path}' FORMAT '{format.lower()}'"
     if format == 'csv':
         expected += " fields terminated by ','"
     executor.execute.assert_called_once_with(expected)
