@@ -153,7 +153,7 @@ def test_table_regular_indexes(client):
             client.insert(
                 RegularIndexesTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "name": f"item_{i}",
                     "category": f"cat{i % 10}",
                     "status": i % 5,
@@ -195,7 +195,7 @@ def test_table_unique_indexes(client):
         for i in range(80):
             client.insert(
                 UniqueIndexesTable,
-                {"id": i, "email": f"user{i}@test.com", "username": f"user_{i}", "phone": f"1234567{i:04d}"},
+                {"id": i + 1, "email": f"user{i}@test.com", "username": f"user_{i}", "phone": f"1234567{i:04d}"},
             )
 
         # Flush table to ensure metadata is available
@@ -233,7 +233,7 @@ def test_table_mixed_indexes(client):
             client.insert(
                 MixedIndexesTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "email": f"user{i}@test.com",
                     "username": f"user{i}",
                     "category": f"cat{i % 5}",
@@ -277,7 +277,7 @@ def test_table_fulltext_index(client):
             client.insert(
                 FulltextIndexTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "title": f"Article {i}",
                     "content": f"This is test content for article {i}. It contains various keywords and phrases.",
                 },
@@ -321,7 +321,7 @@ def test_table_ivf_index(client):
         for i in range(100):
             embedding = [random.random() for _ in range(128)]
             client.vector_ops.insert(
-                IVFIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "meta_info": f"metadata_{i}"}
+                IVFIndexTable, {"id": i + 1, "name": f"item_{i}", "embedding": embedding, "meta_info": f"metadata_{i}"}
             )
 
         # Flush table to ensure metadata is available
@@ -365,7 +365,7 @@ def test_table_hnsw_index(client):
         for i in range(50):
             embedding = [random.random() for _ in range(64)]
             client.vector_ops.insert(
-                HNSWIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "description": f"description_{i}"}
+                HNSWIndexTable, {"id": i + 1, "name": f"item_{i}", "embedding": embedding, "description": f"description_{i}"}
             )
 
         # Flush table to ensure metadata is available
@@ -410,7 +410,7 @@ def test_table_with_tombstone(client):
 
         # Insert test data (100 rows) using SDK
         for i in range(100):
-            client.insert(TombstoneTable, {"id": i, "name": f"item_{i}", "value": i * 10, "category": f"cat{i % 10}"})
+            client.insert(TombstoneTable, {"id": i + 1, "name": f"item_{i}", "value": i * 10, "category": f"cat{i % 10}"})
 
         # Flush table to ensure all data is written
         try:
