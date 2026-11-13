@@ -233,6 +233,7 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	//move here to prohibit potential recursive lock
 	var attachAbort string
 
+	status := mp.responseStatus(uint16(resp.status))
 	mp.m.Lock()
 	defer mp.m.Unlock()
 
@@ -240,15 +241,15 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	case OkResponse:
 		s, ok := resp.data.(string)
 		if !ok {
-			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, "")
+			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, "")
 		}
-		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, s)
+		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, s)
 	case EoFResponse:
-		return mp.sendEOFPacket(0, uint16(resp.status))
+		return mp.sendEOFPacket(0, status)
 	case ErrorResponse:
 		err := resp.data.(error)
 		if err == nil {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+			return mp.sendOKPacket(0, 0, status, 0, "")
 		}
 		var myerr *moerr.Error
 		if errors.As(err, &myerr) {
@@ -274,12 +275,12 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+			return mp.sendOKPacket(0, 0, status, 0, "")
 		}
 		if mer.Mrs() == nil {
-			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
+			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), status, mer.Warnings(), "")
 		}
-		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), status)
 	case LocalInfileRequest:
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)
