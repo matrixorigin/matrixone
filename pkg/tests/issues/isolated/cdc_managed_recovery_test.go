@@ -34,8 +34,6 @@ import (
 )
 
 func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
 	path := t.TempDir()
 	cluster, err := embed.NewCluster(embed.WithTesting(), embed.WithDataPath(path), embed.WithCNCount(2), embed.WithPreStart(func(s embed.ServiceOperator) {
 		if s.ServiceType() == metadata.ServiceType_CN {
@@ -46,8 +44,10 @@ func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
 			})
 		}
 	}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	require.NoError(t, cluster.Start())
 	first, err := cluster.GetCNService(0)
 	require.NoError(t, err)
@@ -58,6 +58,9 @@ func TestCDCManagedRecoveryAndUserRestart(t *testing.T) {
 		ts, ok = svc.GetTaskService()
 		return ok
 	}, 90*time.Second, 100*time.Millisecond)
+	// Keep the scenario timeout independent of waiting for cluster admission.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=45s&writeTimeout=45s", first.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
