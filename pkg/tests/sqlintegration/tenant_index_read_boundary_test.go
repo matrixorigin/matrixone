@@ -98,16 +98,14 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, active.QueryRowContext(ctx, "select count(*) from index_boundary.t").Scan(&after))
 		require.Equal(t, 2, after)
-		for _, read := range []func() error{
-			func() error { return active.QueryRowContext(ctx, "select count(*) from "+target).Scan(&after) },
-			func() error { return retained.QueryRowContext(ctx).Scan(&after) },
-			func() error { return active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after) },
-		} {
-			err = read()
+		assertIndexReadDenied := func(err error) {
 			var denied *mysql.MySQLError
 			require.True(t, errors.As(err, &denied))
 			require.EqualValues(t, 20101, denied.Number)
 		}
+		assertIndexReadDenied(active.QueryRowContext(ctx, "select count(*) from "+target).Scan(&after))
+		assertIndexReadDenied(retained.QueryRowContext(ctx).Scan(&after))
+		assertIndexReadDenied(active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))
 		_, err = active.ExecContext(ctx, "set role accountadmin")
 		require.NoError(t, err)
 		require.NoError(t, retained.QueryRowContext(ctx).Scan(&after))
