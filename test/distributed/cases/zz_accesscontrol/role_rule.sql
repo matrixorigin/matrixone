@@ -227,6 +227,43 @@ select database();
 deallocate prepare ctas_qualified_stmt;
 -- @session
 select * from db_ctas_context.ctas_qualified order by k;
+
+-- 可执行包装的关闭符不属于内层 CTAS；字符串内的关闭符必须保留。
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+use db1;
+/*!50700 prepare ctas_exec_comment from */ create table ctas_exec_comment as select 'marker*/tail' as marker;
+execute ctas_exec_comment;
+deallocate prepare ctas_exec_comment;
+-- @session
+select * from db1.ctas_exec_comment;
+drop table db1.ctas_exec_comment;
+
+-- 源表撤权后，不能在另一默认库鉴权同名表、再物化原库的数据。
+drop role if exists test_rule_revoke;
+create role test_rule_revoke;
+grant connect on account * to test_rule_revoke;
+grant create table, drop table on database db1 to test_rule_revoke;
+grant select on table db1.ctas_policy_source to test_rule_revoke;
+grant select on table db_ctas_context.ctas_policy_source to test_rule_revoke;
+grant test_rule_revoke to test_rule_user;
+-- @session:id=94&user=sys:test_rule_user:test_rule_revoke&password=123456
+set secondary role none;
+set enable_remap_hint = 1;
+set enable_privilege_cache = 0;
+use db1;
+prepare ctas_revoke_stmt from 'create table ctas_revoked as select * from ctas_policy_source';
+-- @session
+revoke select on table db1.ctas_policy_source from test_rule_revoke;
+-- @session:id=94&user=sys:test_rule_user:test_rule_revoke&password=123456
+use db_ctas_context;
+select count(*) from db1.ctas_policy_source;
+execute ctas_revoke_stmt;
+select sum(amount)+2 from ctas_policy_source;
+deallocate prepare ctas_revoke_stmt;
+-- @session
+select count(*) from mo_catalog.mo_tables where reldatabase='db1' and relname='ctas_revoked';
+revoke test_rule_revoke from test_rule_user;
+drop role test_rule_revoke;
 drop database db_ctas_context;
 revoke test_rule_ctas_wide from test_rule_user;
 drop role test_rule_ctas_wide;

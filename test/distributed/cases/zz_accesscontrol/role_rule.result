@@ -266,6 +266,41 @@ select * from db_ctas_context.ctas_qualified order by k;
 ➤ k[4,32,0]  ¦  amount[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  90
+use db1;
+/*!50700 prepare ctas_exec_comment from */ create table ctas_exec_comment as select 'marker*/tail' as marker;
+execute ctas_exec_comment;
+deallocate prepare ctas_exec_comment;
+select * from db1.ctas_exec_comment;
+➤ marker[12,-1,0]  𝄀
+marker*/tail
+drop table db1.ctas_exec_comment;
+drop role if exists test_rule_revoke;
+create role test_rule_revoke;
+grant connect on account * to test_rule_revoke;
+grant create table, drop table on database db1 to test_rule_revoke;
+grant select on table db1.ctas_policy_source to test_rule_revoke;
+grant select on table db_ctas_context.ctas_policy_source to test_rule_revoke;
+grant test_rule_revoke to test_rule_user;
+set secondary role none;
+set enable_remap_hint = 1;
+set enable_privilege_cache = 0;
+use db1;
+prepare ctas_revoke_stmt from 'create table ctas_revoked as select * from ctas_policy_source';
+revoke select on table db1.ctas_policy_source from test_rule_revoke;
+use db_ctas_context;
+select count(*) from db1.ctas_policy_source;
+internal error: do not have privilege to execute the statement
+execute ctas_revoke_stmt;
+internal error: do not have privilege to execute the statement
+select sum(amount)+2 from ctas_policy_source;
+➤ sum(amount) + 2[-5,64,0]  𝄀
+902
+deallocate prepare ctas_revoke_stmt;
+select count(*) from mo_catalog.mo_tables where reldatabase='db1' and relname='ctas_revoked';
+➤ count(*)[-5,64,0]  𝄀
+0
+revoke test_rule_revoke from test_rule_user;
+drop role test_rule_revoke;
 drop database db_ctas_context;
 revoke test_rule_ctas_wide from test_rule_user;
 drop role test_rule_ctas_wide;

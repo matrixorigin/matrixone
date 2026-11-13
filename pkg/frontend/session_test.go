@@ -645,6 +645,27 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, 2, len(s.prepareStmts))
 	})
 
+	t.Run("prepare failure restores database", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(s, &query.MigrateConnToRequest{
+			DB:           "d1",
+			PrepareStmts: []*query.PrepareStmt{{Name: "bad", SQL: "select (", Database: "d2"}},
+		})
+		assert.Error(t, err)
+		assert.Equal(t, "d1", s.GetDatabaseName())
+		assert.Equal(t, "d1", s.GetTxnCompileCtx().DefaultDatabase())
+		assert.Empty(t, s.prepareStmts, "失败的重建不能发布 handle")
+	})
+
 	t.Run("db dropped", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

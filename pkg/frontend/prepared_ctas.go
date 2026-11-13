@@ -37,7 +37,29 @@ func directPreparedCTASSourceSQL(ctx context.Context, sql string) (string, error
 			return "", moerr.NewParseError(ctx, "invalid CTAS PREPARE wrapper")
 		}
 	}
-	source := strings.TrimSpace(sql[scanner.Pos:])
+	start := scanner.Pos
+	source := sql[start:]
+	if scanner.CommentFlag {
+		// FROM 位于可执行包装内：起始 /*! 已在前缀中丢弃，只移除与它
+		// 对应的关闭符。逐 token 扫描，不能误删字符串或普通注释里的 */。
+		for scanner.CommentFlag {
+			before := scanner.Pos
+			token, _ := scanner.Scan()
+			if !scanner.CommentFlag {
+				close := strings.Index(sql[before:scanner.Pos], "*/")
+				if close < 0 {
+					return "", moerr.NewParseError(ctx, "invalid executable PREPARE wrapper")
+				}
+				end := before + close
+				source = sql[start:end] + sql[end+2:]
+				break
+			}
+			if token == 0 || token == mysql.LEX_ERROR {
+				return "", moerr.NewParseError(ctx, "unterminated executable PREPARE wrapper")
+			}
+		}
+	}
+	source = strings.TrimSpace(source)
 	if source == "" {
 		return "", moerr.NewParseError(ctx, "missing CTAS PREPARE source")
 	}

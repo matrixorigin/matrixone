@@ -509,6 +509,8 @@ message PrepareStmt {
   string Name = 1;
   string SQL = 2;
   bytes ParamTypes = 3;
+  // 重建此 prepared handle 时的默认库；空值也是有效的绑定。
+  string Database = 4;
 }
 
 message MigrateConnFromRequest {

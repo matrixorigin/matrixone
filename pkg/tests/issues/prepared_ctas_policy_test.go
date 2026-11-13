@@ -24,7 +24,12 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 )
 
 // 同一连接在 prepare/execute 间切换角色；实际快照由管理员回读，
@@ -56,6 +61,7 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 				"drop user if exists prepared_ctas_user",
 				"drop role if exists prepared_ctas_narrow",
 				"drop role if exists prepared_ctas_wide",
+				"drop role if exists prepared_ctas_revoke",
 				"drop database if exists prepared_ctas_other",
 				"drop database if exists prepared_ctas_policy",
 			} {
@@ -69,11 +75,21 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 			"create database prepared_ctas_other",
 			"create table prepared_ctas_other.source(k int, amount int)",
 			"insert into prepared_ctas_other.source values (9,900)",
+			"create table prepared_ctas_policy.migration_source(amount int)",
+			"insert into prepared_ctas_policy.migration_source values (10)",
+			"create table prepared_ctas_other.migration_source(amount int)",
+			"insert into prepared_ctas_other.migration_source values (900)",
 			"create role prepared_ctas_narrow",
 			"create role prepared_ctas_wide",
+			"create role prepared_ctas_revoke",
 			`alter role prepared_ctas_narrow add rule "select amount from prepared_ctas_policy.source where k = 1" on table prepared_ctas_policy.source`,
 			"create user prepared_ctas_user identified by '123456' default role prepared_ctas_narrow",
 			"grant prepared_ctas_wide to prepared_ctas_user",
+			"grant prepared_ctas_revoke to prepared_ctas_user",
+			"grant connect on account * to prepared_ctas_revoke",
+			"grant create table, drop table on database prepared_ctas_policy to prepared_ctas_revoke",
+			"grant select on table prepared_ctas_other.source to prepared_ctas_revoke",
+			"grant select on table prepared_ctas_other.migration_source to prepared_ctas_revoke",
 		} {
 			mustExec(t, ctx, adminConn, sql)
 		}
@@ -83,7 +99,7 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 			mustExec(t, ctx, adminConn, "grant create table, drop table on database prepared_ctas_policy to "+role)
 		}
 		mustExec(t, ctx, adminConn, "grant create table, drop table on database prepared_ctas_other to prepared_ctas_wide")
-		for _, protocol := range []string{"sql", "direct", "binary"} {
+		for _, protocol := range []string{"sql", "direct", "executable", "binary"} {
 			t.Run(protocol, func(t *testing.T) {
 				cfg := mysql.NewConfig()
 				cfg.User = "sys:prepared_ctas_user:prepared_ctas_narrow"
@@ -108,6 +124,8 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 					text := "prepare " + name + " from '" + query + "'"
 					if protocol == "direct" {
 						text = "/* from misleading prefix */ prepare `" + name + "` from " + query
+					} else if protocol == "executable" {
+						text = "/*!50700 prepare `" + name + "` from " + query + " */"
 					}
 					mustExec(t, ctx, conn, text)
 					t.Cleanup(func() { mustExec(t, ctx, conn, "deallocate prepare "+name) })
@@ -215,6 +233,26 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 					require.NoError(t, adminConn.QueryRowContext(ctx, "select sum(amount) from prepared_ctas_other.qualified_snapshot").Scan(&total))
 					require.Equal(t, 30, total)
 				})
+				t.Run("revoked source privilege", func(t *testing.T) {
+					mustExec(t, ctx, adminConn, "grant select on table prepared_ctas_policy.source to prepared_ctas_revoke")
+					mustExec(t, ctx, conn, "set secondary role none")
+					mustExec(t, ctx, conn, "set role prepared_ctas_revoke")
+					mustExec(t, ctx, conn, "set enable_privilege_cache=0")
+					mustExec(t, ctx, conn, "use prepared_ctas_policy")
+					execute := prepare(t, "revoke_stmt", "create table revoked_snapshot as select * from source")
+					defer mustExec(t, ctx, adminConn, "drop table if exists prepared_ctas_policy.revoked_snapshot")
+					mustExec(t, ctx, adminConn, "revoke select on table prepared_ctas_policy.source from prepared_ctas_revoke")
+					mustExec(t, ctx, conn, "use prepared_ctas_other")
+					var n int
+					err := conn.QueryRowContext(ctx, "select count(*) from prepared_ctas_policy.source").Scan(&n)
+					require.Error(t, err, "直接查询在撤权后应拒绝")
+					require.ErrorContains(t, execute(), "do not have privilege", "不能改为鉴权当前库的同名表而读取原库，也不能用解析错误冒充拒绝授权")
+					require.NoError(t, adminConn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='prepared_ctas_policy' and relname='revoked_snapshot'").Scan(&n))
+					require.Zero(t, n, "鉴权失败不能留下快照")
+					var total int
+					require.NoError(t, conn.QueryRowContext(ctx, "select sum(amount)+2 from source").Scan(&total))
+					require.Equal(t, 902, total, "拒绝后默认库应恢复；新查询避免旧缓存掩盖问题")
+				})
 				if protocol == "direct" {
 					t.Run("batch raw source", func(t *testing.T) {
 						mustExec(t, ctx, conn, "set role prepared_ctas_narrow")
@@ -229,5 +267,80 @@ func TestPreparedCTASRowPolicies(t *testing.T) {
 				}
 			})
 		}
+		t.Run("migration RPC", func(t *testing.T) {
+			cfg := mysql.NewConfig()
+			cfg.User = "sys:prepared_ctas_user:prepared_ctas_wide"
+			cfg.Passwd, cfg.Net, cfg.Addr = "123456", "tcp", addr
+			connector, err := mysql.NewConnector(cfg)
+			require.NoError(t, err)
+			db := sql.OpenDB(connector)
+			defer db.Close()
+			src, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer src.Close()
+			dst, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer dst.Close()
+			mustExec(t, ctx, src, "use prepared_ctas_policy")
+			mustExec(t, ctx, src, "prepare migration_stmt from 'create table migration_snapshot as select * from migration_source'")
+			defer mustExec(t, ctx, adminConn, "drop table if exists prepared_ctas_policy.migration_snapshot")
+			defer mustExec(t, ctx, adminConn, "drop table if exists prepared_ctas_other.migration_snapshot")
+			mustExec(t, ctx, src, "execute migration_stmt")
+			var amount int
+			require.NoError(t, adminConn.QueryRowContext(ctx, "select amount from prepared_ctas_policy.migration_snapshot").Scan(&amount))
+			require.Equal(t, 10, amount)
+			mustExec(t, ctx, adminConn, "drop table prepared_ctas_policy.migration_snapshot")
+			mustExec(t, ctx, src, "use prepared_ctas_other")
+			mustExec(t, ctx, src, "prepare ordinary_stmt from 'select amount from migration_source'")
+			var srcID, dstID uint32
+			require.NoError(t, src.QueryRowContext(ctx, "select connection_id()").Scan(&srcID))
+			require.NoError(t, dst.QueryRowContext(ctx, "select connection_id()").Scan(&dstID))
+			client, err := queryclient.NewQueryClient(cn.ServiceID(), morpc.Config{})
+			require.NoError(t, err)
+			defer client.Close()
+			membership := clusterservice.GetMOCluster(cn.ServiceID())
+			membership.ForceRefresh(true)
+			var address string
+			membership.GetCNService(clusterservice.NewServiceIDSelector(cn.ServiceID()), func(service metadata.CNService) bool {
+				address = service.QueryAddress
+				return false
+			})
+			require.NotEmpty(t, address, "必须使用实际注册的 query RPC 地址")
+			from := client.NewRequest(query.CmdMethod_MigrateConnFrom)
+			from.MigrateConnFromRequest = &query.MigrateConnFromRequest{ConnID: srcID}
+			exported, err := client.SendMessage(ctx, address, from)
+			require.NoError(t, err)
+			defer client.Release(exported)
+			info := exported.MigrateConnFromResponse
+			require.NotNil(t, info)
+			require.Equal(t, "prepared_ctas_other", info.DB)
+			require.Len(t, info.PrepareStmts, 2)
+			to := client.NewRequest(query.CmdMethod_MigrateConnTo)
+			to.MigrateConnToRequest = &query.MigrateConnToRequest{
+				ConnID: dstID, DB: info.DB, PrepareStmts: info.PrepareStmts,
+			}
+			imported, err := client.SendMessage(ctx, address, to)
+			require.NoError(t, err)
+			defer client.Release(imported)
+			require.True(t, imported.MigrateConnToResponse.Success)
+			mustExec(t, ctx, dst, "execute migration_stmt")
+			require.NoError(t, adminConn.QueryRowContext(ctx, "select amount from prepared_ctas_policy.migration_snapshot").Scan(&amount))
+			require.Equal(t, 10, amount, "迁移不能把 A 的名称绑定变成当前库 B")
+			require.NoError(t, dst.QueryRowContext(ctx, "execute ordinary_stmt").Scan(&amount))
+			require.Equal(t, 900, amount, "普通 prepared 保持原迁移语义")
+			var database string
+			require.NoError(t, dst.QueryRowContext(ctx, "select database()").Scan(&database))
+			require.Equal(t, "prepared_ctas_other", database)
+			// 迁移只转移名称绑定，不转移旧角色的授权；迁移后也应重新鉴权 A。
+			mustExec(t, ctx, adminConn, "drop table prepared_ctas_policy.migration_snapshot")
+			mustExec(t, ctx, dst, "set role prepared_ctas_revoke")
+			mustExec(t, ctx, dst, "set enable_privilege_cache=0")
+			err = dst.QueryRowContext(ctx, "select amount from prepared_ctas_policy.migration_source").Scan(&amount)
+			require.Error(t, err)
+			_, err = dst.ExecContext(ctx, "execute migration_stmt")
+			require.ErrorContains(t, err, "do not have privilege")
+			require.NoError(t, dst.QueryRowContext(ctx, "select amount+3 from migration_source").Scan(&amount))
+			require.Equal(t, 903, amount, "拒绝后仍按当前库解析新查询")
+		})
 	}
 }

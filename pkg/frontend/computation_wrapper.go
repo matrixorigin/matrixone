@@ -257,7 +257,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err != nil {
 				return nil, err
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan)
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan, cwft.prepareDatabase)
 			if err != nil {
 				return nil, err
 			}
@@ -284,7 +284,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if stmt != nil {
 				cwft.stmt = stmt
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan, cwft.prepareDatabase)
 			if err != nil {
 				return nil, err
 			}
@@ -338,7 +338,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	return cwft.compile, err
 }
 
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan, database string) (statistic.StatsArray, error) {
+	if ctas, ok := stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		// 源 SELECT 会在鉴权中重新规划；名称绑定必须与实际物化一致，
+		// 不能鉴权当前库 B 的同名表却执行准备时库 A 的读取。
+		compileCtx := ses.GetTxnCompileCtx()
+		oldDatabase := compileCtx.DefaultDatabase()
+		compileCtx.SetDatabase(database)
+		defer compileCtx.SetDatabase(oldDatabase)
+	}
 	var stats statistic.StatsArray
 	stats.Reset()
 	switch stmt.(type) {

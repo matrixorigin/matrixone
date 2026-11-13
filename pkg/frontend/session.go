@@ -2104,7 +2104,15 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
-		if err := pm.Migrate(ctx, ses); err != nil {
+		err := func() error {
+			// 每个 handle 有独立的重建库；不能用连接当前库覆盖 CTAS 的绑定。
+			// 同时恢复协议和 compiler context，成功/错误均不泄漏临时默认库。
+			currentDatabase := ses.GetDatabaseName()
+			ses.SetDatabaseName(p.Database)
+			defer ses.SetDatabaseName(currentDatabase)
+			return pm.Migrate(ctx, ses)
+		}()
+		if err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
 		id := parsePrepareStmtID(p.Name)

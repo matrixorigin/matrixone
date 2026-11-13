@@ -55,6 +55,26 @@ func TestDirectPreparedCTASSourceSQL(t *testing.T) {
 	require.Empty(t, ec.rawSQLOfStmt)
 }
 
+func TestDirectPreparedCTASExecutableCommentSource(t *testing.T) {
+	ctx := context.Background()
+	const source = "create table db1.copy as select 'marker*/tail;from' as marker"
+	for _, sql := range []string{
+		"/*! prepare p from " + source + " */",
+		"/*!50700 prepare p from " + source + " */",
+		"/*! prepare p from */ " + source,
+		"/*! prepare p */ from " + source,
+	} {
+		got, err := directPreparedCTASSourceSQL(ctx, sql)
+		require.NoError(t, err)
+		require.Equal(t, source, got, "只去掉包装边界，保留字符串中的关闭符和分号")
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, got, 1)
+		require.NoError(t, err)
+		stmt.Free()
+	}
+	_, err := directPreparedCTASSourceSQL(ctx, "/*! prepare p from "+source)
+	require.Error(t, err, "无关闭边界必须拒绝")
+}
+
 func TestPreparedCTASTargetDatabaseBinding(t *testing.T) {
 	for _, tc := range []struct{ table, database, want string }{
 		{"copy", "a", "a"},
