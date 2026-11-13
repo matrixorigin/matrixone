@@ -16,14 +16,40 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// 从对应的未脱敏语句按词法边界提取源，前置注释和名字里的 FROM 不能影响位置。
+func directPreparedCTASSourceSQL(ctx context.Context, sql string) (string, error) {
+	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	defer mysql.PutScanner(scanner)
+	for _, expected := range []int{mysql.PREPARE, 0, mysql.FROM} {
+		token, _ := scanner.Scan()
+		if expected != 0 && token != expected {
+			return "", moerr.NewParseError(ctx, "invalid CTAS PREPARE wrapper")
+		}
+	}
+	source := strings.TrimSpace(sql[scanner.Pos:])
+	if source == "" {
+		return "", moerr.NewParseError(ctx, "missing CTAS PREPARE source")
+	}
+	return source, nil
+}
+
+func bindPreparedCTASTargetDatabase(stmt *tree.CreateTable, database string) {
+	if stmt.Table.SchemaName == "" && database != "" {
+		stmt.Table.SchemaName = tree.Identifier(database)
+		stmt.Table.ExplicitSchema = true
+	}
+}
 
 // 在未注入角色规则的用户原文上附加当前角色，既保留显式 hint，也不能
 // 把 prepare 时自动注入的旧角色 hint 当作用户输入跨角色复用。
@@ -68,8 +94,13 @@ func refreshPreparedCTAS(ctx context.Context, ses *Session, prepared *PrepareStm
 	if err = applyPreparedCTASRewrite(ctx, ses, fresh, prepared.Sql); err != nil {
 		return err
 	}
+	bindPreparedCTASTargetDatabase(fresh, prepared.ctasDatabase)
+	compileCtx := ses.GetTxnCompileCtx()
+	oldDatabase := compileCtx.DefaultDatabase()
+	compileCtx.SetDatabase(prepared.ctasDatabase)
+	defer compileCtx.SetDatabase(oldDatabase)
 	wrapper := &tree.PrepareStmt{Name: tree.Identifier(prepared.Name), Stmt: fresh}
-	p, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), wrapper)
+	p, err := buildPlan(ctx, ses, compileCtx, wrapper)
 	if err != nil {
 		return err
 	}

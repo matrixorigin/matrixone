@@ -196,6 +196,38 @@ deallocate prepare ctas_policy_var;
 -- @session
 select * from db1.ctas_prepared_var;
 drop table db1.ctas_prepared_var;
+
+-- 默认库在 PREPARE 时绑定；USE 只改变当前会话，不改变目标、源表或鉴权库。
+drop database if exists db_ctas_context;
+create database db_ctas_context;
+create table db_ctas_context.ctas_policy_source(k int, amount int);
+insert into db_ctas_context.ctas_policy_source values (9,900);
+grant create table, drop table on database db_ctas_context to test_rule_ctas_wide;
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+use db1;
+/* from misleading prefix */ prepare ctas_bound_stmt from create table ctas_bound as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_bound_stmt;
+select database();
+execute ctas_bound_stmt;
+select database();
+-- @session
+select * from db1.ctas_bound;
+select count(*) from mo_catalog.mo_tables where reldatabase='db_ctas_context' and relname='ctas_bound';
+drop table db1.ctas_bound;
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+deallocate prepare ctas_bound_stmt;
+set role test_rule_ctas_wide;
+use db1;
+/* from misleading prefix */ prepare ctas_qualified_stmt from create table db_ctas_context.ctas_qualified as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_qualified_stmt;
+select database();
+deallocate prepare ctas_qualified_stmt;
+-- @session
+select * from db_ctas_context.ctas_qualified order by k;
+drop database db_ctas_context;
 revoke test_rule_ctas_wide from test_rule_user;
 drop role test_rule_ctas_wide;
 drop table db1.ctas_policy_source;

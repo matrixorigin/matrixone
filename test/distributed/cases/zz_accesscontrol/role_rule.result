@@ -227,6 +227,46 @@ select * from db1.ctas_prepared_var;
 ➤ amount[4,32,0]  𝄀
 10
 drop table db1.ctas_prepared_var;
+drop database if exists db_ctas_context;
+create database db_ctas_context;
+create table db_ctas_context.ctas_policy_source(k int, amount int);
+insert into db_ctas_context.ctas_policy_source values (9,900);
+grant create table, drop table on database db_ctas_context to test_rule_ctas_wide;
+set enable_remap_hint = 1;
+use db1;
+/* from misleading prefix */ prepare ctas_bound_stmt from create table ctas_bound as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_bound_stmt;
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+execute ctas_bound_stmt;
+table ctas_bound already exists
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+select * from db1.ctas_bound;
+➤ amount[4,32,0]  𝄀
+10
+select count(*) from mo_catalog.mo_tables where reldatabase='db_ctas_context' and relname='ctas_bound';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table db1.ctas_bound;
+deallocate prepare ctas_bound_stmt;
+set role test_rule_ctas_wide;
+use db1;
+/* from misleading prefix */ prepare ctas_qualified_stmt from create table db_ctas_context.ctas_qualified as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_qualified_stmt;
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+deallocate prepare ctas_qualified_stmt;
+select * from db_ctas_context.ctas_qualified order by k;
+➤ k[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  90
+drop database db_ctas_context;
 revoke test_rule_ctas_wide from test_rule_user;
 drop role test_rule_ctas_wide;
 drop table db1.ctas_policy_source;

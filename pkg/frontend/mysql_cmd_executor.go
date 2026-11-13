@@ -1272,13 +1272,21 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 }
 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
-	originSql := strings.TrimLeft(sql[idx:], " ")
-	if ctas, ok := st.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil && ses.GetCmd() == COM_STMT_PREPARE {
-		// 不能把 sqlOfStmt 的诊断原文或旧角色自动注入的 hint 用作后续执行输入。
-		originSql = execCtx.input.prepareSQL
+	var originSql string
+	if ctas, ok := st.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		if ses.GetCmd() == COM_STMT_PREPARE {
+			originSql = execCtx.input.prepareSQL
+		} else {
+			var err error
+			originSql, err = directPreparedCTASSourceSQL(execCtx.reqCtx, execCtx.rawSQLOfStmt)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
+		originSql = strings.TrimLeft(sql[idx:], " ")
 	}
-	// fmt.Print(originSql)
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
@@ -1349,12 +1357,15 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
+	var ctasDatabase string
 	if ctas, ok := saveStmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
 		// prepared owner 持有独立原文，不能借用协议请求可能复用的缓冲区。
 		originSQL = strings.Clone(originSQL)
 		if err := applyPreparedCTASRewrite(execCtx.reqCtx, ses, ctas, originSQL); err != nil {
 			return nil, err
 		}
+		ctasDatabase = strings.Clone(ses.GetDatabaseName())
+		bindPreparedCTASTargetDatabase(ctas, ctasDatabase)
 		if s, ok := stmt.(*tree.PrepareString); ok {
 			// 使用同一棵带策略的内层 AST 推导列，不能让 buildPrepare 再解析丢失规则。
 			stmt = &tree.PrepareStmt{Name: s.Name, Stmt: saveStmt}
@@ -1368,7 +1379,7 @@ func createPrepareStmt(
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, ses.GetDatabaseName())
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -1385,6 +1396,7 @@ func createPrepareStmt(
 	prepareStmt := &PrepareStmt{
 		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
 		Sql:                 originSQL,
+		ctasDatabase:        ctasDatabase,
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
@@ -3465,6 +3477,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 	}()
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	var rawSQLRecord []string // 仅直接 CTAS PREPARE 使用，每批至多切分一次。
 
 	for i, cw := range cws {
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
@@ -3537,6 +3550,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
 		execCtx.sqlOfStmt = sqlRecord[i]
+		execCtx.rawSQLOfStmt = ""
+		if prepare, ok := stmt.(*tree.PrepareStmt); ok && ses.GetCmd() != COM_STMT_PREPARE {
+			if ctas, ok := prepare.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+				if rawSQLRecord == nil {
+					rawSQLRecord = parsers.SplitSqlBySemicolon(input.getSql())
+				}
+				if i >= len(rawSQLRecord) {
+					return moerr.NewParseError(execCtx.reqCtx, "CTAS PREPARE source index mismatch")
+				}
+				execCtx.rawSQLOfStmt = rawSQLRecord[i]
+			}
+		}
 		execCtx.cw = cw
 		execCtx.proc = proc
 		execCtx.resper = resper

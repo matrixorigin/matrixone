@@ -299,6 +299,7 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
+	ctasDatabase   string // CTAS 的 prepare-time 默认库，与 execute-time 角色策略独立
 	proc           *process.Process
 
 	params              *vector.Vector
@@ -877,6 +878,7 @@ type ExecCtx struct {
 	tenant          string
 	userName        string
 	sqlOfStmt       string
+	rawSQLOfStmt    string // 当前语句的未脱敏原文，仅直接 CTAS PREPARE 需要
 	cw              ComputationWrapper
 	runner          ComputationRunner
 	loadLocalWriter *io.PipeWriter
@@ -904,6 +906,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
+	execCtx.rawSQLOfStmt = ""
 	execCtx.cw = nil
 	execCtx.runner = nil
 	execCtx.loadLocalWriter = nil

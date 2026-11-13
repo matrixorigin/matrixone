@@ -26,6 +26,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func TestDirectPreparedCTASSourceSQL(t *testing.T) {
+	ctx := context.Background()
+	const source = "create table db1.copy as select '__mo_query;from', 'secret_access_key=original' from db1.source"
+	for _, prefix := range []string{
+		"prepare stmt from ",
+		"/* from misleading */ prepare `from` FROM\n",
+		`/*+ {"rewrites":{"db1.source":"select * from db1.source"}} */ prepare stmt from `,
+		"-- from misleading\n prepare stmt /* from misleading */ from ",
+	} {
+		got, err := directPreparedCTASSourceSQL(ctx, prefix+source)
+		require.NoError(t, err)
+		require.Equal(t, source, got)
+	}
+	for _, sql := range []string{"", "select 1", "prepare stmt", "prepare stmt from"} {
+		_, err := directPreparedCTASSourceSQL(ctx, sql)
+		require.Error(t, err)
+	}
+	// 与日志相同的切分索引，但不能使用其脱敏结果；内层分号不分割语句。
+	batch := "select 1; /* from misleading */ prepare stmt from " + source + "; execute stmt"
+	parts := parsers.SplitSqlBySemicolon(batch)
+	require.Len(t, parts, 3)
+	got, err := directPreparedCTASSourceSQL(ctx, parts[1])
+	require.NoError(t, err)
+	require.Equal(t, source, got)
+	ec := &ExecCtx{rawSQLOfStmt: source}
+	ec.Close()
+	require.Empty(t, ec.rawSQLOfStmt)
+}
+
+func TestPreparedCTASTargetDatabaseBinding(t *testing.T) {
+	for _, tc := range []struct{ table, database, want string }{
+		{"copy", "a", "a"},
+		{"b.copy", "a", "b"},
+		{"copy", "", ""},
+	} {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "create table "+tc.table+" as select 1", 1)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			ctas := stmt.(*tree.CreateTable)
+			bindPreparedCTASTargetDatabase(ctas, tc.database)
+			require.Equal(t, tc.want, string(ctas.Table.SchemaName))
+			require.Equal(t, tc.want != "", ctas.Table.ExplicitSchema)
+			if tc.want != "" {
+				bindPreparedCTASTargetDatabase(ctas, "changed")
+				require.Equal(t, tc.want, string(ctas.Table.SchemaName))
+			}
+		}()
+	}
+}
+
 func TestPreparedCTASPreservesExplicitHints(t *testing.T) {
 	ctx := context.Background()
 	const sql = `/*+ {"rewrites":{"db1.source":"select amount from db1.source where marker = '__mo_query'"}} */ create table db1.snapshot as select * from db1.source`
