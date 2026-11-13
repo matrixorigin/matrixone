@@ -64,6 +64,7 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
 			for _, q := range []string{
+				"drop account if exists lazy_counts_owner",
 				"drop snapshot if exists lazy_remote_snapshot",
 				"drop account if exists lazy_remote_owner",
 				"drop snapshot if exists lazy_admission_snapshot",
@@ -83,6 +84,33 @@ func TestLazyCatalogCrossAccountAdmission(t *testing.T) {
 		} {
 			execSQLRequire(t, ctx, sys0, q)
 		}
+
+		t.Run("show accounts includes cold catalog counts", func(t *testing.T) {
+			execSQLRequire(t, ctx, sys0, "create account lazy_counts_owner admin_name 'admin' identified by '111'")
+			tenant := open(t, 0, "lazy_counts_owner#admin#accountadmin")
+			execSQLRequire(t, ctx, tenant, "create database lazy_counts_db")
+			execSQLRequire(t, ctx, tenant, "create table lazy_counts_db.t(id int)")
+			id := accountID(t, "lazy_counts_owner")
+			require.False(t, eng1.PushClient().CanServeAccount(id, types.MaxTs().ToTimestamp()))
+			counts := func(db *sql.DB) [2]string {
+				rows, err := db.QueryContext(ctx, "show accounts like 'lazy_counts_owner'")
+				require.NoError(t, err)
+				defer rows.Close()
+				columns, err := rows.Columns()
+				require.NoError(t, err)
+				values := make([]sql.NullString, len(columns))
+				dest := make([]any, len(columns))
+				for i := range values {
+					dest[i] = &values[i]
+				}
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(dest...))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+				return [2]string{values[5].String, values[6].String}
+			}
+			require.Equal(t, counts(sys0), counts(sys1), "cold and warm CN must report identical database/table counts")
+		})
 
 		t.Run("snapshot activates a cold owner", func(t *testing.T) {
 			execSQLRequire(t, ctx, sys0, "create account lazy_snapshot_owner admin_name 'admin' identified by '111'")

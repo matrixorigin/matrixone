@@ -64,6 +64,37 @@ type barrierTimestampWaiter struct {
 	get func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
+func TestActivationResponseDoesNotDeliverFailedTail(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 1)},
+	}
+	c := &e.pClient
+	c.lazyCatalog = newLazyCatalogCNState()
+	c.lazyCatalog.enable()
+	seq := c.lazyCatalog.beginCatchingUp(10)
+	response := c.lazyCatalog.registerPendingResponse(10, seq)
+	table := api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID, DbName: catalog.MO_CATALOG, TbName: catalog.MO_TABLES}
+	part := e.GetOrCreateLatestPart(t.Context(), 0, table.DbId, table.TbId)
+	require.NoError(t, part.Lock(t.Context()))
+	defer part.Unlock()
+	cancel()
+	ts := timestamp.Timestamp{PhysicalTime: 100}
+	err := c.handleActivationResponse(ctx, e, &logtail.ActivateAccountForCatalogResponse{
+		AccountId: 10, Seq: seq, TargetTs: &ts,
+		Tails: []logtail.TableLogtail{{Table: &table, Ts: &ts}},
+	}, time.Now())
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case <-response:
+		t.Fatal("a failed partition apply must not admit catalog replay")
+	default:
+	}
+	require.False(t, c.CanServeAccount(10, ts))
+}
+
 func TestReconnectHandlerConcurrentUpdate(t *testing.T) {
 	var c PushClient
 	var calls atomic.Int64

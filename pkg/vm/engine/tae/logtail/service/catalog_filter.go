@@ -85,38 +85,50 @@ func filterLazyCatalogSubscribeRowsInTail(
 func filterLazyCatalogPublishRowsInTail(
 	tail logtail.TableLogtail,
 	allowedAccounts *lazyCatalogAllowedAccounts,
-) (logtail.TableLogtail, bool, error) {
+) (logtail.TableLogtail, bool, func(), error) {
 	// This helper is only for the three lazy-load catalog tables. Callers are
 	// expected to keep normal-table publish/subscribe paths out of here.
 	if len(tail.Commands) == 0 {
-		return tail, false, nil
+		return tail, false, nil, nil
 	}
 
 	var filteredCommands []api.Entry
+	var closeCBs []func()
 	for i := range tail.Commands {
-		keep, err := filterLazyCatalogPublishEntry(tail.Commands[i], allowedAccounts)
-		if err != nil {
-			return logtail.TableLogtail{}, false, err
-		}
-		if filteredCommands == nil {
-			if keep {
-				continue
+		entry := tail.Commands[i]
+		rowEntry := entry.EntryType == api.Entry_Insert || entry.EntryType == api.Entry_Update || entry.EntryType == api.Entry_Delete
+		accountID, summarized := catalog.LazyCatalogEntryAccountSummary(entry)
+		if !rowEntry || summarized && allowedAccounts.contains(accountID) {
+			if filteredCommands != nil {
+				filteredCommands = append(filteredCommands, entry)
 			}
-			filteredCommands = make([]api.Entry, 0, len(tail.Commands)-1)
-			filteredCommands = append(filteredCommands, tail.Commands[:i]...)
 			continue
 		}
-		if keep {
-			filteredCommands = append(filteredCommands, tail.Commands[i])
+		if filteredCommands == nil {
+			filteredCommands = make([]api.Entry, 0, len(tail.Commands))
+			filteredCommands = append(filteredCommands, tail.Commands[:i]...)
+		}
+		if summarized {
+			continue
+		}
+		entries, closeCB, err := splitLazyCatalogPublishEntry(entry, allowedAccounts)
+		if err != nil {
+			closeCallbacks(closeCB)
+			closeCallbacks(closeCBs...)
+			return logtail.TableLogtail{}, false, nil, err
+		}
+		filteredCommands = append(filteredCommands, entries...)
+		if closeCB != nil {
+			closeCBs = append(closeCBs, closeCB)
 		}
 	}
 	if filteredCommands == nil {
-		return tail, false, nil
+		return tail, false, nil, nil
 	}
 
 	filtered := tail
 	filtered.Commands = filteredCommands
-	return filtered, true, nil
+	return filtered, true, composeCloseCallback(closeCBs...), nil
 }
 
 func filterLazyCatalogSubscribeEntry(
@@ -143,24 +155,67 @@ func filterLazyCatalogSubscribeEntry(
 	}
 }
 
-func filterLazyCatalogPublishEntry(
+// Entries without a summary may contain several accounts (for example restore).
+// Emit homogeneous entries so CN per-account delayed replay remains exact.
+func splitLazyCatalogPublishEntry(
 	entry api.Entry,
 	allowedAccounts *lazyCatalogAllowedAccounts,
-) (bool, error) {
-	switch entry.GetEntryType() {
-	case api.Entry_Insert, api.Entry_Update, api.Entry_Delete:
-		accountID, ok, err := catalog.LazyCatalogEntryAccountID(entry)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return true, nil
-		}
-		return allowedAccounts.contains(accountID), nil
-	default:
-		// Object/meta entries are not row-level tenant data; keep them untouched.
-		return true, nil
+) ([]api.Entry, func(), error) {
+	bat, err := mustProtoBatch(entry)
+	if err != nil {
+		return nil, nil, err
 	}
+	if bat.RowCount() == 0 {
+		return []api.Entry{entry}, nil, nil
+	}
+	attrIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.SystemDBAttr_AccID)
+	if entry.EntryType == api.Entry_Delete {
+		attrIdx = catalog.FindCatalogDeletePKIndex(bat.Attrs)
+	}
+	if attrIdx < 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("catalog entry missing account identity column")
+	}
+	vec := bat.GetVector(int32(attrIdx))
+	var accountIDs []uint32
+	if entry.EntryType != api.Entry_Delete {
+		accountIDs = vector.MustFixedColWithTypeCheck[uint32](vec)
+	}
+	var order []uint32
+	groups := make(map[uint32][]int64)
+	for row := 0; row < bat.RowCount(); row++ {
+		var accountID uint32
+		if entry.EntryType == api.Entry_Delete {
+			accountID, err = catalog.DecodeLazyCatalogAccountFromCPKey(vec.GetBytesAt(row))
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			accountID = accountIDs[row]
+		}
+		if !allowedAccounts.contains(accountID) {
+			continue
+		}
+		if _, exists := groups[accountID]; !exists {
+			order = append(order, accountID)
+		}
+		groups[accountID] = append(groups[accountID], int64(row))
+	}
+	entries := make([]api.Entry, 0, len(order))
+	var closeCBs []func()
+	for _, accountID := range order {
+		filtered, _, closeCB, err := buildFilteredCatalogEntry(entry, bat, groups[accountID])
+		if err != nil {
+			closeCallbacks(closeCB)
+			closeCallbacks(closeCBs...)
+			return nil, nil, err
+		}
+		catalog.SetLazyCatalogEntryAccountSummary(&filtered, accountID)
+		entries = append(entries, filtered)
+		if closeCB != nil {
+			closeCBs = append(closeCBs, closeCB)
+		}
+	}
+	return entries, composeCloseCallback(closeCBs...), nil
 }
 
 func filterLazyCatalogSubscribeInsertOrUpdateEntry(

@@ -194,30 +194,35 @@ func (s *lazyCatalogCNState) delayAccountCacheApply(accountID uint32, f func()) 
 // moves the account out of catching_up, but does not publish readyTS yet. The
 // caller must finish the transition under catalogCacheMu after the detached
 // closures have run.
-func (s *lazyCatalogCNState) beginAccountReadyTransition(accountID uint32) []func() {
+func (s *lazyCatalogCNState) beginAccountReadyTransition(accountID uint32, seq uint64) ([]func(), bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := s.getOrCreateEntry(accountID)
-	if e.state == accountCatchingUp {
-		s.catchingUpCount.Add(-1)
+	e := s.accounts[accountID]
+	if current, ok := s.pendingSeq[accountID]; !ok || current != seq || e == nil || e.state != accountCatchingUp {
+		return nil, false
 	}
+	s.catchingUpCount.Add(-1)
 	e.state = accountReadyDraining
-	delete(s.pendingSeq, accountID)
 
 	fns := s.accountDCA[accountID]
 	delete(s.accountDCA, accountID)
-	return fns
+	return fns, true
 }
 
-func (s *lazyCatalogCNState) finishAccountReady(accountID uint32, readyTS timestamp.Timestamp) {
+func (s *lazyCatalogCNState) finishAccountReady(accountID uint32, seq uint64, readyTS timestamp.Timestamp) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := s.getOrCreateEntry(accountID)
+	e := s.accounts[accountID]
+	if current, ok := s.pendingSeq[accountID]; !ok || current != seq || e == nil || e.state != accountReadyDraining {
+		return false
+	}
 	e.state = accountReady
 	e.readyTS = readyTS
+	delete(s.pendingSeq, accountID)
 	s.wantedAccounts[accountID] = struct{}{}
+	return true
 }
 
 // cleanupFailedActivation reverts a catching_up account to inactive if the seq
@@ -239,6 +244,8 @@ func (s *lazyCatalogCNState) cleanupFailedActivation(accountID uint32, seq uint6
 	if e != nil && e.state == accountCatchingUp {
 		e.state = accountInactive
 		s.catchingUpCount.Add(-1)
+	} else if e != nil && e.state == accountReadyDraining {
+		e.state = accountInactive
 	}
 	return true
 }
@@ -256,22 +263,8 @@ func (s *lazyCatalogCNState) snapshotWantedAccounts() []uint32 {
 	return result
 }
 
-// collectWantedAccounts snapshots all currently ready accounts into
-// wantedAccounts. Called before reconnect.
-func (s *lazyCatalogCNState) collectWantedAccounts() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.wantedAccounts = make(map[uint32]struct{})
-	for id, e := range s.accounts {
-		if e.state == accountReady {
-			s.wantedAccounts[id] = struct{}{}
-		}
-	}
-}
-
-// resetAllStates clears all per-account state. Called on reconnect after
-// wantedAccounts has been collected.
+// resetAllStates clears transport readiness but retains wanted accounts,
+// including when another reconnect fails before replay can restore them.
 func (s *lazyCatalogCNState) resetAllStates() {
 	s.mu.Lock()
 	pendingResponses := make([]chan *logtail.ActivateAccountForCatalogResponse, 0, len(s.pendingActivationResponses))
@@ -309,6 +302,13 @@ func (s *lazyCatalogCNState) registerPendingResponse(
 	defer s.mu.Unlock()
 	s.pendingActivationResponses[activationResponseKey{accountID: accountID, seq: seq}] = ch
 	return ch
+}
+
+func (s *lazyCatalogCNState) hasPendingActivationResponse(accountID uint32, seq uint64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, pending := s.pendingActivationResponses[activationResponseKey{accountID: accountID, seq: seq}]
+	return pending && s.pendingSeq[accountID] == seq
 }
 
 // deliverActivationResponse sends the activation response to the waiting

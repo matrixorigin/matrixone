@@ -80,10 +80,13 @@ func TestSessionPrepareLazyCatalogPublishWrapsFiltersCatalogRowsByAccount(t *tes
 			},
 		},
 	}}
-	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
+	filtered, closeCB, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
 		return catalog.IsLazyCatalogTableID(w.tail.Table.TbId)
 	}))
 	require.NoError(t, err)
+	if closeCB != nil {
+		t.Cleanup(closeCB)
+	}
 	require.Len(t, filtered, 1)
 	require.Len(t, filtered[0].tail.Commands, 1)
 	require.Equal(t, []uint32{0}, mustAccountIDsFromEntry(t, filtered[0].tail.Commands[0]))
@@ -109,6 +112,39 @@ func TestFilterLazyCatalogSubscribeRowsInTailCopiesMixedInsertEntry(t *testing.T
 	require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, filtered.Commands[0]))
 }
 
+func TestLazyCatalogPublishSplitsMixedAccountEntries(t *testing.T) {
+	for _, kind := range []api.Entry_EntryType{api.Entry_Insert, api.Entry_Update, api.Entry_Delete} {
+		t.Run(kind.String(), func(t *testing.T) {
+			entry := mustCatalogColumnInsertEntry(t, []uint32{0, 10, 20, 10})
+			entry.EntryType = kind
+			accounts := mustAccountIDsFromEntry
+			if kind == api.Entry_Delete {
+				entry = mustCatalogTableDeleteEntry(t, []uint32{0, 10, 20, 10})
+				accounts = mustCPKeyAccountsFromEntry
+			}
+			tail := logtail.TableLogtail{
+				Table:    &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: entry.TableId},
+				Commands: []api.Entry{entry},
+			}
+			baseline := lazyCatalogSubscribeFilterMP.CurrNB() + lazyCatalogSubscribeFilterMP.OnHeapCurrNB()
+			filtered, changed, closeCB, err := filterLazyCatalogPublishRowsInTail(tail,
+				newLazyCatalogAllowedAccounts(10, 20))
+			require.NoError(t, err)
+			if closeCB != nil {
+				t.Cleanup(func() {
+					closeCB()
+					require.Equal(t, baseline, lazyCatalogSubscribeFilterMP.CurrNB()+lazyCatalogSubscribeFilterMP.OnHeapCurrNB())
+				})
+			}
+			require.True(t, changed)
+			require.Len(t, filtered.Commands, 2)
+			require.Equal(t, []uint32{10, 10}, accounts(t, filtered.Commands[0]))
+			require.Equal(t, []uint32{20}, accounts(t, filtered.Commands[1]))
+			require.Equal(t, []uint32{0, 10, 20, 10}, accounts(t, entry), "shared source must remain unchanged")
+		})
+	}
+}
+
 func TestSessionPrepareLazyCatalogPublishWrapsLeavesNormalTableUntouched(t *testing.T) {
 	ss := newCatalogTestSession(t)
 	require.NoError(t, ss.configureLazyCatalogSubscription(&logtail.SubscribeRequest{
@@ -129,10 +165,11 @@ func TestSessionPrepareLazyCatalogPublishWrapsLeavesNormalTableUntouched(t *test
 	}
 
 	wraps := []wrapLogtail{normal}
-	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
+	filtered, closeCB, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
 		return catalog.IsLazyCatalogTableID(w.tail.Table.TbId)
 	}))
 	require.NoError(t, err)
+	require.Nil(t, closeCB)
 	require.Len(t, filtered, 1)
 	require.Equal(t, normal.tail.Table.String(), filtered[0].tail.Table.String())
 	require.Len(t, filtered[0].tail.Commands, 1)
@@ -220,19 +257,21 @@ func TestFilterLazyCatalogPublishRowsInTailUsesEntryAccountSummary(t *testing.T)
 		Commands: []api.Entry{entry},
 	}
 
-	filtered, changed, err := filterLazyCatalogPublishRowsInTail(
+	filtered, changed, closeCB, err := filterLazyCatalogPublishRowsInTail(
 		tail,
 		&lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}},
 	)
 	require.NoError(t, err)
+	require.Nil(t, closeCB)
 	require.False(t, changed)
 	require.True(t, &filtered.Commands[0] == &tail.Commands[0])
 
-	filtered, changed, err = filterLazyCatalogPublishRowsInTail(
+	filtered, changed, closeCB, err = filterLazyCatalogPublishRowsInTail(
 		tail,
 		&lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{20: {}}},
 	)
 	require.NoError(t, err)
+	require.Nil(t, closeCB)
 	require.True(t, changed)
 	require.Empty(t, filtered.Commands)
 }

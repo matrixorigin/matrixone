@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,8 +36,37 @@ import (
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIncompleteCatalogDefinitionFallsBackToStorage(t *testing.T) {
+	wantErr := moerr.NewInternalErrorNoCtx("catalog storage unavailable")
+	calls := 0
+	exec := executor.NewMemExecutor(func(string) (executor.Result, error) {
+		calls++
+		return executor.Result{}, wantErr
+	})
+	eng, db, txn, ctx := newResultOwnershipFixture(t, exec, false)
+	txn.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1}).AnyTimes()
+	eng.catalog.Store(cache.NewCatalog())
+	eng.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+	packer := types.NewPacker()
+	defer packer.Close()
+	bat, err := catalog.GenCreateTableTuple(catalog.Table{
+		AccountId: 1, DatabaseId: 7, DatabaseName: "db", TableId: 42, TableName: "tbl",
+	}, txn.proc.Mp(), packer)
+	require.NoError(t, err)
+	t.Cleanup(func() { bat.Clean(txn.proc.Mp()) })
+	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	require.NoError(t, err)
+	eng.GetLatestCatalogCache().InsertTable(bat)
+
+	item, err := db.getTableItem(ctx, 1, "tbl", eng)
+	require.Nil(t, item)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 1, calls)
+}
 
 func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 	t.Run("delete table releases zero one and two acquired results", func(t *testing.T) {

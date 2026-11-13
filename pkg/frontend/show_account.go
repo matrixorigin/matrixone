@@ -587,6 +587,33 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}
 
+	// Account enumeration is sys-owned, but catalog counts require each
+	// listed tenant's row deltas. Refresh the counts after activation.
+	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+		refresh := false
+		for _, ids := range accIds {
+			for _, id := range ids {
+				if id == sysAccountID {
+					continue
+				}
+				if err = activator.ActivateTenantCatalog(ctx, uint32(id)); err != nil {
+					return err
+				}
+				refresh = true
+			}
+		}
+		if refresh {
+			for _, b := range accInfosBatches {
+				b.Clean(mp)
+			}
+			accInfosBatches = nil
+			accInfosBatches, accIds, err = getAccountInfo(defines.AttachAccountId(ctx, uint32(sysAccountID)), bh, sql, mp)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	specialTableCnt, specialDBCnt, err = getSpecialTableCnt(ctx, ses, bh, accIds)
 	t1 := time.Now()
 	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(t1.Sub(t0).Seconds())
@@ -689,6 +716,7 @@ func getAccountInfo(ctx context.Context,
 	var rsOfMoAccount []*batch.Batch
 
 	bh.ClearExecResultBatches()
+	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, nil, err

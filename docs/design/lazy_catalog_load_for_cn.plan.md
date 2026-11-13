@@ -137,6 +137,10 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 | `snapshot.go:623,631,2385,2394` | RESTORE |
 | `clone.go:257,378` | CLONE TABLE/DATABASE |
 
+`SHOW ACCOUNTS` 先从 sys catalog 枚举账号，再激活结果中的租户并重新查询库表数量，
+避免将冷租户的缺失增量当作零。全量查询会加载所有返回账号的 catalog；这是精确统计
+所需的按需加载，不保证该操作之后仍保持只加载少量租户。
+
 ---
 
 ## 8. Debug 诊断
