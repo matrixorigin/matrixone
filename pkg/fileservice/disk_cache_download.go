@@ -588,8 +588,6 @@ func (d *DiskCache) prefetchWorkers() int {
 	return int(max(limit/4, min(limit, 4), 1))
 }
 
-// reserveDownloadConns reserves n of the connections whole-object downloads may hold,
-// half the connections to the object storage host, or reports that they are taken.
 // waitDownloadConns reserves n of the connections downloads may hold, waiting until they
 // are free or ctx ends.
 func (d *DiskCache) waitDownloadConns(ctx context.Context, n int64) error {
@@ -630,6 +628,8 @@ func (d *DiskCache) downloadConnsFreed() chan struct{} {
 	return d.connsFreed
 }
 
+// reserveDownloadConns reserves n of the connections downloads may hold, half the
+// connections to the object storage host, or reports that they are taken.
 func (d *DiskCache) reserveDownloadConns(n int64) bool {
 	limit := d.maxDownloadConns
 	for {
