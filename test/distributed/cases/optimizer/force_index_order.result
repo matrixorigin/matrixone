@@ -756,4 +756,50 @@ where a=1 and b in ('alpha','beta') order by payload;
 1  ¦  1  ¦  10  𝄀
 2  ¦  2  ¦  20  𝄀
 3  ¦  3  ¦  30
+create table issue32665_other (id int primary key);
+begin;
+insert into issue32665_other values (1);
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+insert into issue32665 values (5,5,1,'alpha',5);
+insert into issue32665 values (6,6,1,'beta',6);
+update issue32665 set b='beta',payload=1 where pk1=2 and pk2=2;
+delete from issue32665 where pk1=1 and pk2=1;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  2  ¦  1  𝄀
+5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  2  ¦  1  𝄀
+5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  𝄀
+3  ¦  3  ¦  30
+rollback;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
 drop database force_index_order;

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,9 +41,10 @@ type MemPKFilterSpec struct {
 }
 
 type MemPKFilter struct {
-	op        int
-	packed    [][]byte
-	inSet     map[string]struct{}
+	op     int
+	packed [][]byte
+	// inSet is shared by value copies. Reader filters build it only for workspace reads.
+	inSet     func() map[string]struct{}
 	prefixes  [][]byte
 	disjuncts []MemPKFilter
 	isVec     bool
@@ -92,7 +94,18 @@ func NewMemPKFilter(
 	basePKFilter BasePKFilter,
 	filterHint engine.FilterHint,
 ) (filter MemPKFilter, err error) {
+	return newMemPKFilter(tableDef, ts, packerPool, basePKFilter, filterHint, false)
+}
 
+// Reader filters can defer the lookup: persisted and partition-state reads use packed keys.
+func newMemPKFilter(
+	tableDef *plan.TableDef,
+	ts timestamp.Timestamp,
+	packerPool *fileservice.Pool[*types.Packer],
+	basePKFilter BasePKFilter,
+	filterHint engine.FilterHint,
+	deferIN bool,
+) (filter MemPKFilter, err error) {
 	filter.TS = types.TimestampToTS(ts)
 
 	if tableDef == nil {
@@ -109,12 +122,13 @@ func NewMemPKFilter(
 	if len(basePKFilter.Disjuncts) > 0 {
 		disjuncts := make([]MemPKFilter, 0, len(basePKFilter.Disjuncts))
 		for idx := range basePKFilter.Disjuncts {
-			disjunct, disjunctErr := NewMemPKFilter(
+			disjunct, disjunctErr := newMemPKFilter(
 				tableDef,
 				ts,
 				packerPool,
 				basePKFilter.Disjuncts[idx],
 				engine.FilterHint{},
+				deferIN,
 			)
 			if disjunctErr != nil {
 				return MemPKFilter{}, disjunctErr
@@ -283,7 +297,7 @@ func NewMemPKFilter(
 			//
 			packed[0] = packed[0][0 : len(packed[0])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		filter.setFullData(basePKFilter.Op, false, deferIN, packed...)
 
 	case function.IN, function.PREFIX_IN:
 		packed = EncodePrimaryKeyVector(basePKFilter.Vec, packer)
@@ -293,11 +307,11 @@ func NewMemPKFilter(
 				packed[x] = packed[x][0 : len(packed[x])-1]
 			}
 		}
-		filter.SetFullData(basePKFilter.Op, true, packed...)
+		filter.setFullData(basePKFilter.Op, true, deferIN, packed...)
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
 		packed = append(packed, EncodePrimaryKey(lbVal, packer))
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		filter.setFullData(basePKFilter.Op, false, deferIN, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
 		RangeLeftOpen, RangeRightOpen, RangeBothOpen,
@@ -311,7 +325,7 @@ func NewMemPKFilter(
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		filter.setFullData(basePKFilter.Op, false, deferIN, packed...)
 	default:
 		return
 	}
@@ -384,6 +398,10 @@ func (f *MemPKFilter) SetNull() {
 }
 
 func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
+	f.setFullData(op, isVec, false, val...)
+}
+
+func (f *MemPKFilter) setFullData(op int, isVec, deferIN bool, val ...[]byte) {
 	f.packed = append(f.packed[:0], val...)
 	f.op = op
 	f.isVec = isVec
@@ -398,9 +416,19 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 		})
 	}
 	if op == function.IN {
-		f.inSet = make(map[string]struct{}, len(f.packed))
-		for _, key := range f.packed {
-			f.inSet[string(key)] = struct{}{}
+		keys := f.packed
+		build := func() map[string]struct{} {
+			set := make(map[string]struct{}, len(keys))
+			for _, key := range keys {
+				set[string(key)] = struct{}{}
+			}
+			return set
+		}
+		if deferIN {
+			f.inSet = sync.OnceValue(build)
+		} else {
+			set := build()
+			f.inSet = func() map[string]struct{} { return set }
 		}
 	}
 	if op == function.PREFIX_IN {
@@ -430,7 +458,10 @@ func (f *MemPKFilter) matches(key []byte) bool {
 	case function.PREFIX_EQ:
 		return len(f.packed) == 1 && bytes.HasPrefix(key, f.packed[0])
 	case function.IN:
-		_, ok := f.inSet[string(key)]
+		if f.inSet == nil {
+			return false
+		}
+		_, ok := f.inSet()[string(key)]
 		return ok
 	case function.PREFIX_IN:
 		idx := sort.Search(len(f.prefixes), func(idx int) bool {
@@ -472,9 +503,29 @@ func (f *MemPKFilter) FilterVector(
 	skipMask *objectio.Bitmap,
 ) {
 	keys := EncodePrimaryKeyVector(vec, packer)
+	if len(f.disjuncts) == 0 && f.op == function.IN && f.inSet != nil {
+		set := f.inSet()
+		for i, key := range keys {
+			if _, ok := set[string(key)]; !ok {
+				skipMask.Add(uint64(i))
+			}
+		}
+		return
+	}
 	for i := 0; i < len(keys); i++ {
 		if !f.matches(keys[i]) {
 			skipMask.Add(uint64(i))
 		}
+	}
+}
+
+// PrepareWorkspaceFilter initializes IN lookups before workspace scanning takes
+// the transaction lock. Concurrent preparation and filtering share one initializer.
+func (f *MemPKFilter) PrepareWorkspaceFilter() {
+	for i := range f.disjuncts {
+		f.disjuncts[i].PrepareWorkspaceFilter()
+	}
+	if f.isValid && f.op == function.IN && f.inSet != nil {
+		f.inSet()
 	}
 }

@@ -404,6 +404,9 @@ func (ls *LocalDisttaeDataSource) Next(
 	if ls.memPKFilter == nil {
 		ff := filter.(*readutil.MemPKFilter)
 		ls.memPKFilter = ff
+		if len(cols) > 0 && ls.iteratePhase == engine.InMem && ls.category != engine.ShardingRemoteDataSource && ls.txnOffset > 0 && ff.Valid() {
+			ff.PrepareWorkspaceFilter()
+		}
 	}
 
 	if len(cols) == 0 {
