@@ -311,7 +311,7 @@ func TestPrefetcherJoin(t *testing.T) {
 	joinable := make(chan struct{})
 	run := func(ctx context.Context, req ObjectPrefetch) {
 		r.started <- req.FilePath
-		if req.live {
+		if req.FilePath == "a" {
 			<-joinable
 			downloadStarted(ctx)
 		}
@@ -388,6 +388,35 @@ func TestPrefetcherLiveQueueGoesFirst(t *testing.T) {
 	close(release["c"])
 	<-waiting
 	close(release["a"])
+	p.close(context.Background())
+}
+
+// A download in the live queue starts though every read it was asked for ended: a read
+// waits for it.
+func TestPrefetcherLiveQueueKeepsEndedReads(t *testing.T) {
+	started := make(chan string, 8)
+	release := make(chan struct{})
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	scan := new(PrefetchScan)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 10})
+	require.Equal(t, "first", <-started)
+	p.add(ObjectPrefetch{FilePath: "b", Size: 10})
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Scan: scan})
+	all := func(ObjectPrefetch) bool { return true }
+	_, ok := p.join("b", all)
+	require.True(t, ok)
+	require.Equal(t, "b", <-started)
+	waiting, ok := p.join("a", all)
+	require.True(t, ok)
+	scan.End()
+
+	close(release)
+	require.Equal(t, "a", <-started, "the live download starts")
+	<-waiting
 	p.close(context.Background())
 }
 

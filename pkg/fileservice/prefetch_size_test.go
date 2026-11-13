@@ -39,11 +39,30 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	require.Zero(t, stats.stats.Load())
 }
 
+// busyPrefetcher gives fs a prefetcher of one worker per queue whose prefetch worker
+// downloads a placeholder until the test ends, so the prefetches asked for wait in the
+// prefetch queue.
+func busyPrefetcher(t *testing.T, fs *S3FS) {
+	release, started := make(chan struct{}), make(chan struct{})
+	run := func(ctx context.Context, req ObjectPrefetch) {
+		if req.FilePath == "busy" {
+			close(started)
+			<-release
+			return
+		}
+		fs.prefetchObject(ctx, req)
+	}
+	fs.prefetcher = newPrefetcher(1, func() int64 { return 1 << 40 }, fs.haveObject, run)
+	fs.prefetcher.add(ObjectPrefetch{FilePath: "busy", Size: 1})
+	<-started
+	t.Cleanup(func() { close(release) })
+}
+
 // A read of an object whose download is queued joins that download, which a live worker
 // starts, and is served from it; the object is cached whole.
 func TestS3FSReadOfQueuedObjectJoinsItsDownload(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyPrefetcher(t, fs)
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
@@ -171,7 +190,7 @@ func TestPrefetchedObjectsBound(t *testing.T) {
 func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyPrefetcher(t, fs)
 	req := ObjectPrefetch{
 		FilePath: "object",
 		Size:     30,
@@ -188,7 +207,7 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 	require.Equal(t, data[102:107], readRangeOf(t, fs, ColumnPrefetch, 102, 5))
 	require.Equal(t, int64(2), storage.reads.Load(), "served from the column ranges")
 
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyPrefetcher(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
 	readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10)
 	require.True(t, fs.prefetcher.isQueued("object"), "a column read does not join a whole-object download")

@@ -43,8 +43,6 @@ type ObjectPrefetch struct {
 	Scan     *PrefetchScan
 	// deletes is the file service's count of deleted objects when the request was made.
 	deletes uint64
-	// live is set once a read waits for the download.
-	live bool
 }
 
 // PrefetchRange is a range of an object.
@@ -191,12 +189,14 @@ func (q *prefetchQueue) Pop() any {
 }
 
 // fetchQueue is a queue of downloads and its workers, which run at most max of them at
-// once.
+// once. A download whose reads all ended is dropped when it would start, unless
+// keepEnded: a read waits for each download of the queue.
 type fetchQueue struct {
-	queue   prefetchQueue
-	bytes   int64
-	max     int
-	running int
+	queue     prefetchQueue
+	bytes     int64
+	max       int
+	running   int
+	keepEnded bool
 }
 
 func (q *fetchQueue) push(e *prefetchEntry) {
@@ -238,7 +238,7 @@ func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bo
 	return &prefetcher{
 		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
 		prefetch: fetchQueue{max: workers},
-		live:     fetchQueue{max: max(workers, 1)},
+		live:     fetchQueue{max: workers, keepEnded: true},
 		entries:  make(map[string]*prefetchEntry),
 	}
 }
@@ -255,22 +255,22 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		return
 	}
 	if e, ok := p.entries[req.FilePath]; ok {
-		if e.queue == &p.prefetch && have {
+		if e.queue != nil && have {
 			metric.FSPrefetchCachedCounter.Inc()
 			return
 		}
 		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
-		if e.queue == &p.prefetch {
+		if q := e.queue; q != nil {
 			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.prefetch.bytes+grow > p.limit() {
-				// Past the queue's bytes, the queued download keeps what it downloads.
+			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytesLocked()+grow > p.limit() {
+				// Past the queues' bytes, the queued download keeps what it downloads.
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
 			}
-			p.prefetch.bytes += merged.Size - e.req.Size
+			q.bytes += merged.Size - e.req.Size
 			e.req = merged
-			heap.Fix(&p.prefetch.queue, e.index)
+			heap.Fix(&q.queue, e.index)
 		}
 		return
 	}
@@ -285,7 +285,8 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		metric.FSPrefetchDroppedCounter.Inc()
 		return
 	}
-	for q := p.prefetch.queue; p.prefetch.bytes+req.Size > limit; q = p.prefetch.queue {
+	// Room is made in the prefetch queue: a read waits for each download of the live queue.
+	for q := p.prefetch.queue; p.queuedBytesLocked()+req.Size > limit; q = p.prefetch.queue {
 		last := -1
 		for i := range q {
 			if !q[i].live() {
@@ -308,6 +309,11 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.known.Add(1)
 	p.queued.Add(1)
 	p.startLocked()
+}
+
+// queuedBytesLocked returns the bytes of the downloads both queues hold.
+func (p *prefetcher) queuedBytesLocked() int64 {
+	return p.prefetch.bytes + p.live.bytes
 }
 
 func (p *prefetcher) forgetLocked(e *prefetchEntry) {
@@ -348,8 +354,7 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 		e := q.queue[0]
 		q.remove(e)
 		p.queued.Add(-1)
-		// A read waits for a live download, whatever the scans it was asked for.
-		if q == &p.prefetch && !e.live() {
+		if !q.keepEnded && !e.live() {
 			p.forgetLocked(e)
 			e.start()
 			metric.FSPrefetchEndedCounter.Inc()
@@ -411,7 +416,6 @@ func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (<-ch
 	if e.queue == &p.prefetch {
 		metric.FSPrefetchMissedCounter.Inc()
 		p.prefetch.remove(e)
-		e.req.live = true
 		p.live.push(e)
 		p.startLocked()
 	}
@@ -542,7 +546,7 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 			return s.storage.Read(ctx, key, &start, &end)
 		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
-		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open, req.live); ok {
+		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
 			if err != nil {
 				metric.FSPrefetchFailedCounter.Inc()
 				logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))

@@ -315,8 +315,8 @@ func (d *DiskCache) runFlight(
 // readRanges reads the ranges of the object at filePath through open as flights, which
 // reads of their bytes join, caches each, and returns once they end or ctx is done, with
 // the error of a flight that did not cache its range. A range a flight already reads is
-// waited for, not read again. Unless live, ranges that would pass the bytes of the flights
-// under way wait until they fit, or no flight is under way. It reports false, reading
+// waited for, not read again. Ranges that would pass the bytes of the flights under way
+// wait until they fit, or no flight is under way. It reports false, reading
 // nothing, when the cache is closed.
 func (d *DiskCache) readRanges(
 	ctx context.Context,
@@ -324,7 +324,6 @@ func (d *DiskCache) readRanges(
 	policy Policy,
 	ranges []PrefetchRange,
 	open rangeOpener,
-	live bool,
 ) (bool, error) {
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchFlights
@@ -353,7 +352,7 @@ func (d *DiskCache) readRanges(
 			need += r.Size
 		}
 		// Past the bytes of the flights under way, the ranges wait for flights to end.
-		if need == 0 || live || f.bytes == 0 || f.bytes+need <= d.prefetchFlightBytes {
+		if need == 0 || f.bytes == 0 || f.bytes+need <= d.prefetchFlightBytes {
 			break
 		}
 		if f.freed == nil {
