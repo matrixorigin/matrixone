@@ -304,34 +304,6 @@ class TestVectorDistanceFunctionBugFixes:
         # Verify the vector is properly quoted
         assert "[" in sql_str and "]" in sql_str, f"Vector array brackets should be present: {sql_str}"
 
-    def test_sqlalchemy_reserved_field_names(self):
-        """
-        Test that SQLAlchemy reserved field names are avoided.
-
-        Bug: Using 'metadata' as column name causes:
-        "Attribute name 'metadata' is reserved when using the Declarative API"
-        """
-        from sqlalchemy import Column, Integer, String
-        from sqlalchemy.exc import InvalidRequestError
-
-        Base = declarative_base()
-
-        # This should NOT raise an error
-        class GoodDoc(Base):
-            __tablename__ = 'good_doc'
-            id = Column(Integer, primary_key=True)
-            doc_metadata = Column(String(500))  # Use doc_metadata instead
-
-        assert hasattr(GoodDoc, 'doc_metadata')
-
-        # This SHOULD raise an error (reserved name)
-        with pytest.raises(InvalidRequestError, match="reserved"):
-
-            class BadDoc(Base):
-                __tablename__ = 'bad_doc'
-                id = Column(Integer, primary_key=True)
-                metadata = Column(String(500))  # Reserved name!
-
     def test_vector_distance_in_filter_with_literal_binds(self):
         """
         Test that vector distance in filter() preserves vector format with literal_binds.

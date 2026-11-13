@@ -1450,7 +1450,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return final_sql
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> Tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 

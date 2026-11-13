@@ -16,7 +16,7 @@
 MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 """
 
-from typing import Any, List, Optional, TypeVar
+from typing import Any, List, Optional, Tuple, TypeVar
 
 from .orm import BaseMatrixOneQuery
 
@@ -30,7 +30,7 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         super().__init__(model_class, client, transaction_wrapper, snapshot)
         self.database = database
 
-    def _build_sql(self) -> tuple[str, List[Any]]:
+    def _build_sql(self) -> Tuple[str, List[Any]]:
         """Build SQL query with database prefix support"""
         # Add database prefix if provided
         original_table_name = self._table_name

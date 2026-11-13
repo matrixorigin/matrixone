@@ -20,7 +20,7 @@ Session and AsyncSession with MatrixOne-specific features like snapshots, clones
 vector operations, and fulltext search.
 """
 
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 try:
     from sqlalchemy.orm import Session as SQLAlchemySession
@@ -687,7 +687,7 @@ class Session(SQLAlchemySession):
 
             raise _classify_db_error(e, sql_or_stmt) from None
 
-    def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
+    def insert(self, table_name: str, data: Dict[str, Any]) -> "ResultSet":
         """
         Insert data into a table within session.
 
@@ -703,7 +703,7 @@ class Session(SQLAlchemySession):
         sql = self.client._build_insert_sql(table_name, data)
         return self.execute(sql)
 
-    def batch_insert(self, table_name: str, data_list: list[dict[str, Any]]) -> "ResultSet":
+    def batch_insert(self, table_name: str, data_list: List[Dict[str, Any]]) -> "ResultSet":
         """
         Batch insert data into a table within session.
 

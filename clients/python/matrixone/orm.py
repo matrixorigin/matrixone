@@ -27,7 +27,7 @@ This provides better type safety and integration with SQLAlchemy.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 # SQLAlchemy compatibility import
 try:
@@ -299,7 +299,7 @@ class Query:
         self._offset_count = count
         return self
 
-    def _build_select_sql(self) -> tuple[str, List[Any]]:
+    def _build_select_sql(self) -> Tuple[str, List[Any]]:
         """Build SELECT SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
 
@@ -534,7 +534,7 @@ class Query:
         self._insert_values.extend(values_list)
         return self
 
-    def _build_insert_sql(self) -> tuple[str, List[Any]]:
+    def _build_insert_sql(self) -> Tuple[str, List[Any]]:
         """Build INSERT SQL query using unified SQL builder"""
         from .sql_builder import build_insert_query
 
@@ -551,7 +551,7 @@ class Query:
             self._update_set_values.append(value)
         return self
 
-    def _build_update_sql(self) -> tuple[str, List[Any]]:
+    def _build_update_sql(self) -> Tuple[str, List[Any]]:
         """Build UPDATE SQL query using unified SQL builder"""
         from .sql_builder import build_update_query
 
@@ -578,7 +578,7 @@ class Query:
         sql, params = self._build_delete_sql()
         return self._execute(sql, params)
 
-    def _build_delete_sql(self) -> tuple[str, List[Any]]:
+    def _build_delete_sql(self) -> Tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
         from .sql_builder import build_delete_query
 
@@ -630,7 +630,7 @@ class CTE:
                 raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
         return self._sql, self._params
 
-    def as_sql(self) -> tuple[str, list]:
+    def as_sql(self) -> Tuple[str, list]:
         """Get the compiled SQL and parameters for this CTE"""
         return self._compile()
 
@@ -1398,7 +1398,7 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
-    def _build_sql(self) -> tuple[str, List[Any]]:
+    def _build_sql(self) -> Tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
 
@@ -1641,7 +1641,7 @@ class BaseMatrixOneQuery:
 
         return self
 
-    def _build_update_sql(self) -> tuple[str, List[Any]]:
+    def _build_update_sql(self) -> Tuple[str, List[Any]]:
         """
         Build UPDATE SQL query directly to handle SQLAlchemy expressions
 
@@ -1689,7 +1689,7 @@ class BaseMatrixOneQuery:
         sql, params = self._build_delete_sql()
         return self._execute(sql, params)
 
-    def _build_delete_sql(self) -> tuple[str, List[Any]]:
+    def _build_delete_sql(self) -> Tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
         from .sql_builder import build_delete_query
 
