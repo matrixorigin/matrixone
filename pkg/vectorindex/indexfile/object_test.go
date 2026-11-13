@@ -127,3 +127,52 @@ func TestOpenObjectOfMissingObject(t *testing.T) {
 	_, statErr := os.Stat(cache.Path())
 	require.NoError(t, statErr)
 }
+
+// gatedFS blocks reads until release is closed, after signalling reading.
+type gatedFS struct {
+	fileservice.FileService
+	reading chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	g.once.Do(func() { close(g.reading) })
+	<-g.release
+	return g.FileService.Read(ctx, vector)
+}
+
+// A load of an object deleted during its read serves the bytes it read but publishes
+// no entry.
+func TestOpenObjectDeletedDuringLoadIsNotCached(t *testing.T) {
+	base, data := newObjectFS(t, 300<<10)
+	fs := &gatedFS{FileService: base, reading: make(chan struct{}), release: make(chan struct{})}
+	cache := newCache(t, t.TempDir())
+	ctx := context.Background()
+	type result struct {
+		f   *File
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		f, err := OpenObject(ctx, cache, fs, "object", int64(len(data)))
+		done <- result{f, err}
+	}()
+	<-fs.reading
+	require.NoError(t, cache.Delete(ctx, fileservice.IndexObjectEntry("object")))
+	close(fs.release)
+	r := <-done
+	require.NoError(t, r.err)
+	require.Equal(t, data, readFile(t, r.f))
+	require.NoError(t, r.f.Close())
+
+	_, err := cache.Open(ctx, fileservice.IndexObjectEntry("object"), fileservice.IndexObjectFile)
+	require.Error(t, err, "the entry of a deleted object is not published")
+
+	f, err := OpenObject(ctx, cache, base, "object", int64(len(data)))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	files, err := cache.Open(ctx, fileservice.IndexObjectEntry("object"), fileservice.IndexObjectFile)
+	require.NoError(t, err, "a load after the delete caches the object")
+	require.NoError(t, files[0].Close())
+}

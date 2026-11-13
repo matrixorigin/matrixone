@@ -15,7 +15,7 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
 - **Loading.** `indexfile.OpenObject` opens an object's entry, or reads the object whole
   into the cache and opens it, as `indexfile.Open` does for an index file: one read per
   entry at a time, an object of 16 MiB or more read as two ranges at once while fewer than
-  four whole-object downloads, of index objects and of the disk cache, are in flight; each
+  `disk-prefetch-object-split-downloads` whole-object downloads, of index objects and of the disk cache, are in flight; each
   complete download is a sample of the download rate the prefetcher sizes its queue by. The IVF-Flat
   search's scan of the entries table opens the objects of its blocks before reading them,
   eight at once, and holds them until the scan ends. A distributed search assigns whole

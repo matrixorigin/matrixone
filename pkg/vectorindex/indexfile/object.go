@@ -43,6 +43,7 @@ func OpenObject(ctx context.Context, cache *fileservice.IndexFileCache, fs files
 		return f, err
 	}
 
+	mark := cache.DeleteMark()
 	if size <= 0 {
 		entry, err := fs.StatFile(ctx, object)
 		if err != nil {
@@ -59,7 +60,7 @@ func OpenObject(ctx context.Context, cache *fileservice.IndexFileCache, fs files
 		_ = tmp.Close()
 		return nil, err
 	}
-	if _, err := cache.Put(ctx, name, []fileservice.IndexCacheFile{{Name: fileservice.IndexObjectFile, Path: tmp.Name()}}); err != nil {
+	if _, err := cache.PutUnlessDeleted(ctx, name, mark, []fileservice.IndexCacheFile{{Name: fileservice.IndexObjectFile, Path: tmp.Name()}}); err != nil {
 		_ = tmp.Close()
 		return nil, err
 	}
@@ -67,8 +68,9 @@ func OpenObject(ctx context.Context, cache *fileservice.IndexFileCache, fs files
 		_ = tmp.Close()
 		return f, err
 	}
-	// Not cached (the cache write failed or the entry was evicted at once): serve the
-	// read file, which stays readable through tmp after remove.
+	// Not cached (the cache write failed, the object was deleted during the read, or the
+	// entry was evicted at once): serve the read file, which stays readable through tmp
+	// after remove.
 	return &File{f: tmp, size: size}, nil
 }
 

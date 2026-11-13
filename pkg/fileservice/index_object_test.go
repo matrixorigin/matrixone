@@ -90,6 +90,21 @@ func TestIndexObjectServesReads(t *testing.T) {
 	require.NotZero(t, storage.reads.Load(), "a read without IndexFileObject does not use the entry")
 }
 
+// A decoded IndexFileObject read served from the index-file cache with no memory cache
+// gets its cache data from the default allocator.
+func TestIndexObjectDecodedReadWithoutMemoryCache(t *testing.T) {
+	fs, storage, data := newIndexObjectFS(t, true)
+	require.Nil(t, fs.memCache)
+	cacheIndexObject(t, fs, "object", data)
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: 1000, Size: 10, ToCacheData: CacheOriginalData}}}
+	require.NoError(t, fs.Read(context.Background(), vec))
+	defer vec.Release()
+	require.NotNil(t, vec.Entries[0].CachedData)
+	require.Equal(t, data[1000:1010], vec.Entries[0].CachedData.Bytes())
+	require.Zero(t, storage.reads.Load())
+}
+
 // Without an index-file cache, IndexFileObject reads take the normal path.
 func TestIndexObjectsWithoutIndexFileCache(t *testing.T) {
 	fs, storage, data := newIndexObjectFS(t, false)
@@ -168,15 +183,15 @@ func TestReadKeepsIndexObject(t *testing.T) {
 }
 
 // An index object of at least the split size downloads as two aligned ranges while fewer
-// than objectSplitMaxDownloads downloads are in flight, and as one range beyond.
+// than disk-prefetch-object-split-downloads downloads are in flight, and as one range beyond.
 func TestIndexObjectDownloadSplit(t *testing.T) {
 	size := int64(DefaultDiskPrefetchObjectSplitMin + 3<<10)
 	bounds, end := IndexObjectDownload(nil, size/4)
 	require.Nil(t, bounds, "a small object is one range")
 	end(false)
 
-	ends := make([]func(bool), 0, objectSplitMaxDownloads)
-	for range objectSplitMaxDownloads {
+	ends := make([]func(bool), 0, DefaultDiskPrefetchObjectSplitDownloads)
+	for range DefaultDiskPrefetchObjectSplitDownloads {
 		bounds, end := IndexObjectDownload(nil, size)
 		require.Len(t, bounds, 3)
 		require.Equal(t, []int64{0, size}, []int64{bounds[0], bounds[2]})

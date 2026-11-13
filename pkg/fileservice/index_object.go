@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"os"
@@ -48,14 +49,16 @@ var indexObjectDownloads atomic.Int64
 // IndexObjectDownload starts the download of an index object of fs of size bytes. It
 // returns the 64KiB-aligned bounds of the ranges to read at once, or nil to read it as one
 // range, and end, to call once when the download ends. The object is split while fewer
-// than objectSplitMaxDownloads whole-object downloads, of index objects and of fs's disk
-// cache, are in flight. A complete download is a sample of the download rate.
+// than disk-prefetch-object-split-downloads whole-object downloads, of index objects and of
+// fs's disk cache, are in flight. A complete download is a sample of the download rate.
 func IndexObjectDownload(fs FileService, size int64) (bounds []int64, end func(complete bool)) {
 	inFlight := indexObjectDownloads.Add(1) - 1
+	limit := int64(DefaultDiskPrefetchObjectSplitDownloads)
 	if s, ok := fs.(*S3FS); ok && s.diskCache != nil {
 		inFlight += int64(s.diskCache.downloading())
+		limit = int64(cmp.Or(s.diskCache.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))
 	}
-	if inFlight < objectSplitMaxDownloads {
+	if inFlight < limit {
 		bounds = objectSplitConfig{parts: indexObjectSplitParts, min: DefaultDiskPrefetchObjectSplitMin}.bounds(size, 0)
 	}
 	parts := int64(max(len(bounds)-1, 1))
@@ -150,10 +153,6 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	file := files[0]
 	defer file.Close()
 	s.touchIndexObject(diskPath)
-	var allocator CacheDataAllocator
-	if s.memCache != nil {
-		allocator = s.memCache
-	}
 	var read int64
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
@@ -163,7 +162,7 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if e.Size < 0 {
 			return nil
 		}
-		if err := e.readFrom(ctx, io.NewSectionReader(file, e.Offset, e.Size), allocator); err != nil {
+		if err := e.readFrom(ctx, io.NewSectionReader(file, e.Offset, e.Size), s); err != nil {
 			return err
 		}
 		e.done = true
