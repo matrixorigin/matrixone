@@ -1333,6 +1333,21 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		return
 	}
 
+	// Any other range read takes its bytes from a prefetch object, which other reads of
+	// them join.
+	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil {
+		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+			return getReader(ctx, &start, &end)
+		}
+		cache := !vector.Policy.Any(SkipDiskCacheWrites)
+		content, ok, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open, cache)
+		if err != nil {
+			return err
+		}
+		if ok {
+			prefetchContent, prefetchReads = content, 1
+		}
+	}
 	if prefetchContent != nil {
 		contentBytes, getContentDone = prefetchContent, true
 	}
@@ -1633,8 +1648,11 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	}
 	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
+	// The download is a FilePrefetchObject of the whole object.
+	prefetchCtx, endPrefetch := s.diskCache.startFilePrefetch(fillCtx, diskPath, 0, math.MaxInt64)
 	go func() {
-		setDone <- s.diskCache.fillFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		defer endPrefetch()
+		setDone <- s.diskCache.fillFile(prefetchCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			var admitted admittedDownload
@@ -1645,7 +1663,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 				}
 			}
 			started <- admitted
-			return &lazyObjectReader{ctx: fillCtx, read: getReader}, nil
+			return &lazyObjectReader{ctx: ctx, read: getReader}, nil
 		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)))
 	}()
 	var setErr error

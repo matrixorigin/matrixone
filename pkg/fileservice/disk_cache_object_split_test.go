@@ -97,7 +97,7 @@ func TestS3FSObjectSplitSkipsSmallObjects(t *testing.T) {
 func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	for i := 0; i < objectSplitMaxDownloads; i++ {
+	for i := 0; i < DefaultDiskPrefetchObjectSplitDownloads; i++ {
 		d.downloads.store(fmt.Sprintf("other-%d", i), newObjectDownload("", false, nil))
 	}
 	got, err := readFullObjectOf(fs, 100, 10)
@@ -182,11 +182,12 @@ func TestObjectSplitBounds(t *testing.T) {
 }
 
 func TestDiskObjectSplitConfig(t *testing.T) {
-	require.Equal(t, objectSplitConfig{parts: 2, min: 16 << 20}, (&CacheConfig{}).diskObjectSplit())
-	require.Equal(t, objectSplitConfig{parts: 1, min: 16 << 20}, (&CacheConfig{DiskPrefetchObjectSplit: ptrTo(0)}).diskObjectSplit())
-	require.Equal(t, objectSplitConfig{parts: 4, min: 1 << 20}, (&CacheConfig{
-		DiskPrefetchObjectSplit:    ptrTo(9),
-		DiskPrefetchObjectSplitMin: ptrTo[toml.ByteSize](1 << 20),
+	require.Equal(t, objectSplitConfig{parts: 2, min: 16 << 20, downloads: 8}, (&CacheConfig{}).diskObjectSplit())
+	require.Equal(t, objectSplitConfig{parts: 1, min: 16 << 20, downloads: 8}, (&CacheConfig{DiskPrefetchObjectSplit: ptrTo(0)}).diskObjectSplit())
+	require.Equal(t, objectSplitConfig{parts: 4, min: 1 << 20, downloads: 3}, (&CacheConfig{
+		DiskPrefetchObjectSplit:          ptrTo(9),
+		DiskPrefetchObjectSplitMin:       ptrTo[toml.ByteSize](1 << 20),
+		DiskPrefetchObjectSplitDownloads: ptrTo(3),
 	}).diskObjectSplit())
 }
 
@@ -218,21 +219,6 @@ func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 	require.Less(t, time.Since(t0), 2*time.Second)
 }
 
-// With the most downloads in flight, a read of a whole object reads its range instead of
-// downloading the object.
-func TestS3FSDownloadCapReadsRange(t *testing.T) {
-	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 300<<10)
-	d := fs.diskCache
-	d.maxDownloadConns = 3
-	d.downloadConns.Store(3)
-	got, err := readFullObjectOf(fs, 100, 10)
-	require.NoError(t, err)
-	require.Equal(t, data[100:110], got)
-	require.Equal(t, int64(1), storage.reads.Load())
-	require.Equal(t, int64(10), storage.bytes.Load(), "a range read of the entry")
-	require.False(t, d.cache.Contains(d.pathForFile("object")))
-}
-
 // A download releases its connections once its transfer ends, and a split that cannot
 // reserve a connection for each part downloads the object as one range.
 func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
@@ -247,6 +233,30 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	require.Empty(t, storage.starts, "one open-ended range with one connection free")
 	require.Equal(t, int64(1), d.downloadConns.Load(), "its connection is released")
 	require.True(t, d.cache.Contains(d.pathForFile("object")))
+}
+
+// A download with no connection free waits for one, and downloads once one is released.
+func TestS3FSDownloadWaitsForConn(t *testing.T) {
+	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+	d := fs.diskCache
+	d.maxDownloadConns = 1
+	d.downloadConns.Store(1)
+	done := make(chan []byte, 1)
+	go func() {
+		got, err := readFullObjectOf(fs, 100, 10)
+		require.NoError(t, err)
+		done <- got
+	}()
+	require.Eventually(t, func() bool {
+		d.connsMu.Lock()
+		defer d.connsMu.Unlock()
+		return d.connsFreed != nil
+	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
+	require.False(t, d.cache.Contains(d.pathForFile("object")))
+	d.releaseDownloadConns(1)
+	require.Equal(t, data[100:110], <-done)
+	require.True(t, d.cache.Contains(d.pathForFile("object")))
+	require.Zero(t, d.downloadConns.Load())
 }
 
 // Deleting an object forgets the size a prefetch told of: after the path is written again

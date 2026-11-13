@@ -244,12 +244,12 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			release := make(chan struct{})
 			unblock = sync.OnceFunc(func() { close(release) })
 			var once sync.Once
-			var syncCalls int
+			// Cache files of prefetch objects and of the object may sync at once.
+			var syncCalls atomic.Int64
 			fs.diskCache.fileSync = func(*os.File) error {
 				once.Do(func() { close(started) })
 				<-release
-				syncCalls++
-				if mode == "publication-failure" && syncCalls == 1 {
+				if mode == "publication-failure" && syncCalls.Add(1) == 1 {
 					return errors.New("injected publication sync failure")
 				}
 				return nil
@@ -306,8 +306,9 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 						if mode == "error-between-entries" {
 							return injected
 						}
-						<-ctx.Done()
-						return ctx.Err()
+						// The read is a prefetch object's, which outlives the cancelled read.
+						<-readCtx.Done()
+						return readCtx.Err()
 					}
 					return nil
 				}
@@ -318,7 +319,10 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 					unblock()
 					<-done
 				})
-				stop()
+				// The read fails with the second range's error, or is cancelled.
+				if mode == "cancel-between-entries" {
+					stop()
+				}
 				err := waitPendingPublicationResult(t, "cancelled follower read", done, stop, unblock)
 				if mode == "error-between-entries" {
 					require.ErrorIs(t, err, injected)

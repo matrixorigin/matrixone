@@ -405,6 +405,9 @@ type objectSplitConfig struct {
 	// parts is how many ranges the download of an object of at least min bytes reads.
 	parts int
 	min   int64
+	// downloads is the most downloads in flight with which another is split; 0 is
+	// DefaultDiskPrefetchObjectSplitDownloads.
+	downloads int
 }
 
 // objectLayout returns the size of an object to download, and the offset, or 0, a read
@@ -587,6 +590,46 @@ func (d *DiskCache) prefetchWorkers() int {
 
 // reserveDownloadConns reserves n of the connections whole-object downloads may hold,
 // half the connections to the object storage host, or reports that they are taken.
+// waitDownloadConns reserves n of the connections downloads may hold, waiting until they
+// are free or ctx ends.
+func (d *DiskCache) waitDownloadConns(ctx context.Context, n int64) error {
+	for {
+		freed := d.downloadConnsFreed()
+		if d.reserveDownloadConns(n) {
+			return nil
+		}
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// releaseDownloadConns frees n connections reserved, and wakes the downloads waiting for
+// them.
+func (d *DiskCache) releaseDownloadConns(n int64) {
+	if n == 0 {
+		return
+	}
+	d.downloadConns.Add(-n)
+	d.connsMu.Lock()
+	if d.connsFreed != nil {
+		close(d.connsFreed)
+		d.connsFreed = nil
+	}
+	d.connsMu.Unlock()
+}
+
+func (d *DiskCache) downloadConnsFreed() chan struct{} {
+	d.connsMu.Lock()
+	defer d.connsMu.Unlock()
+	if d.connsFreed == nil {
+		d.connsFreed = make(chan struct{})
+	}
+	return d.connsFreed
+}
+
 func (d *DiskCache) reserveDownloadConns(n int64) bool {
 	limit := d.maxDownloadConns
 	for {
@@ -666,10 +709,6 @@ const (
 	// downloadRateMinBytes is written by a part before its own rate is used, and each
 	// part's rate at that point is a sample of the recent downloads' rate.
 	downloadRateMinBytes = 256 << 10
-	// objectSplitMaxDownloads is the most whole-object downloads in flight with which
-	// another download is split: beyond them the link is shared and a split adds no
-	// bandwidth.
-	objectSplitMaxDownloads = 4
 	// rangeReadSmall is the largest range read whose time counts as latency.
 	rangeReadSmall = 256 << 10
 	costWeight     = 0.1

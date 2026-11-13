@@ -58,6 +58,9 @@ type CacheConfig struct {
 	// DiskPrefetchObjectSplitMin is the size of the smallest object whose download is
 	// split. Default DefaultDiskPrefetchObjectSplitMin.
 	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
+	// DiskPrefetchObjectSplitDownloads is the most downloads in flight with which another
+	// download is split. Default DefaultDiskPrefetchObjectSplitDownloads.
+	DiskPrefetchObjectSplitDownloads *int `toml:"disk-prefetch-object-split-downloads"`
 	// DiskPrefetchMemoryMax is the most bytes a prefetch downloads into memory, as a
 	// MemoryPrefetchObject; a larger one downloads to a file, as a FilePrefetchObject.
 	// Default DefaultDiskPrefetchMemoryMax, at least minDiskPrefetchMemoryMax.
@@ -248,6 +251,9 @@ const (
 	DefaultDiskPrefetchObjectSplitMin = 16 << 20
 	// diskPrefetchObjectSplitMax is the most ranges a whole-object download reads at once.
 	diskPrefetchObjectSplitMax = 4
+	// DefaultDiskPrefetchObjectSplitDownloads is the default
+	// DiskPrefetchObjectSplitDownloads.
+	DefaultDiskPrefetchObjectSplitDownloads = 8
 	// DefaultDiskPrefetchMemoryMax is the default DiskPrefetchMemoryMax.
 	DefaultDiskPrefetchMemoryMax = 32 << 20
 	// minDiskPrefetchMemoryMax is the least DiskPrefetchMemoryMax.
@@ -262,12 +268,15 @@ func (c *CacheConfig) diskPrefetchMemoryMax() int64 {
 }
 
 func (c *CacheConfig) diskObjectSplit() objectSplitConfig {
-	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin}
+	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin, downloads: DefaultDiskPrefetchObjectSplitDownloads}
 	if c.DiskPrefetchObjectSplit != nil {
 		split.parts = min(max(*c.DiskPrefetchObjectSplit, 1), diskPrefetchObjectSplitMax)
 	}
 	if c.DiskPrefetchObjectSplitMin != nil {
 		split.min = int64(*c.DiskPrefetchObjectSplitMin)
+	}
+	if c.DiskPrefetchObjectSplitDownloads != nil && *c.DiskPrefetchObjectSplitDownloads > 0 {
+		split.downloads = *c.DiskPrefetchObjectSplitDownloads
 	}
 	return split
 }

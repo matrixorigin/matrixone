@@ -2485,7 +2485,7 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 		t.Fatal("range follower waited for async disk finalization")
 	}
 	require.Equal(t, []byte("ello"), follower.Entries[0].Data)
-	require.Equal(t, int64(2), pcSet.FileService.S3.Get.Load())
+	require.Equal(t, int64(1), pcSet.FileService.S3.Get.Load(), "the follower joins the leader's prefetch object")
 	diskPath := fs.diskCache.pathForIOEntry("foo/bar", follower.Entries[0])
 	require.True(t, fs.diskCache.isUpdating(diskPath))
 

@@ -75,7 +75,10 @@ type DiskCache struct {
 	// at most maxDownloadConns.
 	downloadConns    atomic.Int64
 	maxDownloadConns int64
-	prefetchFlights  prefetchFlights
+	// connsFreed, when set, is closed once reserved connections are freed.
+	connsMu         sync.Mutex
+	connsFreed      chan struct{}
+	prefetchFlights prefetchFlights
 	// filePrefetches are the FilePrefetchObjects under way.
 	filePrefetches filePrefetches
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
@@ -1050,7 +1053,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var bounds []int64
 	var conns int64
 	if fill == storageFill || fill == rangeFill {
-		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < objectSplitMaxDownloads {
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}
@@ -1060,12 +1063,18 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			bounds, conns = nil, 1
 		}
 		if conns == 1 && !d.reserveDownloadConns(1) {
-			metric.FSDiskCacheDownloadSkippedCounter.Inc()
-			return false, nil
+			// Without a connection to hold, the download is skipped; otherwise it waits for one.
+			if d.maxDownloadConns < 1 {
+				metric.FSDiskCacheDownloadSkippedCounter.Inc()
+				return false, nil
+			}
+			if err := d.waitDownloadConns(ctx, 1); err != nil {
+				return false, err
+			}
 		}
 	}
 	releaseConns := func() {
-		d.downloadConns.Add(-conns)
+		d.releaseDownloadConns(conns)
 		conns = 0
 	}
 	defer releaseConns()
@@ -1226,6 +1235,16 @@ func (d *DiskCache) finalizeFile(
 func (d *DiskCache) Flush(ctx context.Context) {
 	// OnWritten callbacks are post-publication notifications and deliberately
 	// outside this barrier, so a callback may safely reenter Flush or Close.
+	// The prefetch objects under way cache their bytes before they end.
+	done := make(chan struct{})
+	go func() {
+		d.prefetchFlights.reads.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 	d.flushAsyncUpdates(ctx)
 }
 

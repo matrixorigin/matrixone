@@ -158,7 +158,8 @@ func TestPrefetchRangeSkipsDiskCacheReads(t *testing.T) {
 }
 
 // Past the bytes of the prefetch range runs under way, a read reads only its entries;
-// the bytes of runs that end are given back.
+// A read whose prefetch range runs would pass the bytes of the runs under way waits for
+// them to end, then reads its prefetch range.
 func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	// A run's buffer is at least 64 KiB, the bytes it counts for.
@@ -167,14 +168,22 @@ func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	f.mu.Lock()
 	f.bytes = 1
 	f.mu.Unlock()
-	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
-	require.Equal(t, int64(2), storage.bytes.Load(), "only the entry")
+	got := make(chan []byte, 1)
+	go func() { got <- readRangeOf(t, fs, 0, 5000, 2) }()
+	require.Eventually(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.freed != nil
+	}, 10*time.Second, time.Millisecond, "the read waits for room")
+	require.Zero(t, storage.bytes.Load())
 
 	f.mu.Lock()
 	f.bytes = 0
+	close(f.freed)
+	f.freed = nil
 	f.mu.Unlock()
-	require.Equal(t, data[9000:9002], readRangeOf(t, fs, 0, 9000, 2))
-	require.Equal(t, int64(2+4096), storage.bytes.Load(), "the prefetch range")
+	require.Equal(t, data[5000:5002], <-got)
+	require.Equal(t, int64(4096), storage.bytes.Load(), "the prefetch range")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	require.Zero(t, f.bytes)
