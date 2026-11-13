@@ -4,8 +4,10 @@ Decision: **accepted for implementation**. This is a design-only review, before
 implementation changes, conducted by Codex (`/root`). It is not an independent
 external review or a claim that implementation validation has passed.
 
-Reviewed revision: `89052f62563dc4c546d7be32b989b3eb26ca38ed`.  
-Design SHA-256: `39cbae04d3c3e16b7bcae25e8bba8d10b38dae4d7d43f1650872f1787eb24d4f`.  
+Reviewed revision: `89052f62563dc4c546d7be32b989b3eb26ca38ed`.
+
+Design SHA-256: `39cbae04d3c3e16b7bcae25e8bba8d10b38dae4d7d43f1650872f1787eb24d4f`.
+
 Design: [legacy-arrow-upload.md](legacy-arrow-upload.md).
 
 The gate applies because file-format negotiation changes an existing compatibility

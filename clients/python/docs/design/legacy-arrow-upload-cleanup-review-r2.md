@@ -3,7 +3,8 @@
 Decision: **accepted for implementation**, reviewed by Codex `/root` before the
 production change. This is root self-review, not independent external approval.
 
-Reviewed revision: `5a43151ae3`.  
+Reviewed revision: `5a43151ae3`.
+
 Design SHA-256: `ed68d1cfcf3ff13e8fc0893764b03004668e6ad5e919e1962c7c0c9b40e26bc5`.
 
 The counterexample is reproduced through the public upload method. Abort of a
