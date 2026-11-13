@@ -3669,6 +3669,22 @@ func TestPushClientCloseCancelsTimestampWait(t *testing.T) {
 	})
 }
 
+func TestPushClientCloseCancelsTenantActivationWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{lazyCatalog: newLazyCatalogCNState()}
+		c.start(context.Background())
+		c.lazyCatalog.enable()
+		c.lazyCatalog.inflightActivations.Store(uint32(10), &inflightActivation{done: make(chan struct{})})
+		result := make(chan error, 1)
+		require.True(t, c.runOwned(func() {
+			result <- c.ActivateTenantCatalog(context.Background(), nil, 10)
+		}))
+		synctest.Wait()
+		require.NoError(t, c.Close())
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
+}
+
 func TestPushClientReadinessCancellation(t *testing.T) {
 	t.Run("missing cluster", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
