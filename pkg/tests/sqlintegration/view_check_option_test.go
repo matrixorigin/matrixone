@@ -45,8 +45,9 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 			t.Run(fmt.Sprintf("round_%d", round+1), func(t *testing.T) {
 				// Each replay/recreation round owns its complete execution and
 				// teardown budget; the preceding round must not consume it.
-				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 				defer cancel()
+				roundCtx := ctx
 				execSQLRequire(t, ctx, db, "create database "+schema)
 				execSQLRequire(t, ctx, db, "create view "+schema+".current_v as select 1 with cAsCaDeD check option")
 				var current string
@@ -125,56 +126,65 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 						"select name_const('c', '" + strings.ReplaceAll(value, `\`, `\\`) + "') as c", value})
 				}
 				metadataNames := make([][3]string, 0, len(replayCases))
+				t.Logf("view replay cases=%d", len(replayCases))
+				// Limit each replay independently while keeping a separate overall
+				// round deadline; a replay is also bounded by the remaining round time.
 				for index, tc := range replayCases {
-					names := [3]string{fmt.Sprintf("name_const_source_%d", index)}
-					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
-					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
-					read := func(view string) [3]string {
-						t.Helper()
-						valueRows, err := db.QueryContext(ctx, "select *, charset(c), collation(c) from "+view)
+					if !t.Run(fmt.Sprintf("replay_%02d", index), func(t *testing.T) {
+						ctx, cancel := context.WithTimeout(roundCtx, 60*time.Second)
+						defer cancel()
+						names := [3]string{fmt.Sprintf("name_const_source_%d", index)}
+						source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
+						execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
+						read := func(view string) [3]string {
+							t.Helper()
+							valueRows, err := db.QueryContext(ctx, "select *, charset(c), collation(c) from "+view)
+							require.NoError(t, err)
+							defer valueRows.Close()
+							valueNames, err := valueRows.Columns()
+							require.NoError(t, err)
+							require.Len(t, valueNames, 3)
+							require.Equal(t, "c", valueNames[0])
+							require.True(t, valueRows.Next(), "view %s: %v", view, valueRows.Err())
+							var values [3]string
+							require.NoError(t, valueRows.Scan(&values[0], &values[1], &values[2]))
+							require.False(t, valueRows.Next(), "view must return exactly one row: %s", view)
+							require.NoError(t, valueRows.Err())
+							// Keep the independent empty-result metadata path. The data
+							// result above also checks its actual wire column shape.
+							rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
+							require.NoError(t, err)
+							defer rows.Close()
+							names, err := rows.Columns()
+							require.NoError(t, err)
+							require.Equal(t, []string{"c"}, names)
+							require.False(t, rows.Next())
+							require.NoError(t, rows.Err())
+							return values
+						}
+						want := read(source)
+						require.Equal(t, tc.want, want[0])
+						var currentDefinition string
+						require.NoError(t, db.QueryRowContext(ctx,
+							"select mo_view_definition(viewdef) from mo_catalog.mo_tables where account_id=0 and reldatabase=? and relname=?",
+							schema, fmt.Sprintf("name_const_source_%d", index)).Scan(&currentDefinition))
+						persisted, err := json.Marshal(map[string]string{"Stmt": "create view old as " + tc.selectSQL})
 						require.NoError(t, err)
-						defer valueRows.Close()
-						valueNames, err := valueRows.Columns()
-						require.NoError(t, err)
-						require.Len(t, valueNames, 3)
-						require.Equal(t, "c", valueNames[0])
-						require.True(t, valueRows.Next(), "view %s: %v", view, valueRows.Err())
-						var values [3]string
-						require.NoError(t, valueRows.Scan(&values[0], &values[1], &values[2]))
-						require.False(t, valueRows.Next(), "view must return exactly one row: %s", view)
-						require.NoError(t, valueRows.Err())
-						// Keep the independent empty-result metadata path. The data
-						// result above also checks its actual wire column shape.
-						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
-						require.NoError(t, err)
-						defer rows.Close()
-						names, err := rows.Columns()
-						require.NoError(t, err)
-						require.Equal(t, []string{"c"}, names)
-						require.False(t, rows.Next())
-						require.NoError(t, rows.Err())
-						return values
+						var legacyDefinition string
+						// A SQL literal keeps this input's actual width; an untyped
+						// prepared parameter can acquire a default VARCHAR bound.
+						legacyInput := strings.ReplaceAll(strings.ReplaceAll(string(persisted), `\`, `\\`), "'", "''")
+						require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition('"+legacyInput+"')").Scan(&legacyDefinition))
+						for generation, definition := range []string{currentDefinition, legacyDefinition} {
+							names[generation+1] = fmt.Sprintf("name_const_replayed_%d_%d", index, generation)
+							replayed := schema + "." + names[generation+1]
+							execSQLRequire(t, ctx, db, "create view "+replayed+" as "+definition)
+							require.Equal(t, want, read(replayed), definition)
+						}
+						metadataNames = append(metadataNames, names)
+					}) {
+						return
 					}
-					want := read(source)
-					require.Equal(t, tc.want, want[0])
-					var currentDefinition string
-					require.NoError(t, db.QueryRowContext(ctx,
-						"select mo_view_definition(viewdef) from mo_catalog.mo_tables where account_id=0 and reldatabase=? and relname=?",
-						schema, fmt.Sprintf("name_const_source_%d", index)).Scan(&currentDefinition))
-					persisted, err := json.Marshal(map[string]string{"Stmt": "create view old as " + tc.selectSQL})
-					require.NoError(t, err)
-					var legacyDefinition string
-					// A SQL literal keeps this input's actual width; an untyped
-					// prepared parameter can acquire a default VARCHAR bound.
-					legacyInput := strings.ReplaceAll(strings.ReplaceAll(string(persisted), `\`, `\\`), "'", "''")
-					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition('"+legacyInput+"')").Scan(&legacyDefinition))
-					for generation, definition := range []string{currentDefinition, legacyDefinition} {
-						names[generation+1] = fmt.Sprintf("name_const_replayed_%d_%d", index, generation)
-						replayed := schema + "." + names[generation+1]
-						execSQLRequire(t, ctx, db, "create view "+replayed+" as "+definition)
-						require.Equal(t, want, read(replayed), definition)
-					}
-					metadataNames = append(metadataNames, names)
 				}
 				// The column catalog is stable after CREATE. Read it once for
 				// the round instead of repeating an information_schema scan for

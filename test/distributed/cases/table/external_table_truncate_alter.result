@@ -1,0 +1,87 @@
+drop database if exists external_table_truncate_alter;
+create database external_table_truncate_alter;
+use external_table_truncate_alter;
+create external table ext_ro_csv (id int, s varchar(16)) infile{'filepath'='$resources/external_table_truncate_alter/ro.csv','format'='csv'};
+select id, s from ext_ro_csv order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+truncate table ext_ro_csv;
+not supported: truncate read-only external table 'ext_ro_csv'; its files are not managed by the table
+select id, s from ext_ro_csv order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+alter table ext_ro_csv add column extra int;
+not supported: ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema
+alter table ext_ro_csv modify column s varchar(32);
+not supported: ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema
+alter table ext_ro_csv change column s s2 varchar(16);
+not supported: ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema
+select id, s from ext_ro_csv order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+insert into ext_ro_csv values (9, 'x');
+invalid input: cannot insert/update/delete from external table
+create external table ext_ro_jsonline (id int, s varchar(16)) infile{'filepath'='$resources/external_table_truncate_alter/ro.jsonline','format'='jsonline','jsondata'='object'};
+select id, s from ext_ro_jsonline order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+truncate table ext_ro_jsonline;
+not supported: truncate read-only external table 'ext_ro_jsonline'; its files are not managed by the table
+select id, s from ext_ro_jsonline order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+alter table ext_ro_jsonline add column extra int;
+not supported: ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema
+select id, s from ext_ro_jsonline order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+create external table ext_ro_parquet (id int, s varchar(16)) infile{'filepath'='$resources/external_table_truncate_alter/ro.parquet','format'='parquet'};
+select id, s from ext_ro_parquet order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+truncate table ext_ro_parquet;
+not supported: truncate read-only external table 'ext_ro_parquet'; its files are not managed by the table
+select id, s from ext_ro_parquet order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+alter table ext_ro_parquet add column extra int;
+not supported: ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema
+select id, s from ext_ro_parquet order by id;
+➤ id[4,32,0]  ¦  s[12,16,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third
+select column_name, data_type from information_schema.columns where table_schema='external_table_truncate_alter' and table_name='ext_ro_csv' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+id  ¦  int  𝄀
+s  ¦  varchar
+select column_name, data_type from information_schema.columns where table_schema='external_table_truncate_alter' and table_name='ext_ro_parquet' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+id  ¦  int  𝄀
+s  ¦  varchar
+create table t_native (id int);
+insert into t_native values (1), (2);
+select count(*) as cnt from t_native;
+➤ cnt[-5,64,0]  𝄀
+2
+truncate table t_native;
+select count(*) as cnt from t_native;
+➤ cnt[-5,64,0]  𝄀
+0
+drop database if exists external_table_truncate_alter;

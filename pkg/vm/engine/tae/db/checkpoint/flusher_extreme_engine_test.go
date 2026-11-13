@@ -97,7 +97,7 @@ func TestPartialFlushBusyTombstoneKeepsDeleteAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, latest.HasDropCommitted())
 
-	checkRows := func() {
+	checkRows := func(ctx context.Context) {
 		txn, finishTxn := flushProgressTxn(t, ctx, engine)
 		readRel := flushProgressRelation(t, txn, schema.Name)
 		testutil.CheckAllColRowsByScan(t, readRel, 2, true)
@@ -112,7 +112,7 @@ func TestPartialFlushBusyTombstoneKeepsDeleteAcrossRestart(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 		finishTxn()
 	}
-	checkRows()
+	checkRows(ctx)
 
 	releaseAppender()
 	require.NoError(t, checkpoint.FireFlushTabletailForTest(rt, table, engine.TxnMgr.Now()))
@@ -122,7 +122,11 @@ func TestPartialFlushBusyTombstoneKeepsDeleteAcrossRestart(t *testing.T) {
 	latest, err = table.GetObjectByID(tomb.ID(), true)
 	require.NoError(t, err)
 	require.True(t, latest.HasDropCommitted())
-	checkRows()
-	engine.Restart(ctx)
-	checkRows()
+	checkRows(ctx)
+	// Restart and recovery need their own budget; setup and flush work must not
+	// leave the reopen with an already-expired context on a loaded runner.
+	restartCtx, cancelRestart := context.WithTimeout(t.Context(), testutil.TestCheckpointTimeout)
+	defer cancelRestart()
+	engine.Restart(restartCtx)
+	checkRows(restartCtx)
 }

@@ -168,7 +168,7 @@ func TestM0SenderTombstonesRespectSharedBlockRelation(t *testing.T) {
 	t.Cleanup(func() { fs.Close(ctx) })
 	op, closeOp := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeOp)
-	workspace := &Transaction{proc: proc, op: op, deletedBlocks: &deletedBlocks{offsets: make(map[types.Blockid][]int64)}, cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
+	workspace := &Transaction{proc: proc, op: op, deletedBlocks: &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}, cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
 	op.AddWorkspace(workspace)
 	t.Cleanup(func() {
 		for _, entry := range workspace.writes {
@@ -484,7 +484,7 @@ func TestM0LocalReaderUsesTNCreatedTombstoneCommitTS(t *testing.T) {
 func TestM0ScopedFlushedTombstonesAfterCCPRRollback(t *testing.T) {
 	txn := newCatalogCreateTxnForTest(t)
 	txn.isCCPRTxn = true
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.tableCache = new(sync.Map)
 	txn.tableOps = newTableOps()
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
@@ -511,7 +511,7 @@ func TestM0ScopedFlushedTombstonesAfterCCPRRollback(t *testing.T) {
 func TestM0ScopedFlushedTombstonesCCPRRollbackRetainsSharedReference(t *testing.T) {
 	txn := newCatalogCreateTxnForTest(t)
 	txn.isCCPRTxn = true
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.tableCache = new(sync.Map)
 	txn.tableOps = newTableOps()
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
@@ -544,7 +544,7 @@ func TestM0ScopedFlushedTombstonesCCPRDiscardedTable(t *testing.T) {
 		t.Run(fmt.Sprintf("retain=%v", retain), func(t *testing.T) {
 			txn := newCatalogCreateTxnForTest(t)
 			txn.isCCPRTxn = true
-			txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			txn.tableOps = newTableOps()
 			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 			txn.tablesInVain[102] = 1

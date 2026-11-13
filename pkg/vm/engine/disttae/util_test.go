@@ -633,25 +633,26 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 }
 
 func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
+	const tableID uint64 = 42
 	delBlks := deletedBlocks{
-		offsets: map[types.Blockid][]int64{},
+		offsets: map[uint64]map[types.Blockid][]int64{},
 	}
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
 		bid, offset := row.Decode()
 
-		delBlks.addDeletedBlocks(42, bid, []int64{int64(offset)})
+		delBlks.addDeletedBlocks(tableID, bid, []int64{int64(offset)})
 	}
 
 	rowIds := make([]types.Rowid, 0)
 
-	delBlks.getDeletedRowIDs(42, func(row types.Rowid) {
+	delBlks.getDeletedRowIDs(tableID, func(row types.Rowid) {
 		rowIds = append(rowIds, row)
 	})
 
 	for i := range rowIds {
 		bid, offset := rowIds[i].Decode()
-		have, ok := delBlks.offsets[*bid]
+		have, ok := delBlks.offsets[tableID][*bid]
 		require.True(t, ok)
 		require.NotEqual(t, 0, len(have))
 
@@ -660,28 +661,32 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 	}
 
 	selected := rowIds[0].CloneBlockID()
-	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selected]))
-	delBlks.getDeletedRowIDsForBlocks(42, []types.Blockid{selected}, func(row types.Rowid) {
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[tableID][selected]))
+	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
 		scoped = append(scoped, row)
 	})
-	require.Len(t, scoped, len(delBlks.offsets[selected]))
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 	for i := range scoped {
 		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
 	}
 
-	// Different cloned relations can point to the same physical block.
-	delBlks.addDeletedBlocks(43, &selected, []int64{99})
-	other := make([]types.Rowid, 0)
-	delBlks.getDeletedRowIDsForBlocks(43, []types.Blockid{selected}, func(row types.Rowid) {
-		other = append(other, row)
+	otherTableRows := make([]types.Rowid, 0)
+	delBlks.getDeletedRowIDs(tableID+1, func(row types.Rowid) {
+		otherTableRows = append(otherTableRows, row)
 	})
-	require.Len(t, other, 1)
-	require.Equal(t, uint32(99), other[0].GetRowOffset())
+	require.Empty(t, otherTableRows)
+	// Different cloned relations can point to the same physical block.
+	delBlks.addDeletedBlocks(tableID+1, &selected, []int64{99})
+	delBlks.getDeletedRowIDsForBlocks(tableID+1, []types.Blockid{selected}, func(row types.Rowid) {
+		otherTableRows = append(otherTableRows, row)
+	})
+	require.Len(t, otherTableRows, 1)
+	require.Equal(t, uint32(99), otherTableRows[0].GetRowOffset())
 	scoped = scoped[:0]
-	delBlks.getDeletedRowIDsForBlocks(42, []types.Blockid{selected}, func(row types.Rowid) {
+	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
 		scoped = append(scoped, row)
 	})
-	require.Len(t, scoped, len(delBlks.byTable[42][selected]))
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 }
 
 func TestConcurrentExecutor_Run(t *testing.T) {

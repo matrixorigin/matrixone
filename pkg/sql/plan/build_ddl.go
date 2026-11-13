@@ -6184,9 +6184,12 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 
 		// TRUNCATE has historically been a silent no-op for generic read-only
-		// external tables. MongoDB mappings, however, have an explicit read-only
-		// DML contract, so fail closed with the same stable error as other direct
-		// mutations. Keep the existing behavior for other generic mappings.
+		// external tables. A read-only file mapping (CSV/JSONLINE/Parquet) has no
+		// truncate semantics — the table does not own the stage's files — so fail
+		// closed with an explicit not-supported error (issue #31920). MongoDB
+		// mappings keep their explicit read-only DML contract; writable and
+		// envelope-backed mappings keep their own contracts; other generic
+		// mappings keep the existing behavior.
 		if tableDef.TableType == catalog.SystemExternalRel {
 			isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
@@ -6203,8 +6206,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "truncate Iceberg table mapping '%v'", truncateTable.Table)
 			}
 			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
-				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
-					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
+				return nil, RejectTruncateWritableFileExternal(ctx.GetContext(), truncateTable.Table)
+			}
+			if err := RejectFileExternalTruncate(ctx.GetContext(), tableDef, truncateTable.Table); err != nil {
+				return nil, err
 			}
 		}
 

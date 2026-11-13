@@ -85,7 +85,6 @@ GRANT show databases ON account  `dump`@`localhost`  𝄀
 GRANT connect ON account  `dump`@`localhost`  𝄀
 GRANT manage grants ON account  `dump`@`localhost`  𝄀
 GRANT account all ON account  `dump`@`localhost`  𝄀
-GRANT upgrade account ON account  `dump`@`localhost`  𝄀
 GRANT show tables ON database * `dump`@`localhost`  𝄀
 GRANT create table ON database * `dump`@`localhost`  𝄀
 GRANT create view ON database * `dump`@`localhost`  𝄀
@@ -105,6 +104,7 @@ GRANT index ON table *.* `dump`@`localhost`  𝄀
 GRANT table all ON table *.* `dump`@`localhost`  𝄀
 GRANT table ownership ON table *.* `dump`@`localhost`  𝄀
 GRANT values ON table *.* `dump`@`localhost`  𝄀
+GRANT upgrade account ON account  `dump`@`localhost`  𝄀
 GRANT connect ON account  `dump`@`localhost`
 show grants for 'root'@'localhost';
 ➤ Grants for root@localhost[12,-1,0]  𝄀
@@ -122,7 +122,6 @@ GRANT show databases ON account  `root`@`localhost`  𝄀
 GRANT connect ON account  `root`@`localhost`  𝄀
 GRANT manage grants ON account  `root`@`localhost`  𝄀
 GRANT account all ON account  `root`@`localhost`  𝄀
-GRANT upgrade account ON account  `root`@`localhost`  𝄀
 GRANT show tables ON database * `root`@`localhost`  𝄀
 GRANT create table ON database * `root`@`localhost`  𝄀
 GRANT create view ON database * `root`@`localhost`  𝄀
@@ -142,6 +141,7 @@ GRANT index ON table *.* `root`@`localhost`  𝄀
 GRANT table all ON table *.* `root`@`localhost`  𝄀
 GRANT table ownership ON table *.* `root`@`localhost`  𝄀
 GRANT values ON table *.* `root`@`localhost`  𝄀
+GRANT upgrade account ON account  `root`@`localhost`  𝄀
 GRANT connect ON account  `root`@`localhost`
 show grants for 'test'@'localhost';
 ➤ Grants for test@localhost[12,-1,0]
@@ -152,10 +152,10 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 ➤ Grants for user1@localhost[12,-1,0]  𝄀
-GRANT table all ON table *.* `user1`@`localhost`  𝄀
+GRANT connect ON account  `user1`@`localhost`  𝄀
 GRANT create table ON database *.* `user1`@`localhost`  𝄀
 GRANT drop table ON database *.* `user1`@`localhost`  𝄀
-GRANT connect ON account  `user1`@`localhost`
+GRANT table all ON table *.* `user1`@`localhost`
 drop user user1;
 drop role role1;
 create database if not exists test03;
@@ -345,15 +345,15 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 ➤ Grants for user1@localhost[12,-1,0]  𝄀
-GRANT table all ON table *.* `user1`@`localhost`  𝄀
+GRANT connect ON account  `user1`@`localhost`  𝄀
 GRANT create table ON database *.* `user1`@`localhost`  𝄀
 GRANT drop table ON database *.* `user1`@`localhost`  𝄀
-GRANT connect ON account  `user1`@`localhost`
+GRANT table all ON table *.* `user1`@`localhost`
 show grants for ROLE role1;
 ➤ Grants for role1[12,-1,0]  𝄀
-GRANT table all ON table *.* `role1`  𝄀
 GRANT create table ON database *.* `role1`  𝄀
-GRANT drop table ON database *.* `role1`
+GRANT drop table ON database *.* `role1`  𝄀
+GRANT table all ON table *.* `role1`
 drop user user1;
 drop role role1;
 drop database if exists test01;

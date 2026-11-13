@@ -46,7 +46,7 @@ func TestM0StatementViewOwnsVisiblePrefix(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
 	op, closeOp := client.NewTestTxnOperator(t.Context())
 	t.Cleanup(closeOp)
-	txn := &Transaction{proc: proc, op: op, engine: &Engine{}, batchSelectList: make(map[*batch.Batch][]int64), deletedBlocks: &deletedBlocks{byTable: make(map[uint64]map[types.Blockid][]int64)}, cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
+	txn := &Transaction{proc: proc, op: op, engine: &Engine{}, batchSelectList: make(map[*batch.Batch][]int64), deletedBlocks: &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}, cn_flushed_s3_tombstone_object_stats_list: new(sync.Map)}
 	op.AddWorkspace(txn)
 	table := &txnTable{tableId: 42, db: &txnDatabase{databaseId: 7, op: op}}
 	table.proc.Store(proc)
@@ -62,8 +62,8 @@ func TestM0StatementViewOwnsVisiblePrefix(t *testing.T) {
 	}
 	rows.SetRowCount(2)
 	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: rows}}
-	txn.deletedBlocks.byTable[42] = map[types.Blockid][]int64{block: {1}}
-	txn.deletedBlocks.byTable[43] = map[types.Blockid][]int64{block: {0}}
+	txn.deletedBlocks.offsets[42] = map[types.Blockid][]int64{block: {1}}
+	txn.deletedBlocks.offsets[43] = map[types.Blockid][]int64{block: {0}}
 	baseline := proc.Mp().CurrNB()
 	captured, err := txn.CaptureM0StatementReadView(t.Context(), 1, proc)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestM0StatementViewOwnsVisiblePrefix(t *testing.T) {
 	txn.Lock()
 	vector.MustFixedColNoTypeCheck[int32](rows.Vecs[1])[0] = 99
 	txn.deletedBlocks.Lock()
-	txn.deletedBlocks.byTable[42][block] = []int64{0, 1}
+	txn.deletedBlocks.offsets[42][block] = []int64{0, 1}
 	txn.deletedBlocks.Unlock()
 	txn.writes = append(txn.writes, txn.writes[0])
 	txn.Unlock()
@@ -298,12 +298,12 @@ func TestM0StatementViewCollectorsUseCapturedMember(t *testing.T) {
 	defer proc.Free()
 	op, closeOp := client.NewTestTxnOperator(t.Context())
 	defer closeOp()
-	txn := &Transaction{proc: proc, op: op, deletedBlocks: &deletedBlocks{byTable: make(map[uint64]map[types.Blockid][]int64)}}
+	txn := &Transaction{proc: proc, op: op, deletedBlocks: &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
 	op.AddWorkspace(txn)
 	row := types.RandomRowid()
 	block := *row.BorrowBlockID()
-	txn.deletedBlocks.byTable[42] = map[types.Blockid][]int64{block: {1}}
-	txn.deletedBlocks.byTable[43] = map[types.Blockid][]int64{block: {0}}
+	txn.deletedBlocks.offsets[42] = map[types.Blockid][]int64{block: {1}}
+	txn.deletedBlocks.offsets[43] = map[types.Blockid][]int64{block: {0}}
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
 	meta := batch.New([]string{catalog.ObjectMeta_ObjectStats})
@@ -320,7 +320,7 @@ func TestM0StatementViewCollectorsUseCapturedMember(t *testing.T) {
 	// Subsequent removal/compaction of live entries cannot make ranges lose the
 	// captured persistent data or adopt another relation's raw deletes.
 	txn.writes = nil
-	txn.deletedBlocks.byTable[42][block] = []int64{0, 1}
+	txn.deletedBlocks.offsets[42][block] = []int64{0, 1}
 	objects, _, err := table.collectUnCommittedDataObjs(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, []objectio.ObjectStats{*stats}, objects)

@@ -88,6 +88,49 @@ func TestLeaveOutRecordsUnstorableRows(t *testing.T) {
 	require.Contains(t, sqls[1], "SELECT COUNT(*) FROM `db`.`ign`")
 }
 
+func TestLeaveOutRecordsEmptyIntegerVectors(t *testing.T) {
+	for _, typ := range []types.T{types.T_array_int8, types.T_array_uint8} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			var sqls []string
+			defer stubSql(t, mp, 1, &sqls)()
+
+			ap := &Productl2{Ignored: &Ignored{
+				Storage: ivfflat.NewStorage(typ, "", 0, 0, false),
+				Db:      "db", Table: "ign", Pk: 0, Limit: 1,
+			}}
+			ctr := &ap.ctr
+			ctr.sqlproc = sqlexec.NewSqlProcess(proc)
+			ctr.inBat = batch.NewWithSize(2)
+			defer ctr.inBat.Clean(mp)
+			ctr.inBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			ctr.inBat.Vecs[1] = vector.NewVec(types.New(typ, 1, 0))
+			for _, pk := range []int32{1, 2} {
+				require.NoError(t, vector.AppendFixed(ctr.inBat.Vecs[0], pk, false, mp))
+			}
+			switch typ {
+			case types.T_array_int8:
+				require.NoError(t, vector.AppendArray(ctr.inBat.Vecs[1], []int8{}, false, mp))
+				require.NoError(t, vector.AppendArray(ctr.inBat.Vecs[1], []int8{1}, false, mp))
+			case types.T_array_uint8:
+				require.NoError(t, vector.AppendArray(ctr.inBat.Vecs[1], []uint8{}, false, mp))
+				require.NoError(t, vector.AppendArray(ctr.inBat.Vecs[1], []uint8{1}, false, mp))
+			}
+			ctr.inBat.SetRowCount(2)
+
+			out, err := ctr.leaveOut(ap, proc, ctr.inBat.Vecs[1])
+			require.NoError(t, err)
+			require.Equal(t, []bool{true, false}, out)
+			require.Equal(t, int64(1), ctr.ignored)
+			require.Len(t, sqls, 1)
+			require.Contains(t, sqls[0], "REPLACE INTO `db`.`ign`")
+			require.Contains(t, sqls[0], "(1,")
+			require.NotContains(t, sqls[0], "(2,")
+		})
+	}
+}
+
 func TestLeaveOutPastTheLimit(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)

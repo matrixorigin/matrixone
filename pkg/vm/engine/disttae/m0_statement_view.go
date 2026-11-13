@@ -144,7 +144,7 @@ func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset i
 		}
 	}
 	if txn.deletedBlocks != nil {
-		for _, blocks := range txn.deletedBlocks.byTable {
+		for _, blocks := range txn.deletedBlocks.offsets {
 			budget += 256
 			for _, offs := range blocks {
 				budget += 256 + uint64(len(offs))*8
@@ -213,7 +213,7 @@ func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset i
 	}
 	v.deleted = make(map[uint64]map[types.Blockid][]int64)
 	if txn.deletedBlocks != nil {
-		for table, blocks := range txn.deletedBlocks.byTable {
+		for table, blocks := range txn.deletedBlocks.offsets {
 			copyBlocks := make(map[types.Blockid][]int64, len(blocks))
 			for block, offs := range blocks {
 				copyBlocks[block] = slices.Clone(offs)
