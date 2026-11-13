@@ -172,6 +172,9 @@ type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 
+// CatalogUpgradeKey marks internal catalog migration statements.
+type CatalogUpgradeKey struct{}
+
 func IsInternalExecutor(ctx context.Context) bool {
 	if v := ctx.Value(InternalExecutorKey{}); v != nil {
 		return v.(bool)
