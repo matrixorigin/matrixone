@@ -91,8 +91,8 @@ func TestSharedCandidateCannotJoinIndexIteration(t *testing.T) {
 func TestIndexCandidatesShareOnlyEqualBudgets(t *testing.T) {
 	table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
 	watermark := types.BuildTS(10, 0)
-	for i, target := range []int{0, DefaultTargetChangeRows, 200_000} {
-		name := []string{"index_a", "index_b", "index_c"}[i]
+	for i, target := range []int{0, 100_000, 100_000, 200_000} {
+		name := []string{"index_a", "index_b", "index_c", "index_d"}[i]
 		_, err := table.AddOrUpdateSinker(context.Background(), name,
 			&JobSpec{ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync)},
 				TriggerSpec: TriggerSpec{JobType: TriggerType_AlwaysUpdate, TargetRows: target}},
@@ -100,13 +100,13 @@ func TestIndexCandidatesShareOnlyEqualBudgets(t *testing.T) {
 		require.NoError(t, err)
 	}
 	iters, _ := table.getCandidate()
-	require.Len(t, iters, 2)
+	require.Len(t, iters, 3)
 	for _, iter := range iters {
 		switch len(iter.jobNames) {
 		case 1:
-			require.Equal(t, "index_c", iter.jobNames[0])
+			require.Contains(t, []string{"index_a", "index_d"}, iter.jobNames[0])
 		case 2:
-			require.ElementsMatch(t, []string{"index_a", "index_b"}, iter.jobNames)
+			require.ElementsMatch(t, []string{"index_b", "index_c"}, iter.jobNames)
 		default:
 			t.Fatalf("unexpected index grouping: %v", iter.jobNames)
 		}

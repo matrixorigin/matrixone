@@ -25,11 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const DefaultTargetChangeRows = 100_000
-
 func indexTargetRows(spec *TriggerSpec) int {
-	if spec == nil || spec.TargetRows == 0 {
-		return DefaultTargetChangeRows
+	if spec == nil {
+		return 0
 	}
 	return spec.TargetRows
 }
@@ -58,6 +56,22 @@ func rowBudgetForJobs(specs []*JobSpec) (int, error) {
 		targetSet = true
 	}
 	return target, nil
+}
+
+// Keep the scheduled range intact when a probe fails so the same iteration
+// context can be retried with a fresh source transaction.
+func selectRowBudgetForIteration(
+	ctx context.Context,
+	iterCtx *IterationContext,
+	target int,
+	probe func(context.Context, types.TS, types.TS, int) (int, error),
+) (int, error) {
+	selectedTo, rows, err := selectRowBudgetTo(ctx, iterCtx.fromTS, iterCtx.toTS, target, probe)
+	if err != nil {
+		return 0, err
+	}
+	iterCtx.toTS = selectedTo
+	return rows, nil
 }
 
 // selectRowBudgetTo probes complete timestamp prefixes under one source
