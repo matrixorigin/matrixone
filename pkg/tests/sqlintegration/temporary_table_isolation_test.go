@@ -50,16 +50,31 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 		require.NoError(t, err)
 		defer attacker.Close()
 
-		exec := func(conn *sql.Conn, statement string, args ...any) {
+		exec := func(t *testing.T, ctx context.Context, conn *sql.Conn, statement string, args ...any) {
 			t.Helper()
 			_, err := conn.ExecContext(ctx, statement, args...)
 			require.NoError(t, err, statement)
 		}
-		exec(owner, "create database "+schema)
-		exec(owner, "use "+schema)
-		exec(attacker, "use "+schema)
-		exec(owner, "create temporary table victim_t(id int primary key, v varchar(32))")
-		exec(owner, "insert into victim_t values (1, 'owner')")
+		cleanup := func(t *testing.T, conn *sql.Conn, statement string) {
+			t.Helper()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cleanupCancel()
+			if _, err := conn.ExecContext(cleanupCtx, statement); err != nil {
+				t.Errorf("cleanup %s: %v", statement, err)
+			}
+		}
+		run := func(name string, scenario func(*testing.T, context.Context)) bool {
+			return t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
+				scenario(t, ctx)
+			})
+		}
+		exec(t, ctx, owner, "create database "+schema)
+		exec(t, ctx, owner, "use "+schema)
+		exec(t, ctx, attacker, "use "+schema)
+		exec(t, ctx, owner, "create temporary table victim_t(id int primary key, v varchar(32))")
+		exec(t, ctx, owner, "insert into victim_t values (1, 'owner')")
 
 		var physical string
 		require.NoError(t, owner.QueryRowContext(ctx,
@@ -72,7 +87,7 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", schema, physical).Scan(&visible))
 		require.Zero(t, visible, "foreign temporary roots must not be enumerable")
 
-		assertMySQLError := func(statement string, want ...uint16) {
+		assertMySQLError := func(t *testing.T, ctx context.Context, statement string, want ...uint16) {
 			t.Helper()
 			_, err := attacker.ExecContext(ctx, statement)
 			var sqlErr *mysql.MySQLError
@@ -84,16 +99,16 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			}
 			require.Failf(t, "unexpected MySQL error", "%s returned %d", statement, sqlErr.Number)
 		}
-		assertMySQLError("select * from "+qualified, 1146)
-		assertMySQLError("insert into "+qualified+" values (2, 'attacker')", 1146)
-		assertMySQLError("drop table "+qualified, 1051, 1146)
+		assertMySQLError(t, ctx, "select * from "+qualified, 1146)
+		assertMySQLError(t, ctx, "insert into "+qualified+" values (2, 'attacker')", 1146)
+		assertMySQLError(t, ctx, "drop table "+qualified, 1051, 1146)
 
 		var count int
 		require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from victim_t").Scan(&count))
 		require.Equal(t, 1, count)
-		exec(owner, "drop temporary table victim_t")
-		exec(owner, "create temporary table victim_t(id int primary key, v varchar(32))")
-		exec(owner, "insert into victim_t values (2, 'recreated')")
+		exec(t, ctx, owner, "drop temporary table victim_t")
+		exec(t, ctx, owner, "create temporary table victim_t(id int primary key, v varchar(32))")
+		exec(t, ctx, owner, "insert into victim_t values (2, 'recreated')")
 		require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from victim_t").Scan(&count))
 		require.Equal(t, 1, count)
 
@@ -101,13 +116,15 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 		// roots. A permanent table with the same generated-name shape remains
 		// visible to the other session.
 		permanent := "__mo_tmp_00112233445566778899aabbccddeeff_" + schema + "_x"
-		exec(owner, "create table `"+permanent+"` (id int)")
-		defer exec(owner, "drop table `"+permanent+"`")
+		exec(t, ctx, owner, "create table `"+permanent+"` (id int)")
+		defer cleanup(t, owner, "drop table `"+permanent+"`")
 		require.NoError(t, attacker.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", schema, permanent).Scan(&visible))
 		require.Equal(t, 1, visible)
+		// Each scenario owns its work budget; teardown is independent of both.
+		cancel()
 
-		t.Run("create_index_keeps_owner", func(t *testing.T) {
+		if !run("create_index_keeps_owner", func(t *testing.T, ctx context.Context) {
 			_, err := owner.ExecContext(ctx, "create index idx_v on victim_t(v)")
 			require.NoError(t, err)
 			var value string
@@ -126,21 +143,34 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			_, err = owner.ExecContext(ctx, "insert into victim_t values(3, 'recreated')")
 			require.ErrorAs(t, err, &sqlErr)
 			require.EqualValues(t, 1062, sqlErr.Number)
-		})
+		}) {
+			return
+		}
 
-		t.Run("inline_index_survives_alter", func(t *testing.T) {
-			exec(owner, "create temporary table alter_t(id int primary key, v varchar(32), unique index uk(v))")
-			exec(owner, "insert into alter_t values(1, 'hello')")
-			exec(owner, "alter table alter_t rename to renamed_t")
-			defer exec(owner, "drop table renamed_t")
-			exec(owner, "insert into renamed_t values(2, 'world')")
-			exec(owner, "alter table renamed_t add index secondary_v(v), algorithm=inplace")
-			exec(owner, "insert into renamed_t values(6, 'added')")
-			exec(owner, "alter table renamed_t drop index secondary_v, algorithm=inplace")
-			exec(owner, "alter table renamed_t add column extra int, algorithm=copy")
-			exec(owner, "insert into renamed_t(id,v) values(3, 'copy')")
-			exec(owner, "truncate table renamed_t")
-			exec(owner, "insert into renamed_t(id,v) values(4, 'truncate')")
+		if !run("inline_index_survives_alter", func(t *testing.T, ctx context.Context) {
+			exec(t, ctx, owner, "create temporary table alter_t(id int primary key, v varchar(32), unique index uk(v))")
+			currentName := "alter_t"
+			defer func() {
+				if !t.Failed() {
+					cleanup(t, owner, "drop temporary table "+currentName)
+					return
+				}
+				// An interrupted rename may have committed even if its response
+				// was lost. Both names belong to this temporary-table fixture.
+				cleanup(t, owner, "drop temporary table if exists renamed_t")
+				cleanup(t, owner, "drop temporary table if exists alter_t")
+			}()
+			exec(t, ctx, owner, "insert into alter_t values(1, 'hello')")
+			exec(t, ctx, owner, "alter table alter_t rename to renamed_t")
+			currentName = "renamed_t"
+			exec(t, ctx, owner, "insert into renamed_t values(2, 'world')")
+			exec(t, ctx, owner, "alter table renamed_t add index secondary_v(v), algorithm=inplace")
+			exec(t, ctx, owner, "insert into renamed_t values(6, 'added')")
+			exec(t, ctx, owner, "alter table renamed_t drop index secondary_v, algorithm=inplace")
+			exec(t, ctx, owner, "alter table renamed_t add column extra int, algorithm=copy")
+			exec(t, ctx, owner, "insert into renamed_t(id,v) values(3, 'copy')")
+			exec(t, ctx, owner, "truncate table renamed_t")
+			exec(t, ctx, owner, "insert into renamed_t(id,v) values(4, 'truncate')")
 			var v string
 			require.NoError(t, owner.QueryRowContext(ctx, "select v from renamed_t").Scan(&v))
 			require.Equal(t, "truncate", v)
@@ -148,20 +178,24 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			var sqlErr *mysql.MySQLError
 			require.ErrorAs(t, err, &sqlErr)
 			require.EqualValues(t, 1062, sqlErr.Number)
-		})
+		}) {
+			return
+		}
 
-		t.Run("permanent_prefix_view", func(t *testing.T) {
-			exec(owner, "create table __mo_tmp(id int)")
-			defer exec(owner, "drop table __mo_tmp")
-			exec(owner, "insert into __mo_tmp values(7)")
-			exec(owner, "create view permanent_view as select * from __mo_tmp")
-			defer exec(owner, "drop view permanent_view")
+		if !run("permanent_prefix_view", func(t *testing.T, ctx context.Context) {
+			exec(t, ctx, owner, "create table __mo_tmp(id int)")
+			defer cleanup(t, owner, "drop table __mo_tmp")
+			exec(t, ctx, owner, "insert into __mo_tmp values(7)")
+			exec(t, ctx, owner, "create view permanent_view as select * from __mo_tmp")
+			defer cleanup(t, owner, "drop view permanent_view")
 			var id int
 			require.NoError(t, attacker.QueryRowContext(ctx, "select id from permanent_view").Scan(&id))
 			require.Equal(t, 7, id)
-		})
+		}) {
+			return
+		}
 
-		t.Run("inline_async_and_background_fulltext", func(t *testing.T) {
+		if !run("inline_async_and_background_fulltext", func(t *testing.T, ctx context.Context) {
 			var original int
 			require.NoError(t, owner.QueryRowContext(ctx, "select @@experimental_fulltext2_index").Scan(&original))
 			service := cn.RawService().(cnservice.Service)
@@ -172,16 +206,21 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 				return ready
 			}, time.Minute, 10*time.Millisecond, "ISCP executor must be ready before pausing")
 			defer func() {
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-				defer cleanupCancel()
+				cleaned := true
 				for _, statement := range []string{
 					"drop table if exists background_t",
 					"drop table if exists async_t",
 					fmt.Sprintf("set experimental_fulltext2_index=%d", original),
 				} {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 					if _, err := owner.ExecContext(cleanupCtx, statement); err != nil {
 						t.Errorf("cleanup %s: %v", statement, err)
+						cleaned = false
 					}
+					cleanupCancel()
+				}
+				if !cleaned {
+					return
 				}
 				require.NoError(t, executor.Resume())
 				restored, ready := iscp.GetExecutorRuntime(service.ID())
@@ -213,12 +252,14 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			var id int
 			require.NoError(t, owner.QueryRowContext(ctx, "select id from background_t where match(body) against('apple')").Scan(&id))
 			require.Equal(t, 1, id)
-			assertMySQLError("select * from `"+schema+"`.`"+physical+"`", 1146)
-		})
+			assertMySQLError(t, ctx, "select * from `"+schema+"`.`"+physical+"`", 1146)
+		}) {
+			return
+		}
 
-		t.Run("clone_preserves_allocator", func(t *testing.T) {
+		if !run("clone_preserves_allocator", func(t *testing.T, ctx context.Context) {
 			for _, sourceKind := range []string{"permanent", "temporary"} {
-				t.Run(sourceKind, func(t *testing.T) {
+				if !t.Run(sourceKind, func(t *testing.T) {
 					exec := func(t *testing.T, statement string) {
 						t.Helper()
 						_, err := owner.ExecContext(ctx, statement)
@@ -229,7 +270,7 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 						qualifier = "temporary "
 					}
 					exec(t, "create "+qualifier+"table owned_clone_source(id bigint auto_increment primary key, v int)")
-					defer exec(t, "drop table owned_clone_source")
+					defer cleanup(t, owner, "drop table owned_clone_source")
 					exec(t, "insert into owned_clone_source values(7, 11)")
 					if sourceKind == "temporary" {
 						var physical string
@@ -243,23 +284,27 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 						require.EqualValues(t, 1064, sqlErr.Number)
 					}
 					for _, destinationKind := range []string{"temporary", "permanent"} {
-						t.Run(destinationKind+"_destination", func(t *testing.T) {
+						if !t.Run(destinationKind+"_destination", func(t *testing.T) {
 							qualifier := ""
 							if destinationKind == "temporary" {
 								qualifier = "temporary "
 							}
 							_, err := owner.ExecContext(ctx, "create "+qualifier+"table owned_clone_target clone owned_clone_source")
 							require.NoError(t, err)
-							defer exec(t, "drop table owned_clone_target")
+							defer cleanup(t, owner, "drop table owned_clone_target")
 							exec(t, "insert into owned_clone_target(v) values(12)")
 							var id, copied int
 							require.NoError(t, owner.QueryRowContext(ctx, "select v from owned_clone_target where id=7").Scan(&copied))
 							require.Equal(t, 11, copied)
 							require.NoError(t, owner.QueryRowContext(ctx, "select id from owned_clone_target where v=12").Scan(&id))
 							require.Equal(t, 8, id)
-						})
+						}) {
+							return
+						}
 					}
-				})
+				}) {
+					return
+				}
 			}
 			_, err := owner.ExecContext(ctx, "create table clone_source(id bigint auto_increment primary key, v int) auto_increment=10")
 			require.NoError(t, err)
@@ -272,14 +317,11 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			var id int
 			require.NoError(t, owner.QueryRowContext(ctx, "select id from clone_target where v=3").Scan(&id))
 			require.Equal(t, 12, id)
-		})
+		}) {
+			return
+		}
 
-		t.Run("clone_subscription_preserves_source_account", func(t *testing.T) {
-			exec := func(conn *sql.Conn, statement string) {
-				t.Helper()
-				_, err := conn.ExecContext(ctx, statement)
-				require.NoError(t, err, statement)
-			}
+		if !run("clone_subscription_preserves_source_account", func(t *testing.T, ctx context.Context) {
 			const (
 				account     = "tmp_clone_subscriber"
 				publisherDB = "tmp_clone_publisher"
@@ -297,22 +339,22 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 					"select count(*) from mo_catalog.mo_account where account_name=?", account).Scan(&remaining))
 				require.Zero(t, remaining, "subscriber account must not leak into the shared fixture")
 			}()
-			exec(owner, "create account "+account+" admin_name 'root' identified by '111'")
-			exec(owner, "create database "+publisherDB)
-			exec(owner, "create table "+publisherDB+".src(id bigint auto_increment primary key, v int)")
-			exec(owner, "insert into "+publisherDB+".src values(7,11)")
+			exec(t, ctx, owner, "create account "+account+" admin_name 'root' identified by '111'")
+			exec(t, ctx, owner, "create database "+publisherDB)
+			exec(t, ctx, owner, "create table "+publisherDB+".src(id bigint auto_increment primary key, v int)")
+			exec(t, ctx, owner, "insert into "+publisherDB+".src values(7,11)")
 			// A publisher's renamed index child must not become subscriber metadata.
-			exec(owner, "create table "+publisherDB+".metadata_source(id int primary key, v int, key iv(v))")
+			exec(t, ctx, owner, "create table "+publisherDB+".metadata_source(id int primary key, v int, key iv(v))")
 			var physicalIndex string
 			require.NoError(t, owner.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='metadata_source') and name='iv' limit 1", publisherDB).Scan(&physicalIndex))
-			exec(owner, "alter table "+publisherDB+"."+sqlquote.Ident(physicalIndex)+" rename to renamed_index")
+			exec(t, ctx, owner, "alter table "+publisherDB+"."+sqlquote.Ident(physicalIndex)+" rename to renamed_index")
 			defer func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
 				_, err := owner.ExecContext(cleanupCtx, "alter table "+publisherDB+".renamed_index rename to "+sqlquote.Ident(physicalIndex))
 				require.NoError(t, err)
 			}()
-			exec(owner, "create publication "+publication+" database "+publisherDB+" account "+account)
+			exec(t, ctx, owner, "create publication "+publication+" database "+publisherDB+" account "+account)
 
 			tenantDB, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
@@ -381,9 +423,11 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			var localNext int
 			require.NoError(t, subscriber.QueryRowContext(ctx, "select id from "+publisherDB+".owner_target where v=23").Scan(&localNext))
 			require.Equal(t, 100, localNext)
-		})
+		}) {
+			return
+		}
 
-		t.Run("fulltext_search_keeps_owner", func(t *testing.T) {
+		if !run("fulltext_search_keeps_owner", func(t *testing.T, ctx context.Context) {
 			_, err := owner.ExecContext(ctx, "create temporary table search_t(id int primary key, title varchar(50), body varchar(100))")
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "insert into search_t values(1, 'apple news', 'red apple'), (2, 'banana news', 'yellow banana')")
@@ -404,16 +448,16 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, owner.QueryRowContext(ctx, "select id from search_clone where match(title, body) against('apple')").Scan(&id))
 			require.Equal(t, 1, id)
-		})
+		}) {
+			return
+		}
 
-		t.Run("clone_vector_index_keeps_owner", func(t *testing.T) {
+		if !run("clone_vector_index_keeps_owner", func(t *testing.T, ctx context.Context) {
 			var originalIVF int
 			require.NoError(t, owner.QueryRowContext(ctx, "select @@experimental_ivf_index").Scan(&originalIVF))
 			_, err := owner.ExecContext(ctx, "set experimental_ivf_index=1")
 			require.NoError(t, err)
-			defer func() {
-				_, _ = owner.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("set experimental_ivf_index=%d", originalIVF))
-			}()
+			defer cleanup(t, owner, fmt.Sprintf("set experimental_ivf_index=%d", originalIVF))
 			_, err = owner.ExecContext(ctx, "create table vector_source(id int primary key, v vecf32(3))")
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "insert into vector_source values(1, '[1,2,3]'), (2, '[2,2,3]')")
@@ -425,18 +469,22 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			var id int
 			require.NoError(t, owner.QueryRowContext(ctx, "select id from vector_target order by l2_distance(v, '[2,2,3]') limit 1").Scan(&id))
 			require.Equal(t, 2, id)
-		})
+		}) {
+			return
+		}
 
-		t.Run("procedure_temporary_lifecycle", func(t *testing.T) {
+		if !run("procedure_temporary_lifecycle", func(t *testing.T, ctx context.Context) {
 			_, err := owner.ExecContext(ctx, "create procedure temp_lifecycle() 'begin create temporary table proc_t(id int); insert into proc_t values(1); drop table proc_t; end'")
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "call temp_lifecycle()")
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "call temp_lifecycle()")
 			require.NoError(t, err, "procedure must release its temporary alias")
-		})
+		}) {
+			return
+		}
 
-		t.Run("drop_database_removes_temporary_catalog", func(t *testing.T) {
+		run("drop_database_removes_temporary_catalog", func(t *testing.T, ctx context.Context) {
 			const dropped = "tmp_iso_drop"
 			_, err := owner.ExecContext(ctx, "create database "+dropped)
 			require.NoError(t, err)
@@ -449,7 +497,7 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			require.NoError(t, owner.QueryRowContext(ctx, "select dat_id from mo_catalog.mo_database where datname=?", dropped).Scan(&databaseID))
 			_, err = owner.ExecContext(ctx, "begin")
 			require.NoError(t, err)
-			defer func() { _, _ = owner.ExecContext(context.WithoutCancel(ctx), "rollback") }()
+			defer cleanup(t, owner, "rollback")
 			_, err = owner.ExecContext(ctx, "drop database "+dropped)
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "rollback")

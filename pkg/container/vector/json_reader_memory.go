@@ -18,12 +18,40 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// JSONReaderMemoryAdmission charges non-MPool reader allocations to a statement budget.
+// JSONReaderMemoryAdmission charges reader memory to a statement budget,
+// including physical allocations when no AllocationAccount is available.
 // A successful reservation returns exactly one release function. The callback
 // does not attest that any bytes are valid or immutable.
 type JSONReaderMemoryAdmission func(uint64) (func(), error)
+
+// JSONReaderAllocationSelection supplies physical allocation provenance when
+// the caller has a transient budget but no statement allocation account.
+// It is an allocation policy only; it never confers JSON reader authority.
+func JSONReaderAllocationSelection(selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission) *AllocationAccountSelection {
+	if selection == nil && admission != nil {
+		return &AllocationAccountSelection{transient: admission}
+	}
+	return selection
+}
+
+func (s *AllocationAccountSelection) admitPhysical(size uint64) (func(), error) {
+	// MPool records the requested physical capacity exactly. The extra
+	// allowance covers the registry entry and opaque release token.
+	if size > math.MaxUint64-256 {
+		return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
+	}
+	return ReserveJSONReaderMetadata(nil, s.transient, size+256)
+}
+
+func makeSelectedSlice[T any](s *AllocationAccountSelection, n int, mp *mpool.MPool, site mpool.AllocationSite) ([]T, error) {
+	if s.transient != nil {
+		return mpool.MakeSliceAdmitted[T](n, mp, s.admitPhysical)
+	}
+	return mpool.MakeSliceAccountedWithCapacityClass[T](n, mp, s.account, s.owner, site, s.capacityClass)
+}
 
 // JSONReaderMetadataCapacity conservatively covers Go size-class rounding,
 // the admission token and its release closure in addition to object sizes.
@@ -55,6 +83,9 @@ func ReserveJSONReaderMetadata(selection *AllocationAccountSelection, admission 
 	if selection != nil {
 		if err := selection.validate(); err != nil {
 			return nil, err
+		}
+		if selection.transient != nil {
+			return ReserveJSONReaderMetadata(nil, selection.transient, capacity)
 		}
 		reservation, err := selection.account.ReserveCapacityWithClass(capacity, selection.capacityClass, selection.owner, selection.dataSite)
 		if err != nil {

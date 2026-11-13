@@ -265,6 +265,7 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 		return nil, false, err
 	}
 	defer func() { releaseJSONReaderMetadata(ownerMeta) }()
+	selection = JSONReaderAllocationSelection(selection, admission)
 	var private *Vector
 	if source.IsDictionary() {
 		private, err = source.materializeDictionaryWithBuilder(mp, selection, buildPrivateJSONVarlena)
@@ -323,6 +324,7 @@ func NewJSONReaderBuilder(mp *mpool.MPool, selection *AllocationAccountSelection
 	if err != nil {
 		return nil, err
 	}
+	selection = JSONReaderAllocationSelection(selection, admission)
 	column, err := NewOffHeapVecWithTypeAndAllocation(types.T_json.ToType(), selection)
 	if err != nil {
 		releaseJSONReaderMetadata(ownerMeta)

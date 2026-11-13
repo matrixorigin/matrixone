@@ -33,13 +33,14 @@ type jsonReadSetKey struct{}
 // Vector addresses. Unsupported row transformations disable the entire scope.
 // Published handles are owned here until Close; consumers must retain them.
 type JSONReadSet struct {
-	selection *vector.AllocationAccountSelection
-	cachePin  JSONCachePinAdmission
-	scopeMeta func()
-	requested []int
-	sequences map[uint16]int
-	readers   map[int]vector.JSONReader
-	disabled  bool
+	selection          *vector.AllocationAccountSelection
+	transientSelection *vector.AllocationAccountSelection
+	cachePin           JSONCachePinAdmission
+	scopeMeta          func()
+	requested          []int
+	sequences          map[uint16]int
+	readers            map[int]vector.JSONReader
+	disabled           bool
 }
 
 // NewJSONReadSetWithAdmission reserves the read scope's control maps and slice
@@ -63,6 +64,7 @@ func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAcco
 	set := NewJSONReadSet(columns, selection)
 	set.cachePin = admission
 	set.scopeMeta = release
+	set.transientSelection = vector.JSONReaderAllocationSelection(selection, admission)
 	return set, nil
 }
 
@@ -71,6 +73,7 @@ func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAcco
 func (set *JSONReadSet) SetCachePinAdmission(admission JSONCachePinAdmission) {
 	if set != nil && !set.disabled {
 		set.cachePin = admission
+		set.transientSelection = vector.JSONReaderAllocationSelection(set.selection, admission)
 	}
 }
 
@@ -85,6 +88,7 @@ func NewJSONReadSet(columns []int, selections ...*vector.AllocationAccountSelect
 	set := &JSONReadSet{requested: append([]int(nil), columns...), readers: make(map[int]vector.JSONReader)}
 	if len(selections) != 0 {
 		set.selection = selections[0]
+		set.transientSelection = selections[0]
 	}
 	return set
 }
@@ -164,6 +168,7 @@ func (set *JSONReadSet) Disable() {
 	set.sequences = nil
 	set.requested = nil
 	set.cachePin = nil
+	set.transientSelection = nil
 	if set.scopeMeta != nil {
 		set.scopeMeta()
 		set.scopeMeta = nil
@@ -210,7 +215,7 @@ func (set *JSONReadSet) ApplyDeletes(deleted []int64, mp *mpool.MPool) (err erro
 			return moerr.NewInvalidInputNoCtx("invalid JSON publication delete mapping")
 		}
 	}
-	kept, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), set.selection)
+	kept, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), set.transientSelection)
 	if err != nil {
 		return err
 	}

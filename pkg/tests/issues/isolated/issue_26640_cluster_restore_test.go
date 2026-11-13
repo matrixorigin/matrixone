@@ -80,15 +80,7 @@ func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
 		subscriptionDB    = "issue_26640_subscription"
 		publicationName   = "issue_26640_publication"
 	)
-	cleanup := func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+snapshotName)
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+publisherAccount+"`")
-		execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+subscriberAccount+"`")
-	}
-	cleanup()
-	defer cleanup()
+	// This cluster is private to the test and is not restarted after Close.
 
 	execSQLRequire(t, ctx, sysDB,
 		"create account `"+publisherAccount+"` admin_name 'admin' identified by '111'")
@@ -397,7 +389,8 @@ func runIssue28742RestoreWithMetadataProbe(
 	}, 30*time.Second, 10*time.Millisecond,
 		"restore did not reach the lifecycle coordination barrier")
 
-	probeCtx, cancelProbe := context.WithTimeout(ctx, 120*time.Second)
+	// The probe must remain live while the restore owns the lifecycle gate.
+	probeCtx, cancelProbe := context.WithCancel(ctx)
 	defer cancelProbe()
 	go func() {
 		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
