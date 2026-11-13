@@ -22,6 +22,25 @@ The branch design revision and separate root self-review are in
 [data_branch_identity_42_review_r1.md](data_branch_identity_42_review_r1.md).
 They precede implementation; they are not independent external approval.
 
+## Stage URI and error boundary
+
+The backport extends accepted Stage references. Existing valid host-form URIs
+such as `stage://simple/file.csv` remain supported; a path-form URI such as
+`stage:///two%20words/file.csv`, previously rejected as having an empty host,
+now addresses the logical Stage `two words`. The first path segment is decoded
+once, so `%2F` belongs to the name and `%252F` represents a literal `%2F`.
+Empty names remain invalid, and dot-only names use the host form. See the
+[Stage guide](../../clients/python/docs/stage_guide.rst) for examples, the
+existing SDK helper limitation, and the all-CN upgrade requirement.
+
+The CI Datalink regression exposed a separate missing-process error path after
+path-form parsing succeeded. Catalog lookup now returns an internal error when
+its process, process base or Stage cache is absent, instead of dereferencing it.
+This does not turn malformed Datalink ranges such as `size=c` into valid input;
+the range error is checked with an initialized Stage cache. Host and path forms,
+all four public Datalink consumers, and the original failing input retain error
+coverage.
+
 ## Ownership, concurrency and restore boundaries
 
 Branch DELETE owns one pessimistic transaction and the existing mo_database
@@ -62,6 +81,10 @@ tables. Only that expected header changes. The original DDL bound, empty row set
 permissions and rejected local-file operations are retained. Combined ALTER now
 succeeds; only its five obsolete rejection rows are removed from the existing
 Stage/snapshot goldens, with all SQL and subsequent catalog assertions preserved.
+The original metadata audit did not include four saved `result_scan` expectations:
+three `INT(32)` cells and one `bool` DDL string now match the direct SHOW output
+(`int` and `boolean`, respectively). The SQL and remaining result checks are
+unchanged.
 
 ## Upgrade and release limits
 

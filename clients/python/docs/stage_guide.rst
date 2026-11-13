@@ -19,6 +19,34 @@ Stages enable:
 * ✅ **Transaction support** - atomic stage operations with ``session()``
 * ✅ **Security** - store credentials separately from queries
 
+Stage URI syntax and 4.2 compatibility
+--------------------------------------
+
+A Stage can be referenced with the existing host form, such as
+``stage://simple/file.csv``. The 4.2 server backport also accepts the path form
+``stage:///encoded-name/file.csv`` for logical Stage names that cannot be used
+as URL hosts. For example, ``stage:///two%20words/file.csv`` refers to the Stage
+named ``two words`` and its file ``file.csv``.
+
+The server percent-decodes the first path segment once. An encoded slash remains
+part of the name: ``stage:///part%2Fname/file.csv`` refers to ``part/name``.
+Similarly, ``stage:///literal%252F/file.csv`` refers to ``literal%2F``. The
+remaining path identifies the file. Dot-only names (``.`` and ``..``) use the
+existing host form. An empty Stage name, user information or a fragment in the
+path form is rejected. Catalog, Stage status and file-access checks still apply.
+
+The published 4.2.8 server does not support the path form. Upgrade every CN to
+a 4.2 release containing this backport before using it. The existing 4.2 SDK
+``read_csv_stage`` and ``to_csv_stage`` helpers build host-form URLs without
+encoding the name. For names needing path form, construct a URI and pass it to
+a method accepting a full URI, for example::
+
+   from urllib.parse import quote
+
+   stage_name = 'two words'  # an existing Stage
+   uri = f"stage:///{quote(stage_name, safe='')}/file.csv"
+   client.load_data.read_csv(uri, table='target_table')
+
 Creating Stages with Simple Interfaces (Recommended)
 -----------------------------------------------------
 
