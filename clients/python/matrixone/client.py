@@ -440,6 +440,7 @@ class Client(BaseMatrixOneClient):
                 ssl_key=ssl_key,
                 account=account,
                 role=role,
+                auto_commit=self.auto_commit,
             )
 
     def get_capabilities(self, refresh=False):
@@ -467,7 +468,7 @@ class Client(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -524,17 +525,19 @@ class Client(BaseMatrixOneClient):
         from .capabilities import validate_overrides
 
         overrides = validate_overrides(capability_overrides)
-        from ._connection_options import positive_timeout
+        from ._connection_options import positive_timeout, resolve_auto_commit
 
         positive_timeout(self.query_timeout, 'query_timeout')
         timeout = self.connection_timeout if connection_timeout is None else connection_timeout
         positive_timeout(timeout, 'connection_timeout')
+        auto_commit = resolve_auto_commit(auto_commit, self.auto_commit)
         if ssl_mode not in ('disabled', 'preferred', 'required'):
             raise ValueError('ssl_mode must be disabled, preferred or required')
         if self._engine is not None:
             self.disconnect()
         self._reset_compatibility(overrides)
         self.connection_timeout = timeout
+        self.auto_commit = auto_commit
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
 
@@ -773,6 +776,7 @@ class Client(BaseMatrixOneClient):
         from ._local_infile import connection_options, configure_engine
 
         connect_args = {
+            'autocommit': self._connection_params.get('autocommit', self.auto_commit),
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
@@ -905,9 +909,7 @@ class Client(BaseMatrixOneClient):
 
         return sql_string_token(value, context='Administrative SQL')
 
-    def _build_login_info(
-        self, user: str, account: Optional[str] = None, role: Optional[str] = None
-    ) -> tuple[str, dict]:
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1431,8 +1433,12 @@ class Client(BaseMatrixOneClient):
                         # Escape % to %% for pymysql's format string handling in exec_driver_sql
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
+                            from ._driver_execution import driver_parameters
+
                             result = conn.exec_driver_sql(
-                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                                escaped_sql,
+                                driver_parameters(params),
+                                execution_options={'no_parameters': params is None},
                             )
                         else:
                             result = conn.exec_driver_sql(escaped_sql)
@@ -1486,9 +1492,7 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = (
-                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
-                )
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -2899,7 +2903,13 @@ class Session(SQLAlchemySession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
-            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            from ._driver_execution import driver_parameters
+
+            return self.connection().exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None},
+            )
         except Exception as error:
             from .client import _classify_db_error
 

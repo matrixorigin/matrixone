@@ -3,6 +3,7 @@
 
 import asyncio
 import ssl
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -35,6 +36,47 @@ def test_success_requires_authenticated_query(monkeypatch):
     assert client._connection_params['connect_timeout'] == 17
     assert client.connected()
     client.disconnect()
+
+
+def test_sync_auto_connect_forwards_disabled_auto_commit(monkeypatch):
+    connect = Mock()
+    monkeypatch.setattr(Client, 'connect', connect)
+    Client(host='localhost', port=6001, user='test', password='synthetic', database='test', auto_commit=False, logger=Mock())
+    assert connect.call_args.kwargs['auto_commit'] is False
+
+
+@pytest.mark.parametrize('initial', [False, True])
+@pytest.mark.parametrize('override', [None, False, True])
+def test_sync_connect_autocommit_resolution(monkeypatch, initial, override):
+    client = Client(logger=Mock(), auto_commit=initial)
+    monkeypatch.setattr(client, '_create_engine', lambda: MagicMock())
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+    client.connect(database='test', auto_commit=override, on_connect=[])
+    expected = initial if override is None else override
+    assert client.auto_commit is expected
+    assert client._connection_params['autocommit'] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('initial', [False, True])
+@pytest.mark.parametrize('override', [None, False, True])
+async def test_async_connect_autocommit_resolution(monkeypatch, initial, override):
+    connection = SimpleNamespace(exec_driver_sql=AsyncMock(), execute=AsyncMock())
+
+    class Context:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *args):
+            return None
+
+    engine = SimpleNamespace(begin=lambda: Context(), dispose=AsyncMock())
+    client = AsyncClient(logger=Mock(), auto_commit=initial)
+    monkeypatch.setattr(client, '_create_async_engine', lambda: engine)
+    await client.connect(database='test', auto_commit=override, on_connect=[])
+    expected = initial if override is None else override
+    assert client.auto_commit is expected
+    assert client._connection_params['autocommit'] is expected
 
 
 @pytest.mark.parametrize('mode', ['disabled', 'preferred', 'required'])
@@ -136,10 +178,11 @@ async def test_async_failed_probe_clears_engine(monkeypatch):
     engine.dispose.assert_awaited_once()
 
 
-def test_driver_receives_sync_timeout_and_charset(monkeypatch):
+@pytest.mark.parametrize('auto_commit', [False, True])
+def test_driver_receives_sync_timeout_and_charset(monkeypatch, auto_commit):
     import matrixone.client as module
 
-    client = Client(logger=Mock(), connection_timeout=12, query_timeout=7)
+    client = Client(logger=Mock(), connection_timeout=12, query_timeout=7, auto_commit=auto_commit)
     client._connection_params = {
         'host': 'localhost',
         'port': 6001,
@@ -157,6 +200,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
     monkeypatch.setattr(module, 'create_engine', factory)
     client._create_engine()
     assert factory.call_args.kwargs['connect_args'] == {
+        'autocommit': auto_commit,
         'connect_timeout': 12,
         'read_timeout': 7,
         'write_timeout': 7,

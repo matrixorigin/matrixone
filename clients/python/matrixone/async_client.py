@@ -407,7 +407,7 @@ class AsyncClient(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -460,17 +460,19 @@ class AsyncClient(BaseMatrixOneClient):
         from .capabilities import validate_overrides
 
         overrides = validate_overrides(capability_overrides)
-        from ._connection_options import positive_timeout
+        from ._connection_options import positive_timeout, resolve_auto_commit
 
         positive_timeout(self.query_timeout, 'query_timeout')
         timeout = self.connection_timeout if connection_timeout is None else connection_timeout
         positive_timeout(timeout, 'connection_timeout')
+        auto_commit = resolve_auto_commit(auto_commit, self.auto_commit)
         if self._engine is not None:
             await self.disconnect()
         if self._analytics is not None:
             self._analytics.reconnect()
         self._reset_compatibility(overrides)
         self.connection_timeout = timeout
+        self.auto_commit = auto_commit
         try:
             # Build final login info based on user parameter and optional account/role
             final_user, parsed_info = self._build_login_info(user, account, role)
@@ -713,6 +715,7 @@ class AsyncClient(BaseMatrixOneClient):
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="rollback",  # Never commit an abandoned borrower
             connect_args={
+                'autocommit': self._connection_params.get('autocommit', self.auto_commit),
                 'connect_timeout': self._connection_params['connect_timeout'],
                 **connection_options(self._connection_params.get('local_infile')),
             },
@@ -868,9 +871,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(
-        self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None
-    ):
+    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1302,8 +1303,12 @@ class AsyncClient(BaseMatrixOneClient):
                         # Escape % to %% for pymysql's format string handling
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
+                            from ._driver_execution import driver_parameters
+
                             result = await conn.exec_driver_sql(
-                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                                escaped_sql,
+                                driver_parameters(params),
+                                execution_options={'no_parameters': params is None},
                             )
                         else:
                             result = await conn.exec_driver_sql(escaped_sql)
@@ -1355,9 +1360,7 @@ class AsyncClient(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = (
-                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
-                )
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Async query execution")
             except Exception as log_err:
@@ -1379,9 +1382,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return substitute_parameters(sql, params, sql_mode=sql_mode)
 
-    def _build_login_info(
-        self, user: str, account: Optional[str] = None, role: Optional[str] = None
-    ) -> tuple[str, dict]:
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -2002,9 +2003,7 @@ class AsyncClient(BaseMatrixOneClient):
         await self.execute(sql)
         return self
 
-    async def create_table_with_index(
-        self, table_name: str, columns: dict, indexes: list = None, **kwargs
-    ) -> "AsyncClient":
+    async def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "AsyncClient":
         """
             Create a table with indexes asynchronously
 

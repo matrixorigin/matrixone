@@ -17,6 +17,14 @@ def positive_timeout(value, name):
     return value
 
 
+def resolve_auto_commit(value, inherited):
+    """Resolve an explicit connection override without losing ``False``."""
+    resolved = inherited if value is None else value
+    if not isinstance(resolved, bool):
+        raise TypeError('auto_commit must be a boolean')
+    return resolved
+
+
 def redact_error(error, password):
     message = str(error)
     if not password:

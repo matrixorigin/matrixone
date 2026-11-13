@@ -61,6 +61,7 @@ from urllib.parse import quote
 
 from dateutil.parser import isoparse
 
+from .exceptions import QueryError
 from ._sql_literals import sql_literal, sql_object_name, sql_string_token
 from ._utils import rows_from_result
 
@@ -297,6 +298,11 @@ class BaseCDCManager:
             raise ValueError("task_name is required")
         return f"SHOW CDC TASK {sql_object_name(task_name)}"
 
+    @classmethod
+    def _build_list_sql(cls) -> str:
+        """Read through the tenant-aware CDC interface, not catalog tables."""
+        return cls._build_show_all_sql()
+
     @staticmethod
     def _build_select_tasks_sql(task_name: Optional[str] = None) -> str:
         base_sql = (
@@ -320,6 +326,17 @@ class BaseCDCManager:
         if task_name:
             base_sql += f" AND t.task_name = {sql_literal(task_name)}"
         return base_sql
+
+    @staticmethod
+    def _catalog_unavailable(error: QueryError) -> bool:
+        """Recognize only CDC catalog visibility errors, not arbitrary query failures."""
+        message = str(error).lower()
+        if 'mo_cdc_task' not in message and 'mo_cdc_watermark' not in message:
+            return False
+        return error.errno in (1044, 1045, 1146, 20403) or any(
+            phrase in message
+            for phrase in ('does not exist', "doesn't exist", 'no such table', 'access denied', 'permission denied')
+        )
 
     @staticmethod
     def _normalise_table_mappings(table_mappings) -> str:
@@ -387,13 +404,12 @@ class BaseCDCManager:
                 value_str = "true" if value else "false"
             else:
                 value_str = str(value)
-            option_pairs.append(
-                sql_string_token(key_str, context='CDC') + '=' + sql_string_token(value_str, context='CDC')
-            )
+            option_pairs.append(sql_string_token(key_str, context='CDC') + '=' + sql_string_token(value_str, context='CDC'))
 
         return "{" + ", ".join(option_pairs) + "}"
 
-    def _rows_to_tasks(self, rows: Iterable[Sequence[Any]]) -> List[CDCTaskInfo]:
+    def _catalog_rows_to_tasks(self, rows: Iterable[Sequence[Any]]) -> List[CDCTaskInfo]:
+        """Preserve the complete metadata contract for catalog-capable callers."""
         tasks: List[CDCTaskInfo] = []
         for row in rows or []:
             (
@@ -418,10 +434,7 @@ class BaseCDCManager:
             if tables:
                 try:
                     parsed_tables = json.loads(tables)
-                    if isinstance(parsed_tables, dict):
-                        table_mapping = parsed_tables.get("table") or tables
-                    else:
-                        table_mapping = tables
+                    table_mapping = parsed_tables.get("table") or tables if isinstance(parsed_tables, dict) else tables
                 except (json.JSONDecodeError, TypeError):
                     table_mapping = tables
 
@@ -432,7 +445,7 @@ class BaseCDCManager:
                     if isinstance(parsed, dict):
                         parsed_additional = parsed
                 except (json.JSONDecodeError, TypeError):
-                    parsed_additional = None
+                    pass
 
             tasks.append(
                 CDCTaskInfo(
@@ -454,7 +467,7 @@ class BaseCDCManager:
             )
         return tasks
 
-    def _rows_to_watermarks(self, rows: Iterable[Sequence[Any]]) -> List[CDCWatermarkInfo]:
+    def _catalog_rows_to_watermarks(self, rows: Iterable[Sequence[Any]]) -> List[CDCWatermarkInfo]:
         watermarks: List[CDCWatermarkInfo] = []
         for row in rows or []:
             task_id, task_name, db_name, table_name, watermark, err_msg = row
@@ -470,6 +483,84 @@ class BaseCDCManager:
                 )
             )
         return watermarks
+
+    def _rows_to_tasks(self, rows: Iterable[Sequence[Any]], task_name: Optional[str] = None) -> List[CDCTaskInfo]:
+        """Convert the eight columns exposed by ``SHOW CDC``.
+
+        The server intentionally exposes less metadata than its internal catalog.
+        Fields outside that public contract remain ``None`` instead of requiring
+        catalog privileges that ordinary tenants do not have.
+        """
+        tasks: List[CDCTaskInfo] = []
+        for row in rows or []:
+            task_id, name, source_uri, sink_uri, state, err_msg, checkpoint, snapshot_ts = row
+            if task_name is not None and name != task_name:
+                continue
+            sink_type = None
+            try:
+                sink_info = json.loads(sink_uri) if sink_uri else None
+                if isinstance(sink_info, dict):
+                    sink_type = sink_info.get("_") or sink_info.get("sink_type")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            tasks.append(
+                CDCTaskInfo(
+                    task_id=task_id,
+                    task_name=name,
+                    source_uri=source_uri,
+                    sink_uri=sink_uri,
+                    sink_type=sink_type,
+                    table_mapping=None,
+                    state=state,
+                    checkpoint=checkpoint,
+                    err_msg=err_msg,
+                    created_time=None,
+                    raw_row=row,
+                )
+            )
+        return tasks
+
+    def _rows_to_watermarks(self, rows: Iterable[Sequence[Any]], task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
+        watermarks: List[CDCWatermarkInfo] = []
+        for task in self._rows_to_tasks(rows, task_name):
+            for database, table, watermark, err_msg in self._parse_watermarks(task.checkpoint):
+                values = (task.task_id, task.task_name, database, table, watermark, err_msg)
+                watermarks.append(CDCWatermarkInfo(*values, raw_row=values))
+        return watermarks
+
+    @staticmethod
+    def _parse_watermarks(checkpoint) -> List[tuple]:
+        """Parse ``SHOW CDC`` watermarks, including multiline sink errors."""
+        if not checkpoint:
+            return []
+        payload = str(checkpoint)
+        entry_start = re.compile(r'(?m)^\s*"(?P<qualified>[^"\r\n]+)":\s*')
+        entries = list(entry_start.finditer(payload))
+        if not entries:
+            if re.fullmatch(r'\s*\{\s*\}\s*', payload):
+                return []
+            raise ValueError("Invalid CDC watermark payload")
+        closing = re.search(r'(?m)^\s*\}\s*$', payload)
+        payload_end = closing.start() if closing else len(payload)
+        parsed = []
+        for index, entry in enumerate(entries):
+            if entry.start() >= payload_end:
+                break
+            body_end = entries[index + 1].start() if index + 1 < len(entries) else payload_end
+            body = payload[entry.end() : body_end].strip()
+            if body.endswith(','):
+                body = body[:-1].rstrip()
+            match = re.fullmatch(
+                r'(?P<watermark>.*?)(?:\(Failed, error:\s*(?P<error>.*)\))?',
+                body,
+                flags=re.DOTALL,
+            )
+            qualified = entry.group('qualified')
+            if not match or not match.group('watermark') or '.' not in qualified:
+                raise ValueError(f"Invalid CDC watermark entry for {qualified!r}")
+            database, table = qualified.rsplit('.', 1)
+            parsed.append((database, table, match.group('watermark'), match.group('error')))
+        return parsed
 
 
 class CDCManager(BaseCDCManager):
@@ -743,11 +834,16 @@ class CDCManager(BaseCDCManager):
         return self._get_executor().execute(sql)
 
     def list(self, task_name: Optional[str] = None) -> List[CDCTaskInfo]:
-        """Return CDC tasks as :class:`CDCTaskInfo` objects."""
-        sql = self._build_select_tasks_sql(task_name)
-        result = self._get_executor().execute(sql)
-        rows = rows_from_result(result)
-        return self._rows_to_tasks(rows)
+        """Return complete task metadata, falling back to tenant-visible SHOW rows."""
+        try:
+            result = self._get_executor().execute(self._build_select_tasks_sql(task_name))
+        except QueryError as error:
+            if not self._catalog_unavailable(error):
+                raise
+        else:
+            return self._catalog_rows_to_tasks(rows_from_result(result))
+        result = self._get_executor().execute(self._build_list_sql())
+        return self._rows_to_tasks(rows_from_result(result), task_name or None)
 
     def get(self, task_name: str) -> CDCTaskInfo:
         """Retrieve a single CDC task or raise :class:`ValueError`."""
@@ -765,11 +861,16 @@ class CDCManager(BaseCDCManager):
             return False
 
     def list_watermarks(self, task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
-        """Return CDC watermark rows as :class:`CDCWatermarkInfo`."""
-        sql = self._build_select_watermarks_sql(task_name)
-        result = self._get_executor().execute(sql)
-        rows = rows_from_result(result)
-        return self._rows_to_watermarks(rows)
+        """Return structured catalog watermarks or tenant-visible SHOW watermarks."""
+        try:
+            result = self._get_executor().execute(self._build_select_watermarks_sql(task_name))
+        except QueryError as error:
+            if not self._catalog_unavailable(error):
+                raise
+        else:
+            return self._catalog_rows_to_watermarks(rows_from_result(result))
+        result = self._get_executor().execute(self._build_list_sql())
+        return self._rows_to_watermarks(rows_from_result(result), task_name or None)
 
     # ------------------------------------------------------------------
     # Operational helpers
@@ -972,10 +1073,15 @@ class AsyncCDCManager(BaseCDCManager):
         return await self._get_executor().execute(sql)
 
     async def list(self, task_name: Optional[str] = None) -> List[CDCTaskInfo]:
-        sql = self._build_select_tasks_sql(task_name)
-        result = await self._get_executor().execute(sql)
-        rows = rows_from_result(result)
-        return self._rows_to_tasks(rows)
+        try:
+            result = await self._get_executor().execute(self._build_select_tasks_sql(task_name))
+        except QueryError as error:
+            if not self._catalog_unavailable(error):
+                raise
+        else:
+            return self._catalog_rows_to_tasks(rows_from_result(result))
+        result = await self._get_executor().execute(self._build_list_sql())
+        return self._rows_to_tasks(rows_from_result(result), task_name or None)
 
     async def get(self, task_name: str) -> CDCTaskInfo:
         tasks = await self.list(task_name)
@@ -991,7 +1097,12 @@ class AsyncCDCManager(BaseCDCManager):
             return False
 
     async def list_watermarks(self, task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
-        sql = self._build_select_watermarks_sql(task_name)
-        result = await self._get_executor().execute(sql)
-        rows = rows_from_result(result)
-        return self._rows_to_watermarks(rows)
+        try:
+            result = await self._get_executor().execute(self._build_select_watermarks_sql(task_name))
+        except QueryError as error:
+            if not self._catalog_unavailable(error):
+                raise
+        else:
+            return self._catalog_rows_to_watermarks(rows_from_result(result))
+        result = await self._get_executor().execute(self._build_list_sql())
+        return self._rows_to_watermarks(rows_from_result(result), task_name or None)

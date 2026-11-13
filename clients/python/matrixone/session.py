@@ -147,7 +147,13 @@ class Session(SQLAlchemySession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
-            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            from ._driver_execution import driver_parameters
+
+            return self.connection().exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None},
+            )
         except Exception as error:
             from .client import _classify_db_error
 
@@ -725,8 +731,14 @@ class AsyncSession(SQLAlchemyAsyncSession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
+            from ._driver_execution import driver_parameters
+
             connection = await self.connection()
-            return await connection.exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            return await connection.exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None},
+            )
         except Exception as error:
             from .client import _classify_db_error
 
@@ -768,9 +780,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
                 from ._session_execution import execute_session_sql
 
-                result = await execute_session_sql(
-                    super().execute, sql_or_stmt, client=self.client, params=params, **kwargs
-                )
+                result = await execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)

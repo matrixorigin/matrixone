@@ -7,7 +7,7 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from matrixone import with_snapshot
 
@@ -57,6 +57,10 @@ def mysql_transport(request, monkeypatch):
         def execute(self, sql, params=None):
             wire.append(formatter.mogrify(sql, params))
             self.rows = [(1,)]
+
+        def executemany(self, sql, parameters):
+            for params in parameters:
+                self.execute(sql, params)
 
         def fetchone(self):
             return self.rows.pop(0) if self.rows else None
@@ -164,6 +168,58 @@ def test_snapshot_driver_formatting_preserves_identity(mysql_transport, snapshot
             check(session)
     assert all(cache[key] is value for key, value in warmed.items())
     assert statement._annotations['matrixone_snapshot'] == snapshot
+
+
+@pytest.mark.parametrize('owner', ['client', 'session'])
+def test_driver_tuple_with_collection_first_item_is_single_execution(mysql_transport, owner):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    params = ([1.0, 2.0], "O'Reilly")
+    with client.session() as session:
+        executor = client if owner == 'client' else session
+        executor.execute_driver(sql, params)
+        assert wire[-1] == formatter.mogrify(sql, params)
+
+
+def test_driver_list_of_tuples_remains_executemany(mysql_transport):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    parameters = [([1.0, 2.0], 'first'), ([3.0, 4.0], 'second')]
+    result = client.execute_driver(sql, parameters)
+    assert result.affected_rows >= 0
+    assert wire[-2:] == [formatter.mogrify(sql, params) for params in parameters]
+
+
+@pytest.mark.parametrize('mysql_transport', ['pyformat'], indirect=True)
+def test_driver_dict_remains_named_binding(mysql_transport):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'SELECT %(value)s AS value'
+    params = {'value': "O'Reilly"}
+    assert client.execute_driver(sql, params).scalar() == 1
+    assert wire[-1] == formatter.mogrify(sql, params)
+
+
+@pytest.mark.asyncio
+async def test_async_driver_tuple_with_collection_first_item_is_single_execution():
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    params = ([1.0, 2.0], "O'Reilly")
+    result = SimpleNamespace(returns_rows=False, rowcount=1)
+    connection = SimpleNamespace(exec_driver_sql=AsyncMock(return_value=result))
+
+    class Begin:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *args):
+            return None
+
+    client = AsyncClient(logger=Mock(), sql_log_mode='off')
+    client._engine = SimpleNamespace(begin=lambda: Begin())
+    assert (await client.execute_driver(sql, params)).affected_rows == 1
+    connection.exec_driver_sql.assert_awaited_once_with(sql, [params], execution_options={'no_parameters': False})
 
 
 @pytest.mark.parametrize(
@@ -359,7 +415,7 @@ def test_admin_string_authority_and_consumers(engine):
     cdc = BaseCDCManager(client)
     sql = cdc._build_create_sql('cdc-name', 'mysql://source', 'mysql', "mysql://O'Reilly", 'db.t:db.t')
     assert "CREATE CDC `cdc-name` 'mysql://source' 'mysql' 'mysql://O''Reilly'" in sql
-    assert "task_name = 'O''Reilly'" in cdc._build_select_tasks_sql("O'Reilly")
+    assert cdc._build_list_sql() == 'SHOW CDC ALL'
 
 
 @pytest.mark.parametrize('value', ['a\\b', 'a\0b'])
@@ -713,9 +769,7 @@ def test_compiler_memo_preserves_generative_parent_sql():
 async def test_clone_snapshot_convenience_stays_on_executor(async_mode, object_type):
     client = Client(logger=Mock(), sql_log_mode='off')
     client._engine = object()
-    client._snapshots = SimpleNamespace(
-        exists=Mock(side_effect=AssertionError('must not acquire another pool connection'))
-    )
+    client._snapshots = SimpleNamespace(exists=Mock(side_effect=AssertionError('must not acquire another pool connection')))
     calls = []
 
     def execute(sql):

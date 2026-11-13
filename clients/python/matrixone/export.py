@@ -27,6 +27,55 @@ from ._utils import stage_file_uri
 from typing import Any, Optional, Union
 
 
+def _strip_statement_terminators(sql: str) -> str:
+    """Remove trailing terminators without cutting quoted text or comments.
+
+    A terminator may precede trailing SQL comments. Removing it keeps the
+    export clause in the same statement; the export builders put that clause on
+    a new line so a trailing line comment cannot consume it.
+    """
+    sql = sql.strip()
+    while True:
+        last_code = None
+        i = 0
+        while i < len(sql):
+            char = sql[i]
+            if char in ("'", '"', '`'):
+                quote = char
+                i += 1
+                while i < len(sql):
+                    if sql[i] == '\\' and quote != '`' and i + 1 < len(sql):
+                        i += 2
+                    elif sql[i] == quote:
+                        i += 1
+                        if i < len(sql) and sql[i] == quote:
+                            i += 1
+                        else:
+                            break
+                    else:
+                        i += 1
+                last_code = i - 1
+                continue
+            if (
+                char == '#'
+                or sql.startswith('//', i)
+                or (sql.startswith('--', i) and (i + 2 == len(sql) or sql[i + 2].isspace()))
+            ):
+                end = sql.find('\n', i)
+                i = len(sql) if end < 0 else end + 1
+                continue
+            if sql.startswith('/*', i):
+                end = sql.find('*/', i + 2)
+                i = len(sql) if end < 0 else end + 2
+                continue
+            if not char.isspace():
+                last_code = i
+            i += 1
+        if last_code is None or sql[last_code] != ';':
+            return sql.rstrip()
+        sql = sql[:last_code].rstrip() + sql[last_code + 1 :]
+
+
 def _query_to_sql(query: Union[str, Any]) -> str:
     """
     Convert various query types to SQL string.
@@ -56,19 +105,19 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     """
     # If it's already a string, return it
     if isinstance(query, str):
-        return query.strip().rstrip(';').rstrip()
+        return _strip_statement_terminators(query)
 
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
         sql = substitute_parameters(sql, params)
-        return sql.strip().rstrip(';').rstrip()
+        return _strip_statement_terminators(sql)
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
             compiled = compile_expression(query)
-            return str(compiled).strip().rstrip(';').rstrip()
+            return _strip_statement_terminators(str(compiled))
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
 
@@ -133,8 +182,9 @@ def _build_csv_export_sql(
     # Convert query to SQL string
     query_sql = _query_to_sql(query)
 
-    # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
+    # Keep OUTFILE on a new line so a trailing SQL line comment cannot
+    # consume the export clause. This is a statement boundary, not formatting.
+    sql_parts = ["INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
 
     # Add CSV options
     options = []
@@ -153,12 +203,11 @@ def _build_csv_export_sql(
     # Note: HEADER option not yet supported in MatrixOne
     if header:
         warnings.warn(
-            "header=True is not yet supported by MatrixOne's INTO OUTFILE. "
-            "Headers will not be included in the output.",
+            "header=True is not yet supported by MatrixOne's INTO OUTFILE. " "Headers will not be included in the output.",
             UserWarning,
         )
 
-    return ' '.join(sql_parts)
+    return f"{query_sql}\n{' '.join(sql_parts)}"
 
 
 def _build_jsonl_export_sql(
@@ -180,7 +229,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
+    return f"{query_sql}\nINTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:

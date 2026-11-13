@@ -32,7 +32,7 @@ async def test_export_removes_terminator_before_trailing_whitespace(asynchronous
         output = await output
     assert output is result
     expected_format = 'jsonline' if format == 'jsonl' else 'csv'
-    expected = f"SELECT 'semi;colon' AS value INTO OUTFILE '/tmp/output' FORMAT '{expected_format}'"
+    expected = f"SELECT 'semi;colon' AS value\nINTO OUTFILE '/tmp/output' FORMAT '{expected_format}'"
     if format == 'csv':
         expected += " fields terminated by ','"
     execute.assert_called_once_with(expected)
@@ -43,3 +43,20 @@ async def test_export_removes_terminator_before_trailing_whitespace(asynchronous
 @pytest.mark.parametrize('suffix', ['', ';', ';;;', ' \n'])
 def test_normalization_preserves_semicolons_inside_strings(suffix):
     assert _query_to_sql("  SELECT 'value;'" + suffix) == "SELECT 'value;'"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('comment', ['-- trailing', '# trailing', '// trailing'])
+@pytest.mark.parametrize('terminator', ['', ';'])
+async def test_export_places_outfile_after_trailing_line_comments(asynchronous, comment, terminator):
+    execute = AsyncMock(return_value=object()) if asynchronous else Mock(return_value=object())
+    exporter = (AsyncExportManager if asynchronous else ExportManager)(SimpleNamespace(execute=execute))
+    query = f"SELECT 'data; -- # //' AS value{terminator} {comment}"
+    output = exporter.to_csv('/tmp/output', query)
+    if asynchronous:
+        output = await output
+    expected = (
+        f"SELECT 'data; -- # //' AS value {comment}\n" "INTO OUTFILE '/tmp/output' FORMAT 'csv' fields terminated by ','"
+    )
+    execute.assert_called_once_with(expected)
