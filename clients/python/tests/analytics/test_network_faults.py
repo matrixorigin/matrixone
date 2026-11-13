@@ -88,6 +88,7 @@ def proxied(proxy):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.usefixtures("native_arrow_load")
 async def test_lost_commit_acknowledgement_is_unknown_not_rollback(trial, asynchronous):
     from sqlalchemy.ext.asyncio import create_async_engine
     from matrixone import AsyncClient
@@ -116,6 +117,7 @@ async def test_lost_commit_acknowledgement_is_unknown_not_rollback(trial, asynch
     assert sorted(trial.rows(table)['id'].to_pylist()) == [1, 2]
 
 
+@pytest.mark.usefixtures("native_arrow_load")
 def test_disconnect_before_commit_leaves_no_partial_create(trial):
     table = trial.table()
     with FaultProxy("disconnect_before_commit") as proxy:
@@ -149,6 +151,7 @@ def test_stalled_network_times_out_and_releases_pool(trial):
             client.disconnect()
 
 
+@pytest.mark.usefixtures("native_arrow_load")
 def test_corrupt_staging_file_rolls_back_target(trial):
     table = trial.table()
 
@@ -166,6 +169,7 @@ def test_corrupt_staging_file_rolls_back_target(trial):
     assert not trial.exists(table)
 
 
+@pytest.mark.usefixtures("native_arrow_load")
 def test_staging_unlink_failure_preserves_commit_evidence(trial, monkeypatch):
     import matrixone.analytics as module
 
@@ -187,6 +191,7 @@ def test_staging_unlink_failure_preserves_commit_evidence(trial, monkeypatch):
         p.unlink()
 
 
+@pytest.mark.usefixtures("native_arrow_load")
 def test_cleanup_failure_does_not_mask_original_reader_error(trial, monkeypatch):
     import matrixone.analytics as module
 
@@ -216,7 +221,7 @@ def test_cleanup_failure_does_not_mask_original_reader_error(trial, monkeypatch)
 @pytest.mark.asyncio
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('source', ['arrow', 'file'])
-async def test_duplicate_write_rejection(trial, asynchronous, source):
+async def test_duplicate_write_rejection(trial, asynchronous, source, native_arrow_load_check):
     """Use the real shared transaction owner through all four public write paths."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.exc import IntegrityError
@@ -224,6 +229,8 @@ async def test_duplicate_write_rejection(trial, asynchronous, source):
     from matrixone.analytics import AnalyticsCommitRejectedError
     import pyarrow.parquet as pq
 
+    if source == 'arrow':
+        native_arrow_load_check()
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY, note VARCHAR(20))')
     trial.client.execute('INSERT INTO ' + table + " VALUES (100, 'sentinel')")
@@ -259,8 +266,18 @@ async def test_duplicate_write_rejection(trial, asynchronous, source):
         assert wrapped.connection_invalidated is False and wrapped.orig.args[0] == 1062
         assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [(100, 'sentinel')]
         good = pa.table({'id': [300], 'note': ['control']})
-        operation = client.analytics.upload_arrow(table, good, trial.directory, create=False)
-        assert (await operation if asynchronous else operation) == 1
+        if source == 'file':
+            path = trial.directory / 'control.parquet'
+            pq.write_table(good, path)
+            if asynchronous:
+                async with await client.analytics.read_parquet(path) as control:
+                    assert await control.import_into(table) == 1
+            else:
+                with client.analytics.read_parquet(path) as control:
+                    assert control.import_into(table) == 1
+        else:
+            operation = client.analytics.upload_arrow(table, good, trial.directory, create=False)
+            assert (await operation if asynchronous else operation) == 1
         assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [
             (100, 'sentinel'),
             (300, 'control'),
@@ -280,6 +297,7 @@ async def test_duplicate_write_rejection(trial, asynchronous, source):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.usefixtures("native_arrow_load")
 async def test_duplicate_commit_rejection_survives_staging_cleanup_failure(trial, monkeypatch, asynchronous):
     from sqlalchemy.ext.asyncio import create_async_engine
     from matrixone import AsyncClient
