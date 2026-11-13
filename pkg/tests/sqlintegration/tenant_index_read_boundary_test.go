@@ -72,9 +72,9 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		require.Equal(t, 2, before)
 		prepared, err := admin.PrepareContext(ctx, "select count(*) from "+target)
 		require.NoError(t, err)
+		defer prepared.Close()
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&after))
 		require.Equal(t, before, after)
-		require.NoError(t, prepared.Close())
 		for _, q := range []string{
 			"delete from " + target,
 			"update " + target + " set __mo_index_pri_col=1",
@@ -88,8 +88,8 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		}
 		preparedWrite, err := admin.PrepareContext(ctx, "delete from "+target)
 		if err == nil {
+			defer preparedWrite.Close()
 			_, err = preparedWrite.ExecContext(ctx)
-			require.NoError(t, preparedWrite.Close())
 		}
 		var preparedErr *mysql.MySQLError
 		require.True(t, errors.As(err, &preparedErr))
@@ -122,6 +122,7 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		}
 		rows, err := admin.QueryContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='idx' and algo='ivfflat' and algo_table_type in ('metadata','entries') and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='index_boundary' and relname='vectors')")
 		require.NoError(t, err)
+		defer rows.Close()
 		var ivfTables []string
 		for rows.Next() {
 			var name string
@@ -136,6 +137,7 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		query := "select count(*) from index_boundary.vectors union all select count(*) from index_boundary.`" + ivfTables[0] + "` union all select count(*) from index_boundary.`" + ivfTables[1] + "`"
 		rows, err = admin.QueryContext(ctx, query)
 		require.NoError(t, err)
+		defer rows.Close()
 		var observations int
 		for rows.Next() {
 			var count int
