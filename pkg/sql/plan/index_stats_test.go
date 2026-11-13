@@ -15,17 +15,86 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
+
+type indexStatsTestPlugin struct {
+	indexplugin.AlgoPlugin
+	name  string
+	hooks planplugin.Hooks
+}
+
+func (p indexStatsTestPlugin) Algo() string           { return p.name }
+func (p indexStatsTestPlugin) Plan() planplugin.Hooks { return p.hooks }
+
+type indexStatsTestHooks struct {
+	planplugin.Hooks
+	configure func(context.Context, *pbplan.TableDef, []*pbplan.IndexDef, *indexstats.Config) error
+}
+
+func (h *indexStatsTestHooks) ConfigureIndexStats(ctx context.Context, source *pbplan.TableDef, defs []*pbplan.IndexDef, cfg *indexstats.Config) error {
+	return h.configure(ctx, source, defs, cfg)
+}
+
+var indexStatsTestPluginID atomic.Uint64
+
+func TestMoIndexStatsPlannerUsesRegisteredCapability(t *testing.T) {
+	base, ok := indexplugin.Get("ivfflat")
+	require.True(t, ok)
+	owner, ok := base.Plan().(planplugin.IndexStatsHooks)
+	require.True(t, ok)
+	mock := indexStatsTestContext(t)
+	source := mock.tables["stats_source"]
+	name := "test_index_stats_" + strconv.FormatUint(indexStatsTestPluginID.Add(1), 10)
+	for _, idx := range source.Indexes {
+		idx.IndexAlgo = name
+	}
+	calls := 0
+	hooks := &indexStatsTestHooks{Hooks: base.Plan()}
+	hooks.configure = func(ctx context.Context, gotSource *pbplan.TableDef, defs []*pbplan.IndexDef, cfg *indexstats.Config) error {
+		calls++
+		require.Equal(t, source.TblId, gotSource.TblId)
+		require.Equal(t, source.Name, gotSource.Name)
+		require.Equal(t, gotSource.Indexes, defs)
+		return owner.ConfigureIndexStats(ctx, gotSource, defs, cfg)
+	}
+	indexplugin.Register(indexStatsTestPlugin{AlgoPlugin: base, name: name, hooks: hooks})
+	build := func() (*QueryBuilder, int32, error) {
+		builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
+		node, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{
+			makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType("idx"),
+		})
+		return builder, node, err
+	}
+	builder, node, err := build()
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	var cfg indexstats.Config
+	require.NoError(t, json.Unmarshal(builder.qry.Nodes[node].TableDef.TblFunc.Param, &cfg))
+	require.Equal(t, name, cfg.Algorithm)
+	require.Equal(t, "hidden_entries", cfg.Entries)
+	require.Equal(t, "id", cfg.PrimaryKey)
+
+	wantErr := moerr.NewInvalidInput(mock.GetContext(), "owner rejected diagnostic configuration")
+	hooks.configure = func(context.Context, *pbplan.TableDef, []*pbplan.IndexDef, *indexstats.Config) error { return wantErr }
+	_, _, err = build()
+	require.ErrorIs(t, err, wantErr)
+}
 
 func indexStatsTestContext(t *testing.T) *MockCompilerContext {
 	t.Helper()

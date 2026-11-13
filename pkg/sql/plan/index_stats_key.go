@@ -72,5 +72,8 @@ func configureKeyIndexStats(ctx context.Context, cfg *indexstats.Config, source 
 		}
 		cfg.Columns = append(cfg.Columns, display)
 	}
+	if len(cfg.KeyColumns) == 0 || source.Pkey == nil {
+		return moerr.NewInvalidInput(ctx, "mo_index_stats: incomplete key index definition")
+	}
 	return nil
 }
