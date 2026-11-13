@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -322,7 +323,7 @@ func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout ti
 // the fill fails.
 var sourceIdleTimeout = readWriteTimeout
 
-var errSourceIdle = errors.New("fileservice: no bytes from the source within the idle timeout")
+var errSourceIdle = moerr.NewInternalErrorNoCtx("fileservice: no bytes from the source within the idle timeout")
 
 // idleReader reads r, which reads through ctx, and cancels ctx when a Read waits for
 // bytes past sourceIdleTimeout.
