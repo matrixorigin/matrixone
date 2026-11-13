@@ -16,10 +16,10 @@ package testutil
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
@@ -113,7 +113,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 
 func (e *TestEngine) restart(ctx context.Context, disableGC bool, opts ...*options.Options) error {
 	if e.DB == nil {
-		return errors.New("test engine is not open")
+		return moerr.NewInternalError(ctx, "test engine is not open")
 	}
 	previous := e.DB
 	err := previous.Close()
