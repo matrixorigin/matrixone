@@ -2,11 +2,11 @@
 
 ## 0. 版本、范围与审批状态
 
-- 文档版本：**v1**，2026-11-13。所属 [issue #32265](https://github.com/matrixorigin/matrixone/issues/32265)，实现 [PR #32520](https://github.com/matrixorigin/matrixone/pull/32520)，目标 `4.1.6-hotfix`。
+- 文档版本：**v2**，2026-11-13；v1 的独立审查为 REQUEST_CHANGES，§4.6—4.7 关闭两项设计决定缺口，并在§8区分尚未完成的实现修改。所属 [issue #32265](https://github.com/matrixorigin/matrixone/issues/32265)，实现 [PR #32520](https://github.com/matrixorigin/matrixone/pull/32520)，目标 `4.1.6-hotfix`。
 - 实现审阅锚点：`16082594b63b24b0ecf4aba43c92e15edc4f8a0b`，已合并目标 `9937f1b74a7a7a01f8e0dcb6e7d3ff447e0ce29e`。本 PR 自有实现与 `0a88c1d8cd412b106901b95dfcb7ac4ad949be6e` 相同；新增基线包含 #32609、#32596、#32591，不归为本设计的实现成果。
-- **审批状态：设计草案，独立设计审查待完成，维护者批准待定；实现批准路径暂停。** PR 正文必须链接被审阅的精确 Git revision，而非只链接可移动分支。
+- **审批状态：独立设计审查结论以相邻版本化审查记录为准；维护者批准待定，实现批准路径暂停。** 本文的设计决定不代表代码已符合；§8列出的实现阻塞必须另行关闭。PR 正文必须链接被审阅的精确 Git revision，而非只链接可移动分支。
 - 这是针对已经实现的改动补做设计门禁。此前局部修复演变为架构变更时没有及时重新分类；不把历史实现、测试通过或用户授权写文档当成设计批准。本轮先冻结设计，再单独评审并记录决定；任何实现修改须在设计决定后另行验证。
-- 触发门禁：排除测试、生成 parser 和上游合并后，手写生产 Go 增删约 786 行；更重要的是改变分支输出与全局消费者的求值、身份及类型证明边界，并影响热路径。
+- 触发门禁：排除测试、生成 parser 和上游合并后，手写生产 Go 为新增651/删除35，共686行增删（另有grammar 5行）；更正早先786行的误计；更重要的是改变分支输出与全局消费者的求值、身份及类型证明边界，并影响热路径。
 - `groupingStage` 是 query-local binder 状态及 lowering 辅助逻辑，**不是新执行算子、协议字段或跨查询缓存**。这种区别不豁免设计审查。
 
 ## 1. 问题、目标与不变量
@@ -58,13 +58,13 @@ FROM/WHERE → AGG 或 SAMPLE → HAVING → WINDOW → PROJECT → DISTINCT
 - [PostgreSQL 18：GROUPING SETS/CUBE/ROLLUP](https://www.postgresql.org/docs/18/queries-table-expressions.html#QUERIES-GROUPING-SETS)：多集合组合及缺失列 NULL 的关系语义。
 - [PostgreSQL 18：窗口处理](https://www.postgresql.org/docs/18/queries-table-expressions.html#QUERIES-WINDOW)：窗口处理发生在 grouping/HAVING 之后。
 - [MySQL 8.4：GROUP BY modifiers](https://dev.mysql.com/doc/refman/8.4/en/group-by-modifiers.html)：GROUPING 区分 super-aggregate NULL 和实际 NULL；本分支 ROLLUP 空输入行为已有 MySQL 8.4.11 对照。
-- SQL 的 bag 语义、三值逻辑、输出别名身份是正确性要求；SAMPLE 是 MO 扩展，以现有普通 grouped/global SAMPLE 为参照，不借用其他数据库的 TABLESAMPLE 契约。
+- SQL 的 bag 语义、三值逻辑、输出别名身份是正确性要求；SAMPLE 是 MO 扩展，以现有普通 grouped/global SAMPLE 为参照，不借用其他数据库的 TABLESAMPLE 契约。同一 SELECT 的 `SAMPLE + OVER` 仍按现有 validSample 返回 NYI；下面的统一流程图不新增该组合支持。
 
 ## 3. 替代方案与选择
 
 | 方案 | 正确性/复杂度 | 性能、兼容与运维 | 可测性/交付代价 | 决定 |
 | --- | --- | --- | --- | --- |
-| A. 只修格式化/AST/nullability，完整 SELECT 仍在各分支 | 原始 CTAS 面较小；不能解决全局窗口与 DISTINCT，不可静默放行会写错的新 CTAS | 最小 planner 扰动；必须收缩功能或对未闭合组合明确拒绝，可能收紧原 SELECT 能力 | 局部 UT/BVT 较小，但必须重新界定支持范围、撤回已有修复并获产品同意 | 作为可行的范围收缩方案保留；**不满足本次保留已修完整契约的目标**，不是技术上绝对不可行 |
+| A. 只修格式化/AST/nullability，完整 SELECT 仍在各分支 | 原始 CTAS 面较小；不能解决全局窗口与 DISTINCT，不可静默放行会写错的新 CTAS | 最小 planner 扰动；必须收缩功能或对未闭合组合明确拒绝，可能收紧原 SELECT 能力 | 局部 UT/BVT 较小，但必须重新界定支持范围、撤回已有修复并获产品同意 | 作为可行的范围收缩方案保留；**不满足本次保持现有公开 grouping/DISTINCT/分析窗口/SAMPLE 能力并纠正其组合语义的目标**，不是技术上绝对不可行 |
 | B. AST 规范化为外层 SELECT + 内层分支 UNION | 复用普通 binder；仍需提取 aggregate/SAMPLE/key 依赖、生成隐藏列、保存别名/子查询 scope/GROUPING 来源 | 可以用既有节点；公开 UNION coercion 和 derived-table 边界仍可能丢 bitmap/provenance；额外 AST 复制与重绑定 | 可通过同一反例矩阵；CTAS 序列化前后、别名 shadowing/correlation 需额外证明；不天然比 typed lowering 小 | 可信替代方案；当前不选，避免把已绑定身份退回 SQL 名称再解析 |
 | C. 显式 binder 内部运输边界，复用已有执行节点 | 在已绑定的 tag/ordinal 上确定 owner，只把分支产物送过 UNION；集中维护一份表达式遍历/重绑定契约 | 仍保留原分支扫描数；只运输用到的列；新增 query-local 状态与复制，不新增长期资源/协议 | typed UT 可直接证明引用、类型与阶段；SQL 可独立证明结果。代价是必须审查新边界，不能当局部修补 | **选择**；接受新增约 403 行 stage 模块及配套 binder 修改的维护代价 |
 | D. 原生 grouping-set AGG，单次输入产生多个集合 | 最直接表达多 grouping 输出，但要求分布式 partial/final aggregate、SAMPLE、bitmap、剪枝一起设计 | 可能减少重复 scan，但增加执行器/资源/分布式契约，不能未经测量承诺收益 | 新算子/plan/runtime及取消/多CN验证显著超出 hotfix | 长期可研究，本次不选 |
@@ -77,12 +77,12 @@ FROM/WHERE → AGG 或 SAMPLE → HAVING → WINDOW → PROJECT → DISTINCT
 
 ```text
 源 AST（逻辑语义保留；每次绑定创建局部展开）
- ├─ 分支0 FROM/WHERE → AGG/SAMPLE → 分支 HAVING → 私有运输 PROJECT
- ├─ 分支1 FROM/WHERE → AGG/SAMPLE → 分支 HAVING → 私有运输 PROJECT
- └─ ...
+ ├─ 分支0 FROM/WHERE → AGG/SAMPLE 输出证明B → 分支 HAVING → 私有运输 PROJECT
+ ├─ 分支1 FROM/WHERE → AGG/SAMPLE 输出证明B → 分支 HAVING → 私有运输 PROJECT
+ └─ ...（SAMPLE 的所选物化/相关 flatten 也必须先消费证明B）
         ↓ 同构 slots，保留 bitmap/来源，不走用户 UNION 的强制转换
       UNION ALL
-        ↓ 重新定位 tag/ordinal，刷新输入及派生 NULL 证明
+        ↓ 重新定位 tag/ordinal，发布合并输出证明U，刷新派生 NULL 证明
       WINDOW → window-dependent HAVING
         ↓ flatten 子查询后产生最终选出值
       selected PROJECT → [全局 DISTINCT]
@@ -122,10 +122,10 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 
 - 缺失键只弱化输出 `NotNullable`；公共键、COUNT、有效非空 COALESCE fallback 保留对应证明。
 - UNION 输出列类型由同构输入合并 nullability；对函数、窗口按孩子先于父的顺序使用既有 `DeduceNotNullable` / `DeduceWindowNotNullable`。未知证明不得升级成 NOT NULL。
-- 此更新必须先于 quantified-subquery flatten/MARK 优化；本 PR 不改 MARK→ANTI 的算法，只保证其前提真实。
+- 每次证明更新必须先于该层的 quantified-subquery flatten/MARK 优化；不只是在 UNION 之后刷新。分支消费者先取证明B、全局消费者再取证明U，详见§4.6。本设计不改 MARK→ANTI 的算法，只保证其前提真实。
 - 逻辑窗口的 partition/order/function 依赖都要采集；最终 remap 后 PARTITION-only key 属于上游 PARTITION 输入坐标，可能已从 WINDOW child 剪掉，不能再按 WINDOW 的坐标访问它或用越界 guard 掩盖 owner 错误。
 - 对 AGG，GROUPING 读取保留下来的键 bitmap；对 SAMPLE，它是分支 origin 的标量 mask（按参数顺序左移，缺失为 1），不可能从采样后 NULL 值重新计算。
-- 对 SAMPLE DISTINCT，未选出的 marker 不能靠选择键 g 自动获得；要选出 flag 再排序。AGG 的 bitmap 路径与 SAMPLE 标量路径不同，不能由 SAMPLE 的验证泛化为所有 aggregate/DISTINCT marker 组合的证明。
+- 对 **AGG 与 SAMPLE 的 DISTINCT 都一样**：选择键 g 不授予对其隐藏 GROUPING marker 的访问。bitmap 能运输不等于 DISTINCT 等价类上来源唯一。具体保守准入规则和现有实现差距见§4.7；不得把来源加入去重键来规避歧义。
 
 ### 4.5 行重数、优化与错误
 
@@ -134,6 +134,36 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 - omitted-key AGG 不可因原始键为 PK 删除；对补 NULL 键的输出谓词以及无键全局 AGG 的输出谓词不可下推成输入 WHERE。公共键仍可安全下推。
 - hidden order 的函数/tuple/list 必须逐层证明来源；不可用依赖按既有 1149 syntax error 拒绝。多行标量子查询与原有不支持的嵌套左子查询继续返回原错误，不转成 NULL/空集。
 - flatten 完成的公开 PROJECT 不得残留可执行期不能消费的 Sub；CTAS 失败后目录中无目标表、服务仍能执行后续查询是独立公有断言。
+
+### 4.6 设计决定：两层 NULL 证明，覆盖最早消费者
+
+v1 把刷新描述为 UNION 后操作，漏掉分支 HAVING 及 SAMPLE 物化之前的 flatten；仅补最终列 metadata 不足以修复已经做出的优化决定。
+
+**证明B（分支逻辑输出发布点）**：groupingFlag 与完整根键映射确定后、任何消费 AGG/SAMPLE 输出的表达式进入 flatten/布尔简化/NULL 敏感优化之前，创建该分支输出类型视图。缺失 group key 的输出 NotNullable=false；聚合输出仍由其函数规则推导，采样原始值仍用 SAMPLE 自身语义。保持 owner tag/ordinal，不在这一层改为 UNION tag。
+
+- 作用域包含分支 HAVING、SAMPLE 所选 post-sample 表达式与分支隐藏依赖，以及它们的复合孩子和量化 `SubqueryRef.Child`。逐节点孩子先于父地刷新；若函数仍将子查询转换为 MARK，转换输入及其比较表达式必须已读取证明B。
+- AGG 的输入表达式/编码类型、采样算子的原始 `sample(v)` 输入不是缺失键输出，不可一并改为 nullable。`groupTag` 引用描述的 null-extended key 与 `sampleTag` 描述的采样值必须区分。
+- 证明B是**逻辑类型发布时序**，不要求物理 AGG node 必须先 append；任何更早消费此输出类型的 binder/flatten 调用都须先获得证明B。不能寄希望于最终 remap 再修复。
+- 子查询内部 context 的 tags 不做无差别替换；其已有外层相关依赖必须由既有 correlation/flatten 所有者正确转接。若出现不能转接的相关形态，保留原有拒绝而非输出悬空引用；不借此新增相关子查询支持。
+
+**证明U（合并输出发布点）**：同一 slot 的 branch proof 合并后、全局 window/project/subquery 消费之前，绑定到 UNION 输出；再次自底向上重算派生证明。输出强非空必须是所有可能生产分支均能保证的结论。任何后续替换孩子的 rewrite 仍须保持既有证明刷新契约，不能把证明U当永久属性。
+
+独立验收输入：`t(g NOT NULL)` 中为1，`u(x NOT NULL)` 中为2，`... GROUP BY g WITH ROLLUP HAVING NOT(g+0 IN(SELECT x FROM u))` 只能保留明细1，subtotal为UNKNOWN必须删除。SAMPLE 早期消费者增加同一 key-output/原始sample-value对照；使用 SAMPLE 最后、100% 的合法形态避开 #32595。对每种场景覆盖空 RHS、含NULL RHS、`COALESCE(g,0)` 非空fallback，分别检查 flatten 前类型、MARK转换前提、SELECT值及CTAS残表。若合法公有SAMPLE表达式无法到达某内部节点，就用可达的分支HAVING证明公有语义，并把synthetic类型测试明确标为内部契约，不伪造SQL复现。
+
+### 4.7 设计决定：DISTINCT 后只允许来源明确的 GROUPING 排序
+
+令用户选出tuple为 V，DISTINCT 按 V 的值等价关系折叠，**不包含隐藏lineage**。实际NULL组与subtotal可能具有相同V、不同mask；任意挑选一个bitmap继续排序没有定义，额外把mask加入key又改变 DISTINCT 的行重数。
+
+本版本选择保守准入，不增加数据/约束驱动的唯一来源证明：
+
+1. ORDER BY 子树若指向已选出槽位，或与可安全复用的完整选出表达式匹配，使用那个结果，不重新执行。`GROUPING(g) flag` 被选出，`ORDER BY flag` 或 `flag+chosen` 合法；选出 `GROUPING(g)+1 x` 后 `ORDER BY x` 同样合法。
+2. 对其余可组合的函数/list递归处理；遇到**尚未被完整选出表达式覆盖的 GROUPING 调用即1149**，无论AGG还是SAMPLE，也不因g非空/PK/当前数据无NULL而豁免。普通可由选出值重建的函数仍合法。
+3. `GROUPING(alias)` 先按§4.3解析键origin，再进行相同的选出依赖匹配；既不能丢失alias来源，也不能绕过此门禁。
+4. 禁止将隐藏marker运输到DISTINCT key，禁止用`IS NULL`推导mask，禁止采用首个/最后一个来源的隐式选择。相同V含不同flag时，显式选出flag就改变了用户tuple，这种保留两行是正确而非重复。
+
+最小反例：`t(g)` 有NULL、1，`SELECT DISTINCT g FROM t GROUP BY g WITH ROLLUP ORDER BY GROUPING(g) DESC,g IS NULL,g LIMIT 1` 必须在绑定/规划时1149，CTAS无残表。选出`g,GROUPING(g) flag`的合法对照结果按flag排序应明确区分实际NULL和subtotal；再加重复集合、无NULL输入、SAMPLE、alias和LIMIT控制，证明此决定不是数据依赖特判。
+
+这是对当前实现的**待实施设计约束**：`groupingDistinctOrder` 当前允许递归重建未选出的AGG GROUPING，不能因v1已有局部测试通过就宣称符合v2。后续修复须保留合法 selected-marker 和普通 `chosen+1` 路径，并以统一AGG/SAMPLE门禁覆盖该边界。
 
 ## 5. 状态生命周期、资源与性能
 
@@ -176,7 +206,7 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 ### 6.3 发布、观测及回退
 
 1. 设计文档冻结、独立审查完成；维护者在精确 revision 上给出设计决定前，**不得宣称 PR ready/approved**。
-2. 按设计矩阵审核现有证据及新增基线影响；必要补齐再进行实现批准/发布。以 bug fix 发布，说明 CTAS 可执行性、结果重数和 nullable 元数据的纠正可能改变依赖错误行为的应用。
+2. 按设计矩阵审核现有证据及新增基线影响；必要补齐再进行实现批准/发布。以 bug fix 发布，说明 CTAS 可执行性、结果重数和 nullable 元数据的纠正可能改变依赖错误行为的应用。§4.7的保守准入会将此前接受的部分AGG DISTINCT隐藏GROUPING排序改为1149，这是明确的release-branch兼容取舍；不能在release note中只写“CTAS修复”。应用可显式选出marker后排序，但这会使marker参与DISTINCT，须由应用确认所需结果语义，不能自动代改SQL。
 3. 使用既有 EXPLAIN 检查 UNION 输出 schema 与 WINDOW/DISTINCT 所在位置，用 SQL 日志、错误码、查询内存/延迟监控诊断；不增加 per-query 高基数指标或后台任务。
 4. 不提供“关掉 stage 继续返回旧错误结果”的运行开关。发布前可在源码中 revert 本 PR 自有变更并重新构建测试，不能直接丢弃上游合并；发布后应前向修复或按经批准的完整备份恢复方案处理，**不能保证旧 binary 直接启动新数据可降级**。不授权自动修改/重建客户历史 CTAS 表。
 
@@ -196,6 +226,8 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 | review7：独立volatile a/b被结构匹配偷换 | I4/I8；[identity tests](../../pkg/sql/plan/grouping_order_identity_test.go) `TestGroupingVolatileAliasSlot` / `TestGroupingOrderReferenceAndStructuralFallback` | 比较实际返回 b 的排序，不固定random golden，不retry到成功；CTAS用row_number记录输入ordinal再验证 |
 | review8：mixed SAMPLE ORDER BY未来输出自引用 | I4/I9；identity `TestGroupingSampleMixedOrderScope` | arithmetic/CASE/list/quantified/scalar混合；分支payload无projectTag自引用；DISTINCT非法marker1149及零残表 |
 | review9：GROUPING(alias)取未来输出而非根键 | I3/I4；identity `TestGroupingArgumentAliasOrigin` | alias shadow/quoted/CUBE多参数顺序；actual NULL；selected-marker与未选SAMPLE-marker控制 |
+| 设计审查DR1：AGG DISTINCT等价类丢失未选lineage | I2/I3/I7；**待新增**全局DISTINCT前后可用依赖断言；AGG/SAMPLE同一准入矩阵 | §4.7的NULL/subtotal/duplicate-set/alias/LIMIT；未选marker1149和CTAS清理、selected完整表达式合法对照；本轮未执行 |
+| 设计审查DR2：分支先于UNION消费旧NULL证明 | I3/I6；**待新增**证明B先于HAVING/SAMPLE flatten的typed断言与证明U对照 | §4.6的分支HAVING/早期SAMPLE，空/NULL RHS、fallback、原始采样值；本轮未执行 |
 
 公有回归汇总：[grouping_ctas.sql](../../test/distributed/cases/function/grouping_ctas.sql) / [生成并比较的 result](../../test/distributed/cases/function/grouping_ctas.result)。三行 fixture `(g,h,v)=(1,10,5),(1,20,7),(2,10,9)` 加独立 nullable、PK、empty、小型binary对象；不加入宽键大数据或延迟断言。相邻 SAMPLE、CTAS、ROLLUP、hint CTE 用现有 suite，不为文档新增集群 fixture。
 
@@ -218,8 +250,12 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 | D4 新stage无开关、错误不fallback到旧错误结果 | 避免两套结果语义并行与silent corruption | 维护者决定收缩支持范围时回到方案A重新审批 |
 | D5 只支持停机升级，不加mixed-version gate | 遵循项目升级契约；仍需持久视图与release来源检查 | 项目公开支持混跑或引入持久格式变化 |
 | D6 后补设计与维护者批准分开记 | 历史实现/本地独立评审不能冒充批准 | 文档语义或实现ownership有实质变化时重新审查 |
+| D7 DISTINCT按用户值去重，隐藏GROUPING保守拒绝 | 不定义任意来源合并，不增加数据相关准入证明；接受此前部分合法绑定形态收紧为1149 | 若要放宽，必须证明每个等价类中来源唯一并重新审查 |
+| D8 分支证明B与合并证明U双发布 | 关闭早期HAVING/SAMPLE consumer与flatten时序，不修改输入编码类型 | 新消费阶段/表达式替换绕过相应证明发布点 |
 
 **设计阶段验收**：替代方案、I1—I9、owner/slot/NULL/lineage与成本模型一致；所有设计阻塞有决定；独立审查指明版本与PASS/REQUEST_CHANGES。设计通过允许继续实施验证，不等于所有发布测试已完成。
+
+**当前实现阻塞（不得靠文档宣称已修复）**：DR1，AGG DISTINCT的隐藏GROUPING准入不符合§4.7；DR2，当前流程缺少§4.6要求的分支早期证明闭合，需要针对相关调用验证并修复。依据是设计与源码时序/准入不一致，本轮没有执行新的反例，不宣称已运行得到某个错误结果。作者在设计获准后补最小失败证据、实现与上述回归，再审查实现符合性；文档发布不能解除这两项实现阻塞。
 
 **实现/发布阶段待办（不是可默默豁免的证据）**：维护者对精确设计revision的决定；新基线的受影响消费链验证；真实多CN边界证据；支持的release源与持久视图升级检查；若目标工作负载要求性能SLA，则在发布前由发布owner确认。作者负责补证据，维护者负责合并门禁，release owner负责支持矩阵/投产验收；没有这些证据不宣称可发布。
 
