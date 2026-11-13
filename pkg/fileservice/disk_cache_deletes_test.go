@@ -118,18 +118,12 @@ func (h *heldStorage) Read(ctx context.Context, key string, min, max *int64) (io
 }
 
 // A column range download that read an object before it was deleted and recreated does
-// not cache the old bytes after the delete: a later read returns the new object. As a
-// flight the delete cancels it; read past the flights' bytes, its cache write is retracted.
+// not cache the old bytes after the delete, which cancels it: a later read returns the
+// new object.
 func TestColumnRangeReadBeforeDeleteIsNotCached(t *testing.T) {
-	for _, mode := range []struct {
-		async, flight bool
-	}{{false, true}, {false, false}, {true, false}} {
-		async := mode.async
+	for _, async := range []bool{false, true} {
 		fs, _, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
 		fs.SetAsyncUpdate(async)
-		if !mode.flight {
-			fs.diskCache.prefetchFlightBytes = 1
-		}
 		ctx := context.Background()
 		held := &heldStorage{ObjectStorage: fs.storage, read: make(chan struct{}), released: make(chan struct{})}
 		fs.storage = held
