@@ -20,7 +20,7 @@ create snapshot sp_explicit for account acc01;
 -- Both forms must expose the same point-in-time state.
 select 'implicit' as snapshot_form, count(*) as rows_read from t {snapshot = 'sp_implicit'}
 union all
-select 'explicit', count(*) from t {snapshot = 'sp_explicit'};
+select 'explicit', count(*) from t {snapshot = 'sp_explicit'} order by snapshot_form;
 select 'implicit' as snapshot_form, id, value from t {snapshot = 'sp_implicit'}
 union all
 select 'explicit', id, value from t {snapshot = 'sp_explicit'} order by snapshot_form, id;

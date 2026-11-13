@@ -220,9 +220,24 @@ func TestDropAccountDuringAsyncIndexInit(t *testing.T) {
 		t.Fatal("async index initializer was not observed", ctx.Err())
 	}
 	dropping.Store(true)
-	_, err = admins[1-initializerCN].ExecContext(ctx, "drop account async_drop")
+	dropCN := 1 - initializerCN
+	_, err = admins[dropCN].ExecContext(ctx, "drop account async_drop")
 	require.NoError(t, err)
 	require.Positive(t, rollbacks.Load(), "a real admission conflict must precede success")
+	// The DROP may commit on CN1 while the catalog assertions read on CN0.
+	// Observe that commit before checking cleanup, rather than reading CN0's
+	// older snapshot immediately after the other CN returns.
+	dropService, err := cluster.GetCNService(dropCN)
+	require.NoError(t, err)
+	frontier := dropService.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+	require.False(t, frontier.IsEmpty())
+	observer, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+	defer stop()
+	snapshot, err := observer.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+	require.NoError(t, err)
+	require.True(t, snapshot.Greater(frontier))
 	var accounts int
 	require.NoError(t, admins[0].QueryRowContext(ctx, "select count(*) from mo_catalog.mo_account where account_name='async_drop'").Scan(&accounts))
 	require.Zero(t, accounts)

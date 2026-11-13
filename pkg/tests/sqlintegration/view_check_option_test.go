@@ -134,21 +134,13 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 						recreate:  index == 1,
 					})
 				}
-				if round == 1 {
-					// The first round owns the complete metadata matrix. After teardown,
-					// replay one representative of each wire/type family instead of
-					// repeating every large literal and every equivalent DDL round trip.
-					recreated := replayCases[:0]
-					for _, tc := range replayCases {
-						if tc.recreate {
-							recreated = append(recreated, tc)
-						}
-					}
-					replayCases = recreated
-					require.Len(t, replayCases, 5)
-				}
 				metadataNames := make([][3]string, 0, len(replayCases))
 				for index, tc := range replayCases {
+					// Keep the original index so recreation uses the same source
+					// and replay names with the same expression after teardown.
+					if round == 1 && !tc.recreate {
+						continue
+					}
 					names := [3]string{fmt.Sprintf("name_const_source_%d", index)}
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
@@ -198,6 +190,9 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 						require.Equal(t, want, read(replayed), definition)
 					}
 					metadataNames = append(metadataNames, names)
+				}
+				if round == 1 {
+					require.Len(t, metadataNames, 5)
 				}
 				// The column catalog is stable after CREATE. Read it once for
 				// the round instead of repeating an information_schema scan for

@@ -94,7 +94,7 @@ reporting remain outside this phase comparison.
 
 All 8,746 selected roots and 42,412 root/subtest start and terminal nodes match
 exactly between the prepared candidate arms, including the same nine existing
-prerequisite root skips and no new skips, duplicate execution or failures.
+root skips and no new skips, duplicate execution or failures.
 The new protocol-scope regression is the only addition relative to the old
 planner source. Every original SQL/data/result/error/cleanup oracle is retained;
 see the [behavior map](ci-test-cost-coverage.md). The canonical report validator

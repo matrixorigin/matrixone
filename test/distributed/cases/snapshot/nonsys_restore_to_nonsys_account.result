@@ -11,7 +11,7 @@ create snapshot sp_implicit for account;
 create snapshot sp_explicit for account acc01;
 select 'implicit' as snapshot_form, count(*) as rows_read from t {snapshot = 'sp_implicit'}
 union all
-select 'explicit', count(*) from t {snapshot = 'sp_explicit'};
+select 'explicit', count(*) from t {snapshot = 'sp_explicit'} order by snapshot_form;
 ➤ snapshot_form[12,8,0]  ¦  rows_read[-5,64,0]  𝄀
 explicit  ¦  2  𝄀
 implicit  ¦  2
