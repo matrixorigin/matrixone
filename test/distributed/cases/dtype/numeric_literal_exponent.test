@@ -1,4 +1,4 @@
--- @metacmp(true)
+--- @metacmp(true)
 -- Incomplete exponents after a decimal point are syntax errors, not aliases.
 select 1.5e;
 select 1.e;
