@@ -48,7 +48,19 @@ type terminalTCPProbe struct {
 
 func terminalTCPConn(conn net.Conn) *net.TCPConn {
 	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if tlsConn == nil {
+			return nil
+		}
 		conn = tlsConn.NetConn()
+	}
+	// A TLS upgrade may have retained a read-ahead ClientHello in this
+	// frontend-owned wrapper. The terminal probe still needs the physical TCP
+	// connection after TLS has consumed those bytes.
+	if buffered, ok := conn.(*bufferedNetConn); ok {
+		if buffered == nil {
+			return nil
+		}
+		conn = buffered.Conn
 	}
 	tcp, _ := conn.(*net.TCPConn)
 	return tcp
