@@ -148,7 +148,7 @@ c_tiny_unsigned    tinyint    tinyint unsigned
 c_small_unsigned    smallint    smallint unsigned
 c_int_unsigned    int    int unsigned
 c_big_unsigned    bigint    bigint unsigned
-c_bool    tinyint    boolean
+c_bool    tinyint    tinyint(1)
 create table information_schema_data_type_case.composite_pk_probe (
 a int not null,
 b int not null,
@@ -236,4 +236,17 @@ and column_name = 'mode_value';
 ➤ column_name[12,256,0]  ¦  default_hex[-1,16383,0]  ¦  default_is_null[-6,8,0]  𝄀
 mode_value  ¦  615C62  ¦  0
 set sql_mode = @column_default_sql_mode;
+create view information_schema_data_type_case.type_probe_boolview as
+select c_tiny, c_tiny_unsigned, c_bool from information_schema_data_type_case.type_probe;
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case'
+and table_name = 'type_probe_boolview'
+and column_name in ('c_tiny', 'c_tiny_unsigned', 'c_bool')
+order by ordinal_position;
+column_name    data_type    column_type
+c_tiny    tinyint    tinyint
+c_tiny_unsigned    tinyint    tinyint unsigned
+c_bool    tinyint    tinyint(1)
+drop view information_schema_data_type_case.type_probe_boolview;
 drop database information_schema_data_type_case;
