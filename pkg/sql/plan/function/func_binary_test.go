@@ -15618,3 +15618,51 @@ func BenchmarkTimestampAddDate(b *testing.B) {
 		})
 	}
 }
+
+func TestMoWinTruncateRejectsOverflowingScaledInterval(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name string
+		unit types.IntervalType
+		diff int64
+	}{
+		{
+			name: "minute",
+			unit: types.Minute,
+			diff: math.MaxInt64/(types.SecsPerMinute*types.MicroSecsPerSec) + 1,
+		},
+		{
+			name: "hour",
+			unit: types.Hour,
+			diff: math.MaxInt64/(types.SecsPerHour*types.MicroSecsPerSec) + 1,
+		},
+		{
+			name: "day",
+			unit: types.Day,
+			diff: math.MaxInt64/(types.SecsPerDay*types.MicroSecsPerSec) + 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The existing bound admits these counts, so nothing before the
+			// multiplication rejects them.
+			require.NoError(t, types.JudgeIntervalNumOverflow(tc.diff, tc.unit))
+
+			values := vector.NewVec(types.T_datetime.ToType())
+			require.NoError(t, vector.AppendFixed(values, types.DatetimeEpoch, false, proc.Mp()))
+			defer values.Free(proc.Mp())
+
+			diff, err := vector.NewConstFixed(types.T_int64.ToType(), tc.diff, 1, proc.Mp())
+			require.NoError(t, err)
+			defer diff.Free(proc.Mp())
+			unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+			defer unit.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.ErrorContains(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 1, nil), "interval")
+		})
+	}
+}

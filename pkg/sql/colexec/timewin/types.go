@@ -15,6 +15,8 @@
 package timewin
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -301,20 +303,27 @@ func calcDatetime(diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 	if err != nil {
 		return 0, err
 	}
+	factor := int64(1)
 	switch iTyp {
 	case types.MicroSecond:
-		num = diff
 	case types.Second:
-		num = diff * types.MicroSecsPerSec
+		factor = types.MicroSecsPerSec
 	case types.Minute:
-		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
+		factor = types.SecsPerMinute * types.MicroSecsPerSec
 	case types.Hour:
-		num = diff * types.SecsPerHour * types.MicroSecsPerSec
+		factor = types.SecsPerHour * types.MicroSecsPerSec
 	case types.Day:
-		num = diff * types.SecsPerDay * types.MicroSecsPerSec
+		factor = types.SecsPerDay * types.MicroSecsPerSec
 	default:
 		return 0, moerr.NewNotSupportedNoCtx("Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
+	// JudgeIntervalNumOverflow bounds diff on its own, which keeps SECOND
+	// inside int64 but still lets MINUTE, HOUR and DAY wrap once diff is
+	// scaled to microseconds.
+	if diff > math.MaxInt64/factor || diff < math.MinInt64/factor {
+		return 0, moerr.NewInvalidArgNoCtx("interval", diff)
+	}
+	num = diff * factor
 	return types.Datetime(num), nil
 }
 
