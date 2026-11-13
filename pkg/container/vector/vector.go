@@ -5891,9 +5891,12 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 	preflightRowCount int,
 	finalize bool,
 ) error {
-	err := v.unionBatch(
-		w, offset, cnt, flags, stringSources, mp,
-		selectedAreaBytes, preflightRowCount, true)
+	var err error
+	if w.IsDictionary() {
+		err = v.admitDictionaryBatch(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
+	} else {
+		err = v.unionBatchFlat(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
+	}
 	if finalize {
 		v.FinalizeStringSourcePreflight()
 	}
@@ -8879,6 +8882,33 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
 			return unionT(v, source, sels, mp)
 		})
+	}
+	// Classify the source cheaply before considering a reused destination.
+	// Metadata-bearing, nullable and constant sources keep the ordinary path.
+	if cap(v.data) > 0 && w.class == FLAT && w.nsp.EmptyByFlag() &&
+		w.prepareParamKinds == nil && w.prepareParamKind == PrepareParamNone {
+		width := v.typ.TypeSize()
+		if (width == 4 || width == 8) && v.class == FLAT && v.typ == w.typ &&
+			len(sels) <= cap(v.data)/width-v.length && v.nsp.EmptyByFlag() &&
+			v.gsp.EmptyByFlag() && w.gsp.EmptyByFlag() &&
+			v.DataBackingKind() == OwnedMPoolUnique && !v.HasBorrowedBacking() &&
+			!v.preflightStringSourceReady && v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
+			(v.length == 0 || v.stringSource == w.stringSource) {
+			oldLen := v.length
+			v.data = v.data[:cap(v.data)]
+			if width == 8 {
+				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
+			} else {
+				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
+			}
+			if mp != nil {
+				v.prepareParamKindsMP = mp
+			}
+			v.length = oldLen + len(sels)
+			v.stringSource = w.stringSource
+			v.prepareParamKindSeen = true
+			return nil
+		}
 	}
 	preserveDisjointArea := v.typ.IsVarlen() &&
 		v.AreaBackingKind() == OwnedMPoolUnique &&
