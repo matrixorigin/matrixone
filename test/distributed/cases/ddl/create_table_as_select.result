@@ -1,3 +1,30 @@
+drop database if exists ctas_internal_database;
+create database ctas_internal_database;
+select database();
+➤ database()[12,-1,0]  𝄀
+
+create table ctas_internal_database.no_default as select result as v from generate_series(1,10001) g;
+select count(*), min(v), max(v), sum(v) from ctas_internal_database.no_default;
+➤ count(*)[-5,64,0]  ¦  min(v)[-5,64,0]  ¦  max(v)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+10001  ¦  1  ¦  10001  ¦  50015001
+create table ctas_internal_database.high_no_default (id bigint auto_increment primary key) as select cast(100002 as bigint) as id;
+insert into ctas_internal_database.high_no_default values (null);
+select id from ctas_internal_database.high_no_default order by id;
+➤ id[-5,64,0]  𝄀
+100002  𝄀
+100003
+use ctas_internal_database;
+create table selected_default as select result as v from generate_series(1,10001) g;
+select count(*), min(v), max(v), sum(v) from selected_default;
+➤ count(*)[-5,64,0]  ¦  min(v)[-5,64,0]  ¦  max(v)[-5,64,0]  ¦  sum(v)[3,38,0]  𝄀
+10001  ¦  1  ¦  10001  ¦  50015001
+create table high_selected_default (id bigint auto_increment primary key) as select cast(100002 as bigint) as id;
+insert into high_selected_default values (null);
+select id from high_selected_default order by id;
+➤ id[-5,64,0]  𝄀
+100002  𝄀
+100003
+drop database ctas_internal_database;
 create database test;
 use test;
 create table t1(a int default 123, b char(5));

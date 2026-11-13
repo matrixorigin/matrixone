@@ -502,7 +502,11 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {
-		switch stmt.(type) {
+		switch s := stmt.(type) {
+		case *tree.CreateTable:
+			if s.AsSource == nil {
+				continue
+			}
 		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
 			// SELECT and INSERT...SELECT carry the rewrite option for the planner
 			// (INSERT propagates it to its inner SELECT read-source, see below).
@@ -558,6 +562,16 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		case *tree.ParenSelect:
 			if s.Select != nil {
 				s.Select.RewriteOption = rewriteOption
+			}
+		case *tree.CreateTable:
+			// CTAS 的源查询必须保留有效行规则，内部填充时继续传递。
+			for source := s.AsSource; source != nil; {
+				source.RewriteOption = rewriteOption
+				paren, ok := source.Select.(*tree.ParenSelect)
+				if !ok {
+					break
+				}
+				source = paren.Select
 			}
 		case *tree.Insert:
 			// INSERT...SELECT: propagate the rewrite to the inner read-source so

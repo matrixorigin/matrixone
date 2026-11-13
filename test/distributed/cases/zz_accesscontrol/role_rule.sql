@@ -29,6 +29,7 @@ drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop database if exists db1;
 drop database if exists db2;
+drop database if exists ctas_remap_db;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
@@ -73,10 +74,134 @@ alter role test_rule_role add rule "select * from db1.t1 where age > 28" on tabl
 create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
+grant create table, drop table on database db1 to test_rule_role;
+alter role test_rule_role add rule "select * from db1.t_dup where marker = 2 and a = 1" on table db1.t_dup;
 -- @session:id=1&user=sys:test_rule_user:test_rule_role&password=123456
 set enable_remap_hint = 1;
 select * from db1.t1;
+
+-- CTAS 的普通明细与 SELECT 遵守同一行权限。
+create table db1.ctas_visible as select a from db1.t1;
+select * from db1.ctas_visible order by a;
+
+-- 聚合虽返回一行，也不能物化权限外金额或条数。
+select sum(a) as total, count(*) as n from db1.t1 where age < 28;
+create table db1.ctas_aggregate as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t1 where age < 28) src;
+select * from db1.ctas_aggregate order by rn;
+
+-- 第二张受控表使用不同的复合规则，派生表包装不得绕过规则。
+select sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+create table db1.ctas_second as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t_dup where marker = 1) src;
+select * from db1.ctas_second order by rn;
+
+-- 空分组与无分组合计保留不同基数，两条 UNION 分支均须受控。
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+create table db1.ctas_union as
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+select * from db1.ctas_union order by kind;
+
+-- 有可见数据的对照：两张表的规则独立生效，不能全部过滤。
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+create table db1.ctas_join as
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+select * from db1.ctas_join order by first_a, marker;
 -- @session
+
+-- 管理员只核对实际物化内容；受限查询和 CTAS 均由上方受限用户执行。
+select * from db1.ctas_visible order by a;
+select * from db1.ctas_aggregate order by rn;
+select * from db1.ctas_second order by rn;
+select * from db1.ctas_union order by kind;
+select * from db1.ctas_join order by first_a, marker;
+-- 无规则的 CTAS 保持原行为。
+create table db1.ctas_unrestricted as select sum(a) as total, count(*) as n from db1.t1;
+select * from db1.ctas_unrestricted;
+
+-- 行规则按用户 SQL mode 解析，内部执行不得重新解释反斜杠或诊断标记。
+set @ctas_saved_sql_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+alter role test_rule_role add rule "select * from db1.t_dup where marker = 2 and 'a\b' = concat('a', char(92), 'b')" on table db1.t_dup;
+set sql_mode = @ctas_saved_sql_mode;
+-- @session:id=10&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+set sql_mode = '';
+select marker from db1.t_dup order by marker;
+create table db1.ctas_mode_default as select marker from db1.t_dup;
+select * from db1.ctas_mode_default order by marker;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select marker from db1.t_dup order by marker;
+create table db1.ctas_mode_literal as select marker, '__mo_query' as tag from db1.t_dup;
+select * from db1.ctas_mode_literal order by marker;
+
+-- 业务 SQL 使用逻辑库名，规则绑定实际物理表；CTAS 保留同一有效策略。
+set remap_rewrites = '{"remapdb":{"logical_ctas":"db1"}}';
+select marker from logical_ctas.t_dup order by marker;
+create table db1.ctas_remap as select marker, '__mo_query' as tag from logical_ctas.t_dup;
+select * from db1.ctas_remap order by marker;
+set remap_rewrites = '';
+set sql_mode = default;
+-- @session
+select * from db1.ctas_mode_default order by marker;
+select * from db1.ctas_mode_literal order by marker;
+select * from db1.ctas_remap order by marker;
+drop table db1.ctas_mode_default;
+drop table db1.ctas_mode_literal;
+drop table db1.ctas_remap;
+drop table db1.ctas_visible;
+drop table db1.ctas_aggregate;
+drop table db1.ctas_second;
+drop table db1.ctas_union;
+drop table db1.ctas_join;
+drop table db1.ctas_unrestricted;
+
+-- 有效默认库必须随 CTAS 策略一起传递，不能回到重映射前的同名表。
+create database ctas_remap_db;
+create table db1.t_remap(a int, age int);
+insert into db1.t_remap values (1,999),(2,888);
+create table ctas_remap_db.t_remap(a int, age int);
+insert into ctas_remap_db.t_remap values (1,10),(2,999);
+alter role test_rule_role add rule "select a, age from t_remap where a = 1" on table ctas_remap_db.t_remap;
+grant create table, drop table on database ctas_remap_db to test_rule_role;
+-- @session:id=11&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+use db1;
+set remap_rewrites = '{"remapdb":{"db1":"ctas_remap_db"}}';
+select * from t_remap;
+create table ctas_remap_db.copy_remapped as select * from t_remap;
+select * from ctas_remap_db.copy_remapped;
+create table ctas_remap_db.copy_remapped_paren as ((select * from t_remap));
+select * from ctas_remap_db.copy_remapped_paren;
+set remap_rewrites = '';
+-- @session
+select * from ctas_remap_db.copy_remapped;
+select * from ctas_remap_db.copy_remapped_paren;
+drop database ctas_remap_db;
+
+-- 部分列投影在无括号、单层与多层括号源下保持同一建表/填充契约。
+alter role test_rule_role add rule "select a from db1.t1 where age > 28" on table db1.t1;
+-- @session:id=12&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+create table db1.copy_projected as select * from db1.t1;
+create table db1.copy_projected_paren as (select * from db1.t1);
+create table db1.copy_projected_nested as ((select * from db1.t1));
+select * from db1.copy_projected;
+select * from db1.copy_projected_paren;
+select * from db1.copy_projected_nested;
+-- @session
+select * from db1.copy_projected;
+select * from db1.copy_projected_paren;
+select * from db1.copy_projected_nested;
+drop table db1.copy_projected;
+drop table db1.copy_projected_paren;
+drop table db1.copy_projected_nested;
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;
