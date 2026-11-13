@@ -301,4 +301,16 @@ execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;
 deallocate prepare row_scalar_stmt;
 drop table row_scalar_28295;
 
+-- ROW expression spelling shares the ordinary tuple comparison semantics.
+select row('a','b','c') = row('a','b','c') as row_equal,
+       ('a','b','c') = ('a','b','c') as tuple_equal;
+select row(1,2) < row(1,3) as row_less,
+       (1,2) < (1,3) as tuple_less;
+select row(1,null) = row(1,null) as row_unknown,
+       (1,null) = (1,null) as tuple_unknown;
+set @row_expr_arg=2;
+prepare row_expr_stmt from 'select row(1,?) = row(1,2) as row_prepared, (1,?) = (1,2) as tuple_prepared';
+execute row_expr_stmt using @row_expr_arg, @row_expr_arg;
+deallocate prepare row_expr_stmt;
+
 drop database test;

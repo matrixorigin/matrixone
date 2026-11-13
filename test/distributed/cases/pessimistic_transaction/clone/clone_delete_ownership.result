@@ -1,0 +1,63 @@
+drop database if exists clone_delete_ownership;
+create database clone_delete_ownership;
+use clone_delete_ownership;
+set session transaction_isolation='READ-COMMITTED';
+begin;
+create table original(id int primary key, a int, b int);
+insert into original values (1,10,100),(2,20,200),(3,30,300);
+create index ia on original(a);
+create table a clone original;
+create table b clone a;
+delete from a where id=1;
+update a set a=11 where id=2;
+select id,a,b from original order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  20  ¦  200  𝄀
+3  ¦  30  ¦  300
+select id,a,b from a order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  11  ¦  200  𝄀
+3  ¦  30  ¦  300
+select id,a,b from b order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  20  ¦  200  𝄀
+3  ¦  30  ¦  300
+commit;
+select id,a,b from original order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  20  ¦  200  𝄀
+3  ¦  30  ¦  300
+select id,a,b from a order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  11  ¦  200  𝄀
+3  ¦  30  ¦  300
+select id,a,b from b order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  20  ¦  200  𝄀
+3  ¦  30  ¦  300
+select id from original where a=20;
+➤ id[4,32,0]  𝄀
+2
+select id from a where a=11;
+➤ id[4,32,0]  𝄀
+2
+select id from b where a=20;
+➤ id[4,32,0]  𝄀
+2
+select count(*) as old_key_rows from a where a=20;
+➤ old_key_rows[-5,64,0]  𝄀
+0
+begin;
+delete from b where id=2;
+rollback;
+select id,a,b from b order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  20  ¦  200  𝄀
+3  ¦  30  ¦  300
+set session transaction_isolation=default;
+drop database clone_delete_ownership;
