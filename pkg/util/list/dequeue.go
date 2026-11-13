@@ -69,7 +69,8 @@ type Deque[E any] interface {
 	Remove(e *Element[E]) E
 	// Truncate trancate deque, keeping the first size elements
 	Truncate(keeping int)
-	// Drain removes the specified range in the deque, returns drained
+	// Drain removes [from, to), clipped to [0, Len()), and returns the drained elements.
+	// An empty range returns nil.
 	Drain(from, to int) Deque[E]
 }
 
@@ -322,6 +323,12 @@ func (q *defaultDeque[E]) MoveAfter(e, mark *Element[E]) {
 }
 
 func (q *defaultDeque[E]) doRangeRemove(from, to int, withRemoved bool) Deque[E] {
+	if from < 0 {
+		from = 0
+	}
+	if to > q.len {
+		to = q.len
+	}
 	if from >= to {
 		return nil
 	}
@@ -329,10 +336,6 @@ func (q *defaultDeque[E]) doRangeRemove(from, to int, withRemoved bool) Deque[E]
 	q.lazyInit()
 	if q.len == 0 {
 		return nil
-	}
-
-	if to > q.len {
-		to = q.len
 	}
 
 	i := 0
