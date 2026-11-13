@@ -64,13 +64,13 @@ func TestFormatKafkaTableOptionsForShowCreate(t *testing.T) {
 	got := formatKafkaTableOptionsForShowCreate(sqlkafka.Config{
 		Brokers: "h1:9092,h2:9092", Topic: "t'1", Partition: 3, Autocommit: true,
 		Group: "g1", Format: sqlkafka.FormatCSV, Separator: "|",
-	})
+	}, false)
 	require.Equal(t, ` ENGINE = KAFKA WITH ("brokers" = 'h1:9092,h2:9092', "topic" = 't''1', "partition" = '3', "autocommit" = 'true', "group" = 'g1', "format" = 'csv', "separator" = '|')`, got)
 
 	// jsonl omits the separator
 	got = formatKafkaTableOptionsForShowCreate(sqlkafka.Config{
 		Brokers: "h:9092", Topic: "t", Group: "g", Format: sqlkafka.FormatJSONL,
-	})
+	}, false)
 	require.NotContains(t, got, "separator")
 	require.Contains(t, got, `"format" = 'jsonl'`)
 }
