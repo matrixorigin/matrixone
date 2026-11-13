@@ -302,33 +302,35 @@ func (d *DiskCache) runFlight(
 	}
 	fl.finish()
 	if err == nil {
-		_ = d.Update(context.WithoutCancel(ctx), &IOVector{
+		err = d.Update(context.WithoutCancel(ctx), &IOVector{
 			FilePath: filePath,
 			Policy:   policy,
 			Entries:  []IOEntry{{Offset: fl.start, Size: int64(len(content)), Data: content, readDeletes: fl.readDeletes}},
 		}, false)
 	}
+	fl.err = err
 	d.endPrefetch(diskPath, fl)
 }
 
 // readRanges reads the ranges of the object at filePath through open as flights, which
-// reads of their bytes join, caches each, and returns once they end or ctx is done. A range
-// a flight already reads is waited for, not read again. It reports false, reading nothing,
-// when the cache is closed or the ranges would pass the bytes of the flights under way.
+// reads of their bytes join, caches each, and returns once they end or ctx is done, with
+// the error of a flight that did not cache its range. A range a flight already reads is
+// waited for, not read again. It reports false, reading nothing, when the cache is closed
+// or the ranges would pass the bytes of the flights under way.
 func (d *DiskCache) readRanges(
 	ctx context.Context,
 	filePath string,
 	policy Policy,
 	ranges []PrefetchRange,
 	open rangeOpener,
-) bool {
+) (bool, error) {
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchFlights
 	f.mu.Lock()
 	closing, ok := f.openLocked()
 	if !ok {
 		f.mu.Unlock()
-		return false
+		return false, nil
 	}
 	now := time.Now()
 	var missing []PrefetchRange
@@ -344,7 +346,7 @@ func (d *DiskCache) readRanges(
 	}
 	if need > 0 && f.bytes+need > d.prefetchFlightBytes {
 		f.mu.Unlock()
-		return false
+		return false, nil
 	}
 	started := make([]*prefetchFlight, 0, len(missing))
 	for _, r := range missing {
@@ -354,8 +356,16 @@ func (d *DiskCache) readRanges(
 	for _, fl := range started {
 		go d.runFlight(ctx, filePath, diskPath, policy, fl, open, closing)
 	}
-	_ = waitFlights(ctx, append(waits, started...))
-	return true
+	flights := append(waits, started...)
+	if err := waitFlights(ctx, flights); err != nil {
+		return true, err
+	}
+	for _, fl := range flights {
+		if fl.err != nil {
+			return true, fl.err
+		}
+	}
+	return true, nil
 }
 
 // readFromFlights fills the entries of vector not done, of the object at filePath, from the
@@ -431,10 +441,11 @@ type prefetchFlight struct {
 	buf        []byte
 
 	// ctx is the read's; cancel ends it. ended is closed when the flight, and the cache
-	// write of its range, are done.
+	// write of its range, are done; err is then why its range was not cached.
 	ctx    context.Context
 	cancel context.CancelFunc
 	ended  chan struct{}
+	err    error
 
 	mu       sync.Mutex
 	n        int64 // bytes of buf read
