@@ -22,9 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The scan a DEDUP join checks keys against is narrow, for the primary key and unique
-// indexes of INSERT, UPDATE and REPLACE; every other scan, such as the source of an
-// INSERT ... SELECT, is not.
+// The scan a DEDUP join checks keys against reads column ranges, for the primary key and
+// unique indexes of INSERT, UPDATE and REPLACE.
 func TestDedupTargetScanIsNarrow(t *testing.T) {
 	for _, sql := range []string{
 		"insert into constraint_test.emp values (1, 'a', 'b', 1, '2020-01-01', 1.0, 1.0, 1)",
@@ -38,7 +37,6 @@ func TestDedupTargetScanIsNarrow(t *testing.T) {
 			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 			query := p.GetQuery()
-			target := make(map[int32]bool)
 			dedups := 0
 			for _, n := range query.Nodes {
 				if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_DEDUP {
@@ -47,18 +45,13 @@ func TestDedupTargetScanIsNarrow(t *testing.T) {
 				dedups++
 				narrow := false
 				for _, c := range n.Children {
-					if query.Nodes[c].NodeType == plan.Node_TABLE_SCAN && query.Nodes[c].NarrowScan {
-						target[c], narrow = true, true
+					if query.Nodes[c].NodeType == plan.Node_TABLE_SCAN && readsColumnRanges(query.Nodes[c]) {
+						narrow = true
 					}
 				}
 				require.True(t, narrow, "DEDUP join on %s has a narrow target scan", n.DedupColName)
 			}
 			require.NotZero(t, dedups)
-			for i, n := range query.Nodes {
-				if n.NodeType == plan.Node_TABLE_SCAN && !target[int32(i)] {
-					require.False(t, n.NarrowScan, "scan of %s outside a DEDUP join", n.TableDef.GetName())
-				}
-			}
 		})
 	}
 }

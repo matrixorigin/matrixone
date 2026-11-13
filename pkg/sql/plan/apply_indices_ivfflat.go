@@ -955,7 +955,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			return nodeID, nil
 		}
 		// The join reads only the candidate rows of the base table.
-		scanNode.NarrowScan = true
+		readColumnRanges(scanNode)
 
 		// JOIN( table, ivf )
 		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{

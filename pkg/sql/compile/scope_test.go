@@ -628,7 +628,10 @@ func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.BuildPipelineContext(context.Background())
 			reader := &mockReaderForParallelOrderBy{}
-			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
+			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
+			if skip {
+				node.ReadPolicy = uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+			}
 			tableDef := &plan.TableDef{TblId: 42}
 			if fromObjRef {
 				// A rewritten scan can carry its table only in the object reference.
@@ -3861,12 +3864,14 @@ func TestScopeGetRelDataAppliesScanReadPolicy(t *testing.T) {
 		s.Proc = testutil.NewProcess(t)
 		s.NodeInfo = engine.Node{Mcpu: 1, CNCNT: 1}
 		s.DataSource = &Source{node: &plan.Node{
-			NodeType:   plan.Node_TABLE_SCAN,
-			NarrowScan: narrow,
-			Stats:      &plan.Stats{},
-			ObjRef:     &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
-			TableDef:   &plan.TableDef{Name: "t"},
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{},
+			ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef: &plan.TableDef{Name: "t"},
 		}}
+		if narrow {
+			s.DataSource.node.ReadPolicy = uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
+		}
 		c := NewMockCompile(t)
 		c.proc = s.Proc
 		c.e = e
@@ -3886,22 +3891,4 @@ type rangesPolicyDatabase struct {
 
 func (db *rangesPolicyDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
 	return db.rel, nil
-}
-
-// A scan reads with the planner's read policy, and a column prefetch, asked for by policy
-// or by a narrow scan, never preloads whole objects.
-func TestScanReadPolicyTakesThePlannersPolicy(t *testing.T) {
-	cols := fileservice.Policy(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
-	for _, tc := range []struct {
-		node plan.Node
-		want fileservice.Policy
-	}{
-		{plan.Node{}, 0},
-		{plan.Node{ReadPolicy: uint64(fileservice.SkipMemoryCacheWrites)}, fileservice.SkipMemoryCacheWrites},
-		{plan.Node{ReadPolicy: uint64(fileservice.ColumnPrefetch)}, cols},
-		{plan.Node{NarrowScan: true}, cols},
-		{plan.Node{NarrowScan: true, ReadPolicy: uint64(fileservice.SkipMemoryCacheWrites)}, cols | fileservice.SkipMemoryCacheWrites},
-	} {
-		require.Equal(t, tc.want, scanReadPolicy(&tc.node), "node %+v", tc.node.ReadPolicy)
-	}
 }

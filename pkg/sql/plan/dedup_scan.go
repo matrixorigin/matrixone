@@ -14,15 +14,24 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // markDedupTargetScan marks the scan of the table a DEDUP join checks keys against as
 // narrow: it reads the key columns of a few rows, so it prefetches those columns and
 // never downloads whole objects.
 func (builder *QueryBuilder) markDedupTargetScan(nodeID int32) {
 	if node := builder.qry.Nodes[nodeID]; node.NodeType == plan.Node_TABLE_SCAN {
-		node.NarrowScan = true
+		readColumnRanges(node)
 	}
+}
+
+// readColumnRanges makes a table scan prefetch only the columns it reads and never
+// download whole objects.
+func readColumnRanges(node *plan.Node) {
+	node.ReadPolicy |= uint64(fileservice.ColumnPrefetch | fileservice.SkipFullFilePreloads)
 }
 
 // readsSubsetOfColumns reports whether a scan of a table with columns all reads only some

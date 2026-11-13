@@ -422,26 +422,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
 			if ts, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
-				ts.ReadPolicy = scanReadPolicy(s.DataSource.node)
+				ts.ReadPolicy = fileservice.Policy(s.DataSource.node.GetReadPolicy())
 			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	return err
-}
-
-// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads: the
-// planner's read policy, with a column prefetch never preloading whole objects.
-func scanReadPolicy(node *plan.Node) fileservice.Policy {
-	policy := fileservice.Policy(node.GetReadPolicy())
-	if node.GetNarrowScan() {
-		policy |= fileservice.ColumnPrefetch
-	}
-	if policy.Any(fileservice.ColumnPrefetch) {
-		policy |= fileservice.SkipFullFilePreloads
-	}
-	return policy
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
@@ -1257,7 +1244,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 	// The block pruning reads, of object metadata and bloom filters, take the scan's
 	// read policy too.
-	if policy := scanReadPolicy(s.DataSource.node); policy != 0 {
+	if policy := fileservice.Policy(s.DataSource.node.GetReadPolicy()); policy != 0 {
 		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|policy)
 	}
 
