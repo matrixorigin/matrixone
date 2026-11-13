@@ -165,4 +165,14 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	require.Equal(t, "2", text.Text)
 	text.Close()
 
+	failedPublication := objectio.NewJSONReadSet([]int{0})
+	failedPublication.SetCachePinAdmission(admit)
+	defer failedPublication.Close()
+	failedPublication.BindColumns([]uint16{0})
+	mismatchedDestination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	defer mismatchedDestination.Free(mp)
+	_, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, failedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{mismatchedDestination}, mp, 0, nil)
+	require.Error(t, err)
+	require.Nil(t, failedPublication.Readers(), "failed borrowing must release an already published JSON owner")
+
 }

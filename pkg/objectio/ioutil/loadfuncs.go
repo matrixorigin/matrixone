@@ -333,6 +333,7 @@ func loadColumnsDataInto(
 			var borrowed bool
 			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m)
 			if err != nil {
+				publication.Disable()
 				return
 			}
 			if borrowed {
