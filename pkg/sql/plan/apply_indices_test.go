@@ -3018,7 +3018,7 @@ func makeTestRegularIndexMessageBuilder(
 				},
 				{
 					Name: catalog.IndexTablePrimaryColName,
-					Typ:  planpb.Type{Id: int32(types.T_int64)},
+					Typ:  planpb.Type{Id: int32(types.T_int64), NotNullable: true},
 				},
 			},
 		},
@@ -3356,7 +3356,7 @@ func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	ctx := NewBindContext(builder, nil)
 	scanTag := builder.genNewBindTag()
 	projectTag := builder.genNewBindTag()
-	colType := planpb.Type{Id: int32(types.T_int64)}
+	colType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 
 	scanID := builder.appendNode(&planpb.Node{
 		NodeType:    planpb.Node_TABLE_SCAN,
@@ -3483,6 +3483,7 @@ func TestHandleMessageFromTopToScanDisablesShuffleOnAcceptedPath(t *testing.T) {
 		NodeId:   3,
 		Children: []int32{2},
 		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64), NotNullable: true},
 			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: leftTag, ColPos: 0}},
 		}}},
 		Limit: makePlan2Uint64ConstExprWithType(1),

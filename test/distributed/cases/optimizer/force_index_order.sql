@@ -151,4 +151,90 @@ set @v=1;
 execute force_order_param using @v;
 deallocate prepare force_order_param;
 
+
+-- Dynamic TopValue can prune the base probe of an INDEX join; no static
+-- reader limit may cross that join. A non-NULL first key permits safe pruning.
+create table top_probe (id int primary key, a int, payload int not null, key ix_top(a));
+insert into top_probe values (1,1,30),(2,1,10),(3,2,20),(4,2,40);
+-- @separator:table
+-- @regex("Index Table Scan.*ix_top",true)
+-- @regex("MsgTopValue",true)
+-- @regex("Index Reader Param",false)
+explain select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
+select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
+select id,payload from top_probe ignore index(ix_top) order by payload,id limit 2;
+
+-- A NULL can be the first SQL value even when the block's non-NULL zonemap
+-- lies beyond the current TopValue. Both indexed and base scans must retain it.
+create table nullable_top (id int primary key, a int not null, payload int, key ix_null_top(a));
+set @@max_dop=1;
+insert into nullable_top values (1,1,1);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+insert into nullable_top values (2,2,100),(3,3,null);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+-- @separator:table
+-- @regex("Index Table Scan.*ix_null_top",true)
+-- @regex("MsgTopValue",false)
+explain select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+select id,payload from nullable_top where payload is null;
+set @@max_dop=0;
+
+-- An integer range after an equality prefix can bound the physical index,
+-- while the original SQL predicates remain authoritative.
+-- @separator:table
+-- @regex("Block Filter Cond:.*prefix_between",true)
+explain select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+select id,payload from t ignore index(ix_ab) where a=1 and b between 1 and 2 order by id;
+select id,payload from t force index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+select id,payload from t ignore index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+
+prepare force_index_range from 'select id,payload from t force index(ix_ab) where a=? and b between ? and ? order by id';
+set @a=1, @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+set @lo=null;
+execute force_index_range using @a,@lo,@hi;
+set @lo=2, @hi=1;
+execute force_index_range using @a,@lo,@hi;
+set @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+deallocate prepare force_index_range;
+
+-- A lossless probe widening may use the index via a narrowed, checked runtime
+-- filter. Out-of-range build values fail open and cannot hide matching rows.
+-- @separator:table
+-- @regex("Runtime Filter Build: serial_full.*cast",true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix",true)
+explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t ignore index(ix_ab) on t.a=k.a order by t.id;
+
+-- The reported composite-primary-key and VARCHAR index case must retain its
+-- bounded forced access after ORDER BY introduces a separate Sort.
+create table issue32665 (pk1 int, pk2 int, a int, b varchar(20), payload int,
+    primary key (pk1,pk2), key ix_issue32665_ab(a,b));
+insert into issue32665 values
+    (1,1,1,'alpha',10),(2,2,1,'alpha',20),(3,3,1,'beta',30),(4,4,2,'alpha',40);
+select mo_ctl('dn','flush','force_index_order.issue32665');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_issue32665_ab');
+-- @separator:table
+-- @regex("Index Table Scan.*ix_issue32665_ab",true)
+-- @regex("prefix_in",true)
+explain select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+
 drop database force_index_order;

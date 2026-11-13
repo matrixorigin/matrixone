@@ -355,4 +355,253 @@ execute force_order_param using @v;
 3  ¦  20  𝄀
 1  ¦  30
 deallocate prepare force_order_param;
+create table top_probe (id int primary key, a int, payload int not null, key ix_top(a));
+insert into top_probe values (1,1,30),(2,1,10),(3,2,20),(4,2,40);
+explain select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
+-- @regex("Index Table Scan.*ix_top", true)
+-- @regex("MsgTopValue", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: top_probe.payload INTERNAL, top_probe.id INTERNAL  𝄀
+        Limit: 2  𝄀
+        Send Message: [tag 2 , type MsgTopValue]  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (top_probe.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.top_probe [ForceOneCN]  𝄀
+                    Sort Key: top_probe.payload INTERNAL  𝄀
+                    Runtime Filter Probe: top_probe.id  𝄀
+                    Recv Message: [tag 2 , type MsgTopValue]  𝄀
+              ->  Index Table Scan on top_probe.ix_top [ForceOneCN]
+select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from top_probe ignore index(ix_top) order by payload,id limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+create table nullable_top (id int primary key, a int not null, payload int, key ix_null_top(a));
+set @@max_dop=1;
+insert into nullable_top values (1,1,1);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into nullable_top values (2,2,100),(3,3,null);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+-- @regex("Index Table Scan.*ix_null_top", true)
+-- @regex("MsgTopValue", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_top.payload INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (nullable_top.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.nullable_top [ForceOneCN]  𝄀
+                    Runtime Filter Probe: nullable_top.id  𝄀
+              ->  Index Table Scan on nullable_top.ix_null_top [ForceOneCN]
+select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+select id,payload from nullable_top where payload is null;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+set @@max_dop=0;
+explain select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+-- @regex("Block Filter Cond:.*prefix_between", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                    Filter Cond: (t.a = 1), t.b BETWEEN 1 AND 2  𝄀
+                    Block Filter Cond: (t.a = 1), t.b BETWEEN 1 AND 2  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
+                    Filter Cond: prefix_between(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 1, INT)) BETWEEN 1 AND 2  𝄀
+                    Block Filter Cond: prefix_eq(__mo_index_idx_col), prefix_between(__mo_index_idx_col)
+select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from t ignore index(ix_ab) where a=1 and b between 1 and 2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+select id,payload from t force index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20
+select id,payload from t ignore index(ix_ab) where a=1 and b>1 and b<=2 order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20
+prepare force_index_range from 'select id,payload from t force index(ix_ab) where a=? and b between ? and ? order by id';
+set @a=1, @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+set @lo=null;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @lo=2, @hi=1;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @lo=1, @hi=2;
+execute force_index_range using @a,@lo,@hi;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+deallocate prepare force_index_range;
+explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+-- @regex("Runtime Filter Build: serial_full.*cast", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (cast(t.a AS BIGINT) = k.a)  𝄀
+              Runtime Filter Build: serial_full(cast(#[-1,0] AS INT))  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (t.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                          Runtime Filter Probe: t.id  𝄀
+                    ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
+                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+              ->  Project  𝄀
+                    ->  Values Scan "*VALUES*"
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t force index(ix_ab) on t.a=k.a order by t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  30  𝄀
+2  ¦  1  ¦  1  ¦  10  𝄀
+3  ¦  1  ¦  2  ¦  20
+select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
+join t ignore index(ix_ab) on t.a=k.a order by t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  30  𝄀
+2  ¦  1  ¦  1  ¦  10  𝄀
+3  ¦  1  ¦  2  ¦  20
+create table issue32665 (pk1 int, pk2 int, a int, b varchar(20), payload int,
+primary key (pk1,pk2), key ix_issue32665_ab(a,b));
+insert into issue32665 values
+(1,1,1,'alpha',10),(2,2,1,'alpha',20),(3,3,1,'beta',30),(4,4,2,'alpha',40);
+select mo_ctl('dn','flush','force_index_order.issue32665');
+➤ mo_ctl(dn, flush, force_index_order.issue32665)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_issue32665_ab');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+-- @regex("Index Table Scan.*ix_issue32665_ab", true)
+-- @regex("prefix_in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: issue32665.payload INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (issue32665.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.issue32665 [ForceOneCN]  𝄀
+                    Filter Cond: (issue32665.a = 1), issue32665.b in ([alpha beta])  𝄀
+                    Block Filter Cond: (issue32665.a = 1)  𝄀
+                    Runtime Filter Probe: issue32665.__mo_cpkey_col  𝄀
+              ->  Index Table Scan on issue32665.ix_issue32665_ab [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_in(__mo_index_idx_col)
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+➤ pk1[4,32,0]  ¦  pk2[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
 drop database force_index_order;
