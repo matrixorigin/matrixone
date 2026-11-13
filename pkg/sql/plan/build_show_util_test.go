@@ -870,7 +870,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "stage://s/part-*.csv",
 		Option:   []string{"format", "csv", "write_file_pattern", pattern},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(p)
+	out := formatInfileExternalOptionsForShowCreate(p, false)
 	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
 	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
 	require.NotContains(t, out, "JSONDATA")
@@ -883,7 +883,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	roOut := formatInfileExternalOptionsForShowCreate(ro, false)
 	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
 	require.Contains(t, roOut, "'FILEPATH'=''")
 	require.NotContains(t, roOut, "/local/path.csv")
@@ -898,7 +898,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	out = formatS3ExternalOptionsForShowCreate(s3)
+	out = formatS3ExternalOptionsForShowCreate(s3, false)
 	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
 }
 
@@ -913,7 +913,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv", "comment", "#"},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(ro)
+	out := formatInfileExternalOptionsForShowCreate(ro, false)
 	require.Contains(t, out, "'COMMENT'='#'")
 
 	// no comment option => no COMMENT key
@@ -922,7 +922,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment, false), "COMMENT")
 
 	// S3 read-only table with a comment marker
 	s3 := &tree.ExternParam{
@@ -933,7 +933,27 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3, false), "'comment'='REM'")
+
+	// URL s3option values use the same replay mode as INFILE values.
+	s3.Option[3] = `#\t`
+	for _, mode := range []struct {
+		name, sqlMode      string
+		noBackslashEscapes bool
+	}{
+		{name: "ordinary"},
+		{name: "NO_BACKSLASH_ESCAPES", sqlMode: "NO_BACKSLASH_ESCAPES", noBackslashEscapes: true},
+	} {
+		t.Run("s3/"+mode.name, func(t *testing.T) {
+			ddl := "CREATE EXTERNAL TABLE comment_s3 (`id` int)" + formatS3ExternalOptionsForShowCreate(s3, mode.noBackslashEscapes)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode.sqlMode)
+			require.NoError(t, err, ddl)
+			defer stmt.Free()
+			create, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Equal(t, `#\t`, GetCSVComment(create.Param), ddl)
+		})
+	}
 }
 
 // TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
@@ -947,13 +967,12 @@ func TestFormatStrInSingleQuotes(t *testing.T) {
 	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
 }
 
-// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
-// CRLF writable external table recreates as CRLF (not silently downgraded to
-// LF). Both render as doubled-backslash escape sequences; other values flow
-// through formatStrInSingleQuotes.
+// SHOW CREATE must keep LF and CRLF distinct. Render for one DDL parse;
+// the rewrite SELECT separately transports the entire DDL unchanged.
 func TestFormatLinesTerminatedBy(t *testing.T) {
-	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
-	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
-	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
-	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+	require.Equal(t, `'\n'`, formatDDLString("\n", false))
+	require.Equal(t, `'\r\n'`, formatDDLString("\r\n", false))
+	require.Equal(t, "'\n'", formatDDLString("\n", true))
+	require.Equal(t, "'\r\n'", formatDDLString("\r\n", true))
+	require.Equal(t, "'#EOL#'", formatDDLString("#EOL#", false))
 }
