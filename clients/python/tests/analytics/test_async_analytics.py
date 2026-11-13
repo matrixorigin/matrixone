@@ -168,8 +168,10 @@ async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(tri
         client = AsyncClient.from_engine(engine, query_timeout=10, sql_log_mode='off')
         try:
             await client.get_capabilities()
-            # Apply the short deadline to the armed fault, not cold dialect setup.
-            client.query_timeout = 1
+            # The deadline covers staging and LOAD before the armed COMMIT.
+            # Allow those real operations to finish under concurrent CI load;
+            # the proxy holds the selected response for up to ten seconds.
+            client.query_timeout = 5
             if fault != 'read':
 
                 @event.listens_for(engine.sync_engine, 'before_cursor_execute')
@@ -214,10 +216,13 @@ async def _unsupported_upload_control(trial):
 
 
 @pytest.mark.asyncio
-async def test_async_cross_cn_upload_and_file_relation_visibility(trial):
+@pytest.mark.parametrize('source', ['arrow', 'file'])
+async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source, native_arrow_load_check):
     import os
     from decimal import Decimal
 
+    if source == 'arrow':
+        native_arrow_load_check()
     port = os.environ.get('MO_SECOND_CN_PORT')
     if not port:
         pytest.skip('second CN required for the cross-CN qualification')
@@ -226,7 +231,16 @@ async def test_async_cross_cn_upload_and_file_relation_visibility(trial):
     table = trial.table()
     try:
         data = pa.table({'id': [1, 2, 3]})
-        assert await client.analytics.upload_arrow(table, data, trial.directory) == 3
+        if source == 'arrow':
+            assert await client.analytics.upload_arrow(table, data, trial.directory) == 3
+        else:
+            import pyarrow.parquet as pq
+
+            trial.client.execute('CREATE TABLE ' + table + '(id BIGINT)')
+            path = trial.directory / 'cross-cn-initial.parquet'
+            pq.write_table(data, path)
+            async with await client.analytics.read_parquet(path) as relation:
+                assert await relation.import_into(table) == 3
         assert trial.client.execute('SELECT count(*), sum(id) FROM ' + table).rows == [(3, Decimal(6))]
         path = trial.directory / 'cross-cn-async.csv'
         path.write_text('id\n4\n5\n')

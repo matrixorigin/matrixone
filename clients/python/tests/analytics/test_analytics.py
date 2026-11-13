@@ -431,10 +431,17 @@ def test_dictionary_and_timezone_normalization(analytics, tmp_path):
 
 
 def test_protocol_time_duration_and_boolean(analytics):
-    table = _query(analytics, "SELECT CAST('-25:00:00' AS TIME) AS span, CAST(1 AS BOOL) AS ok")
-    # This CAST expression is advertised as TINYINT by the MySQL protocol.
-    assert table.schema.types == [pa.duration("us"), pa.int8()]
-    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": 1}]
+    from pymysql.constants import FIELD_TYPE
+
+    with analytics.query("SELECT CAST('-25:00:00' AS TIME) AS span, CAST(1 AS BOOL) AS ok") as stream:
+        # Releases advertise BOOL as TINYINT(1); source builds can advertise a
+        # wider TINYINT. Check against the native wire metadata, not row values.
+        wire = stream._cursor._result.fields[1]
+        assert wire.type_code == FIELD_TYPE.TINY and wire.length > 0
+        expected = pa.bool_() if wire.length == 1 else pa.int8()
+        table = stream.to_arrow()
+    assert table.schema.types == [pa.duration("us"), expected]
+    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": True if pa.types.is_boolean(expected) else 1}]
     explicit = _query(analytics, "SELECT CAST(1 AS BOOL) AS ok", schema=pa.schema([("ok", pa.bool_())]))
     assert explicit.to_pylist() == [{"ok": True}]
     with pytest.raises(ValueError, match="clock day"):
