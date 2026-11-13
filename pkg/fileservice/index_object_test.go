@@ -175,7 +175,7 @@ func TestIndexObjectDownloadSplit(t *testing.T) {
 	require.Nil(t, bounds, "a small object is one range")
 	end(false)
 
-	var ends []func(bool)
+	ends := make([]func(bool), 0, objectSplitMaxDownloads)
 	for range objectSplitMaxDownloads {
 		bounds, end := IndexObjectDownload(nil, size)
 		require.Len(t, bounds, 3)
