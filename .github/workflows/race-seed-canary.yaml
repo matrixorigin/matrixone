@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -94,6 +94,18 @@ jobs:
       CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
       CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
+  cs-s3-timing:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'mnl2-timing' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-mnl2-dedicated-s3-coverage-canary
+      cancel-in-progress: false
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@318515e3245b46adbafbade9289c1fbabd8e6800
+    with:
+      stack: mnl2
+      cache_seed: false
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
   cs-s3-cache-comparison:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'mnl2-cache' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
