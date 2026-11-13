@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -126,10 +124,18 @@ func StartTestCluster(opts ...Option) (Cluster, error) {
 
 const (
 	basicClusterHAKeeperStoreTimeout = 60 * time.Second
+	basicClusterTaskServiceTimeout   = 90 * time.Second
+	basicClusterTaskServicePoll      = 100 * time.Millisecond
 )
 
-func startBasicCluster() (Cluster, error) {
-	return StartTestCluster(
+func startBasicCluster(ctx context.Context) (Cluster, error) {
+	if ctx == nil {
+		return nil, moerr.NewInvalidInputNoCtx("shared cluster requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c, err := StartTestCluster(
 		WithCNCount(3),
 		WithPreStart(func(svc ServiceOperator) {
 			switch svc.ServiceType() {
@@ -161,38 +167,64 @@ func startBasicCluster() (Cluster, error) {
 			}
 		}),
 	)
+	if err != nil {
+		return c, err
+	}
+	cn, err := c.GetCNService(0)
+	if err != nil {
+		return cleanupClusterOnError(c, err)
+	}
+	rt := mruntime.ServiceRuntime(cn.ServiceID())
+	if rt == nil {
+		return cleanupClusterOnError(c, moerr.NewInternalErrorNoCtx("shared cluster CN runtime is unavailable"))
+	}
+	return finishBasicClusterInitialization(ctx, c, rt)
 }
 
-func prepareBasicCluster(c Cluster) {
-	// Initialize essential frontend/session state using SQL executor
-	svc, e := c.GetCNService(0)
-	if e != nil {
-		return
+func finishBasicClusterInitialization(ctx context.Context, c Cluster, rt mruntime.Runtime) (Cluster, error) {
+	readyCtx, cancel := context.WithTimeout(ctx, basicClusterTaskServiceTimeout)
+	defer cancel()
+	if err := waitForBasicTaskService(readyCtx, func() bool { return basicTaskServicePublished(rt) }); err != nil {
+		return cleanupClusterOnError(c, errors.Join(moerr.NewInternalErrorNoCtx("shared cluster task service was not published"), err))
 	}
-	// Create and register a TaskService for embed cluster
-	// Build a simple address factory using CN SQL address
-	cfg := svc.GetServiceConfig()
-	sqlAddr := fmt.Sprintf("%s:%d", cfg.CN.Frontend.Host, cfg.CN.Frontend.Port)
-	addressFactory := func(ctx context.Context, random bool) (string, error) { return sqlAddr, nil }
-	holder := taskservice.NewTaskServiceHolder(mruntime.ServiceRuntime(svc.ServiceID()), addressFactory)
-	// register special user for task framework
-	username := "task_user"
-	password := "task_pass"
-	frontend.SetSpecialUser(username, []byte(password))
-	_ = holder.Create(logservicepb.CreateTaskService{
-		User: logservicepb.TaskTableUser{
-			Username: username,
-			Password: password,
-		},
-		TaskDatabase: "mo_task",
-	})
-	if ts, ok := holder.Get(); ok {
-		mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("task-service", ts)
-	}
+	return c, nil
+}
 
-	// Also prepare and register a ParameterUnit for compile path fallback
-	pu := config.NewParameterUnit(&cfg.CN.Frontend, nil, nil, nil)
-	mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("parameter-unit", pu)
+// A CN publishes its owned task service to its ParameterUnit before publishing
+// the same service in its runtime. Do not replace either object with a fixture.
+func basicTaskServicePublished(rt mruntime.Runtime) bool {
+	value, ok := rt.GetGlobalVariables("task-service")
+	service, valid := value.(taskservice.TaskService)
+	if !ok || !valid || service == nil {
+		return false
+	}
+	value, ok = rt.GetGlobalVariables("parameter-unit")
+	pu, valid := value.(*config.ParameterUnit)
+	return ok && valid && pu != nil && pu.GetTaskService() == service
+}
+
+func waitForBasicTaskService(ctx context.Context, ready func() bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ready() {
+		return ctx.Err()
+	}
+	ticker := time.NewTicker(basicClusterTaskServicePoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if ready() {
+				return ctx.Err()
+			}
+		}
+	}
 }
 
 // RunBaseClusterTests starting an integration test for a 1 log, 1tn, 3cn base cluster is very slow
@@ -204,8 +236,9 @@ func RunBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
-	basicClusterState.Run(t, startBasicCluster, func(c Cluster) {
-		prepareBasicCluster(c)
-		fn(c)
-	})
+	ctx := context.Background()
+	if contextual, ok := t.(interface{ Context() context.Context }); ok {
+		ctx = contextual.Context()
+	}
+	basicClusterState.Run(t, func() (Cluster, error) { return startBasicCluster(ctx) }, fn)
 }
