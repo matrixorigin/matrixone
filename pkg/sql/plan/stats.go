@@ -2195,7 +2195,8 @@ const (
 	dopBlocksPrepareUnit int32 = 64 // prepare: more conservative
 )
 
-func calcDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
+// CalcScanDOP applies the scan scheduling grain to a block count and row width.
+func CalcScanDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
 	if ncpu <= 0 {
 		return 1
 	}
@@ -2282,7 +2283,7 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 			setNodeDOP(p, rootID, dop)
 		}
 	} else {
-		node.Stats.Dop = calcDOP(ncpu, node.Stats, p.IsPrepare)
+		node.Stats.Dop = CalcScanDOP(ncpu, node.Stats, p.IsPrepare)
 	}
 }
 

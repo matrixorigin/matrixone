@@ -1731,6 +1731,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	}
 
+	readerCount := s.NodeInfo.Mcpu
+	if !emptyScan {
+		readerCount = s.scanReaderCount(c)
+	}
+
 	switch {
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
@@ -1767,7 +1772,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			hint)
 		if err != nil {
 			return
@@ -1806,7 +1811,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1890,7 +1895,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1914,15 +1919,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// just for quick GC.
 	s.NodeInfo.Data = nil
 
-	//for partition table.
-	if len(readers) != s.NodeInfo.Mcpu {
-		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
-		step := len(readers) / s.NodeInfo.Mcpu
-		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
-		}
-		readers = newReaders
+	readers = groupScanReaders(readers, readerCount)
+	for len(readers) < s.NodeInfo.Mcpu {
+		readers = append(readers, new(readutil.EmptyReader))
 	}
+
 	if !emptyScan && s.DataSource.markGuard != nil {
 		s.applyMarkScanGuard(c)
 	}
@@ -1941,4 +1942,61 @@ func cleanupScopePipeline(p *pipeline.Pipeline, proc *process.Process, isPrepare
 		proc.Error(proc.Ctx, "panic during pipeline cleanup", zap.Error(cleanupErr))
 	}
 	return err
+}
+
+// scanReaderCount applies the existing scheduling grain after static and runtime
+// filters have selected the actual blocks. Worker topology and EOF counts stay
+// fixed; unused workers receive EmptyReaders.
+func (s *Scope) scanReaderCount(c *Compile) int {
+	n := s.NodeInfo.Mcpu
+	if n <= 1 || uint64(n) > uint64(^uint32(0)>>1) || c == nil || c.pn == nil || c.pn.GetQuery() == nil || len(c.pn.GetQuery().Nodes) == 0 ||
+		s.DataSource == nil || s.DataSource.node == nil || s.DataSource.node.Stats == nil ||
+		len(s.DataSource.OrderBy) > 0 || s.DataSource.IndexReaderParam != nil {
+		return n
+	}
+	// Other relation data can encode shuffle buckets rather than plain blocks.
+	data, ok := s.NodeInfo.Data.(*readutil.BlockListRelData)
+	if !ok || data.DataCnt() <= 0 || uint64(data.DataCnt()) > uint64(^uint32(0)>>1) {
+		return n
+	}
+	for _, node := range c.pn.GetQuery().Nodes {
+		// Reused shuffle input already belongs to particular workers. Ordinary
+		// shuffle operators still repartition their input at the original DOP.
+		if node == nil || node.Stats == nil ||
+			node.Stats.GetHashmapStats().GetShuffleMethod() == plan.ShuffleMethod_Reuse {
+			return n
+		}
+	}
+	stats := *s.DataSource.node.Stats
+	stats.BlockNum = int32(data.DataCnt())
+	return int(plan2.CalcScanDOP(int32(n), &stats, c.pn.IsPrepare))
+}
+
+// groupScanReaders transfers every backend reader to exactly one worker. Some
+// backends return one reader for an empty scan; partitions can return multiples
+// of the requested count. Balanced contiguous groups handle both forms without
+// dropping readers or changing the order of a partition's existing groups.
+func groupScanReaders(readers []engine.Reader, n int) []engine.Reader {
+	if len(readers) <= n {
+		for len(readers) < n {
+			readers = append(readers, new(readutil.EmptyReader))
+		}
+		return readers
+	}
+	groups := make([]engine.Reader, 0, n)
+	size, extra := len(readers)/n, len(readers)%n
+	start := 0
+	for i := 0; i < n; i++ {
+		end := start + size
+		if i < extra {
+			end++
+		}
+		if end-start == 1 {
+			groups = append(groups, readers[start])
+		} else {
+			groups = append(groups, readutil.NewMergeReader(readers[start:end]))
+		}
+		start = end
+	}
+	return groups
 }
