@@ -23,11 +23,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -372,6 +374,23 @@ func TestTopSpillUsesLocalFileService(t *testing.T) {
 	info, err := spillFile.Stat()
 	require.NoError(t, err)
 	require.Positive(t, info.Size())
+}
+
+func TestTopSpillWithoutLocalFileService(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "other", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{FileService: fs},
+		Ctx:  ctx,
+	}
+	ctr := new(container)
+	err = ctr.spillBatch(nil, proc, process.NewAnalyzer(0, false, false, "top-missing-local-spill"))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService), "unexpected error: %v", err)
+	require.Nil(t, ctr.spillFile)
+	require.Empty(t, ctr.spillIndex)
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
