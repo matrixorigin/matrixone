@@ -25,15 +25,46 @@ def resolve_auto_commit(value, inherited):
     return resolved
 
 
-def _explicit_begin(connection):
-    connection.exec_driver_sql('BEGIN')
+def _driver_connection(connection):
+    """Resolve the DBAPI connection behind a SQLAlchemy sync or adapted connection."""
+    fairy = connection.connection
+    return getattr(fairy, 'dbapi_connection', None) or getattr(fairy, 'connection', fairy)
+
+
+def _suspend_autocommit(connection):
+    """Enter SQLAlchemy's transaction with driver autocommit suspended.
+
+    MatrixOne rejects administrative statements such as ``CREATE STAGE`` inside
+    an explicit transaction, so emitting ``BEGIN`` would break them. Disabling
+    driver autocommit reproduces the non-autocommit session that
+    ``Client.execute`` already expects, and keeps ``commit``/``rollback``
+    effective. The requested mode is restored when the connection is reused.
+    """
+    driver = _driver_connection(connection)
+    setter = getattr(driver, 'autocommit', None)
+    if callable(setter):
+        setter(False)
+    else:
+        connection.exec_driver_sql('SET autocommit = 0')
+
+
+def _restore_autocommit(dbapi_connection, *args):
+    setter = getattr(dbapi_connection, 'autocommit', None)
+    if not callable(setter):
+        return
+    try:
+        setter(True)
+    except Exception:
+        # A closed or invalidated connection owns no reusable session state.
+        return
 
 
 def preserve_transactions_with_autocommit(engine):
     """Keep SQLAlchemy transaction boundaries effective on autocommit DBAPI connections."""
     from sqlalchemy import event
 
-    event.listen(engine, 'begin', _explicit_begin)
+    event.listen(engine, 'begin', _suspend_autocommit)
+    event.listen(engine, 'reset', _restore_autocommit)
 
 
 def redact_error(error, password):
