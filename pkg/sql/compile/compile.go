@@ -5439,6 +5439,14 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	// 持久化 BOOL 上界可能是历史兼容的保守视图，不能作为精确 MAX。
+	// 在任何 COUNT 重写或提前返回之前检查完整列表，统一回退行扫描。
+	for _, expr := range node.AggList {
+		agg := expr.GetF()
+		if agg.Func.ObjName == "max" && len(agg.Args) == 1 && agg.Args[0].Typ.Id == int32(types.T_bool) {
+			return nil, nil, nil
+		}
+	}
 	partialResults := make([]any, len(node.AggList))
 	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)

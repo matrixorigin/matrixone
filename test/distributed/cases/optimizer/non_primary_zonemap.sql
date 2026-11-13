@@ -97,6 +97,39 @@ full outer join (select id, enabled from bool_values where id in (2,3) and enabl
 on l.id = r.id and l.enabled = r.enabled
 order by coalesce(l.id, r.id);
 
+-- 保守 BOOL 上界不能当作精确 MAX；表达式聚合是独立扫描对照。
+create table bool_aggregate (b bool);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+insert into bool_aggregate values (false),(false);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select max(b) from bool_aggregate;
+select count(1), min(b), max(b) from bool_aggregate;
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+truncate table bool_aggregate;
+insert into bool_aggregate values (false),(null);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select min(b), max(b) from bool_aggregate;
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+truncate table bool_aggregate;
+insert into bool_aggregate values (true),(true);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select min(b), max(b) from bool_aggregate;
+truncate table bool_aggregate;
+insert into bool_aggregate values (false),(true),(null);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select min(b), max(b) from bool_aggregate;
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+truncate table bool_aggregate;
+insert into bool_aggregate values (null),(null);
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+select min(b), max(b) from bool_aggregate;
+
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
 select id from bool_values where enabled = true order by id;
