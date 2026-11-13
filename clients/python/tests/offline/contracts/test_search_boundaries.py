@@ -87,7 +87,9 @@ def test_explicit_pagination_all_builders(limit, offset):
         legacy.build_sql(),
     ]
     for sql in sqls:
-        assert ('LIMIT ' in sql) is (limit is not None)
+        assert ('LIMIT ' in sql) is (limit is not None or offset is not None)
+        if limit is None and offset is not None:
+            assert 'LIMIT 18446744073709551615 ' in sql
         assert ('OFFSET ' in sql) is (offset is not None)
         if limit is not None:
             assert 'LIMIT %s' % limit in sql
