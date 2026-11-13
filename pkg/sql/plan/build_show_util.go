@@ -736,7 +736,7 @@ func constructCreateTableSQLWithFormat(
 		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatIcebergTableOptionsForShowCreate(env)
+			createStr += formatIcebergTableOptionsForShowCreate(env, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = parseRenderedSQL(createStr)
@@ -744,7 +744,7 @@ func constructCreateTableSQLWithFormat(
 			return createStr, stmt, err
 		}
 		if len(mongoColumns) > 0 {
-			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = parseRenderedSQL(createStr)
@@ -754,7 +754,7 @@ func constructCreateTableSQLWithFormat(
 		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg)
+			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = parseRenderedSQL(createStr)
@@ -764,7 +764,7 @@ func constructCreateTableSQLWithFormat(
 		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatForeignTableOptionsForShowCreate(fCfg)
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = parseRenderedSQL(createStr)
@@ -774,7 +774,7 @@ func constructCreateTableSQLWithFormat(
 		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatKafkaTableOptionsForShowCreate(kCfg)
+			createStr += formatKafkaTableOptionsForShowCreate(kCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = parseRenderedSQL(createStr)
@@ -1235,6 +1235,15 @@ func formatDDLString(value string, noBackslashEscapes bool) string {
 	return formatStrLit(value)
 }
 
+// Preserve ordinary-mode ENGINE WITH spelling (also used by the 4.2 schema
+// hash), but render literal backslashes for NO_BACKSLASH_ESCAPES replay.
+func formatEngineOptionValueForShowCreate(value string, noBackslashEscapes bool) string {
+	if noBackslashEscapes {
+		return formatDDLString(value, true)
+	}
+	return "'" + formatStrInSingleQuotes(value) + "'"
+}
+
 // The CREATE/ALTER parser stores comments with single quotes already doubled.
 // Undo that catalog spelling before quoting the value for the replay mode.
 func formatDDLComment(value string, noBackslashEscapes bool) string {
@@ -1248,7 +1257,7 @@ func formatExternalTableOptionsForShowCreate(param *tree.ExternParam, noBackslas
 	return formatInfileExternalOptionsForShowCreate(param, noBackslashEscapes)
 }
 
-func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1268,15 +1277,14 @@ func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) st
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1302,15 +1310,14 @@ func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) st
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string {
+func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1332,9 +1339,8 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string 
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
@@ -1343,7 +1349,7 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string 
 // formatKafkaTableOptionsForShowCreate renders the ENGINE = KAFKA clause of
 // SHOW CREATE TABLE. No option carries a credential in v1, so everything is
 // emitted verbatim and the output round-trips through CREATE.
-func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config) string {
+func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1366,15 +1372,14 @@ func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config) string {
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatForeignTableOptionsForShowCreate(cfg foreignext.Config) string {
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, noBackslashEscapes bool) string {
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = ")
 	builder.WriteString(strings.ToUpper(cfg.Kind))
@@ -1403,9 +1408,8 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config) string {
 			}
 			builder.WriteString("\"")
 			builder.WriteString(option.key)
-			builder.WriteString("\" = '")
-			builder.WriteString(formatStrInSingleQuotes(option.value))
-			builder.WriteString("'")
+			builder.WriteString("\" = ")
+			builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 		}
 		builder.WriteString(")")
 	}

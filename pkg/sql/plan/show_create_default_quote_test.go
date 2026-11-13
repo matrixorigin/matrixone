@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -247,6 +249,57 @@ func TestShowCreateExternalCommentReplaysInSessionMode(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, marker, GetCSVComment(create.Param), ddl)
 				replay.Free()
+			})
+		}
+	}
+}
+
+func TestShowCreateKafkaSeparatorReplaysInSessionMode(t *testing.T) {
+	for _, separator := range []string{`\`, ","} {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			t.Run(separator+"/"+mode, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				cfg := sqlkafka.Config{
+					Brokers: "host.invalid:9092", Topic: "events", Group: "reader",
+					Format: sqlkafka.FormatCSV, Separator: separator,
+				}
+				source := &plan.TableDef{
+					Name: "kafka_mode", TableType: catalog.SystemExternalRel,
+					FeatureFlag: features.KafkaExternal, Createsql: sqlkafka.BuildCreateSQLEnvelope(cfg),
+					Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}}},
+				}
+				mock.ctxt.tables[source.Name] = source
+				mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+				mock.ctxt.SetSqlModeOverride(mode)
+
+				show, err := mysql.ParseOneWithSQLMode(t.Context(), "show create table kafka_mode", 1, mode)
+				require.NoError(t, err)
+				shown, err := BuildPlan(&mock.ctxt, show, false)
+				show.Free()
+				require.NoError(t, err)
+				query := shown.GetQuery()
+				root := query.GetNodes()[query.GetSteps()[0]]
+				ddl := root.ProjectList[1].GetLit().GetSval()
+				replay, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
+				require.NoError(t, err, ddl)
+				rebuilt, err := BuildPlan(&mock.ctxt, replay, false)
+				replay.Free()
+				require.NoError(t, err, ddl)
+				var createSQL string
+				for _, def := range rebuilt.GetDdl().GetCreateTable().TableDef.Defs {
+					if properties := def.GetProperties(); properties != nil {
+						for _, property := range properties.Properties {
+							if property.Key == catalog.SystemRelAttr_CreateSQL {
+								createSQL = property.Value
+							}
+						}
+					}
+				}
+				require.NotEmpty(t, createSQL)
+				recreated, found, err := sqlkafka.ParseCreateSQLEnvelope(t.Context(), createSQL)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, cfg.Separator, recreated.Separator)
 			})
 		}
 	}
