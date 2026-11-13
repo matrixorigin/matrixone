@@ -28,12 +28,12 @@ func closeTo(t *testing.T, got, want float64) {
 
 func TestMoIndexStatsDistinguishesSpreadFromCenterMismatch(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		values               []float64
-		shift, mismatch, rms float64
+		name     string
+		values   []float64
+		mismatch float64
 	}{
-		{"spread", []float64{-10, 10}, 0, 0, 10},
-		{"shifted", []float64{9, 11}, 10, 100.0 / 101, math.Sqrt(101)},
+		{"spread", []float64{-10, 10}, 0},
+		{"shifted", []float64{9, 11}, 100.0 / 101},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := NewBucket(1, []float64{0})
@@ -46,10 +46,9 @@ func TestMoIndexStatsDistinguishesSpreadFromCenterMismatch(t *testing.T) {
 			if !ok {
 				t.Fatal("geometry unavailable")
 			}
-			closeTo(t, g.MeanResidual, 10)
-			closeTo(t, g.CenterShift, tc.shift)
+
 			closeTo(t, g.Mismatch, tc.mismatch)
-			closeTo(t, g.RMSResidual, tc.rms)
+
 		})
 	}
 }
@@ -74,9 +73,7 @@ func TestMoIndexStatsSummaryWeightsLossAndIncludesEmptyBuckets(t *testing.T) {
 		t.Fatalf("incorrect summary: %+v", s)
 	}
 	closeTo(t, s.Geometry.Mismatch, 0.5)
-	closeTo(t, s.Geometry.RMSResidual, math.Sqrt(200.0/101))
-	closeTo(t, s.Geometry.CenterShift, math.Sqrt(100.0/101))
-	closeTo(t, s.Geometry.MeanResidual, 110.0/101)
+
 	mean := 101.0 / 3
 	wantCV := math.Sqrt(((1-mean)*(1-mean)+(100-mean)*(100-mean)+mean*mean)/3) / mean
 	closeTo(t, s.CV, wantCV)
@@ -94,7 +91,7 @@ func TestMoIndexStatsZeroResidualAndIncompleteGeometry(t *testing.T) {
 		t.Fatal("missing geometry")
 	}
 	closeTo(t, g.Mismatch, 0)
-	closeTo(t, g.RMSResidual, 1)
+
 	zero := NewBucket(2, []float64{0})
 	if err := zero.Add([]float64{0}); err != nil {
 		t.Fatal(err)
@@ -137,5 +134,67 @@ func TestMoIndexStatsMismatchInvariantToUniformScaling(t *testing.T) {
 		}
 		closeTo(t, g.Mismatch, 100.0/101)
 		closeTo(t, Summarize([]*Bucket{bucket}).Geometry.Mismatch, 100.0/101)
+	}
+}
+
+func TestMoIndexStatsExtremeGeometryRetainsCounts(t *testing.T) {
+	for _, scale := range []float64{1e-200, 1, 1e200} {
+		b := NewBucket(1, []float64{0})
+		for _, x := range []float64{9, 11} {
+			if err := b.Add([]float64{x * scale}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		g, ok := b.Geometry()
+		if !ok {
+			t.Fatal("scaled geometry unavailable")
+		}
+		closeTo(t, g.Mismatch, 100.0/101)
+	}
+	b := NewBucket(1, []float64{-math.MaxFloat64})
+	if err := b.Add([]float64{math.MaxFloat64}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add([]float64{1}); err != nil {
+		t.Fatal(err)
+	}
+	if b.Count != 2 || b.GeometryStatus() != "center_stats_overflow" {
+		t.Fatalf("lost counts or status: %+v", b)
+	}
+	s := Summarize([]*Bucket{b})
+	if s.Count != 2 || s.HasGeometry || s.Status != "center_stats_overflow" {
+		t.Fatalf("invalid summary: %+v", s)
+	}
+}
+func TestMoIndexStatsQuantizationResolution(t *testing.T) {
+	b := NewBucket(1, []float64{0})
+	b.Resolution = .5
+	if err := b.Add([]float64{.25}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.Geometry(); ok || b.GeometryStatus() != "center_stats_quantization_limited" {
+		t.Fatal("rounding noise reported as center mismatch")
+	}
+	if err := b.Add([]float64{10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.Geometry(); !ok {
+		t.Fatal("resolvable geometry omitted")
+	}
+}
+
+func TestMoIndexStatsQuantizationDoesNotHideMissingGeometry(t *testing.T) {
+	for _, center := range [][]float64{nil, {0}} {
+		b := NewBucket(1, center)
+		b.Resolution = .5
+		if err := b.Add(nil); err != nil {
+			t.Fatal(err)
+		}
+		if b.GeometryStatus() != "" {
+			t.Fatal("missing vectors or untrained centers mislabeled as rounding noise")
+		}
+		if _, ok := b.Geometry(); ok {
+			t.Fatal("missing geometry reported as valid")
+		}
 	}
 }

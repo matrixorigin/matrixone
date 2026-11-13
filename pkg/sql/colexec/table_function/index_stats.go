@@ -32,16 +32,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
-	indexStatsRunSQL       = sqlexec.RunSql
-	indexStatsRunStreaming = sqlexec.RunStreamingSql
-	indexStatsReadStorage  = readIndexStatsStorage
-	indexStatsSourceCommit = readIndexStatsSourceCommit
+	indexStatsRunSQL        = sqlexec.RunSql
+	indexStatsRunCurrentSQL = sqlexec.RunSqlAutoCommit
+	indexStatsRunStreaming  = sqlexec.RunStreamingSql
+	indexStatsReadStorage   = readIndexStatsStorage
+	indexStatsSourceCommit  = readIndexStatsSourceCommit
 )
 
 type indexStatsState struct {
@@ -152,15 +154,27 @@ func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int,
 	}
 	geometry := strings.EqualFold(s.config.OpType, "vector_l2_ops")
 	quantized := s.config.Quantization != "" && !strings.EqualFold(s.config.Quantization, "none")
+	scale, offset, resolution := 1.0, 0.0, 0.0
 	if !geometry {
 		s.reason = "center_stats_unsupported_distance"
-	} else if quantized && s.config.Async {
-		// Current primary-table values can be ahead of CDC's indexed values.
-		// Joining them would misreport maintenance lag as geometric drift.
-		geometry = false
-		s.reason = "center_stats_unavailable_async_quantized"
+	} else if quantized {
+		var available bool
+		scale, offset, resolution, available, err = readIndexStatsReconstruction(sqlproc, s.config)
+		if err != nil {
+			return err
+		}
+		if !available {
+			geometry = false
+			s.reason = "center_stats_quantization_unavailable"
+		} else {
+			s.reason = "center_stats_approximate_quantized"
+			for _, bucket := range buckets {
+				bucket.Resolution = resolution
+			}
+		}
 	}
-	query := buildIndexStatsEntriesSQL(s.config, s.version, geometry, quantized)
+	query := buildIndexStatsEntriesSQL(s.config, s.version, geometry)
+
 	var scratch []float64
 	err = streamIndexStats(proc, sqlproc, query, func(bat *batch.Batch) error {
 		for row := 0; row < bat.RowCount(); row++ {
@@ -178,7 +192,14 @@ func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int,
 				}
 				if values != nil {
 					scratch = values
+					for i := range values {
+						values[i] = values[i]*scale + offset
+					}
 				}
+			}
+			if !geometry {
+				bucket.Count += vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], row)
+				continue
 			}
 			if addErr := bucket.Add(values); addErr != nil {
 				return addErr
@@ -196,12 +217,7 @@ func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int,
 	}
 	sort.Slice(s.buckets, func(i, j int) bool { return s.buckets[i].ID < s.buckets[j].ID })
 	s.summary = diagnostic.Summarize(s.buckets)
-	for _, value := range []float64{s.summary.CV, s.summary.Geometry.MeanResidual,
-		s.summary.Geometry.RMSResidual, s.summary.Geometry.CenterShift, s.summary.Geometry.Mismatch} {
-		if math.IsInf(value, 0) || math.IsNaN(value) {
-			return moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: summary residual overflow")
-		}
-	}
+
 	return s.readMetadata(proc, sqlproc)
 }
 
@@ -220,24 +236,55 @@ func (s *indexStatsState) readMetadata(proc *process.Process, sqlproc *sqlexec.S
 	return nil
 }
 
-func buildIndexStatsEntriesSQL(cfg indexstats.Config, version int64, geometry, quantized bool) string {
+func buildIndexStatsEntriesSQL(cfg indexstats.Config, version int64, geometry bool) string {
 	id := sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_id)
-	query := "SELECT " + id
+	projection := ", COUNT(*)"
 	if geometry {
-		if quantized {
-			query += ", " + sqlquote.QualifiedIdent("src", cfg.Column)
-		} else {
-			query += ", " + sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+		projection = ", " + sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+	}
+	query := "SELECT " + id + projection + " FROM " + sqlquote.QualifiedIdent(cfg.Database, cfg.Entries) + " AS e WHERE " +
+		sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_version) + " = " + strconv.FormatInt(version, 10)
+	if !geometry {
+		query += " GROUP BY " + id
+	}
+	return query
+}
+
+func readIndexStatsReconstruction(sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (scale, offset, resolution float64, available bool, err error) {
+	_, ok := quantizer.ToVectorType(cfg.Quantization)
+	if !ok {
+		return 0, 0, 0, false, nil
+	}
+	if !quantizer.NeedsBounds(cfg.Quantization) {
+		return 1, 0, 0, true, nil
+	}
+	query := fmt.Sprintf("SELECT %s, CAST(%s AS DOUBLE) FROM %s WHERE %s IN (%s, %s)",
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key), sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.QualifiedIdent(cfg.Database, cfg.Metadata), sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
+		sqlquote.String(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin), sqlquote.String(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax))
+	res, err := indexStatsRunSQL(sqlproc, query)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	defer res.Close()
+	bounds := make(map[string]float64, 2)
+	for _, bat := range res.Batches {
+		for row := 0; row < bat.RowCount(); row++ {
+			if !bat.Vecs[1].IsNull(uint64(row)) {
+				bounds[bat.Vecs[0].GetStringAt(row)] = vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], row)
+			}
 		}
 	}
-	query += " FROM " + sqlquote.QualifiedIdent(cfg.Database, cfg.Entries) + " AS e"
-	if geometry && quantized {
-		// LEFT JOIN retains an index entry even if its primary row is missing.
-		query += " LEFT JOIN " + sqlquote.QualifiedIdent(cfg.Database, cfg.Table) + " AS src ON " +
-			sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk) + " = " +
-			sqlquote.QualifiedIdent("src", cfg.PrimaryKey)
+	lo, hasLo := bounds[catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin]
+	hi, hasHi := bounds[catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax]
+	if !hasLo || !hasHi {
+		return 0, 0, 0, false, nil
 	}
-	return query + " WHERE " + sqlquote.QualifiedIdent("e", catalog.SystemSI_IVFFLAT_TblCol_Entries_version) + " = " + strconv.FormatInt(version, 10)
+	scale, offset, err = quantizer.ReconstructionParams(cfg.Quantization, lo, hi)
+	if err != nil {
+		return 0, 0, 0, false, nil
+	}
+	return scale, offset, scale / 2, true, nil
 }
 
 func readIndexStatsCenters(res executor.Result) (map[int64]*diagnostic.Bucket, error) {
@@ -520,7 +567,11 @@ func (s *indexStatsState) rowMetrics(bucket *diagnostic.Bucket) map[string]any {
 	}
 	status := "ok"
 	switch {
-	case s.reason != "":
+	case bucket != nil && bucket.GeometryStatus() != "":
+		status = bucket.GeometryStatus()
+	case bucket == nil && s.summary.Status != "":
+		status = s.summary.Status
+	case s.reason != "" && (s.reason != "center_stats_approximate_quantized" || hasGeometry):
 		status = s.reason
 	case bucket != nil && bucket.Center == nil || bucket == nil && s.untrained:
 		status = "untrained"

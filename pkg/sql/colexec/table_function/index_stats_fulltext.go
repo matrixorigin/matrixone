@@ -30,16 +30,11 @@ import (
 func (s *indexStatsState) startFullText(proc *process.Process, sqlproc *sqlexec.SqlProcess) error {
 	var summary indexstats.FullTextSummary
 	if s.config.FullTextVersion == 2 {
-		reader := fulltext2.NewFulltext2Search(fulltext2.TableConfig{
-			DbName: s.config.Database, SrcTable: s.config.Table, PKey: s.config.PrimaryKey,
-			IndexTable: s.config.Entries, MetadataTable: s.config.Metadata, Parser: s.config.Parser,
-		})
-		defer reader.Destroy()
-		if err := reader.Load(sqlproc); err != nil {
-			return err
-		}
 		var err error
-		summary, err = reader.Stats(proc.Ctx)
+		summary, err = fulltext2.ReadStats(proc.Ctx, sqlproc, fulltext2.TableConfig{
+			DbName: s.config.Database, SrcTable: s.config.Table, PKey: s.config.PrimaryKey, IndexTable: s.config.Entries,
+			MetadataTable: s.config.Metadata, Parser: s.config.Parser, TokenFilters: s.config.TokenFilters,
+		})
 		if err != nil {
 			return err
 		}

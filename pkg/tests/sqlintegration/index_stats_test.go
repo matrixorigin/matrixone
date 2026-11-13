@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"math"
 	"testing"
 	"time"
 
@@ -76,7 +75,11 @@ func TestMoIndexStatsSQL(t *testing.T) {
 			}
 			require.NotContains(t, summary, "async")
 			require.NotContains(t, summary, "diagnosis")
-			require.NotContains(t, summary, "status")
+			if name == "quantized_vectors" {
+				require.Equal(t, "center_stats_approximate_quantized", summary["status"])
+			} else {
+				require.NotContains(t, summary, "status")
+			}
 			options := summary["index_options"].(map[string]any)
 			for _, key := range []string{"lists", "op_type", "quantization", "async"} {
 				require.NotContains(t, options, key)
@@ -99,22 +102,53 @@ func TestMoIndexStatsSQL(t *testing.T) {
 				require.Len(t, values, 1)
 				return values[0]
 			}
+			expectedMismatch := func(center float64, x1, x2 float64) float64 {
+				t.Helper()
+				if name == "quantized_vectors" {
+					var entries, meta string
+					for role, target := range map[string]*string{"entries": &entries, "metadata": &meta} {
+						require.NoError(t, conn.QueryRowContext(ctx, "select i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase='index_stats_test' and t.relname='"+name+"' and i.name='ivf' and i.algo_table_type='"+role+"'").Scan(target))
+					}
+					var lo, hi float64
+					require.NoError(t, conn.QueryRowContext(ctx, "select cast(`__mo_index_val` as double) from "+sqlquote.Ident(meta)+" where `__mo_index_key`='quantize_min'").Scan(&lo))
+					require.NoError(t, conn.QueryRowContext(ctx, "select cast(`__mo_index_val` as double) from "+sqlquote.Ident(meta)+" where `__mo_index_key`='quantize_max'").Scan(&hi))
+					rows, err := conn.QueryContext(ctx, "select __mo_index_centroid_fk_entry from "+sqlquote.Ident(entries)+" where __mo_index_centroid_fk_version=(select cast(`__mo_index_val` as bigint) from "+sqlquote.Ident(meta)+" where `__mo_index_key`='version') order by __mo_index_pri_col")
+					require.NoError(t, err)
+					defer rows.Close()
+					var values []float64
+					for rows.Next() {
+						var raw string
+						require.NoError(t, rows.Scan(&raw))
+						var v []float64
+						require.NoError(t, json.Unmarshal([]byte(raw), &v))
+						values = append(values, lo+(v[0]+128)*(hi-lo)/255)
+					}
+					require.NoError(t, rows.Err())
+					require.Len(t, values, 2)
+					x1, x2 = values[0], values[1]
+				}
+				shift := (x1+x2)/2 - center
+				denominator := (x1-center)*(x1-center) + (x2-center)*(x2-center)
+				if denominator == 0 {
+					return 0
+				}
+				return 2 * shift * shift / denominator
+			}
 			center := readCenter()
 			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count, &mismatch))
 			require.Equal(t, int64(2), count)
-			require.InDelta(t, center*center/(center*center+100), mismatch, 1e-10)
+			require.InDelta(t, expectedMismatch(center, -10, 10), mismatch, 1e-10)
 			x1, x2 := center+9, center+11
 			exec(fmt.Sprintf("update %s set embedding='[%g]' where id=1", name, x1))
 			exec(fmt.Sprintf("update %s set embedding='[%g]' where id=2", name, x2))
 			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count, &mismatch))
-			require.InDelta(t, 100.0/101, mismatch, 1e-10)
+			require.InDelta(t, expectedMismatch(center, x1, x2), mismatch, 1e-10)
 			oldMismatch := mismatch
 			exec("alter table " + name + " alter reindex ivf ivfflat")
 			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count, &mismatch))
 			require.Equal(t, int64(2), count)
 			newCenter := readCenter()
-			wantShift := math.Abs((x1+x2)/2 - newCenter)
-			wantMismatch := 2 * wantShift * wantShift / ((x1-newCenter)*(x1-newCenter) + (x2-newCenter)*(x2-newCenter))
+			wantMismatch := expectedMismatch(newCenter, x1, x2)
 			require.InDelta(t, wantMismatch, mismatch, 1e-10)
 			require.Less(t, mismatch, oldMismatch)
 			var version int64
@@ -186,6 +220,15 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		exec("grant select on table index_stats_test.plain_vectors to public")
 		var summary string
 		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') AS s where row_type='index'").Scan(&summary))
+		exec("create temporary table plain_vectors(id bigint primary key, embedding vecf64(1))")
+		var unavailable string
+		err = conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') as s where row_type='index'").Scan(&unavailable)
+		require.ErrorContains(t, err, "non-temporary, non-partitioned")
+		exec("drop temporary table plain_vectors")
+		exec("create table partitioned_vectors(id bigint primary key, embedding vecf64(1)) partition by hash(id) partitions 2")
+		err = conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','partitioned_vectors','ivf') as s where row_type='index'").Scan(&unavailable)
+		require.ErrorContains(t, err, "non-temporary, non-partitioned")
+
 	})
 }
 

@@ -220,3 +220,32 @@ func TestMoIndexStatsFulltextPlanner(t *testing.T) {
 		})
 	}
 }
+
+func TestMoIndexStatsPlannerSourceBoundary(t *testing.T) {
+	for _, kind := range []string{"temporary", "partitioned", "resolved"} {
+		t.Run(kind, func(t *testing.T) {
+			mock := indexStatsTestContext(t)
+			source := mock.tables["stats_source"]
+			switch kind {
+			case "temporary":
+				source.IsTemporary = true
+			case "partitioned":
+				source.Partition = &pbplan.Partition{}
+			case "resolved":
+				source.Name = "resolved_source"
+				mock.objects["stats_source"].SchemaName = "resolved_db"
+			}
+			builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
+			node, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType("idx")})
+			if kind != "resolved" {
+				require.ErrorContains(t, err, "non-temporary, non-partitioned")
+				return
+			}
+			require.NoError(t, err)
+			var cfg indexstats.Config
+			require.NoError(t, json.Unmarshal(builder.qry.Nodes[node].TableDef.TblFunc.Param, &cfg))
+			require.Equal(t, "resolved_db", cfg.Database)
+			require.Equal(t, "resolved_source", cfg.Table)
+		})
+	}
+}

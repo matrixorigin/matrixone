@@ -23,6 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type statsTerm struct {
@@ -51,14 +54,24 @@ var errStatsIterationStopped = moerr.NewInternalErrorNoCtx("fulltext stats itera
 func (idx *Index) diagnosticTerms(ctx context.Context, si int) iter.Seq2[statsTerm, error] {
 	return func(yield func(statsTerm, error) bool) {
 		seg := idx.segments[si]
-		visit := func(word string) error {
+		visit := func(word string, offset uint64) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			var p *termPostings
 			var ok bool
+			if seg.dict != nil && idx.liveOrd[si] == nil {
+				df, found := seg.termDFAt(offset)
+				if !found {
+					return moerr.NewInternalError(ctx, "fulltext stats: invalid term frequency header")
+				}
+				if df > 0 && !yield(statsTerm{term: word, df: int64(df), segment: si}, nil) {
+					return errStatsIterationStopped
+				}
+				return nil
+			}
 			if seg.dict != nil {
-				p, ok = seg.LookupLoaded(word)
+				p, ok = seg.decodeTermEntry(int(offset))
 			} else {
 				p, ok = seg.Lookup(word)
 			}
@@ -73,10 +86,10 @@ func (idx *Index) diagnosticTerms(ctx context.Context, si int) iter.Seq2[statsTe
 		}
 		var err error
 		if seg.dict != nil {
-			err = seg.dict.forEachTerm(visit)
+			err = seg.dict.forEachEntry(visit)
 		} else {
 			for _, word := range seg.sortedTerms {
-				if err = visit(word); err != nil {
+				if err = visit(word, 0); err != nil {
 					break
 				}
 			}
@@ -142,11 +155,58 @@ func (idx *Index) Stats(ctx context.Context) (indexstats.FullTextSummary, error)
 	return result, nil
 }
 
-// Stats reads a private, already-loaded index. Diagnostics do not retain it in
-// the shared query cache; the caller releases its mappings with Destroy.
+// Stats reads an already-loaded immutable generation. Its owner must protect
+// the generation from eviction for the duration of this call.
 func (s *Fulltext2Search) Stats(ctx context.Context) (indexstats.FullTextSummary, error) {
 	if s.idx == nil {
 		return indexstats.FullTextSummary{}, moerr.NewInternalError(ctx, "fulltext stats: index is not loaded")
 	}
 	return s.idx.Stats(ctx)
+}
+
+// ReadStats shares a matching warm generation, or loads an exact snapshot into
+// the normal cache. Both paths use its read lock, admission and byte governor.
+func ReadStats(ctx context.Context, sqlproc *sqlexec.SqlProcess, cfg TableConfig) (result indexstats.FullTextSummary, err error) {
+	ts, tail, err := LoadGeneration(sqlproc, cfg)
+	if err != nil {
+		return result, err
+	}
+	veccache.Cache.Once()
+	matched := false
+	_, err = veccache.Cache.ReadIfLoaded(cfg.IndexTable, func(algo veccache.VectorIndexSearchIf) error {
+		reader, ok := algo.(*Fulltext2Search)
+		if !ok {
+			return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")
+		}
+		if !reader.genValid || reader.loadedTs != ts || reader.loadedTail != tail {
+			return nil
+		}
+		matched = true
+		result, err = reader.Stats(ctx)
+		return err
+	})
+	if err != nil || matched {
+		return result, err
+	}
+	var snapshot timestamp.Timestamp
+	if historical := sqlproc.EffectiveSnapshotTS(); historical != nil {
+		snapshot = *historical
+	} else if sqlproc.Proc != nil && sqlproc.Proc.GetTxnOperator() != nil {
+		snapshot = sqlproc.Proc.GetTxnOperator().Txn().SnapshotTS
+	} else if sqlproc.SqlCtx != nil && sqlproc.SqlCtx.TxnOperator != nil {
+		snapshot = sqlproc.SqlCtx.TxnOperator.Txn().SnapshotTS
+	}
+	if snapshot.IsEmpty() {
+		return result, moerr.NewInternalError(ctx, "fulltext stats: read snapshot is unavailable")
+	}
+	key := veccache.SnapshotKey(cfg.IndexTable, snapshot)
+	err = veccache.Cache.Read(sqlproc, key, NewFulltext2Search(cfg), func(algo veccache.VectorIndexSearchIf) error {
+		reader, ok := algo.(*Fulltext2Search)
+		if !ok {
+			return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")
+		}
+		result, err = reader.Stats(ctx)
+		return err
+	})
+	return result, err
 }

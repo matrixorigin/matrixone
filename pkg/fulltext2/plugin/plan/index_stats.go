@@ -16,10 +16,11 @@ package plan
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,23 +40,15 @@ func (Hooks) ConfigureIndexStats(ctx context.Context, source *plan.TableDef, def
 		if idx.IndexAlgoTableType == catalog.IndexIgnored_TblType {
 			continue
 		}
-		rawParams := idx.IndexAlgoParams
-		if rawParams == "" {
-			rawParams = "{}"
-		}
-		params, err := catalog.IndexParamsStringToMap(rawParams)
+
+		options, parser, _, err := fulltext.ParseIndexOptions(idx.IndexAlgoParams)
 		if err != nil {
 			return err
 		}
-		cfg.Options = params
+		cfg.Options, cfg.Parser = options, parser
+		cfg.TokenFilters = fulltext2.ParseTokenFilterNames(options[catalog.IndexAlgoParamTokenFilter])
 		cfg.Columns = append([]string(nil), idx.Parts...)
-		cfg.Parser = strings.ToLower(params["parser"])
-		if cfg.Parser == "" || cfg.Parser == "default" {
-			cfg.Parser = "ngram"
-		}
-		if _, err := catalog.IndexParamAsync(idx.IndexAlgoParams); err != nil {
-			return err
-		}
+
 		switch idx.IndexAlgoTableType {
 		case catalog.FullText2Index_TblType_Metadata:
 			cfg.Metadata = idx.IndexTableName

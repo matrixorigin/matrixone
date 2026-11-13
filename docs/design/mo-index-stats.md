@@ -3,7 +3,7 @@
 Chinese design and metric reference: [索引统计设计](../cn/mo_index_stats.md).
 
 `mo_index_stats(database, table, index)` is a built-in table function. Its three
-arguments are non-empty string literals. Currently it supports local ordinary
+arguments are non-empty string literals. Currently it supports local, non-temporary, non-partitioned ordinary
 tables with declared primary keys, unique indexes, regular BTREE secondary
 indexes, IVF_FLAT, classic fulltext, or fulltext2 indexes. Other index types
 return a not-supported error;
@@ -37,8 +37,8 @@ LIMIT 10;
 IVF returns one `index` summary row followed by `centroid` detail rows. Key indexes
 and fulltext return exactly one `index` row; fulltext never enumerates vocabulary
 terms. All summary rows have a NULL `object_id`. For IVF, only the current metadata version is read,
-and empty buckets are included. Relational reads, physical-object visibility,
-and async job reads use the statement's transaction snapshot. The engine's
+and empty buckets are included. Relational reads and physical-object visibility
+use the statement's transaction snapshot. Async job status is observed in a fresh system transaction, independently of that snapshot. The engine's
 size estimate can include asynchronously published statistics. Nothing is
 persisted, and CREATE INDEX, REINDEX, and DML acquire no new diagnostic writes.
 
@@ -87,15 +87,18 @@ threshold across embedding models and workloads.
 The implementation scans all current entries, without sampling, and retains
 only running statistics per centroid and dimension. Center geometry currently
 supports `vector_l2_ops`. Other distances still return bucket counts, with absent
-geometric metrics and `center_stats_unsupported_distance` status. Synchronous
-quantized indexes obtain original vectors from the source table. Asynchronous
-quantized indexes return counts with `center_stats_unavailable_async_quantized`,
-because current source vectors may be ahead of CDC's indexed state. Unquantized
-asynchronous indexes describe the index's consumed data, not necessarily all
-current source-table data.
+geometric metrics and `center_stats_unsupported_distance` status. Both sync and async geometry reads only the consumed index entries; no source-table
+join is required. Quantized vectors are reconstructed and the ratio carries
+`center_stats_approximate_quantized`. Clipped original values cannot be recovered.
+Integer reconstruction omits geometry with `center_stats_quantization_limited`
+when residual energy is within rounding resolution. Missing or invalid bounds
+return counts with `center_stats_quantization_unavailable`. Geometry uses scaled
+squares rather than absolute distances; an unrepresentable subtraction returns
+`center_stats_overflow` while preserving counts. Count-only reads aggregate in SQL
+and return at most one row per bucket. Async statistics describe consumed data.
 
 Empty buckets omit geometric metrics; a NULL placeholder center has `untrained`
-status. Missing source vectors produce
+status. Missing index vectors produce
 `incomplete_vectors` rather than a misleading geometric score. This is a scan
 and computation operation, not a constant-time metadata lookup. Output filters
 and LIMIT do not eliminate the diagnostic scan. No historical baseline or
@@ -156,14 +159,17 @@ no tokens. The SQL engine performs the grouping; diagnostics never return the
 vocabulary to the client. The average uses floating-point input to avoid the
 fixed-scale rounding of an integer AVG followed by a cast.
 
-Fulltext2 reads a private index at the query's snapshot, using the existing load
-budget checks and releasing its segment mappings after scanning. The engine's
+Fulltext2 uses the existing index cache and byte governor. A warm current generation
+is reused only when its generation fingerprint matches the statement's snapshot;
+otherwise the exact snapshot is loaded under its own cache key. A shared read lock
+protects the generation during statistics, with the same admission and eviction
+lifetime as search. Fully live segments read only the DF header.
+The engine's
 liveness resolution removes superseded copies and delete-shadowed documents.
 Statistics stream and merge sorted segment dictionaries in O(segment count)
 additional vocabulary memory, counting only live postings. A term present in
 several segments is counted once globally; a term appearing only in dead copies
-is excluded. No compaction, retokenization, diagnostic persistence, or shared
-query-cache insertion is performed. Statistics describe consumed index contents;
+is excluded. No compaction, retokenization, diagnostic persistence is performed. Statistics describe consumed index contents;
 async freshness independently reports whether they cover source changes.
 
 ```sql
@@ -208,9 +214,10 @@ I/O cost. Diagnostics do not request a flush or persist a diagnostic baseline.
 
 Synchronous indexes omit the `async` object. An async summary reads the latest
 non-dropped `index_<canonical-index-name>` job for the source account and table
-from the system-owned `mo_iscp_log`, at the same read snapshot. It exposes
-`task_state` (SHOW INDEX STATUS's running/retrying/stopped distinction, plus
-canceled), UTC `synced_at`, nullable `caught_up`, and nullable `lag_seconds`.
+from the system-owned `mo_iscp_log`, in a fresh system transaction. Tenant snapshots
+do not retain sys-owned job history. A failed observation returns
+`task_status_unavailable` with unknown coverage, preserving other statistics. It exposes
+`task_state` (the shared ISCP running/retrying/stopped/canceled names), UTC `synced_at`, nullable `caught_up`, and nullable `lag_seconds`.
 An actual error adds a nonzero `error_code` and available `error_message`.
 Internal job IDs, numeric states and raw timestamps are omitted; watermark
 comparisons still use both physical and logical timestamp components.

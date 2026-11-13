@@ -48,10 +48,10 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 		return 0, moerr.NewInvalidInputf(builder.GetContext(), "table '%s.%s' does not exist", names[0], names[1])
 	}
 	// Resolve must not redirect the runtime's literal source to another tenant.
-	if obj.PubInfo != nil || source.TableType != catalog.SystemOrdinaryRel {
-		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_index_stats currently supports local ordinary tables only")
+	if obj.PubInfo != nil || source.TableType != catalog.SystemOrdinaryRel || source.IsTemporary || source.Partition != nil {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_index_stats supports local, non-temporary, non-partitioned ordinary tables only")
 	}
-	cfg := indexstats.Config{Database: names[0], Table: names[1], Index: names[2], TableID: source.TblId}
+	cfg := indexstats.Config{Database: obj.SchemaName, Table: source.Name, Index: names[2], TableID: source.TblId}
 	if strings.EqualFold(names[2], "PRIMARY") {
 		if source.Pkey == nil || source.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index 'PRIMARY' does not exist on '%s.%s'", names[0], names[1])
