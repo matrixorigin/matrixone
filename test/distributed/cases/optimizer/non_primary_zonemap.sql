@@ -118,6 +118,7 @@ select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select max(b) from bool_aggregate;
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 select count(1), max(b) from bool_aggregate;
 select min(b), max(b) from bool_aggregate;
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
@@ -127,12 +128,14 @@ insert into bool_aggregate values (true),(true);
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 truncate table bool_aggregate;
 insert into bool_aggregate values (false),(true),(null);
 -- @regex("returnStr.*OK",true)
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
 truncate table bool_aggregate;
 insert into bool_aggregate values (null),(null);
 -- @regex("returnStr.*OK",true)
