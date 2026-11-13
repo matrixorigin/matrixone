@@ -609,12 +609,16 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 // fetch them, or are more than an eighth of what the download writes before them. It
 // reports whether a download covers the object, and whether it filled entry.
 func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
-	o := d.download(diskPath)
-	if o == nil {
-		return false, false, nil
-	}
 	end := entry.Offset + entry.Size
-	behind, wait := o.estimate(entry.Offset, end)
+	// The download of the object, or of a FilePrefetchObject holding the entry's bytes,
+	// whose bytes start at base in the object.
+	o, base := d.download(diskPath), int64(0)
+	if o == nil {
+		if o, base = d.fileDownload(diskPath, entry.Offset, end); o == nil {
+			return false, false, nil
+		}
+	}
+	behind, wait := o.estimate(entry.Offset-base, end-base)
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
@@ -635,7 +639,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 			}
 		}
 		// The read waits for the download it chose until its bytes are written or it ends.
-		if _, ok := o.waitFor(ctx, entry.Offset, end, maxIOWaitDuration); !ok {
+		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
 		}
@@ -646,7 +650,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	defer o.release()
-	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
+	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset-base, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}
 	// Only bytes delivered successfully count toward read share. Eviction accounting

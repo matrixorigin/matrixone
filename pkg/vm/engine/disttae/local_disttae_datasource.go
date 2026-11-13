@@ -1793,7 +1793,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     bytes, Due: due, Ranges: ranges, ObjectSize: size, Scan: ls.rc.prefetchScan,
+				Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
 			})
 			if err != nil {
 				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))

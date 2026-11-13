@@ -215,25 +215,23 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 		10*time.Second, time.Millisecond)
 }
 
-// A column prefetch of more bytes than the column bound downloads the whole object.
-func TestS3FSColumnPrefetchPastBoundDownloadsObject(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	fs.diskCache.columnPrefetchMax = 20
-	busyPrefetcher(t, fs)
-	ctx := context.Background()
+// A prefetch of ranges of more bytes than a MemoryPrefetchObject downloads them to their
+// cache files as FilePrefetchObjects, not the object.
+func TestS3FSPrefetchPastMemoryMaxDownloadsFiles(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	fs.diskCache.memoryPrefetchMax = 20
 	ranges := []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}}
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 30, Ranges: ranges, ObjectSize: int64(len(data)), Due: 1 << 62}))
-	fs.prefetcher.mu.Lock()
-	req := fs.prefetcher.entries["object"].req
-	fs.prefetcher.mu.Unlock()
-	require.Empty(t, req.Ranges)
-	require.Equal(t, int64(len(data)), req.Size)
-
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "small", Size: 10, Ranges: ranges[:1], ObjectSize: int64(len(data)), Due: 1 << 62}))
-	fs.prefetcher.mu.Lock()
-	req = fs.prefetcher.entries["small"].req
-	fs.prefetcher.mu.Unlock()
-	require.Equal(t, ranges[:1], req.Ranges, "within the bound it stays a column prefetch")
+	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 30, Ranges: ranges})
+	require.Equal(t, int64(30), storage.bytes.Load(), "only the ranges")
+	key := fs.diskCache.rangeObjectKey("object")
+	for _, r := range ranges {
+		_, cached := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
+		require.True(t, cached)
+	}
+	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.Empty(t, fs.diskCache.prefetchFlights.m, "no MemoryPrefetchObject")
+	require.Equal(t, data[200<<10+5:200<<10+15], readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10))
+	require.Equal(t, int64(30), storage.bytes.Load(), "served from the cached range")
 }
 
 // A column read whose entries have bytes between them reads each one, however close, and

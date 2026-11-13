@@ -640,14 +640,14 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	var calls int
 	avail := uint64(10 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{columnPrefetchMax: 32 << 20}
+	d := &DiskCache{memoryPrefetchMax: 32 << 20}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
 	require.Equal(t, share, d.flightBytes(), "measured once per refresh")
 	require.Equal(t, 1, calls)
 	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(32<<20), d.flightBytes(), "at least one column prefetch")
+	require.Equal(t, int64(32<<20), d.flightBytes(), "at least one MemoryPrefetchObject")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())

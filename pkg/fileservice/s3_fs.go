@@ -555,9 +555,9 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 }
 
 // joinQueued waits until the read can join the prefetcher's download of the object of
-// vector, when it is one the read would join: its column ranges or its whole object for a
-// column read, the whole object for a read that may download it. A download still waiting moves to the
-// live queue. The reads of a download join none.
+// vector, when it is one the read would join: any for a column read, one of the whole
+// object for a read that may download it. A download still waiting moves to the live
+// queue. The reads of a download join none.
 func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) {
 	columns := vector.Policy.Any(ColumnPrefetch)
 	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {

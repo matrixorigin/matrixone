@@ -115,22 +115,25 @@ type flightBudget struct {
 }
 
 // flightBytes returns the most bytes of prefetch range runs under way: prefetchFlightBytes
-// when set, otherwise a share of the memory available on the node, at least one column
-// prefetch's bytes.
+// when set, otherwise a share of the memory available on the node, at least one
+// MemoryPrefetchObject's bytes.
 func (d *DiskCache) flightBytes() int64 {
 	if d.prefetchFlightBytes > 0 {
 		return d.prefetchFlightBytes
 	}
 	b := &d.flightBudget
 	now := time.Now().UnixNano()
-	if bytes := b.bytes.Load(); bytes > 0 && now-b.at.Load() < int64(flightBudgetRefresh) {
+	at := b.at.Load()
+	bytes := b.bytes.Load()
+	// One caller measures once the last measurement is stale; the others keep it meanwhile.
+	if bytes > 0 && (now-at < int64(flightBudgetRefresh) || !b.at.CompareAndSwap(at, now)) {
 		return bytes
 	}
-	bytes := int64(prefetchFlightBytesMax)
+	bytes = int64(prefetchFlightBytesMax)
 	if avail, ok := memoryAvailable(); ok {
 		bytes = int64(min(avail/100*flightMemoryPercent, math.MaxInt64))
 	}
-	bytes = max(bytes, d.columnPrefetchMax)
+	bytes = max(bytes, d.memoryPrefetchMax)
 	b.bytes.Store(bytes)
 	b.at.Store(now)
 	return bytes
@@ -661,6 +664,9 @@ func (d *DiskCache) dropPrefetches(ctx context.Context, diskPath string) error {
 		fl.cancel()
 	}
 	f.mu.Unlock()
+	if err := d.dropFilePrefetches(ctx, diskPath); err != nil {
+		return err
+	}
 	return waitFlights(ctx, flights)
 }
 
