@@ -483,20 +483,29 @@ def test_snapshot_foreign_engine_and_invalid_name_are_explicit(engine):
 
 @pytest.mark.parametrize('entry', ['query', 'client', 'index'])
 @pytest.mark.parametrize('limit', [None, 0, 2])
-def test_fulltext_pagination_preserves_explicit_zero(entry, limit):
+@pytest.mark.parametrize('offset', [None, 0, 1])
+def test_fulltext_pagination_preserves_explicit_zero(entry, limit, offset):
     if entry == 'query':
-        sql = FulltextQueryBuilder().must('hello').as_sql('docs', ['body'], limit=limit)
+        sql = FulltextQueryBuilder().must('hello').as_sql('docs', ['body'], limit=limit, offset=offset)
     elif entry == 'client':
         builder = FulltextSearchBuilder(None).table('docs').columns(['body']).query('hello')
         if limit is not None:
             builder.limit(limit)
+        if offset is not None:
+            builder.offset(offset)
         sql = builder.explain()
     else:
         builder = IndexSearch('docs', ['body']).search('hello')
         if limit is not None:
             builder.limit(limit)
+        if offset is not None:
+            builder.offset(offset)
         sql = builder.build_sql()
-    assert ('LIMIT' not in sql) if limit is None else sql.endswith('LIMIT ' + str(limit))
+    if offset is None:
+        assert ('LIMIT' not in sql) if limit is None else sql.endswith('LIMIT ' + str(limit))
+    else:
+        effective_limit = 18446744073709551615 if limit is None else limit
+        assert sql.endswith(f'LIMIT {effective_limit} OFFSET {offset}')
 
 
 def test_classified_query_error_retains_exact_source_without_double_wrapping():
@@ -526,7 +535,8 @@ def test_public_query_error_chain_and_reuse(engine, entry):
 
 
 @pytest.mark.parametrize('entry', ['client', 'client_session', 'exported_session'])
-def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, entry):
+@pytest.mark.parametrize('logger_failure', [None, 'log_query', 'log_error'])
+def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, entry, logger_failure):
     from matrixone._session_execution import _LiteralSQL, deferred_literal_options
 
     source = sa.exc.OperationalError('SELECT mode', (), RuntimeError('mode lookup failed'))
@@ -540,6 +550,8 @@ def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, ent
     statement = FailedPreparation('SELECT 1', client=object())
     client = Client(logger=Mock(), sql_log_mode='off')
     client._engine = engine
+    if logger_failure:
+        getattr(client.logger, logger_failure).side_effect = OSError('log destination failed')
     if entry == 'client':
         with pytest.raises(QueryError) as raised:
             client.execute(statement)
@@ -551,6 +563,8 @@ def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, ent
     assert raised.value.orig is source
     assert raised.value.__cause__ is source
     assert 'mode lookup failed' in str(raised.value)
+    if logger_failure:
+        getattr(client.logger, logger_failure).side_effect = None
     assert client.execute('SELECT 42').scalar() == 42
 
 

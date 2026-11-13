@@ -549,17 +549,33 @@ async def test_clone_snapshot_convenience_single_connection_pool(client, server,
         client.execute('DROP TABLE ' + source)
 
 
-def test_fulltext_reserved_and_atomic_column_names(client):
+@pytest.mark.parametrize('first_column', ['order', 'fulltext1', 'body'])
+def test_fulltext_reserved_and_atomic_column_names(client, first_column, record_property):
     from matrixone.sqlalchemy_ext import boolean_match
 
     table = name('quoted_fulltext_')
     client.execute('SET experimental_fulltext_index=1')
-    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY, `order` TEXT, `fulltext2` TEXT)')
+    second_column = 'title' if first_column == 'body' else 'fulltext2'
+    quoted = f'`{first_column}`, `{second_column}`'
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY, `{first_column}` TEXT, `{second_column}` TEXT)')
     try:
         client.execute(f"INSERT INTO {table} VALUES(1,'alpha','alpha'),(2,'beta','beta')")
-        client.execute(f'CREATE FULLTEXT INDEX ft ON {table}(`order`,`fulltext2`)')
-        columns = [sa.Column('order'), sa.Column('fulltext2')]
-        quoted = '`order`, `fulltext2`'
+        ddl = f'CREATE FULLTEXT INDEX ft ON {table}({quoted})'
+        if os.environ.get('MO_SDK_TARGET') == '4.2.8' and first_column in ('order', 'fulltext1'):
+            with pytest.raises(QueryError, match='syntax error') as native:
+                client.execute(ddl)
+            assert native.value.errno in (1064, 1105)
+            assert client.execute(f'SELECT id, {quoted} FROM {table} ORDER BY id').rows == [
+                (1, 'alpha', 'alpha'),
+                (2, 'beta', 'beta'),
+            ]
+            record_property(
+                'matrixone.feature.fulltext_' + first_column + '_column', 'native-rejected:' + str(native.value.errno)
+            )
+            return
+        client.execute(ddl)
+        record_property('matrixone.feature.fulltext_' + first_column + '_column', 'supported')
+        columns = [sa.Column(first_column), sa.Column(second_column)]
         expected = client.execute(
             f"SELECT id FROM {table} WHERE MATCH({quoted}) AGAINST('+alpha' IN BOOLEAN MODE)"
         ).rows
@@ -586,6 +602,13 @@ def test_fulltext_reserved_and_atomic_column_names(client):
         ]
         for sql in sqls:
             assert [row[0] for row in client.execute(sql).rows] == [1]
+        # OFFSET without a user LIMIT must remain portable to released grammar.
+        for sql in (
+            FulltextQueryBuilder().must('alpha').as_sql(table, columns, offset=1),
+            FulltextSearchBuilder(None).table(table).columns(columns).query('alpha').offset(1).explain(),
+            IndexSearch(table, columns).search('+alpha').set_mode('boolean mode').offset(1).build_sql(),
+        ):
+            assert client.execute(sql).rows == []
         mapped = sa.Table(table, sa.MetaData(), sa.Column('id'), *(sa.Column(column.name) for column in columns))
         statement = select(mapped.c.id).where(
             boolean_match(*[mapped.c[column.name] for column in columns]).must('alpha')

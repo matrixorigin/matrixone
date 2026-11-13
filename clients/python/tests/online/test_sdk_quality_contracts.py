@@ -99,6 +99,18 @@ def test_legacy_filter_by_preserves_mutation_scope(client, tables):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize('offset', [0, 1, 3])
+async def test_query_offset_without_limit_preserves_slice(client, async_client, tables, kind, offset):
+    model, _ = tables
+    c = client if kind == 'sync' else async_client
+    result = c.query(model).select(model.id).order_by(model.id).offset(offset).all()
+    if inspect.isawaitable(result):
+        result = await result
+    assert [row.id for row in result] == [1, 2, 3][offset:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
 @pytest.mark.parametrize(
     'format,quoted_path,terminator', [('csv', True, '\n'), ('csv', False, "'\n"), ('jsonl', True, '\n')]
 )

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 from uuid import uuid4
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import event
@@ -99,7 +100,8 @@ async def test_export_mode_and_statement_share_one_checkout(server, kind, owner,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
-async def test_mode_probe_failure_preserves_source_and_pool(client, async_client, kind):
+@pytest.mark.parametrize('logger_failure', [None, 'log_query', 'log_error'])
+async def test_mode_probe_failure_preserves_source_and_pool(client, async_client, kind, logger_failure, monkeypatch):
     c = client if kind == 'sync' else async_client
     engine = c._engine if kind == 'sync' else c._engine.sync_engine
     filename = 'mode_failure_' + uuid4().hex + '.jsonl'
@@ -119,10 +121,13 @@ async def test_mode_probe_failure_preserves_source_and_pool(client, async_client
 
     event.listen(engine, 'before_cursor_execute', fail_mode_probe)
     try:
-        with pytest.raises(QueryError) as error:
-            value = c.export.to_jsonl(remote, "SELECT LENGTH('\\') AS value; -- trailing")
-            if inspect.isawaitable(value):
-                await value
+        with monkeypatch.context() as patch:
+            if logger_failure:
+                patch.setattr(c.logger, logger_failure, Mock(side_effect=OSError('log destination failed')))
+            with pytest.raises(QueryError) as error:
+                value = c.export.to_jsonl(remote, "SELECT LENGTH('\\') AS value; -- trailing")
+                if inspect.isawaitable(value):
+                    await value
         assert error.value.orig is failure
         assert probes == [1]
         assert not local.exists()

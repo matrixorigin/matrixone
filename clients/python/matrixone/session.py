@@ -440,13 +440,17 @@ class Session(SQLAlchemySession):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(
-                original_sql,
-                execution_time,
-                success=False,
-                log_mode=log_mode,
-            )
-            self.client.logger.log_error(e, context="Session query execution")
+            try:
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    success=False,
+                    log_mode=log_mode,
+                )
+                self.client.logger.log_error(e, context="Session query execution")
+            except Exception:
+                # A secondary logging failure cannot replace the database error.
+                pass
             from .client import _classify_db_error
 
             classified = _classify_db_error(e, sql_or_stmt)
@@ -804,13 +808,17 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(
-                original_sql,
-                execution_time,
-                success=False,
-                log_mode=log_mode,
-            )
-            self.client.logger.log_error(e, context="Async session query execution")
+            try:
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    success=False,
+                    log_mode=log_mode,
+                )
+                self.client.logger.log_error(e, context="Async session query execution")
+            except Exception:
+                # A secondary logging failure cannot replace the database error.
+                pass
             from .client import _classify_db_error
 
             classified = _classify_db_error(e, sql_or_stmt)

@@ -23,6 +23,7 @@ This file ensures that fixtures are properly registered for online tests.
 import pytest
 import pytest_asyncio
 import asyncio
+import os
 from typing import Tuple
 from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
@@ -80,21 +81,25 @@ class DatabaseTestHelper:
 
     def test_connection(self, host: str, port: int, user: str, password: str, database: str) -> bool:
         """Test database connection"""
+        client = self.create_client(host, port, user, password, database)
         try:
-            client = self.create_client(host, port, user, password, database)
             return self.connect_client(client, host, port, user, password, database)
         except Exception as e:
             self.logger.error(f"Connection test failed: {e}")
             return False
+        finally:
+            client.disconnect()
 
     async def test_async_connection(self, host: str, port: int, user: str, password: str, database: str) -> bool:
         """Test async database connection"""
+        client = self.create_async_client(host, port, user, password, database)
         try:
-            client = self.create_async_client(host, port, user, password, database)
             return await self.connect_async_client(client, host, port, user, password, database)
         except Exception as e:
             self.logger.error(f"Async connection test failed: {e}")
             return False
+        finally:
+            await client.disconnect()
 
 
 @pytest.fixture(scope="session")
@@ -163,6 +168,8 @@ def db_connection_test(db_helper):
     host, port, user, password, database = online_config.get_connection_params()
     success = db_helper.test_connection(host, port, user, password, database)
     if not success:
+        if os.environ.get('MO_SDK_ONLINE') == '1':
+            pytest.fail('Explicitly selected MatrixOne server is unavailable')
         pytest.skip("Database connection failed - skipping online tests")
     return success
 
@@ -173,6 +180,8 @@ async def async_db_connection_test(db_helper):
     host, port, user, password, database = online_config.get_connection_params()
     success = await db_helper.test_async_connection(host, port, user, password, database)
     if not success:
+        if os.environ.get('MO_SDK_ONLINE') == '1':
+            pytest.fail('Explicitly selected MatrixOne async server is unavailable')
         pytest.skip("Async database connection failed - skipping online tests")
     return success
 
@@ -182,8 +191,8 @@ def test_client(db_helper, db_connection_test):
     """Provide a connected test client"""
     host, port, user, password, database = online_config.get_connection_params()
     client = db_helper.create_client(host, port, user, password, database)
-    db_helper.connect_client(client, host, port, user, password, database)
     try:
+        client.connect(host=host, port=port, user=user, password=password, database=database)
         yield client
     finally:
         try:
@@ -199,8 +208,8 @@ async def test_async_client(db_helper, async_db_connection_test):
     """Provide a connected async test client"""
     host, port, user, password, database = online_config.get_connection_params()
     client = db_helper.create_async_client(host, port, user, password, database)
-    await db_helper.connect_async_client(client, host, port, user, password, database)
     try:
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
         yield client
     finally:
         # Clean disconnect - the improved disconnect method should handle cleanup properly
