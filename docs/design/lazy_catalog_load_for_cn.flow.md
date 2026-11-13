@@ -2,19 +2,19 @@
 
 ## 关键规则
 
-1. **subscribe/activation 不透传 raw checkpoint**：只转发过滤后的 row-level data。
+1. **subscribe/activation 保留共享 checkpoint 和 object metadata**：row-level data 才按 account 过滤；不提供 per-account PartitionState 或硬内存隔离。
 2. **`PartitionState` 只保存全局基线**：object/metadata 全局推进；row-level delta 按 account 过滤。
 3. **account ready 点是 `replayTS`，不是 `targetTS`**。
 4. **activation 期间 push 仍推进 `PartitionState`**：cache apply 进 `accountDCA`，replay 后 drain。
 5. **delete 也按 account 过滤**：统一按 `cpkey` 解出 account。
-6. **push 与 pull 粒度不同**：push entry 视为单 account（整条 keep/drop）；pull batch 可能混合 account（行级复制）。
+6. **push 与 pull 粒度不同**：push 的有效 summary 可整条 keep/drop；无 summary 的混合 batch 按 account 拆分后发送。pull batch 按行过滤。
 
 ---
 
 ## Flow 1：首次 startup
 
 1. CN `subSysTables()` 发送 `lazy_catalog=true, initial_active_accounts=[0]`。
-2. TN 返回：object/metadata + sys account row-level delta（无 raw `CkpLocation`）。
+2. TN 返回：共享 `CkpLocation`、object/metadata + sys account row-level delta。
 3. CN 应用到 `PartitionState`，走 `waitTimestamp()` / `replayCatalogCache()`（仅 sys account）。
 4. Flush global DCA → `sys.readyTS = startupReplayTS` → `sys.state = ready`。
 
@@ -38,7 +38,7 @@
 **D. CN 落地**：
 1. Apply tails → `PartitionState`。
 2. `WaitLogTailAppliedAt(targetTS)` → `replayTS`。
-3. `replayCatalogCacheForAccount(X, replayTS)` → drain `accountDCA[X]` → `readyTS` → `ready`。
+3. `replayCatalogCacheAt(..., [X])` → 校验 seq → drain `accountDCA[X]` → 再校验 seq → `readyTS` → `ready`。tail apply/replay 失败或 seq 被 reset 时不得发布 ready。
 
 **E. 期间 push**：`PartitionState` 正常更新；X 的 cache apply 进 `accountDCA`。
 
@@ -58,6 +58,7 @@
 2. Reconnect `subSysTables()`：`initial_active_accounts = wantedAccounts ∪ {0}`。
 3. TN 返回 sys + wanted 的 row-level delta。
 4. CN 走 startup 骨架 → `reconnectReplayTS` → replay sys + wanted → 批量 `ready`。
+5. 重连前的 activation 即使已收到 response，也不能凭旧 seq 将新连接的 account 标记 ready。
 
 ---
 

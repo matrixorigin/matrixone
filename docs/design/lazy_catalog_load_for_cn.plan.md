@@ -8,11 +8,13 @@ isProject: false
 
 > 设计约束、协议语义、实现要点。执行时序见 `lazy_catalog_load_for_cn.flow.md`。
 
+Owning issue: [#23777](https://github.com/matrixorigin/matrixone/issues/23777).
+
 ## 1. 目标与边界
 
 **目标**：startup 后 `CatalogCache` 只加载 sys account；运行中新增 account 走 activation；reconnect 按批量恢复处理。
 
-**非目标**：不改 checkpoint 按账户懒化；不改 `PartitionState` 为 per-account 隔离；不改普通表的订阅/推送/反订阅。
+**非目标**：不改 checkpoint 按账户懒化；不改 `PartitionState` 为 per-account 隔离；不改普通表的订阅/推送/反订阅；不提供每租户硬内存配额或 activated-account eviction。
 
 > **共享 `PartitionState` 保留全局基线；account 是否可见，由 per-account replay 和 per-account `readyTS` 决定。**
 
@@ -20,13 +22,15 @@ isProject: false
 
 ## 2. 核心不变量
 
-1. **不透传 raw checkpoint**：三表的 `CkpLocation` 不是 account-filtered，subscribe/activation 只转发过滤后的 row-level data。
+1. **保留共享 checkpoint 基线**：三表的 `CkpLocation` 和 object metadata 仍是全局的；只对 row-level delta 和 cache replay 做 account 过滤。activation 也保留 object metadata，以清理 flush 与 activation 重叠时重复到达的内存行。
 2. **account 在 full replay 后才能 serve**：activation response 只补 `PartitionState`，`readyTS` 在 replay 后发布。
 3. **`targetTS` 在 TN sender 路径上确定**：保证和 steady-state push 无 gap。
 4. **response 入 FIFO 后才标记 active**：不能让 post-activation update 先于 response 到达 CN。
 5. **object/metadata 全局推进，只有 row-level delta 按 account 过滤**：insert/update 按 `account_id`，delete 按 `cpkey`。
 6. **reconnect 视为批量恢复**：`wantedAccounts ∪ {0}` 一次性 subscribe + 统一 replay。
 7. **只落在三张 catalog 系统表**：`mo_database`/`mo_tables`/`mo_columns`，不污染普通表。
+8. **失败不发布 ready**：tail apply、barrier、replay、drain 任一失败都不能成功完成 activation。重连前的 seq 不能将新连接的 account 标记 ready。
+9. **共享 sender 不等慢客户端**：activation response 采用与 subscription/update 相同的非等待队列准入；队列满时释放 response 并触发该 session 重连。
 
 ---
 
@@ -40,7 +44,7 @@ isProject: false
 | `seq` | activation 相关键（不复用 stream id） |
 | `accountDCA` | per-account 延迟 cache apply 暂存区 |
 
-CN account 状态：`inactive → catching_up → ready`。
+CN account 状态：`inactive → catching_up → ready_draining → ready`。seq 在 ready 发布前保持有效；reset 清除 seq，旧 completion 必须被拒绝。
 
 ---
 
@@ -70,13 +74,13 @@ message ActivateAccountForCatalogResponse {
 
 ### 过滤
 
-- **subscribe/activation（pulled batch）**：可能混合 account → 用 `batch.Union(sels)` 按 `account_id`/`cpkey` 行级复制。Phase1 在 pull 后**立即**过滤，不进串行 send 路径。Filtered batch 用 cleanup callback 保活，不做 proto-batch deep clone。`stripObjectMeta` 参数控制 object metadata 是否保留（subscribe 保留，activation 去除）。
-- **steady-state push**：entry 级单 account 假设 → `prepareLazyCatalogPublishWrapsFromIndex` 读 entry summary 整条 keep/drop。无 summary 时退回行级扫描。
+- **subscribe/activation（pulled batch）**：可能混合 account → 用 `batch.Union(sels)` 按 `account_id`/`cpkey` 行级复制。Phase1 在 pull 后**立即**过滤，不进串行 send 路径。Filtered batch 用 cleanup callback 保活，不做 proto-batch deep clone。subscribe 和 activation 都保留共享 object metadata。
+- **steady-state push**：有效 entry summary 走整条 keep/drop；无 summary 时按行分组，只输出 allowed account 的单租户 entry。CN 的 per-account DCA 因此不依赖混合 batch 的首行来决定归属。
 - **entry-level summary**（`txn_handle.go`）：`api.Entry` 携带 `lazy_catalog_account_id` + validity bit，仅当 batch 内所有行属于同一 account 时设置。混合 batch（如 restore）不设置。
 
 ### Activation worker
 
-有界 `activationReqChan` + 固定 worker pool（默认 1）。Phase1（worker 并发拉三表）→ Phase2（sender goroutine 串行：补齐 gap、合并、发送）。`targetTS = waterline.Waterline()`，response 进入 FIFO 后才 `completeActivation`。
+有界 `activationReqChan` + 固定 worker pool，数量来自 `PullWorkerPoolSize`，与普通 pull 共享 token。Phase1（每个 token 并发拉三表）→ Phase2（sender goroutine 串行：补齐 gap、合并、非等待入队）。`targetTS = waterline.Waterline()`，response 进入 FIFO 后才 `completeActivation`。pull 受 session/server cancellation 和 request timeout 约束；失败通知 session error owner，不能只记录日志后让 CN 无限等 response。
 
 ---
 
@@ -94,6 +98,7 @@ message ActivateAccountForCatalogResponse {
 4. Response → apply tails 到 `PartitionState` → `WaitLogTailAppliedAt(targetTS)` → `replayCatalogCacheForAccount` → drain `accountDCA` → `readyTS` → `ready`。
 
 失败回退：`catching_up → inactive`，丢弃 `accountDCA`，TN `abortActivation`。
+response apply 失败进入现有接收错误/重连路径；已失效 seq 的 replay completion 进入同一有限重试路径，而不是重新创建 ready 状态。
 
 ### Reconnect 重试
 
@@ -145,7 +150,24 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 
 ---
 
-## 9. 实现落点
+## 9. Alternatives, Cost And Operations
+
+- Status quo: eager replay and full catalog push minimize protocol state, but every CN pays for all tenants. This is the comparison baseline.
+- Cache-only lazy replay keeps the wire unchanged, but still sends and applies every inactive tenant's live catalog delta. It does not meet the bandwidth and steady-state replay goal.
+- Per-account PartitionState/checkpoints could isolate more memory, but require a separate persisted-object ownership and historical-read design. They are deliberately not implemented here.
+- The selected design retains the existing shared checkpoint/object owner and adds account-scoped live rows, cache replay and readiness. Full-cluster shutdown upgrades remain the repository contract; no persisted catalog layout or old-peer compatibility mode is added.
+
+Resource owners and bounds:
+
+- TN owns at most `PullWorkerPoolSize` pull tokens; request capacity equals the activation worker count and completed phase-1 capacity is 64. Each admitted activation has three catalog pulls, not a goroutine per waiting request. Source/filter batches transfer through phase-1, merger and session response cleanup exactly once, including rejection and shutdown.
+- CN deduplicates one in-flight activation per account. Its pending response and DCA belong to that attempt and are released on success, failure or reset; waits observe cancellation and TN collection has a finite timeout. Reconnect retries are capped at four with 500ms/1s/2s/4s backoff. Recent diagnostic history is capped at 128 events.
+- Ready/wanted account identifiers remain until CN restart, and the TN active set until session destruction. Capacity is therefore proportional to distinct accounts served during that lifetime, not just currently connected sessions. Table-definition memory follows the existing catalog GC. This design is not an eviction policy or a guarantee that RSS stays below a fixed value.
+- Replay cost is proportional to selected tenants' metadata plus shared checkpoint I/O. A cold activation can still scan large `mo_columns` history; filtering after pull does not remove TN collection cost. Preserve bounded column-batch replay and validate high-DDL pressure separately from functional UT/BVT.
+- Authentication/privilege checks remain authoritative. An internal activation populates metadata but grants no SQL privilege. Remote pipelines, publication/snapshot reads, restore/clone and quota admission must activate before tenant name lookup. Debug status endpoints inherit the existing administrative deployment boundary and must not be exposed as tenant APIs.
+
+Acceptance: verify sys-only startup; independent cold-account activation; mixed-account insert/update/delete filtering; flush and checkpoint completeness; rejected/canceled activation without ready publication; reconnect with stale completion; nonblocking sender rejection and exactly-once cleanup; cross-CN SQL/restore/privilege outcomes. Use deterministic component tests and the shared authenticated two-CN fixture. TKE results from a different source SHA or shared-process vector-cache behavior are not evidence for this catalog protocol's final revision.
+
+## 10. 实现落点
 
 **协议**：`proto/logtail.proto`、`pkg/pb/logtail/`
 **TN**：`tae/logtail/service/{server,session,lazy_catalog_session,catalog_filter}.go`、`tae/logtail/txn_handle.go`
@@ -155,7 +177,7 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 
 ---
 
-## 10. 核对项
+## 11. 核对项
 
 1. startup 后 cache 只有 sys account
 2. activation response 只补 PS，不直接宣告 ready
