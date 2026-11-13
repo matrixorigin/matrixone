@@ -50,7 +50,16 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 	require.NoError(t, err, "acquire test cluster admission")
 	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 
-	c, err := embed.NewCluster(embed.WithTesting(), embed.WithDataPath(t.TempDir()), embed.WithCNCount(1))
+	// This branch creates its cluster directory beneath os.TempDir. Keep it
+	// inside the test-owned directory until Close has stopped all services.
+	t.Setenv("TMPDIR", t.TempDir())
+	c, err := embed.NewCluster(embed.WithTesting(), embed.WithCNCount(1), embed.WithPreStart(func(svc embed.ServiceOperator) {
+		svc.Adjust(func(cfg *embed.ServiceConfig) {
+			// The SQL client below uses TCP. Avoid the Unix socket path limit
+			// when the test runner has a long temporary-directory root.
+			cfg.CN.Frontend.UnixSocketAddress = ""
+		})
+	}))
 	started := make(chan struct{})
 	var startupErr error
 	startupLaunched := false

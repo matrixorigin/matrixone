@@ -21,9 +21,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -57,11 +57,11 @@ func TestReallocRetiresMetadataBeforeCachePublication(t *testing.T) {
 		// Set runs synchronously after the freed mapping enters the cache.
 		// Do not allocate here: the cache mutex is still held.
 		var lease allocationLease
-		_, found := mp.getPtrMetadata(unsafe.Pointer(ptr), &lease)
+		_, found := mp.getPtrMetadata(util.UnsafePointer(ptr), &lease)
 		metadataPresent.Store(found)
-		shard := getProfileShard(uintptr(unsafe.Pointer(ptr)))
+		shard := getProfileShard(uintptr(util.UnsafePointer(ptr)))
 		shard.mu.Lock()
-		_, found = shard.m[uintptr(unsafe.Pointer(ptr))]
+		_, found = shard.m[uintptr(util.UnsafePointer(ptr))]
 		shard.mu.Unlock()
 		profilePresent.Store(found)
 		observed.Store(true)
@@ -69,7 +69,7 @@ func TestReallocRetiresMetadataBeforeCachePublication(t *testing.T) {
 	old, err := mp.Alloc(128<<10, true)
 	require.NoError(t, err)
 	defer func() { capacity.Store(0); target.Store(nil); mp.Free(old) }()
-	target.Store(unsafe.SliceData(old))
+	target.Store(&old[0])
 	next, err := mp.ReallocZero(old, 256<<10, true)
 	require.NoError(t, err)
 	old = next
@@ -85,7 +85,10 @@ func TestReallocRetiresMetadataBeforeCachePublication(t *testing.T) {
 }
 
 func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
-	const child = "MO_TEST_REALLOC_PHYSICAL_FAILURE"
+	const (
+		child                     = "MO_TEST_REALLOC_PHYSICAL_FAILURE"
+		physicalFailureTargetSize = 512 << 20
+	)
 	if os.Getenv(child) != "1" {
 		// A process-local address-space limit injects real OS allocation failure
 		// without a production hot-path hook or affecting other package tests.
@@ -115,7 +118,7 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			require.NoError(t, err)
 			old[0], old[size-1] = 0x5a, 0x7f
 			var lease allocationLease
-			ptr := unsafe.Pointer(unsafe.SliceData(old))
+			ptr := util.UnsafePointer(&old[0])
 			hdr, ok := mp.getPtrMetadata(ptr, &lease)
 			require.True(t, ok)
 			before := GlobalStats().NumCurrBytes.Load()
@@ -129,7 +132,11 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			restricted := limit
 			restricted.Cur = pages*uint64(os.Getpagesize()) + 64<<20
 			require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &restricted))
-			next, resizeErr := mp.ReallocZero(old, 1<<30, true)
+			// Stay below MPoolStats' 1 GiB high-watermark logging boundary. The
+			// RLIMIT_AS budget leaves only 64 MiB above the current address space,
+			// so this target still forces mmap to fail without making the Go logger
+			// allocate while the limit is active.
+			next, resizeErr := mp.ReallocZero(old, physicalFailureTargetSize, true)
 			// Restore before assertions or other test work can allocate memory.
 			restoreErr := unix.Setrlimit(unix.RLIMIT_AS, &limit)
 			require.NoError(t, restoreErr)

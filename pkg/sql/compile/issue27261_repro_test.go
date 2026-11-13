@@ -419,13 +419,13 @@ func newIssue27261Process(t *testing.T) *process.Process {
 	rt := runtime.DefaultRuntime()
 	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
 	runtime.SetupServiceBasedRuntime("", rt)
-	testutil.SetupAutoIncrService("")
+	// NewProcess installs the service; capture that instance for cleanup.
+	proc := testutil.NewProcess(t)
 	service := incrservice.GetAutoIncrementService("")
 	t.Cleanup(func() {
 		service.Close()
 		rt.CompareAndDeleteGlobalVariables(runtime.AutoIncrementService, service)
 	})
-	proc := testutil.NewProcess(t)
 	t.Cleanup(proc.Free)
 	proc.BuildPipelineContext(proc.GetTopContext())
 	t.Cleanup(func() { proc.Cancel(nil) })
