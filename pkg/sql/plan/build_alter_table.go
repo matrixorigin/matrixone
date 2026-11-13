@@ -228,7 +228,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
+	// COPY executes this SQL with the ordinary-mode internal parser, regardless
+	// of the initiating session's SQL mode.
+	createTmpDdl, _, err := constructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil, true)
 	if err != nil {
 		return nil, err
 	}
