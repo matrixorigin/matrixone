@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,6 +84,44 @@ type KafkaScan = plan.KafkaScan
 
 const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
+const viewPrivilegeKeyPrefix = "\x00mo_view_privilege\x00"
+
+// IsStructuredViewDependencyKey distinguishes encoded keys from legacy names.
+func IsStructuredViewDependencyKey(key string) bool {
+	return strings.HasPrefix(key, viewDependencyKeyPrefix)
+}
+
+// FormatViewPrivilegeKey records the logical account in which a view was
+// resolved. This is separate from dependency keys used by DDL and restore.
+func FormatViewPrivilegeKey(databaseName, viewName string, snapshot *Snapshot, account uint32) (string, error) {
+	dependency, err := FormatViewDependencyKey(databaseName, viewName, snapshot)
+	if err != nil {
+		return "", err
+	}
+	return viewPrivilegeKeyPrefix + strconv.FormatUint(uint64(account), 10) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(dependency)), nil
+}
+
+// ParseViewPrivilegeKey decodes an account-qualified view edge.
+func ParseViewPrivilegeKey(key string) (string, string, *Snapshot, uint32, bool, error) {
+	if !strings.HasPrefix(key, viewPrivilegeKeyPrefix) {
+		return "", "", nil, 0, false, nil
+	}
+	accountString, encoded, ok := strings.Cut(key[len(viewPrivilegeKeyPrefix):], ".")
+	if !ok || accountString == "" || encoded == "" {
+		return "", "", nil, 0, true, moerr.NewInternalErrorNoCtx("invalid view privilege key")
+	}
+	account, err := strconv.ParseUint(accountString, 10, 32)
+	if err != nil {
+		return "", "", nil, 0, true, err
+	}
+	dependency, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || !IsStructuredViewDependencyKey(string(dependency)) {
+		return "", "", nil, 0, true, moerr.NewInternalErrorNoCtx("invalid view privilege dependency")
+	}
+	database, view, snapshot, err := ParseViewDependencyKey(string(dependency))
+	return database, view, snapshot, uint32(account), true, err
+}
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -113,7 +152,7 @@ func FormatViewDependencyKey(databaseName, viewName string, snapshot *Snapshot) 
 // snapshot recorded while binding a view. Plain database#view keys remain
 // readable for callers that have not recorded the structured dependency form.
 func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
-	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
+	if !IsStructuredViewDependencyKey(viewKey) {
 		databaseName, viewName, ok := strings.Cut(viewKey, "#")
 		if !ok || databaseName == "" || viewName == "" {
 			return "", "", nil, moerr.NewInternalErrorNoCtx("invalid view dependency")
