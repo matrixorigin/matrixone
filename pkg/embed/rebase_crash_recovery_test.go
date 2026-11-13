@@ -278,8 +278,12 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 	}()
 	select {
 	case err := <-ready:
+		if err != nil {
+			logRebaseCrashChild(t, root, "prepare")
+		}
 		require.NoError(t, err)
 	case <-ctx.Done():
+		logRebaseCrashChild(t, root, "prepare")
 		t.Fatal("child never reached pre-commit crash barrier")
 	}
 	require.NoError(t, cmd.Process.Kill())
@@ -301,8 +305,12 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 				stage = string(data)
 			}
 		}
+		if err != nil {
+			logRebaseCrashChild(t, root, "verify")
+		}
 		require.NoError(t, err, "fresh-process recovery failed at %s; see retained verify log", stage)
 	case <-ctx.Done():
+		logRebaseCrashChild(t, root, "verify")
 		t.Fatal("recovery child did not finish")
 	}
 	if inventoryMode != "" {
