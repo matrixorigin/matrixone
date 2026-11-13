@@ -35,6 +35,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestQueryExecTypeKeepsCapturedIndexLocalWithReceivingProbe(t *testing.T) {
+	captured := &plan.Query{Nodes: []*plan.Node{{
+		NodeType:      plan.Node_TABLE_SCAN,
+		IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true, RequiresCapturedExecution: true},
+	}}}
+	ordinary := &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}}}
+	for _, tc := range []struct {
+		name  string
+		input plan2.ExecType
+		query *plan.Query
+		force bool
+		want  plan2.ExecType
+	}{
+		{"transaction stays local", plan2.ExecTypeTP, captured, false, plan2.ExecTypeTP},
+		{"captured scan stays local", plan2.ExecTypeAP_MULTICN, captured, false, plan2.ExecTypeAP_ONECN},
+		{"probe cannot override captured scan", plan2.ExecTypeTP, captured, true, plan2.ExecTypeAP_ONECN},
+		{"probe still forces ordinary scan", plan2.ExecTypeTP, ordinary, true, plan2.ExecTypeAP_MULTICN},
+		{"ordinary scan keeps placement", plan2.ExecTypeAP_MULTICN, ordinary, false, plan2.ExecTypeAP_MULTICN},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, queryExecTypeWithPlacement(tc.input, tc.query, tc.force))
+		})
+	}
+}
+
 func TestCompileSetupRejectsInvalidBeforeResources(t *testing.T) {
 	for _, setup := range [][]CompileSetup{{CompileSetup(255)}, {ImmediateSetup, PreflightSetup}} {
 		var caught any

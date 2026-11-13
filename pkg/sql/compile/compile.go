@@ -1494,11 +1494,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = vectorQueryExecType(sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
-	if plan2.HasCapturedExecutionIndexScans(qry) && c.execType != plan2.ExecTypeTP {
-		c.execType = plan2.ExecTypeAP_ONECN
-	}
+	c.execType = queryExecTypeWithPlacement(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry,
+		multi_update.ReceivingCNProbeEnabled && multi_update.ReceivingCNForceMultiCN(c.proc))
 	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
 		c.execType = plan2.ExecTypeAP_ONECN
 	}
@@ -1575,6 +1573,19 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.installMarkScanGuard(qry, steps)
 	return steps, err
+}
+
+// queryExecTypeWithPlacement applies ownership constraints after the
+// acceptance probe's optional receiving-CN placement override.
+func queryExecTypeWithPlacement(execType plan2.ExecType, qry *plan.Query, forceReceivingCN bool) plan2.ExecType {
+	if forceReceivingCN {
+		execType = plan2.ExecTypeAP_MULTICN
+	}
+	execType = vectorQueryExecType(sequenceExecType(execType, qry), qry)
+	if plan2.HasCapturedExecutionIndexScans(qry) && execType != plan2.ExecTypeTP {
+		return plan2.ExecTypeAP_ONECN
+	}
+	return execType
 }
 
 // sequenceExecType applies the placement part of the sequence state
@@ -6914,6 +6925,11 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 		return c.compileBroadcastAsofBuildLeft(node, left, right, probeScopes, buildScopes)
 	}
+	// The acceptance-only hook is a no-op in ordinary builds and is admitted
+	// only for the isolated fixture transaction and its posting-index join.
+	if multi_update.ReceivingCNProbeEnabled {
+		multi_update.ReceivingCNForcePostingShuffle(c.proc, node, left, right, c.anal.qry)
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -9798,6 +9814,9 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+	if multi_update.ReceivingCNProbeEnabled {
+		multi_update.ObserveReceivingCNCompile(c.proc, node.Stats.GetOutcnt(), toWriteS3)
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {

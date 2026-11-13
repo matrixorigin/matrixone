@@ -82,6 +82,7 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 }
 
 type s3WriterDelegate struct {
+	receivingCNProbeTag
 	// persistent per-table insert sinkers, created lazily on first append.
 	insertSinkers []*colexec.CNS3Writer
 	// per-table delete column accumulators (rowid + pk only).
@@ -811,7 +812,21 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+	if ReceivingCNProbeEnabled {
+		var syncStats []objectio.ObjectStats
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			var syncErr error
+			syncStats, syncErr = s3Writer.Sync(writeCtx)
+			return syncErr
+		}); err != nil {
+			return
+		}
+		if len(syncStats) > 0 {
+			if err = receivingCNProgress(proc, writer, idx, syncStats); err != nil {
+				return err
+			}
+		}
+	} else if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 		_, syncErr := s3Writer.Sync(writeCtx)
 		return syncErr
 	}); err != nil {
@@ -912,6 +927,11 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		}
 		if len(stats) == 0 {
 			continue
+		}
+		if ReceivingCNProbeEnabled {
+			if err = receivingCNProgress(proc, writer, i, stats); err != nil {
+				return err
+			}
 		}
 		blockInfoBat, fillErr := s3w.FillBlockInfoBat()
 		if fillErr != nil {
