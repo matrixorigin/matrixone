@@ -248,6 +248,9 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	if err = c.captureStatementView(queryPlan); err != nil {
+		return err
+	}
 	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.
@@ -513,8 +516,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// Track workspace writes across statement retries.
 	var writeOffset = uint64(0)
+	var borrowedWriteOffset uint64
+	query := c.pn.GetQuery()
+	borrowedRead := c.proc.IncrStatementDisabled() && query != nil && query.StmtType == plan.Query_SELECT
 	if txnOperator != nil {
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
+		if borrowedRead {
+			borrowedWriteOffset = txnOperator.GetWorkspace().WriteOffset()
+		}
 		txnOperator.GetWorkspace().IncrSQLCount()
 	}
 
@@ -904,7 +913,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		)
 	}
 	if txnOperator != nil {
-		err = txnOperator.GetWorkspace().Adjust(writeOffset)
+		workspace := txnOperator.GetWorkspace()
+		// Borrowed read-only SQL has no statement boundary of its own. Sorting
+		// the parent's earlier writes here changes catalog visibility while
+		// partition metadata is being read, causing every ALTER retry to
+		// invalidate itself. Leave parent maintenance to its statement owner;
+		// retain adjustment for DML and any SELECT that produced workspace data.
+		if !borrowedRead || workspace.WriteOffset() != borrowedWriteOffset {
+			err = workspace.Adjust(writeOffset)
+		}
 		if err != nil {
 			err = joinAllocationLifecycleErrors(err, finishAllocationAttempt())
 			err = abortSinkAttempt(err)

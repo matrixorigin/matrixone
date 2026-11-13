@@ -3536,11 +3536,17 @@ type cnObjectSummaryReader struct {
 }
 
 func (r *cnObjectSummaryReader) get(txn *Transaction, tableID uint64, objectID types.Objectid) Summary {
+	summary, _ := r.lookup(txn, tableID, objectID)
+	return summary
+}
+
+func (r *cnObjectSummaryReader) lookup(txn *Transaction, tableID uint64, objectID types.Objectid) (Summary, bool) {
 	if r.objects == nil || r.tableID != tableID {
 		r.tableID = tableID
 		r.objects = txn.cnObjsSummary[tableID]
 	}
-	return r.objects[objectID]
+	summary, ok := r.objects[objectID]
+	return summary, ok
 }
 
 func (txn *Transaction) WriteFileLocked(
@@ -4682,6 +4688,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}
 
 	if len(txn.tablesInVain) > 0 {
+		if txn.isCCPRTxn && activeM0RetireFlushedTombstones != nil {
+			activeM0RetireFlushedTombstones(txn, func(_ int, entry Entry) bool {
+				_, discard := txn.tablesInVain[entry.tableId]
+				return discard
+			})
+		}
 		ignoreTablesInVain := func(entry Entry) bool {
 			_, ok := txn.tablesInVain[entry.tableId]
 			return ok
@@ -4948,10 +4960,15 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	for {
 		var missing []lookup
 		seen := make(map[tableKey]bool)
+		var missingSummary bool
 		var summaries cnObjectSummaryReader
 		txn.deletedBlocks.iter(
 			func(key deletedBlockKey, offsets []int64) bool {
-				summary := summaries.get(txn, key.tableID, *key.blockID.Object())
+				summary, ok := summaries.lookup(txn, key.tableID, *key.blockID.Object())
+				if !ok {
+					missingSummary = true
+					return false
+				}
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -4963,6 +4980,9 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 				}
 				return true
 			})
+		if missingSummary {
+			return nil, moerr.NewInternalErrorNoCtx("workspace object has no relation-qualified summary")
+		}
 		if len(missing) == 0 {
 			return tables, nil
 		}
@@ -5101,7 +5121,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				blkDel = objBlkDeletion[objectKey]
 			}
 
-			blkDel[key.blockID] = offsets
+			blkDel[key.blockID] = slices.Clone(offsets)
 
 			if _, ok := objTables[objectKey]; !ok {
 				objTables[objectKey] = workspaceTableKey{
@@ -5117,6 +5137,32 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 			return true
 		})
+
+	// Every relation-qualified deletion must refer to exactly one live
+	// workspace object entry. Otherwise skipping or rewriting an arbitrary
+	// entry could silently lose a delete.
+	matched := make(map[cnObjectKey]int, len(objBlkDeletion))
+	for _, entry := range txn.writes {
+		if entry.typ != INSERT || entry.bat == nil || len(entry.bat.Attrs) == 0 ||
+			entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			continue
+		}
+		for _, stats := range collectObjectStatsFromEntry(entry) {
+			key := cnObjectKey{tableID: entry.tableId, objectID: *stats.ObjectName().ObjectId()}
+			if _, dirty := objBlkDeletion[key]; !dirty {
+				continue
+			}
+			if txn.cnObjsSummary[key.tableID][key.objectID].objBat != entry.bat {
+				return moerr.NewInternalErrorNoCtx("workspace object summary does not match its relation entry")
+			}
+			matched[key]++
+		}
+	}
+	for key := range objBlkDeletion {
+		if matched[key] != 1 {
+			return moerr.NewInternalErrorNoCtx("workspace deletion requires one relation object entry")
+		}
+	}
 
 	// round-19 restructure (issue #25590 round-19 review, finding 1): the
 	// compaction keeps its fallible-prefix / infallible-tail discipline
@@ -5154,8 +5200,11 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	locker := sync.Mutex{}
 	rewrites := make([]compactRewrite, 0, 8)
 
-	dirtyObject := make([]objectio.ObjectStats, 0, 1)
-	dirtyObjectKeys := make([]cnObjectKey, 0, 1)
+	type dirtyWorkspaceObject struct {
+		key   cnObjectKey
+		stats objectio.ObjectStats
+	}
+	dirtyObject := make([]dirtyWorkspaceObject, 0, 1)
 
 	// Metadata entries whose objects this pass fully classified are retired
 	// only after the tail below published every staged re-publication AND
@@ -5226,12 +5275,9 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		col, area := vector.MustVarlenaRawData(entry.bat.Vecs[1])
 		for j := range len(col) {
 			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
+			key := cnObjectKey{tableID: entry.tableId, objectID: *stats.ObjectName().ObjectId()}
 
-			objectKey := cnObjectKey{
-				objectID: *stats.ObjectName().ObjectId(),
-				tableID:  entry.tableId,
-			}
-			if objBlkDeletion[objectKey] == nil {
+			if objBlkDeletion[key] == nil {
 				// clean object, no deletion on it: stage its metadata as
 				// its own single-object batch. Every step from here on is
 				// fallible (the fault window, mpool allocations, the
@@ -5289,8 +5335,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					autoIncrEpochKnown: entry.autoIncrEpochKnown,
 				})
 			} else {
-				dirtyObject = append(dirtyObject, stats)
-				dirtyObjectKeys = append(dirtyObjectKeys, objectKey)
+				dirtyObject = append(dirtyObject, dirtyWorkspaceObject{key: key, stats: stats})
 			}
 
 			offset += int(stats.BlkCnt())
@@ -5307,7 +5352,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	// record's write shapes, so a worker owns nothing but its own
 	// result slot and its filesystem reader/writer.
 	for i := range dirtyObject {
-		objectKey := dirtyObjectKeys[i]
+		objectKey := dirtyObject[i].key
 		tbKey := objTables[objectKey]
 
 		// resolveCompactTablesLocked guarantees every table referenced by
@@ -5315,7 +5360,15 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		tbl, _ := tables[tbKey.tableKey].(*txnTable)
 		if tbl == nil {
 			delegate, _ := tables[tbKey.tableKey].(*txnTableDelegate)
+			if delegate == nil || delegate.origin == nil {
+				cleanStagedRepubs()
+				return moerr.NewInternalErrorNoCtx("workspace compaction has no bound table")
+			}
 			tbl = delegate.origin
+		}
+		if len(txn.tnStores) == 0 {
+			cleanStagedRepubs()
+			return moerr.NewInternalErrorNoCtx("workspace compaction has no TN store")
 		}
 		writeName := tbl.tableName
 		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
@@ -5331,7 +5384,11 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 	if len(rewrites) > 0 {
 		if txn.compactWorker == nil {
-			txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+			txn.compactWorker, err = ants.NewPool(min(runtime.NumCPU(), 4))
+			if err != nil {
+				cleanStagedRepubs()
+				return err
+			}
 			defer func() {
 				txn.compactWorker.Release()
 				txn.compactWorker = nil
@@ -5339,21 +5396,31 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		}
 		for i := range rewrites {
 			waiter.Add(1)
-			stats := dirtyObject[i]
+			stats := dirtyObject[i].stats
 			blkDeletion := objBlkDeletion[rewrites[i].objectKey]
-			txn.compactWorker.Submit(func() {
+			if submitErr := txn.compactWorker.Submit(func() {
 				defer waiter.Done()
+				defer func() {
+					if p := recover(); p != nil {
+						rewrites[i].err = moerr.ConvertPanicError(ctx, p)
+					}
+				}()
 				tbl := rewrites[i].tbl
-				locker.Lock()
-				tbl.ensureSeqnumsAndTypesExpectRowid()
-				locker.Unlock()
+				func() {
+					locker.Lock()
+					defer locker.Unlock()
+					tbl.ensureSeqnumsAndTypesExpectRowid()
+				}()
 				bat, fileName, persisted, err := tbl.rewriteObjectByDeletion(
 					ctx, stats, blkDeletion)
 				rewrites[i].bat = bat
 				rewrites[i].fileName = fileName
 				rewrites[i].persisted = persisted
 				rewrites[i].err = err
-			})
+			}); submitErr != nil {
+				waiter.Done()
+				rewrites[i].err = submitErr
+			}
 		}
 		waiter.Wait()
 	}
@@ -5511,8 +5578,17 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 	txn.assertWorkspaceAccountingLocked()
 
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
-	_ = txn.GCObjsByStats(dirtyObject...)
+	dirtyStats := make([]objectio.ObjectStats, 0, len(dirtyObject))
+	seenObjects := make(map[types.Objectid]struct{}, len(dirtyObject))
+	for _, object := range dirtyObject {
+		if _, ok := seenObjects[object.key.objectID]; ok {
+			continue
+		}
+		seenObjects[object.key.objectID] = struct{}{}
+		dirtyStats = append(dirtyStats, object.stats)
+	}
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyStats, nil)
+	_ = txn.GCObjsByStats(dirtyStats...)
 
 	// The rewrites above physically embody the pending deletions, so the
 	// marks may go now. Every early return above intends the opposite:
@@ -5716,6 +5792,15 @@ func (txn *Transaction) getCachedTableByKey(
 	var tbl *txnTableDelegate
 	if v, ok := txn.tableCache.Load(cacheKey); ok {
 		tbl = v.(*txnTableDelegate)
+		// A combined relation captures its partition members when it is
+		// opened. A parent table's catalog version may stay unchanged when
+		// partitions change, so that version alone cannot validate the
+		// captured members after the transaction snapshot advances.
+		if !tbl.combinedCacheCurrent(txn) {
+			// Do not evict a newer canonical relation installed concurrently.
+			txn.tableCache.CompareAndDelete(cacheKey, tbl)
+			return nil
+		}
 
 		if txn.op.IsSnapOp() || !txn.op.Txn().IsRCIsolation() {
 			// if the table has been put into tableCache in snapshot read txn, keep it as it is, do not check new version.

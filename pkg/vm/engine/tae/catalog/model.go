@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -79,6 +80,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 	schema = NewEmptySchema(name)
 	schema.CatalogVersion = pkgcatalog.CatalogVersion_Curr
 	var pkeyColName string
+	var versionSeen bool
 	for _, def := range defs {
 		switch defVal := def.(type) {
 		case *engine.ConstraintDef:
@@ -134,6 +136,19 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 			schema.View = defVal.View
 		case *engine.CommentDef:
 			schema.Comment = defVal.Comment
+		case *engine.VersionDef:
+			if defVal == nil {
+				return nil, moerr.NewInternalErrorNoCtx("nil schema version definition")
+			}
+			if versionSeen && schema.Version != defVal.Version {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"conflicting schema versions %d and %d",
+					schema.Version,
+					defVal.Version,
+				)
+			}
+			schema.Version = defVal.Version
+			versionSeen = true
 		case *engine.ConstraintDef:
 			schema.Constraint, err = defVal.MarshalBinary()
 			if err != nil {

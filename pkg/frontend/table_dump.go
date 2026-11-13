@@ -1653,6 +1653,12 @@ type loadFileTracker interface {
 	TrackLoadFiles(names ...string)
 }
 
+// The experimental M0 build validates installed data objects before any are
+// published to target relations. The ordinary build retains its LOAD contract.
+var validateM0TableDumpObjects = func(context.Context, engine.Relation, []tableDumpObject, fileservice.FileService, *mpool.MPool) error {
+	return nil
+}
+
 var lockTableForTableDump = lockop.LockTableWithContext
 
 var lockTableDumpLoadTargets = func(
@@ -1893,7 +1899,15 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		// is produced by DUMP TABLE. Reopening every copied object to duplicate
 		// the manifest's physical metadata makes load time proportional to the
 		// object count and defeats provider-side CopyObject. Manifest validation,
-		// bounded block counts, and copy/size checks are sufficient here.
+		// bounded block counts, and copy/size checks are sufficient in the
+		// ordinary build. The experimental M0 path validates its target layout
+		// below because a logical schema hash does not bind physical seqnums.
+	}
+	for _, relationDump := range manifest.Relations {
+		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)
+		if err = validateM0TableDumpObjects(ctx, targetByKey[key].relation, relationDump.Objects, targetFS, ses.GetMemPool()); err != nil {
+			return err
+		}
 	}
 	for _, relationDump := range manifest.Relations {
 		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)

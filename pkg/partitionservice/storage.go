@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -43,6 +45,53 @@ const (
 type storage struct {
 	exec executor.SQLExecutor
 	eng  engine.Engine
+}
+
+// partitionMetadataScope binds the existing transaction-local cache to the
+// actual catalog read generation. It is not a lock for concurrent mutation.
+type partitionMetadataScope struct {
+	account           uint32
+	transactionID     string
+	snapshot          timestamp.Timestamp
+	transactionRev    uint64
+	workspaceRevision uint64
+}
+
+func (s partitionMetadataScope) sameTransaction(other partitionMetadataScope) bool {
+	return s.account == other.account && s.transactionID == other.transactionID &&
+		s.snapshot.Equal(other.snapshot) && s.transactionRev == other.transactionRev
+}
+
+func (s partitionMetadataScope) matches(other partitionMetadataScope) bool {
+	return s.sameTransaction(other) && s.workspaceRevision == other.workspaceRevision
+}
+
+type partitionMetadataCacheEntry struct {
+	scope    partitionMetadataScope
+	metadata partition.PartitionMetadata
+}
+
+func partitionMetadataReadScope(op client.TxnOperator, account uint32) (partitionMetadataScope, bool, error) {
+	provider, ok := op.(interface {
+		CatalogReadStamp() (client.CatalogReadStamp, error)
+	})
+	if !ok {
+		return partitionMetadataScope{}, false, nil
+	}
+	stamp, err := provider.CatalogReadStamp()
+	if err != nil {
+		return partitionMetadataScope{}, false, err
+	}
+	if stamp.TransactionID == "" || stamp.Snapshot.IsEmpty() || stamp.Workspace == nil {
+		return partitionMetadataScope{}, false, nil
+	}
+	visibility, ok := stamp.Workspace.(interface{ CatalogVisibility() (uint64, bool) })
+	if !ok {
+		return partitionMetadataScope{}, false, nil
+	}
+	revision, stable := visibility.CatalogVisibility()
+	return partitionMetadataScope{account: account, transactionID: stamp.TransactionID,
+		snapshot: stamp.Snapshot, transactionRev: stamp.Revision, workspaceRevision: revision}, stable, nil
 }
 
 func NewStorage(
@@ -84,6 +133,8 @@ func (s *storage) GetMetadata(
 	}
 
 	key := ""
+	var scope partitionMetadataScope
+	var scoped bool
 
 	opts := executor.Options{}.
 		WithTxn(txnOp).
@@ -91,8 +142,27 @@ func (s *storage) GetMetadata(
 		WithAccountID(accountID)
 	if txnOp != nil {
 		key = fmt.Sprintf(txnBasedMetadataCacheKey, tableID)
-		if v, ok := txnOp.Get(key); ok {
-			return v.(partition.PartitionMetadata), true, nil
+		scope, scoped, err = partitionMetadataReadScope(txnOp, accountID)
+		if err != nil {
+			return partition.PartitionMetadata{}, false, err
+		}
+		if v, ok := txnOp.Get(key); ok && scoped {
+			if cached, ok := v.(partitionMetadataCacheEntry); ok && scope.matches(cached.scope) {
+				current, stable, err := partitionMetadataReadScope(txnOp, accountID)
+				if err != nil {
+					return partition.PartitionMetadata{}, false, err
+				}
+				if !scope.sameTransaction(current) {
+					return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				}
+				if err := ctx.Err(); err != nil {
+					return partition.PartitionMetadata{}, false, err
+				}
+				if stable && scope.matches(current) {
+					return *proto.Clone(&cached.metadata).(*partition.PartitionMetadata), true, nil
+				}
+				// A workspace-only change is a cache miss, not a schema verdict.
+			}
 		}
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -229,8 +299,34 @@ func (s *storage) GetMetadata(
 		},
 		opts,
 	)
-	if found && txnOp != nil {
-		txnOp.Set(key, metadata)
+	if err != nil {
+		return metadata, found, err
+	}
+	if err = ctx.Err(); err != nil {
+		return partition.PartitionMetadata{}, false, err
+	}
+	if txnOp != nil && scope.transactionID != "" {
+		current, stable, scopeErr := partitionMetadataReadScope(txnOp, accountID)
+		if scopeErr != nil {
+			return partition.PartitionMetadata{}, false, scopeErr
+		}
+		if !scope.sameTransaction(current) {
+			return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		// CatalogVisibility also covers data writes and physical workspace
+		// maintenance. A parallel COPY producer can change it while these
+		// ordinary metadata SELECTs run at the same transaction snapshot.
+		// That forbids caching this result; it is not evidence that the
+		// schema changed. Actual snapshot/transaction drift still retries.
+		// As with the SQL executor, the caller owns serialization of catalog
+		// mutations; a visibility stamp is not a concurrent-DDL read lock.
+		if !scoped || !stable || !scope.matches(current) {
+			return metadata, found, nil
+		}
+		if found {
+			owned := *proto.Clone(&metadata).(*partition.PartitionMetadata)
+			txnOp.Set(key, partitionMetadataCacheEntry{scope: scope, metadata: owned})
+		}
 	}
 	return metadata, found, err
 }

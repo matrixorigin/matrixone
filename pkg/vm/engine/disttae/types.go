@@ -1819,6 +1819,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 		if end > len(txn.writes) {
 			end = len(txn.writes)
 		}
+		if txn.isCCPRTxn && activeM0RetireFlushedTombstones != nil {
+			activeM0RetireFlushedTombstones(txn, func(i int, _ Entry) bool { return i >= end })
+		}
 		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 		if !txn.isCCPRTxn {
 			// The recorded files transfer to the engine's lossless queue

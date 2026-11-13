@@ -527,6 +527,9 @@ func (db *txnDatabase) createWithID(
 		tbl.defs = defs
 		tbl.GetTableDef(ctx) // generate tbl.tableDef
 	}
+	if err := activeM0CreateEvolution(ctx, tbl, extra != nil); err != nil {
+		return err
+	}
 
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)

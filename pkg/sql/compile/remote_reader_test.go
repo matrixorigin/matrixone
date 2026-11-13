@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -96,14 +98,26 @@ func (db *readerPathCaptureDatabase) Relation(
 
 type readerPathCaptureRelation struct {
 	engine.Relation
+	tableDef          *plan.TableDef
 	buildReadersCalls int
 	rangesCalls       int
 	rangesData        engine.RelData
+	rangesErr         error
 	rangesParam       engine.RangesParam
 	readerRelData     engine.RelData
 	ctx               context.Context
 	hint              engine.FilterHint
 	readers           []engine.Reader
+}
+
+func (r *readerPathCaptureRelation) GetTableDef(context.Context) *plan.TableDef {
+	return r.tableDef
+}
+
+type readerPathStampedTxn struct{ client.TxnOperator }
+
+func (op *readerPathStampedTxn) CatalogReadStamp() (client.CatalogReadStamp, error) {
+	return client.CatalogReadStamp{TransactionID: "reader-test", Snapshot: op.SnapshotTS()}, nil
 }
 
 func (r *readerPathCaptureRelation) Ranges(
@@ -112,7 +126,7 @@ func (r *readerPathCaptureRelation) Ranges(
 ) (engine.RelData, error) {
 	r.rangesCalls++
 	r.rangesParam = param
-	return r.rangesData, nil
+	return r.rangesData, r.rangesErr
 }
 
 func (r *readerPathCaptureRelation) BuildReaders(
@@ -134,6 +148,19 @@ func (r *readerPathCaptureRelation) BuildReaders(
 		return r.readers, nil
 	}
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
+}
+
+func TestSingleRangeFailureRetainsPreviousData(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewMockCompile(t)
+	c.proc = proc
+	scope := &Scope{Proc: proc, NodeInfo: engine.Node{Mcpu: 1, CNCNT: 1}, DataSource: &Source{}}
+	relation := configureReaderPathTest(t, c, scope)
+	previous := scope.NodeInfo.Data
+	relation.rangesErr = context.Canceled
+	require.ErrorIs(t, scope.getRelData(c, nil), context.Canceled)
+	require.Same(t, previous, scope.NodeInfo.Data)
+	require.Equal(t, 1, relation.rangesCalls)
 }
 
 func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
@@ -272,6 +299,13 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			partitionedMultiCN: true,
 		},
 		{
+			name:               "distributed published table",
+			tableName:          "published_table",
+			pubInfo:            &plan.PubInfo{TenantId: 42},
+			wantReaderAccount:  42,
+			partitionedMultiCN: true,
+		},
+		{
 			name:               "distributed tombstone attachment failure",
 			tableName:          "partitioned_generated",
 			partitionedMultiCN: true,
@@ -282,7 +316,7 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			tableDef := &plan.TableDef{Name: test.tableName, TableType: test.tableType}
+			tableDef := &plan.TableDef{TblId: 42, Name: test.tableName, TableType: test.tableType}
 			node := &plan.Node{
 				ObjRef: &plan.ObjectRef{
 					SchemaName: "test_db",
@@ -298,7 +332,7 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			if test.attachError != nil {
 				memoryRanges = &readerPathAttachFailure{RelData: readutil.NewBlockListRelationData(1), err: test.attachError}
 			}
-			captureRelation := &readerPathCaptureRelation{rangesData: memoryRanges}
+			captureRelation := &readerPathCaptureRelation{tableDef: tableDef, rangesData: memoryRanges}
 			captureEngine := &readerPathCaptureEngine{
 				database: &readerPathCaptureDatabase{relation: captureRelation},
 			}
@@ -336,13 +370,23 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 
 			remoteProc := testutil.NewProcess(t)
 			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
+			snapshot := timestamp.Timestamp{PhysicalTime: 42}
+			txnClient := mock_frontend.NewMockTxnClient(ctrl)
+			txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), snapshot.Prev()).Return(snapshot, nil).AnyTimes()
+			remoteProc.Base.TxnClient = txnClient
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-			remoteProc.Base.TxnOperator = txnOperator
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: snapshot}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().Return(snapshot).AnyTimes()
+			remoteProc.Base.TxnOperator = &readerPathStampedTxn{TxnOperator: txnOperator}
 			decodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
 			decodeCtx.root = decodeCtx
 			decoded, err := generateScope(remoteProc, encoded, decodeCtx, true)
 			require.NoError(t, err)
+			// generateScope creates a no-context child; the real pipeline binds
+			// it before building readers.
+			decoded.Proc.Ctx = remoteProc.Ctx
 			t.Cleanup(func() { ReleaseScopes([]*Scope{decoded}) })
 			require.Nil(t, decoded.DataSource.Rel,
 				"relation handles are local execution state and are not serialized")
@@ -387,6 +431,7 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 				require.True(t, firstBlock.IsMemBlk())
 			}
 			require.Equal(t, test.wantMembershipFilter, readerHint.MembershipFilterBytes)
+			require.False(t, m0read.IsSingleRemote(readerContext), "no shipped tombstones must not change reader semantics")
 			accountID, err := defines.GetAccountId(readerContext)
 			require.NoError(t, err)
 			require.Equal(t, test.wantReaderAccount, accountID)
@@ -401,14 +446,20 @@ func configureReaderPathTest(t *testing.T, c *Compile, s *Scope) *readerPathCapt
 	if s.DataSource.TableDef == nil {
 		s.DataSource.TableDef = &plan.TableDef{Name: "t"}
 	}
-	s.DataSource.node = &plan.Node{ObjRef: &plan.ObjectRef{SchemaName: "test_db"}, TableDef: s.DataSource.TableDef, Stats: &plan.Stats{}}
-	ranges := &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}
+	s.DataSource.TableDef.TblId = 42
+	s.DataSource.SchemaName = "test_db"
+	s.DataSource.RelationName = s.DataSource.TableDef.Name
+	s.DataSource.node = &plan.Node{ObjRef: &plan.ObjectRef{SchemaName: "test_db", ObjName: s.DataSource.TableDef.Name}, TableDef: s.DataSource.TableDef, Stats: &plan.Stats{}}
+	ranges := &readerPathCaptureRelation{tableDef: s.DataSource.TableDef, rangesData: readutil.BuildEmptyRelData()}
 	c.e = &readerPathTestEngine{Engine: c.e, database: &readerPathCaptureDatabase{relation: ranges}}
 	s.NodeInfo.Data = readutil.BuildEmptyRelData()
 	if s.IsRemote {
-		txn := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-		txn.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-		c.proc.Base.TxnOperator = txn
+		txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+		c.proc.Base.TxnOperator = &readerPathStampedTxn{TxnOperator: txnOp}
 	}
 	return ranges
 }

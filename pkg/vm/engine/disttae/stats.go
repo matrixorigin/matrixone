@@ -2304,9 +2304,11 @@ func collectTableStats(
 	// Phase 2: Sampled stats from ObjectMeta (requires IO)
 	var sampledRowCount float64
 	var sampledObjectCount int64
+	m0Base, _ := m0AppendBaseFromPlan(req.tableDef)
 
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
+		provenM0 := false
 
 		// ===== Phase 1: Get exact values from ObjectStats (no IO) =====
 		objRows := obj.Rows()
@@ -2334,6 +2336,14 @@ func collectTableStats(
 			}
 		}
 
+		// Contract parsing must also reject malformed authority that no longer
+		// matches the append-domain shape. The default hook is inert.
+		var proofErr error
+		provenM0, _, proofErr = activeM0ObjectReadLayout(objCtx, req.tableDef, obj, fs)
+		if proofErr != nil {
+			return proofErr
+		}
+
 		// Sampled object: read ObjectMeta (requires IO)
 		location := obj.Location()
 		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
@@ -2345,6 +2355,11 @@ func collectTableStats(
 		defer updateMu.Unlock()
 
 		meta := objMeta.MustDataMeta()
+		if activeM0Enabled && !provenM0 {
+			if err := requirePhysicalMetadataColumns(meta, req.tableDef.Cols[:lenCols], req.tableDef); err != nil {
+				return err
+			}
+		}
 		sampledObjectCount++
 		objectRowCount := meta.BlockHeader().Rows()
 		sampledRowCount += float64(objectRowCount)
@@ -2355,6 +2370,13 @@ func collectTableStats(
 			info.MaxObjectRowCount = objectRowCount
 			info.MinObjectRowCount = objectRowCount
 			for idx, col := range req.tableDef.Cols[:lenCols] {
+				if provenM0 && uint32(col.Seqnum) >= m0Base &&
+					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+					info.NullCnts[idx] = int64(objectRowCount)
+					info.ColumnZMs[idx] = objectio.EmptyZm[:]
+					info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
+					continue
+				}
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(columnMeta.NullCnt())
 				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
@@ -2396,6 +2418,11 @@ func collectTableStats(
 			}
 
 			for idx, col := range req.tableDef.Cols[:lenCols] {
+				if provenM0 && uint32(col.Seqnum) >= m0Base &&
+					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+					info.NullCnts[idx] += int64(objectRowCount)
+					continue
+				}
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] += int64(columnMeta.NullCnt())
 				// CRITICAL FIX: Always accumulate ColumnSize, even if ZoneMap is not initialized

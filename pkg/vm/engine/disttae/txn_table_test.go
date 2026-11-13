@@ -360,6 +360,7 @@ func TestReusableRelationHandleResetDoesNotMutateSharedTable(t *testing.T) {
 	}
 	combinedPrimary.proc.Store(newProc)
 	newShared.combined.tbl = &combinedTxnTable{primary: combinedPrimary}
+	newShared.combined.revision, newShared.combined.cacheable = newTxn.CatalogVisibility()
 	newTxn.tableCache.Store(genTableKey(0, "t", 10, "db"), newShared)
 	require.ErrorContains(t, newShared.combined.tbl.Reset(newOp), "cannot reset a shared combined relation")
 

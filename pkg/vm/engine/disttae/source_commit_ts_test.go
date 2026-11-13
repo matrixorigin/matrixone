@@ -143,7 +143,7 @@ func TestCombinedTxnTableSourceCommitTSRequiresMembers(t *testing.T) {
 
 func TestCombinedTxnTableSourceCommitTSReturnsMax(t *testing.T) {
 	calls := 0
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&sourceCommitTSStub{ts: types.BuildTS(10, 0), calls: &calls},
 			&sourceCommitTSStub{ts: types.BuildTS(30, 0), calls: &calls},
@@ -159,7 +159,7 @@ func TestCombinedTxnTableSourceCommitTSReturnsMax(t *testing.T) {
 
 func TestCombinedTxnTableSourceCommitTSAfterCopyChecksEveryMember(t *testing.T) {
 	calls := 0
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&sourceCommitTSAfterCopyStub{ts: types.BuildTS(10, 0), calls: &calls},
 			&sourceCommitTSAfterCopyStub{ts: types.BuildTS(40, 0), calls: &calls},
@@ -176,7 +176,7 @@ func TestCombinedTxnTableSourceCommitTSAfterCopyChecksEveryMember(t *testing.T) 
 
 func TestCombinedTxnTableSourceCommitTSShortCircuits(t *testing.T) {
 	calls := 0
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&sourceCommitTSStub{ts: types.BuildTS(30, 0), calls: &calls},
 			&sourceCommitTSStub{ts: types.BuildTS(40, 0), calls: &calls},
@@ -192,7 +192,7 @@ func TestCombinedTxnTableSourceCommitTSShortCircuits(t *testing.T) {
 }
 
 func TestCombinedTxnTableSourceCommitTSFailsClosedForMissingProvider(t *testing.T) {
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{struct{ engine.Relation }{}}, nil
 	}}
 	_, err := table.SourceCommitTS(context.Background(), types.TS{})
@@ -202,7 +202,7 @@ func TestCombinedTxnTableSourceCommitTSFailsClosedForMissingProvider(t *testing.
 func TestCombinedTxnTableSourceCommitTSPropagatesMemberError(t *testing.T) {
 	calls := 0
 	memberErr := errors.New("member unavailable")
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&sourceCommitTSStub{err: memberErr, calls: &calls},
 			&sourceCommitTSStub{ts: types.BuildTS(40, 0), calls: &calls},

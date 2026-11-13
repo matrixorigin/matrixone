@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"time"
 
@@ -2673,7 +2674,9 @@ func EvaluateFilterByZoneMap(
 	meta objectio.ColumnMetaFetcher,
 	columnMap map[int]int,
 	zms []objectio.ZoneMap,
-	vecs []*vector.Vector) (selected bool) {
+	vecs []*vector.Vector,
+	readLayouts ...*m0read.ObjectReadLayout,
+) (selected bool) {
 	if expr == nil {
 		selected = true
 		return
@@ -2726,7 +2729,9 @@ func EvaluateFilterByZoneMap(
 		return false
 	}
 
-	zm := GetExprZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
+	zm := GetExprZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs,
+		readLayouts...,
+	)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
 		// Unknown zonemap results are not proof that the block cannot match.
 		selected = true
@@ -2979,7 +2984,9 @@ func GetExprZoneMap(
 	meta objectio.ColumnMetaFetcher,
 	columnMap map[int]int,
 	zms []objectio.ZoneMap,
-	vecs []*vector.Vector) (v objectio.ZoneMap) {
+	vecs []*vector.Vector,
+	readLayouts ...*m0read.ObjectReadLayout,
+) (v objectio.ZoneMap) {
 	var err error
 
 	switch t := expr.Expr.(type) {
@@ -3027,8 +3034,14 @@ func GetExprZoneMap(
 			case function.ISNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
-					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
+					colMeta := meta.MustGetColumn(seqnum)
+					matches := colMeta.NullCnt() > 0
+					if proof := m0read.SelectedReadLayout(readLayouts); proof != nil && proof.Evolution &&
+						uint32(seqnum) >= proof.WrittenSize {
+						matches = true
+					}
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]
 				default:
 					zms[expr.AuxId].Reset()
@@ -3037,8 +3050,14 @@ func GetExprZoneMap(
 			case function.ISNOTNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
-					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
+					colMeta := meta.MustGetColumn(seqnum)
+					matches := colMeta.ZoneMap().IsInited()
+					if proof := m0read.SelectedReadLayout(readLayouts); proof != nil && proof.Evolution &&
+						uint32(seqnum) >= proof.WrittenSize {
+						matches = false
+					}
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]
 				default:
 					zms[expr.AuxId].Reset()
@@ -3046,7 +3065,9 @@ func GetExprZoneMap(
 				}
 			case function.IN:
 				if list := args[1].GetList(); list != nil {
-					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, false)
+					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, false,
+						readLayouts...,
+					)
 				}
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
@@ -3064,7 +3085,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
@@ -3075,13 +3098,17 @@ func GetExprZoneMap(
 
 			case function.NOT_IN:
 				if list := args[1].GetList(); list != nil {
-					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, true)
+					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, true,
+						readLayouts...,
+					)
 				}
 				zms[expr.AuxId].Reset()
 				return zms[expr.AuxId]
 
 			case function.PREFIX_EQ:
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
@@ -3097,7 +3124,9 @@ func GetExprZoneMap(
 				return zms[expr.AuxId]
 
 			case function.PREFIX_BETWEEN:
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
@@ -3118,7 +3147,9 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				bounds := [3][]byte{}
 				valid := lhs.IsInited()
 				for i, arg := range args[1:] {
@@ -3126,7 +3157,9 @@ func GetExprZoneMap(
 						valid = false
 						break
 					}
-					bound := GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					bound := GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs,
+						readLayouts...,
+					)
 					if !bound.IsInited() || (!bound.IsString() && !isSingleValueZoneMap(bound)) {
 						valid = false
 						break
@@ -3157,7 +3190,9 @@ func GetExprZoneMap(
 				return zms[expr.AuxId]
 
 			case function.PREFIX_IN_RANGE:
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
@@ -3190,7 +3225,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+					readLayouts...,
+				)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
@@ -3202,7 +3239,9 @@ func GetExprZoneMap(
 
 			f := func() bool {
 				for _, arg := range args {
-					zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs,
+						readLayouts...,
+					)
 					if !zms[arg.AuxId].IsInited() {
 						zms[expr.AuxId].Reset()
 						return true
@@ -3333,12 +3372,16 @@ func GetExprZoneMap(
 				}
 
 			case function.AND:
-				if hasResult := foldAndZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
+				if hasResult := foldAndZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId,
+					readLayouts...,
+				); hasResult {
 					return zms[expr.AuxId]
 				}
 
 			case function.OR:
-				if hasResult := foldOrZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
+				if hasResult := foldOrZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId,
+					readLayouts...,
+				); hasResult {
 					return zms[expr.AuxId]
 				}
 
@@ -3629,6 +3672,7 @@ func foldNativeInListZoneMap(
 	args []*plan.Expr,
 	auxID int32,
 	notIn bool,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) objectio.ZoneMap {
 	list := args[1].GetList()
 	if list == nil {
@@ -3650,7 +3694,9 @@ func foldNativeInListZoneMap(
 		return zms[auxID]
 	}
 
-	lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+	lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs,
+		readLayouts...,
+	)
 	if !lhs.IsInited() {
 		zms[auxID].Reset()
 		return zms[auxID]
@@ -3928,12 +3974,15 @@ func foldAndZoneMap(
 	vecs []*vector.Vector,
 	args []*plan.Expr,
 	auxID int32,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) bool {
 	hasKnown := false
 	hasUnknown := false
 
 	for _, arg := range args {
-		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs,
+			readLayouts...,
+		)
 		if !zms[arg.AuxId].IsInited() || zms[arg.AuxId].GetType() != types.T_bool {
 			hasUnknown = true
 			continue
@@ -3962,12 +4011,15 @@ func foldOrZoneMap(
 	vecs []*vector.Vector,
 	args []*plan.Expr,
 	auxID int32,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) bool {
 	hasKnown := false
 	hasUnknown := false
 
 	for _, arg := range args {
-		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs,
+			readLayouts...,
+		)
 		if !zms[arg.AuxId].IsInited() || zms[arg.AuxId].GetType() != types.T_bool {
 			hasUnknown = true
 			continue

@@ -419,6 +419,29 @@ message SchemaExtra {
     // Zero retains legacy physical keys and text semantics.
     uint32 key_format = 21;
     uint32 collation_version = 22;
+    // Explicit relation evolution authority. Absent on ordinary relations.
+    // This is persisted metadata, not an object-layout heuristic.
+    M0EvolutionContract m0_evolution = 23;
+}
+
+message M0EvolutionColumn {
+    uint64 column_id = 1;
+    uint32 seqnum = 2;
+    uint32 introduced_layout = 3;
+    // Canonical Engine-owned SQL semantics, independent of planner bindings.
+    bytes semantics = 4;
+}
+
+message M0EvolutionContract {
+    uint32 format_version = 1;
+    bytes root_id = 2;
+    uint32 account_id = 3;
+    uint64 database_id = 4;
+    uint64 relation_id = 5;
+    uint32 root_columns = 6;
+    uint32 layout_generation = 7;
+    repeated M0EvolutionColumn columns = 8;
+    bytes schema_digest = 9;
 }
 
 // Int64Map mainly used in unit test

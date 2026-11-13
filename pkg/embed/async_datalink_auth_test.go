@@ -17,6 +17,7 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,83 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
+
+const asyncDatalinkJobProgressSQL = "select job_state,watermark,job_status from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_changed_ft' and job_id=? and drop_at is null"
+
+type asyncDatalinkIndexSample struct {
+	tail      int64
+	tailErr   error
+	state     int8
+	watermark string
+	jobErr    error
+	parsed    timestamp.Timestamp
+	parseErr  error
+	errorCode int
+	statusErr error
+}
+
+func (s asyncDatalinkIndexSample) caughtUp(before int64, target timestamp.Timestamp) bool {
+	return s.tailErr == nil && s.tail > before && s.jobErr == nil &&
+		s.state == iscp.ISCPJobState_Completed && s.parseErr == nil && s.parsed.GreaterEq(target)
+}
+
+type asyncDatalinkIndexProgress struct {
+	collected    bool
+	tailObserved bool
+	jobObserved  bool
+	lastTailErr  error
+	lastJobErr   error
+	last         asyncDatalinkIndexSample
+}
+
+func (p *asyncDatalinkIndexProgress) record(sample asyncDatalinkIndexSample) {
+	if sample.tailErr == nil {
+		p.last.tail = sample.tail
+		p.tailObserved = true
+	}
+	p.last.tailErr = sample.tailErr
+	if sample.tailErr != nil {
+		p.lastTailErr = sample.tailErr
+	}
+	if sample.jobErr == nil {
+		p.last.state = sample.state
+		p.last.watermark = sample.watermark
+		p.last.parseErr = sample.parseErr
+		p.last.errorCode = sample.errorCode
+		p.last.statusErr = sample.statusErr
+		p.jobObserved = true
+	}
+	p.last.jobErr = sample.jobErr
+	if sample.jobErr != nil {
+		p.lastJobErr = sample.jobErr
+	}
+	p.collected = true
+}
+
+func (p *asyncDatalinkIndexProgress) String() string {
+	if !p.collected {
+		return "no completed observation"
+	}
+	s := p.last
+	return fmt.Sprintf("tail_observed=%t tail=%d tail_error=%v last_tail_error=%v job_observed=%t state=%d watermark=%q job_error=%v last_job_error=%v parse_error=%v error_code=%d status_error=%v",
+		p.tailObserved, s.tail, s.tailErr, p.lastTailErr, p.jobObserved, s.state, s.watermark, s.jobErr, p.lastJobErr, s.parseErr, s.errorCode, s.statusErr)
+}
+
+func readAsyncDatalinkIndexProgress(ctx context.Context, conn *sql.Conn, tailSQL string, tableID, jobID uint64) asyncDatalinkIndexSample {
+	var sample asyncDatalinkIndexSample
+	var status sql.NullString
+	sample.tailErr = conn.QueryRowContext(ctx, tailSQL).Scan(&sample.tail)
+	sample.jobErr = conn.QueryRowContext(ctx, asyncDatalinkJobProgressSQL, tableID, jobID).Scan(&sample.state, &sample.watermark, &status)
+	if sample.jobErr == nil {
+		sample.parsed, sample.parseErr = timestamp.ParseTimestamp(sample.watermark)
+		if status.Valid && status.String != "" {
+			var jobStatus iscp.JobStatus
+			sample.statusErr = json.Unmarshal([]byte(status.String), &jobStatus)
+			sample.errorCode = jobStatus.ErrorCode
+		}
+	}
+	return sample
+}
 
 // Reuse the tenant/remote-stage fixture; this adds no cluster or external service.
 func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, endpoint, dir string) {
@@ -227,20 +305,30 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	// target. A tail increment alone could belong to any of the earlier writes.
 	changedCommit := service.GetTxnClient().GetLatestCommitTS()
 	require.False(t, changedCommit.IsEmpty())
-	require.Eventually(t, func() bool {
-		var now int64
-		if err := conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&now); err != nil || now <= changedBefore {
-			return false
+	func() {
+		waitCtx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		var progress asyncDatalinkIndexProgress
+		for {
+			select {
+			case <-waitCtx.Done():
+				t.Fatalf("changed_ft job %d must reach commit %s (previous tail=%d): %v; last observation: %s",
+					changedJobID, changedCommit.DebugString(), changedBefore, waitCtx.Err(), &progress)
+			case <-ticker.C:
+			}
+			sample := readAsyncDatalinkIndexProgress(waitCtx, conn, changedTailSQL, changedTableID, changedJobID)
+			progress.record(sample)
+			// A Running row can advertise a range before it is committed;
+			// only Completed with the target watermark is a fence.
+			if sample.caughtUp(changedBefore, changedCommit) && waitCtx.Err() == nil {
+				t.Logf("changed_ft job %d target=%s previous_tail=%d final observation: %s",
+					changedJobID, changedCommit.DebugString(), changedBefore, &progress)
+				return
+			}
 		}
-		var watermark string
-		// A Running row can advertise the next range's start before its
-		// consumer has committed that range, so only Completed is a fence.
-		if err := conn.QueryRowContext(t.Context(), "select watermark from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_changed_ft' and job_id=? and job_state=? and drop_at is null", changedTableID, changedJobID, iscp.ISCPJobState_Completed).Scan(&watermark); err != nil {
-			return false
-		}
-		observed, err := timestamp.ParseTimestamp(watermark)
-		return err == nil && observed.GreaterEq(changedCommit)
-	}, 30*time.Second, 100*time.Millisecond, "changed_ft job %d must reach commit %s", changedJobID, changedCommit.DebugString())
+	}()
 	require.Eventually(t, func() bool {
 		return conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where id=1 and match(p1,p2) against('Nulla facilisi' in natural language mode)").Scan(&count) == nil && count == 1
 	}, 30*time.Second, 100*time.Millisecond)

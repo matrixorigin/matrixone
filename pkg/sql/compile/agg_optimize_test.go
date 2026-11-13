@@ -54,6 +54,7 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 								Func: &plan.ObjectRef{ObjName: "count"},
 								Args: []*plan.Expr{
 									{
+										Typ: plan.Type{NotNullable: true},
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{ColPos: 0},
 										},
@@ -182,8 +183,12 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 			}
 
 			partialResults, partialResultTypes, columnMap := checkAggOptimize(tt.node)
+			wantName, wantObj, wantMapSize := tt.wantObjName, tt.wantObj, tt.wantColumnMapSize
+			if activeM0DisableCountNotNullRewrite && tt.name == "COUNT(not_null_col) should rewrite to starcount and set Obj to CountStar" {
+				wantName, wantObj, wantMapSize = "count", 0, 1
+			}
 
-			if tt.wantObjName == "" {
+			if wantName == "" {
 				require.Nil(t, partialResults)
 				require.Nil(t, partialResultTypes)
 				require.Nil(t, columnMap)
@@ -193,15 +198,35 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 				require.NotNil(t, columnMap)
 
 				actualObjName := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName
-				require.Equal(t, tt.wantObjName, actualObjName)
-				if tt.wantObj != 0 {
+				require.Equal(t, wantName, actualObjName)
+				if wantObj != 0 {
 					actualObj := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj
-					require.Equal(t, tt.wantObj, actualObj, "Obj (overload id) must be CountStar so runtime uses countStarExec")
+					require.Equal(t, wantObj, actualObj, "Obj (overload id) must be CountStar so runtime uses countStarExec")
 				}
-				require.Equal(t, tt.wantColumnMapSize, len(columnMap))
+				require.Equal(t, wantMapSize, len(columnMap))
 			}
 		})
 	}
+}
+
+func TestCheckAggOptimizeNullableExpression(t *testing.T) {
+	// A NOT NULL base column can become nullable on the outer side of a join.
+	node := &plan.Node{
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Typ: plan.Type{NotNullable: true}},
+		}},
+		AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "count"},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{NotNullable: false},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}},
+		}}}},
+	}
+	partial, _, columns := checkAggOptimize(node)
+	require.NotNil(t, partial)
+	require.Equal(t, map[int]int{0: 0}, columns)
+	require.Equal(t, "count", node.AggList[0].GetF().Func.ObjName)
 }
 
 // ---------------------------------------------------------------------------
@@ -222,10 +247,18 @@ func zmAggColDef(name string, seq uint32, colType types.T, notNullable bool) *pl
 }
 
 func zmAggNode(cols []*plan.ColDef, aggs ...*plan.Expr) *plan.Node {
-	return &plan.Node{
-		TableDef: &plan.TableDef{Cols: cols},
-		AggList:  aggs,
+	// Real planner column expressions carry nullability; a NOT NULL table
+	// descriptor alone does not authorize rewriting a nullable expression.
+	for _, agg := range aggs {
+		if f := agg.GetF(); f != nil {
+			for _, arg := range f.Args {
+				if col := arg.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(cols) {
+					arg.Typ = cols[col.ColPos].Typ
+				}
+			}
+		}
 	}
+	return &plan.Node{TableDef: &plan.TableDef{Cols: cols}, AggList: aggs}
 }
 
 func zmAggColExpr(colPos int32) *plan.Expr {
@@ -413,6 +446,12 @@ func TestCheckAggOptimize_ZmMinMaxEligibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			partialResults, partialResultTypes, columnMap := checkAggOptimize(tt.node)
 
+			wantColMap, wantStarAt := tt.wantColMap, tt.wantStarAt
+			if activeM0DisableCountNotNullRewrite && (tt.name == "count not-null column alone admits" || tt.name == "count not-null column rewritten beside max over decimal128 admits") {
+				wantColMap++
+				wantStarAt = -1
+				require.Equal(t, "count", tt.node.AggList[0].GetF().Func.ObjName)
+			}
 			if !tt.wantEligible {
 				require.Nil(t, partialResults)
 				require.Nil(t, partialResultTypes)
@@ -421,12 +460,12 @@ func TestCheckAggOptimize_ZmMinMaxEligibility(t *testing.T) {
 				require.NotNil(t, partialResults)
 				require.NotNil(t, partialResultTypes)
 				require.NotNil(t, columnMap)
-				require.Equal(t, tt.wantColMap, len(columnMap))
+				require.Equal(t, wantColMap, len(columnMap))
 				require.Len(t, partialResults, len(tt.node.AggList))
 			}
 
-			if tt.wantStarAt >= 0 {
-				agg := tt.node.AggList[tt.wantStarAt].Expr.(*plan.Expr_F).F
+			if wantStarAt >= 0 {
+				agg := tt.node.AggList[wantStarAt].Expr.(*plan.Expr_F).F
 				require.Equal(t, "starcount", agg.Func.ObjName)
 				require.Equal(t, wantCountStarObj, agg.Func.Obj)
 			}

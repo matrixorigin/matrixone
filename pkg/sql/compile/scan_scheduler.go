@@ -15,10 +15,15 @@
 package compile
 
 import (
+	"reflect"
+
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
@@ -169,7 +174,295 @@ type remoteScanTombstoneAttacher struct {
 	tombstones engine.Tombstoner
 }
 
+// The certificate is coordinator-local. Only the embedded RelData is encoded;
+// the receiver reconstructs committed deletions at its admitted snapshot.
+type m0SingleRemoteReadData struct {
+	engine.RelData
+	validate func() error
+	offset   int
+	node     *plan.Node
+	snapshot timestamp.Timestamp
+}
+
+func validateM0SingleRemoteReadData(s *Scope) error {
+	if s == nil {
+		return nil
+	}
+	if activeM0Enabled && s.NodeInfo.CNCNT == 1 && s.DataSource != nil && m0SingleRemoteScanNode(s.DataSource.node) {
+		if _, ok := s.NodeInfo.Data.(*m0SingleRemoteReadData); !ok {
+			return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks workspace certificate")
+		}
+	}
+	if data, ok := s.NodeInfo.Data.(*m0SingleRemoteReadData); ok {
+		if data == nil || data.RelData == nil || data.validate == nil || data.node == nil {
+			return moerr.NewInternalErrorNoCtx("M0: single remote read certificate is incomplete")
+		}
+		if s.Proc != nil && s.Proc.Ctx != nil {
+			if err := s.Proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if s.TxnOffset != data.offset || s.NodeInfo.CNCNT != 1 || s.DataSource == nil || s.DataSource.node == nil ||
+			!s.DataSource.Timestamp.Equal(data.snapshot) ||
+			s.DataSource.node.NodeType != data.node.NodeType || !proto.Equal(s.DataSource.node.ObjRef, data.node.ObjRef) ||
+			!proto.Equal(s.DataSource.node.TableDef, data.node.TableDef) || !proto.Equal(s.DataSource.node.ScanSnapshot, data.node.ScanSnapshot) {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		if err := data.validate(); err != nil {
+			return err
+		}
+	}
+	for _, child := range s.PreScopes {
+		if err := validateM0SingleRemoteReadData(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func m0HasSingleRemoteScan(s *Scope) bool {
+	var hasSingleScan func(*Scope) bool
+	hasSingleScan = func(scope *Scope) bool {
+		if scope == nil {
+			return false
+		}
+		if scope.NodeInfo.CNCNT == 1 && scope.DataSource != nil && m0SingleRemoteScanNode(scope.DataSource.node) {
+			return true
+		}
+		for _, child := range scope.PreScopes {
+			if hasSingleScan(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return hasSingleScan(s)
+}
+
+func m0SingleRemoteScanNode(node *plan.Node) bool {
+	return node != nil && (node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_TABLE_CLONE)
+}
+
+func m0SingleRemoteScanOffsetsZero(s *Scope) bool {
+	if s == nil {
+		return true
+	}
+	if s.NodeInfo.CNCNT == 1 && s.DataSource != nil && m0SingleRemoteScanNode(s.DataSource.node) && s.TxnOffset != 0 {
+		return false
+	}
+	for _, child := range s.PreScopes {
+		if !m0SingleRemoteScanOffsetsZero(child) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateM0SingleRemoteDispatch(s *Scope, c *Compile) error {
+	if !activeM0Enabled || c == nil || !m0HasSingleRemoteScan(s) {
+		return nil
+	}
+	if s.Proc != nil && s.Proc.Ctx != nil {
+		if err := s.Proc.Ctx.Err(); err != nil {
+			return err
+		}
+	}
+	// Scope scan offsets are not encoded. Require the value reconstructed by
+	// the remote scope and compile to match every single-remote scan.
+	if c.TxnOffset != 0 || !m0SingleRemoteScanOffsetsZero(s) {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	if c.proc == nil {
+		return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks workspace authority")
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks workspace authority")
+	}
+	stamper, ok := txnOp.(interface {
+		CatalogReadStamp() (client.CatalogReadStamp, error)
+	})
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks transaction generation")
+	}
+	stamp, err := stamper.CatalogReadStamp()
+	if err != nil {
+		return err
+	}
+	workspace := stamp.Workspace
+	if workspace == nil {
+		return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks workspace authority")
+	}
+	visibility, ok := workspace.(interface{ CatalogVisibility() (uint64, bool) })
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("M0: single remote scan lacks workspace visibility")
+	}
+	revision, stable := visibility.CatalogVisibility()
+	if !stable || !workspace.Readonly() {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	after, stable := visibility.CatalogVisibility()
+	if !stable || revision != after {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	return nil
+}
+
+// The visibility revision and transaction stamp bind both checks to the same
+// attempt. Readonly by itself can return to true after a statement boundary or
+// snapshot transition without proving the encoded scope is still current.
+func captureM0SingleRemoteDispatch(s *Scope, c *Compile) (func() error, error) {
+	if !activeM0Enabled || c == nil || !m0HasSingleRemoteScan(s) {
+		return nil, nil
+	}
+	if c.proc == nil {
+		return nil, moerr.NewInternalErrorNoCtx("M0: single remote scan lacks transaction owner")
+	}
+	op := c.proc.GetTxnOperator()
+	if op == nil || !reflect.ValueOf(op).Comparable() {
+		return nil, moerr.NewInternalErrorNoCtx("M0: single remote scan has unbound transaction identity")
+	}
+	if err := validateM0SingleRemoteDispatch(s, c); err != nil {
+		return nil, err
+	}
+	currentOp := c.proc.GetTxnOperator()
+	if !reflect.ValueOf(currentOp).Comparable() || currentOp != op {
+		return nil, moerr.NewTxnNeedRetryNoCtx()
+	}
+	stamper, ok := op.(interface {
+		CatalogReadStamp() (client.CatalogReadStamp, error)
+	})
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("M0: single remote scan lacks transaction generation")
+	}
+	stamp, err := stamper.CatalogReadStamp()
+	if err != nil {
+		return nil, err
+	}
+	workspace := stamp.Workspace
+	if workspace == nil || !reflect.ValueOf(workspace).Comparable() {
+		return nil, moerr.NewInternalErrorNoCtx("M0: single remote scan has unbound workspace identity")
+	}
+	visibility, ok := workspace.(interface{ CatalogVisibility() (uint64, bool) })
+	if !ok {
+		return nil, moerr.NewTxnNeedRetryNoCtx()
+	}
+	revision, stable := visibility.CatalogVisibility()
+	if !stable || !workspace.Readonly() {
+		return nil, moerr.NewTxnNeedRetryNoCtx()
+	}
+	if after, stable := visibility.CatalogVisibility(); !stable || after != revision {
+		return nil, moerr.NewTxnNeedRetryNoCtx()
+	}
+	return func() error {
+		if err := validateM0SingleRemoteDispatch(s, c); err != nil {
+			return err
+		}
+		currentOp := c.proc.GetTxnOperator()
+		if !reflect.ValueOf(currentOp).Comparable() || currentOp != op {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		current, err := stamper.CatalogReadStamp()
+		if err != nil {
+			return err
+		}
+		if current.Workspace == nil || !reflect.ValueOf(current.Workspace).Comparable() || current.Workspace != workspace ||
+			current.TransactionID != stamp.TransactionID || current.Revision != stamp.Revision || !current.Snapshot.Equal(stamp.Snapshot) {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		if after, stable := visibility.CatalogVisibility(); !stable || after != revision {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		return nil
+	}, nil
+}
+
 func (a *remoteScanTombstoneAttacher) attach(node *engine.Node) error {
+	// A single remote reader rebuilds its own ranges and cannot reconstruct
+	// coordinator-local workspace writes. Recheck after placement because the
+	// workspace may have become writable since scheduling. A retry can then
+	// choose the coordinator; do not ship an incomplete scan.
+	if activeM0Enabled && node.CNCNT == 1 && a.c.executionRequiresCurrentCN() {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	if activeM0Enabled && node.CNCNT == 1 && m0SingleRemoteScanNode(a.node) {
+		// The receiver can rebuild committed deletes per member at the bound
+		// snapshot. Coordinator-local deletes cannot be reconstructed there.
+		// Prove the visible workspace contribution is empty before omitting
+		// committed tombstones from the unchanged wire payload.
+		offset := a.c.TxnOffset
+		boundNode := &plan.Node{NodeType: a.node.NodeType}
+		if a.node.ObjRef != nil {
+			boundNode.ObjRef = proto.Clone(a.node.ObjRef).(*plan.ObjectRef)
+		}
+		if a.node.TableDef != nil {
+			boundNode.TableDef = proto.Clone(a.node.TableDef).(*plan.TableDef)
+		}
+		if a.node.ScanSnapshot != nil {
+			boundNode.ScanSnapshot = proto.Clone(a.node.ScanSnapshot).(*plan.Snapshot)
+		}
+		probe := &Scope{Proc: a.c.proc, NodeInfo: engine.Node{CNCNT: 1}, DataSource: &Source{node: a.node}}
+		validate, err := captureM0SingleRemoteDispatch(probe, a.c)
+		if err != nil {
+			return err
+		}
+		if validate == nil {
+			return moerr.NewInternalErrorNoCtx("M0: single remote read cannot bind workspace")
+		}
+		stamper, ok := a.c.proc.GetTxnOperator().(interface {
+			CatalogReadStamp() (client.CatalogReadStamp, error)
+		})
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("M0: single remote read has no transaction stamp")
+		}
+		stamp, err := stamper.CatalogReadStamp()
+		if err != nil {
+			return err
+		}
+		if stamp.TransactionID == "" || stamp.Snapshot.IsEmpty() || stamp.Workspace == nil {
+			return moerr.NewInternalErrorNoCtx("M0: single remote read has no transaction snapshot")
+		}
+		// A Scope's scan TxnOffset is not serialized. The receiver therefore
+		// observes offset zero; admit reconstruction only when that is also the
+		// sender's complete visible workspace prefix. Later writes made by this
+		// statement are outside that prefix and need not be sent to the reader.
+		owner := a.c
+		validateAttempt := func() error {
+			if err := validate(); err != nil {
+				return err
+			}
+			if offset != 0 || owner.TxnOffset != offset {
+				return moerr.NewTxnNeedRetryNoCtx()
+			}
+			return nil
+		}
+		if err = validateAttempt(); err != nil {
+			return err
+		}
+		snapshot := stamp.Snapshot
+		if requested := boundNode.ScanSnapshot.GetTS(); requested != nil && !requested.IsEmpty() && requested.Less(snapshot) {
+			snapshot = *requested
+		}
+		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectUncommittedTombstones)
+		if err != nil {
+			return err
+		}
+		if tombstones == nil {
+			return moerr.NewInternalErrorNoCtx("M0: single remote workspace deletes unavailable")
+		}
+		if tombstones.HasAnyInMemoryTombstone() || tombstones.HasAnyTombstoneFile() {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		if err = validateAttempt(); err != nil {
+			return err
+		}
+		data := readutil.BuildEmptyRelData()
+		if err = data.AttachTombstones(tombstones); err != nil {
+			return err
+		}
+		node.Data = &m0SingleRemoteReadData{RelData: data, validate: validateAttempt, offset: offset, node: boundNode, snapshot: snapshot}
+		return nil
+	}
 	if !a.collected {
 		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectAllTombstones)
 		if err != nil {

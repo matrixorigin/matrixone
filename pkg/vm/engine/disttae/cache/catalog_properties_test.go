@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -49,6 +50,7 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				constraint.Cts = append(constraint.Cts,
 					&engine.StreamConfigsDef{Configs: []*plan.Property{
 						{Key: catalog.SystemRelAttr_Kind, Value: "stale"}, custom[0],
+						{Key: catalog.PropSchemaExtra, Value: "stale schema extra"},
 						{Key: "REL_COMMENT", Value: "stale comment"}, custom[1],
 						{Key: catalog.SystemRelAttr_CreateSQL, Value: "stale SQL"},
 					}},
@@ -61,9 +63,10 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 			}
 			wire, err := constraint.MarshalBinary()
 			require.NoError(t, err)
+			evolution := &api.M0EvolutionContract{FormatVersion: 1, RootId: []byte("root")}
 			item := &TableItem{
 				Name: "t", Kind: catalog.SystemOrdinaryRel, Comment: tc.comment,
-				CreateSql: tc.createSQL, Constraint: wire, ExtraInfo: &api.SchemaExtra{},
+				CreateSql: tc.createSQL, Constraint: wire, ExtraInfo: &api.SchemaExtra{M0Evolution: evolution},
 			}
 			var want []*plan.Property
 			if tc.comment != "" {
@@ -73,6 +76,7 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				want = append(want, custom...)
 			}
 			want = append(want, &plan.Property{Key: catalog.SystemRelAttr_Kind, Value: item.Kind})
+			want = append(want, &plan.Property{Key: catalog.PropSchemaExtra, Value: string(api.MustMarshalTblExtra(item.ExtraInfo))})
 			if tc.createSQL != "" {
 				want = append(want, &plan.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: tc.createSQL})
 			}
@@ -90,6 +94,9 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 					properties = append(properties, def.GetProperties().GetProperties()...)
 				}
 				require.Equal(t, want, properties, "round %d", round)
+				actualEvolution, err := m0read.PlanEvolution(decoded)
+				require.NoError(t, err)
+				require.Equal(t, evolution, actualEvolution)
 				require.Equal(t, pkey, decoded.Pkey)
 				require.Equal(t, indexes, decoded.Indexes)
 				require.Equal(t, fkeys, decoded.Fkeys)

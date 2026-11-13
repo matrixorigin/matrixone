@@ -1662,6 +1662,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				did, tid,
 				act.AlterComment.NewComment,
 			))
+		case *plan.AlterTable_Action_AddColumn:
+			add := act.AddColumn
+			if add == nil {
+				return moerr.NewInternalErrorNoCtx("invalid ADD COLUMN action")
+			}
+			reqs = append(reqs, api.NewAddColumnReq(
+				did, tid, add.Name, add.Type, add.Pos,
+			))
 		case *plan.AlterTable_Action_AlterAutoIncrement:
 			targetTableDef := qry.GetCopyTableDef()
 			if targetTableDef == nil {
@@ -2044,6 +2052,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	if activeM0Enabled && qry.GetTableDef().GetVersion() != 0 {
+		exeDefs = append(exeDefs, &engine.VersionDef{Version: qry.GetTableDef().GetVersion()})
 	}
 
 	if c.adjustTableExtraFunc != nil {
@@ -4443,7 +4454,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err := c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts); err != nil {
 			return err
 		}
-		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
+		// Partition TRUNCATE supplies a table-extra adjuster for the newly
+		// created member. SHOW CREATE cannot represent the member's parent or
+		// feature flag, so preserve that callback across this internal CREATE.
+		result, err := c.runSqlWithResultAndOptionsAndExtra(createSQL, int32(accountID), createOpts, c.adjustTableExtraFunc)
+		if err != nil {
+			return err
+		}
+		result.Close()
+		return nil
 	}
 	if !isTemp {
 		err = c.withDropLifecycle(replacementAdmission, replace)
@@ -5502,6 +5521,11 @@ func (s *Scope) TableClone(c *Compile) error {
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
 		originalCtx := c.proc.Ctx
+		cloneCtx, bindErr := activeM0CloneCreateContext(c, clonePlan)
+		if bindErr != nil {
+			return bindErr
+		}
+		c.proc.Ctx = cloneCtx
 		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
 		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
 			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)

@@ -17,7 +17,9 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"slices"
 	"strings"
@@ -163,6 +165,11 @@ func newTxnTable(
 		if err != nil && !strings.Contains(err.Error(), "can not find table by id") {
 			return nil, err
 		}
+		if activeM0Enabled && r != nil {
+			if err = validateM0IndexParent(ctx, tbl.origin, r); err != nil {
+				return nil, err
+			}
+		}
 		tbl.parent = r
 	}
 
@@ -171,6 +178,7 @@ func newTxnTable(
 	if db.databaseId != catalog.MO_CATALOG_ID {
 		if ps.Enabled() && (item.IsPartitionTable() || tbl.IsPartitionIndexTable()) {
 			proc := tbl.origin.proc.Load()
+			startRevision, startStable := txn.CatalogVisibility()
 
 			var combined *combinedTxnTable
 			if item.IsPartitionTable() {
@@ -182,14 +190,17 @@ func newTxnTable(
 				if err != nil {
 					return nil, err
 				}
+				if err = validateM0PartitionMetadata(metadata, item.Id); err != nil {
+					return nil, err
+				}
 				combined = newCombinedTxnTable(
 					tbl.origin,
-					getPartitionTableFunc(proc, metadata, db),
-					getPruneTablesFunc(proc, metadata, db),
-					getPartitionPrunePKFunc(proc, metadata, db),
+					getPartitionTableFunc(proc, metadata, db, item.AccountId),
+					getPruneTablesFunc(proc, metadata, db, item.AccountId),
+					getPartitionPrunePKFunc(proc, metadata, db, item.AccountId),
 				)
 			} else {
-				relations, err := tbl.getPartitionIndexesTables(process)
+				relations, err := tbl.getPartitionIndexesTables(ctx, process)
 				if err != nil {
 					return nil, err
 				}
@@ -203,6 +214,10 @@ func newTxnTable(
 
 			tbl.combined.tbl = combined
 			tbl.combined.is = true
+			endRevision, endStable := txn.CatalogVisibility()
+			tbl.combined.revision = endRevision
+			tbl.combined.cacheable = startStable && endStable && startRevision == endRevision &&
+				tbl.origin.lastTS.Equal(db.op.SnapshotTS())
 		}
 
 		tbl.shard.service = shardservice.GetService(process.GetService())
@@ -249,6 +264,9 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	if err := activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return nil, err
+	}
 	published, err := tbl.getPublishedStats(ctx, sync)
 	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
 		return published, err
@@ -669,6 +687,9 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	if err := activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return nil, nil, err
+	}
 	var (
 		err  error
 		part *logtailreplay.PartitionState
@@ -678,7 +699,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	var inited bool
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	cols := tableDef.GetCols()
 	dataLength := len(cols) - 1
 
 	tableVal := make([][2]any, dataLength)
@@ -695,7 +717,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 	var updateMu sync.Mutex
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
-		var err error
+		provenM0, _, err := activeM0ObjectReadLayout(objCtx, tableDef, obj, fs)
+		if err != nil {
+			return err
+		}
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
 			return err
@@ -703,6 +728,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		updateMu.Lock()
 		defer updateMu.Unlock()
 		meta = objMeta.MustDataMeta()
+		if activeM0Enabled && !provenM0 {
+			if err := requirePhysicalMetadataColumns(meta, cols[:dataLength], tableDef); err != nil {
+				return err
+			}
+		}
 		if inited {
 			for idx := range zms {
 				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
@@ -745,12 +775,16 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 }
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
+	if err := activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return nil, err
+	}
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	cols := tableDef.GetCols()
 	found := false
 	n := 0
 	for _, c := range cols {
@@ -780,6 +814,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
+	m0Base, _ := m0AppendBaseFromPlan(tableDef)
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
@@ -812,6 +847,15 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 			return nil
 		}
 
+		provenM0 := false
+		// Contract parsing must also reject malformed authority that no longer
+		// matches the append-domain shape. The default hook is inert.
+		var proofErr error
+		provenM0, _, proofErr = activeM0ObjectReadLayout(objCtx, tableDef, obj, fs)
+		if proofErr != nil {
+			return proofErr
+		}
+
 		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
@@ -819,9 +863,30 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		updateMu.Lock()
 		defer updateMu.Unlock()
 		meta := objMeta.MustDataMeta()
+		if activeM0Enabled && !provenM0 {
+			if err := requirePhysicalMetadataColumns(meta, needCols, tableDef); err != nil {
+				return err
+			}
+		}
 		rowCnt := int64(meta.BlockHeader().Rows())
 
 		for _, col := range needCols {
+			if provenM0 && uint32(col.Seqnum) >= m0Base &&
+				uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+				infoList = append(infoList, &plan.MetadataScanInfo{
+					ColName:    col.Name,
+					IsHidden:   col.Hidden,
+					ObjectName: objName,
+					ObjLoc:     location,
+					CreateTs:   createTs,
+					DeleteTs:   deleteTs,
+					RowCnt:     rowCnt,
+					NullCnt:    rowCnt,
+					ZoneMap:    objectio.EmptyZm[:],
+					Level:      int32(obj.ObjectStats.GetLevel()),
+				})
+				continue
+			}
 			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
 			infoList = append(infoList, &plan.MetadataScanInfo{
 				ColName:      col.Name,
@@ -906,42 +971,70 @@ func (tbl *txnTable) collectTombstones(
 			offset = tbl.getTxn().GetSnapshotWriteOffset()
 		}
 
-		tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId,
-			offset, func(entry Entry) {
-				if entry.typ == INSERT {
-					return
-				}
-				//entry.typ == DELETE
-				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					/*
-						CASE:
-						create table t1(a int);
-						begin;
-						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-						show tables; // t1 must be shown
-					*/
-					//if entry.IsGeneratedByTruncate() {
-					//	return
-					//}
-					//deletes in txn.Write maybe comes from PartitionState.Rows ,
-					// PartitionReader need to skip them.
-					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-					tombstone.AppendInMemory(vs...)
-				}
-			})
+		view, err := tbl.acquireM0StatementView(ctx, offset)
+		if err != nil {
+			return nil, err
+		}
+		if view != nil {
+			defer view.Release()
+		}
+		visit := func(entry Entry) {
+			if entry.typ == INSERT || entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				//if entry.IsGeneratedByTruncate() {
+				//	return
+				//}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
+				tombstone.AppendInMemory(vs...)
+			}
+		}
+		if view != nil {
+			view.forTable(tbl, visit)
+		} else {
+			tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId, offset, visit)
+		}
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
 		appendDeletedRow := func(row types.Rowid) {
 			tombstone.AppendInMemory(row)
 		}
-		if blocks == nil {
+		if view != nil {
+			for block, offsets := range view.deleted[tbl.tableId] {
+				if blocks != nil && !slices.Contains(blocks, block) {
+					continue
+				}
+				for _, offset := range offsets {
+					appendDeletedRow(types.NewRowid(&block, uint32(offset)))
+				}
+			}
+		} else if blocks == nil {
 			tbl.getTxn().deletedBlocks.getDeletedRowIDs(tbl.tableId, appendDeletedRow)
 		} else {
 			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(tbl.tableId, blocks, appendDeletedRow)
 		}
 
 		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(
+		if view != nil {
+			tombstone.AppendFiles(view.tombstones(tbl)...)
+		} else if activeM0ScopedFlushedTombstones != nil {
+			stats, err := activeM0ScopedFlushedTombstones(tbl, offset, false)
+			if err != nil {
+				return nil, err
+			}
+			tombstone.AppendFiles(stats...)
+		} else if err := tbl.getTxn().getUncommittedS3Tombstone(
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)
 			}); err != nil {
@@ -1007,6 +1100,9 @@ func (tbl *txnTable) collectTombstones(
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
+	if err = activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return nil, err
+	}
 	if len(rangesParam.BlockFilters) == 0 && rangesParam.PreAllocBlocks > 128 && !rangesParam.DontSupportRelData {
 		//no block filters, no agg optimization, not partition table, then we can return object list instead of block list
 		return tbl.getObjList(ctx, rangesParam)
@@ -1276,7 +1372,10 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 
 	if needUncommited {
 		objRelData.TotalBlocks = 1 // first empty block
-		uncommittedObjects, _ := tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommittedObjects, _, readErr := tbl.collectUnCommittedDataObjs(ctx, rangesParam.TxnOffset)
+		if readErr != nil {
+			return nil, readErr
+		}
 		for i := range uncommittedObjects {
 			objRelData.AppendObj(&uncommittedObjects[i])
 		}
@@ -1376,7 +1475,10 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}()
 
 	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
-		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommittedObjects, _, err = tbl.collectUnCommittedDataObjs(ctx, rangesParam.TxnOffset)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// get the table's snapshot
@@ -1443,23 +1545,41 @@ func (tbl *txnTable) rangesOnePart(
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
-
-	if done, err = readutil.TryFastFilterBlocksWithZone(
-		ctx,
-		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
-		rangesParam,
-		state,
-		nil,
-		uncommittedObjects,
-		outBlocks,
-		tbl.PrefetchAllMeta,
-		tbl.getTxn().engine.fs,
-		proc.GetSessionInfo().TimeZone,
-	); err != nil {
+	m0TableDef := tableDef
+	if activeM0Enabled {
+		m0TableDef = tbl.GetTableDef(ctx)
+	}
+	snapshot := tbl.db.op.SnapshotTS()
+	canPrune, err := activeM0ValidateRangeFilters(ctx, tbl, m0TableDef, snapshot, rangesParam, state, uncommittedObjects)
+	if err != nil {
 		return err
-	} else if done {
-		return nil
+	}
+	if !canPrune {
+		// An unproved missing column may be read later. Keep candidate blocks;
+		// the normal reader still applies the residual predicate.
+		rangesParam.BlockFilters = nil
+	}
+
+	// Fast filtering interprets an absent metadata column directly and has no
+	// per-object proof context. Keep the append domain on the proving slow path.
+	if _, m0AppendDomain := m0AppendBaseFromPlan(m0TableDef); !m0AppendDomain {
+		if done, err = readutil.TryFastFilterBlocksWithZone(
+			ctx,
+			snapshot,
+			m0TableDef,
+			rangesParam,
+			state,
+			nil,
+			uncommittedObjects,
+			outBlocks,
+			tbl.PrefetchAllMeta,
+			tbl.getTxn().engine.fs,
+			proc.GetSessionInfo().TimeZone,
+		); err != nil {
+			return err
+		} else if done {
+			return nil
+		}
 	}
 
 	if slowPathCounter.Add(1) >= 1000 {
@@ -1517,14 +1637,26 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(rangesParam.BlockFilters, tableDef, columnMap)
+		plan2.GetColumnMapByExprs(rangesParam.BlockFilters, m0TableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
+	m0FS := tbl.getTxn().engine.fs
 
 	if err = ForeachSnapshotObjects(
-		tbl.db.op.SnapshotTS(),
+		snapshot,
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
+			evalCtx := errCtx
+			var readLayout *m0read.ObjectReadLayout
+			if activeM0Enabled {
+				provenM0, proof, proofErr := activeM0ObjectReadLayout(evalCtx, m0TableDef, obj, m0FS)
+				if proofErr != nil {
+					return proofErr
+				}
+				if provenM0 {
+					readLayout = &proof
+				}
+			}
 			// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
 			if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
@@ -1548,7 +1680,7 @@ func (tbl *txnTable) rangesOnePart(
 				if meta.BlockCount() > 2 {
 					for _, expr := range rangesParam.BlockFilters {
 						if !colexec.EvaluateFilterByZoneMap(
-							errCtx, proc, expr, meta, columnMap, zms, vecs,
+							evalCtx, proc, expr, meta, columnMap, zms, vecs, readLayout,
 						) {
 							skipObj = true
 							break
@@ -1577,7 +1709,7 @@ func (tbl *txnTable) rangesOnePart(
 				if auxIdCnt > 0 {
 					// eval filter expr on the block
 					for _, expr := range rangesParam.BlockFilters {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+						if !colexec.EvaluateFilterByZoneMap(evalCtx, proc, expr, blkMeta, columnMap, zms, vecs, readLayout) {
 							skipBlk = true
 							break
 						}
@@ -1620,50 +1752,58 @@ func (tbl *txnTable) rangesOnePart(
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
 //   - typ: Transaction write entry type to collect object stats from.
 func (tbl *txnTable) collectUnCommittedObjStats(
+	ctx context.Context,
 	txnOffset int,
 	typ int,
-) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
 	var unCommittedObjects []objectio.ObjectStats
 	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
 
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
-	tbl.getTxn().ForEachTableWrites(
-		tbl.db.databaseId,
-		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
-			stats := objectio.ObjectStats{}
-			if entry.typ != typ ||
-				entry.bat == nil ||
-				entry.bat.IsEmpty() {
-				return
-			}
+	view, err := tbl.acquireM0StatementView(ctx, txnOffset)
+	if err != nil {
+		return nil, nil, err
+	}
+	if view != nil {
+		defer view.Release()
+	}
+	visit := func(entry Entry) {
+		stats := objectio.ObjectStats{}
+		if entry.typ != typ ||
+			entry.bat == nil ||
+			entry.bat.IsEmpty() {
+			return
+		}
 
-			// Data and tombstone write batches do not have to place object stats
-			// at the same column offset.
-			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
-			if statsIdx == -1 {
-				return
-			}
+		// Data and tombstone write batches do not have to place object stats
+		// at the same column offset.
+		statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+		if statsIdx == -1 {
+			return
+		}
 
-			for i := 0; i < entry.bat.Vecs[statsIdx].Length(); i++ {
-				stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
-				unCommittedObjects = append(unCommittedObjects, stats)
-				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
-			}
-		})
-
-	return unCommittedObjects, unCommittedObjNames
+		for i := 0; i < entry.bat.Vecs[statsIdx].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
+			unCommittedObjects = append(unCommittedObjects, stats)
+			unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
+		}
+	}
+	if view != nil {
+		view.forTable(tbl, visit)
+	} else {
+		tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId, txnOffset, visit)
+	}
+	return unCommittedObjects, unCommittedObjNames, nil
 }
 
-func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	return tbl.collectUnCommittedObjStats(txnOffset, INSERT)
+func (tbl *txnTable) collectUnCommittedDataObjs(ctx context.Context, txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
+	return tbl.collectUnCommittedObjStats(ctx, txnOffset, INSERT)
 }
 
-func (tbl *txnTable) collectUnCommittedTombstoneObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	return tbl.collectUnCommittedObjStats(txnOffset, DELETE)
+func (tbl *txnTable) collectUnCommittedTombstoneObjs(ctx context.Context, txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
+	return tbl.collectUnCommittedObjStats(ctx, txnOffset, DELETE)
 }
 
 // the return defs has no rowid column
@@ -1843,6 +1983,18 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Createsql = tbl.createSql
 		}
 
+		// Plan consumers need the transaction-visible metadata, not an older
+		// property factory captured when the relation was first created.
+		if tbl.extraInfo != nil {
+			current := string(api.MustMarshalTblExtra(tbl.extraInfo))
+			filtered := properties[:0]
+			for _, property := range properties {
+				if property.Key != catalog.PropSchemaExtra {
+					filtered = append(filtered, property)
+				}
+			}
+			properties = append(filtered, &plan.Property{Key: catalog.PropSchemaExtra, Value: current})
+		}
 		if len(properties) > 0 {
 			defs = append(defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Properties{
@@ -1896,6 +2048,16 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
+		}
+		if base, ok := m0AppendBaseFromPlan(tbl.tableDef); ok {
+			for _, col := range tbl.tableDef.Cols {
+				if col != nil && !col.Hidden && uint32(col.Seqnum) >= base {
+					// The M0 admission guarantees this suffix is nullable and
+					// backfill-free. Keep the CN projection aligned with the
+					// persisted catalog state and count-column semantics.
+					col.Typ.NotNullable = false
+				}
+			}
 		}
 	}
 	return tbl.tableDef
@@ -1964,6 +2126,43 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
 	}
+	var m0AddReq *api.AlterTableReq
+	if activeM0Enabled {
+		for _, req := range reqs {
+			if req.GetKind() != api.AlterKind_AddColumn {
+				continue
+			}
+			if m0AddReq != nil || len(reqs) != 1 {
+				return moerr.NewInternalErrorNoCtx("M0: ADD COLUMN must be one independent ALTER action")
+			}
+			m0AddReq = req
+		}
+	}
+	var m0Defs []engine.TableDef
+	if m0AddReq != nil {
+		var err error
+		m0Defs, err = activeM0CNAddColumn(tbl, ctx, m0AddReq)
+		if err != nil {
+			return err
+		}
+		if err = triggerM0AlterFault(ctx, M0FaultAfterDefs); err != nil {
+			return err
+		}
+	} else if activeM0Enabled && tbl.extraInfo.M0Evolution != nil {
+		if err := activeM0CheckEvolution(ctx, tbl); err != nil {
+			return err
+		}
+		created, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return err
+		}
+		for _, req := range reqs {
+			if req.GetKind() != api.AlterKind_UpdateComment && !(created && (req.GetKind() == api.AlterKind_UpdateConstraint || req.GetKind() == api.AlterKind_RenameTable)) {
+				return moerr.NewInvalidInputNoCtx("M0 contracted table only supports ADD COLUMN or COMMENT")
+			}
+		}
+	}
+
 	var autoIncrResetCount uint64
 	for _, req := range reqs {
 		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
@@ -1983,6 +2182,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldTableName := tbl.tableName
 	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
+	oldVersion := tbl.version
+	oldExtraInfo := api.CloneExtra(tbl.extraInfo)
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
@@ -2025,8 +2226,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 		}
 		tbl.defs = olddefs
+		tbl.version = oldVersion
+		tbl.extraInfo = oldExtraInfo
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
+		if m0AddReq != nil {
+			tbl.refreshM0DerivedIndices(ctx)
+		}
 	}
 	txn.Lock()
 	txn.restoreTxnTableFunc = append(txn.restoreTxnTableFunc, restore)
@@ -2095,6 +2301,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 			tbl.extraInfo.AutoIncrEpoch++
 			req.GetUpdateAutoIncrement().Epoch = tbl.extraInfo.AutoIncrEpoch
+		case api.AlterKind_AddColumn:
+			if !activeM0Enabled {
+				panic("not supported")
+			}
 		default:
 			panic("not supported")
 		}
@@ -2126,6 +2336,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+	} else if m0Defs != nil {
+		baseDefs = m0Defs
 	} else {
 		baseDefs = append([]engine.TableDef{}, tbl.defs...)
 	}
@@ -2162,12 +2374,22 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			bat.Clean(txn.proc.Mp())
 			return err
 		}
+		if m0AddReq != nil {
+			if err = triggerM0AlterFault(ctx, M0FaultAfterTNAlter); err != nil {
+				return err
+			}
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
 	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
+	}
+	if m0AddReq != nil {
+		if err := triggerM0AlterFault(ctx, M0FaultAfterCatalogDelete); err != nil {
+			return err
+		}
 	}
 
 	// update table defs after deleting old table metadata
@@ -2176,6 +2398,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
+	if m0AddReq != nil {
+		if err = activeM0AdvanceEvolution(ctx, tbl); err != nil {
+			return err
+		}
+	} else if activeM0Enabled && tbl.extraInfo.M0Evolution != nil {
+		if err = activeM0CheckEvolution(ctx, tbl); err != nil {
+			return err
+		}
+	}
 	var preservedOwnership *tableCatalogOwnership
 	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
 		preservedOwnership = &tableCatalogOwnership{
@@ -2193,6 +2424,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	); err != nil {
 		return err
 	}
+	if m0AddReq != nil {
+		tbl.RefeshTableDef(ctx)
+		tbl.refreshM0DerivedIndices(ctx)
+	}
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
@@ -2201,6 +2436,17 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	return nil
+}
+
+func (tbl *txnTable) refreshM0DerivedIndices(ctx context.Context) {
+	def := tbl.GetTableDef(ctx)
+	tbl.primaryIdx, tbl.primarySeqnum = -1, -1
+	for i, col := range def.Cols {
+		if col.Primary {
+			tbl.primaryIdx = i
+			tbl.primarySeqnum = int(col.Seqnum)
+		}
+	}
 }
 
 func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
@@ -2237,6 +2483,9 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
+	if err := activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return err
+	}
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
 	}
@@ -2299,20 +2548,25 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
-// rewriteObjectByDeletion rewrites obj's surviving rows — every block
-// minus its pending deleted offsets — into a fresh storage object and
-// returns the replacement's metadata batch, its file name, the names of
-// the objects the rewrite persisted (or may have persisted through a
-// commit-ambiguous Sync error; the snapshot is taken BEFORE the writer's
-// close drops its tracked references), and any error. The writer carries
-// this transaction's per-object capacity option, so a persisted
-// replacement object reserves one in-flight unit under the admission
-// bound BEFORE it goes durable and a saturated ledger refuses the spill
-// with nothing half-persisted behind it; the parent that called the
-// rewrite records the result, and only a recorded result retires the
-// original — a refused or failed rewrite's persisted names are the
-// caller's to retain for asynchronous cleanup (issue #25590 round-19
-// review, finding 1).
+type workspacePhysicalRewrite struct {
+	tableDef *plan.TableDef
+	seqnums  []uint16
+	typs     []types.Type
+	rows     []uint32
+}
+
+func validateWorkspacePhysicalTypes(bat *batch.Batch, typs []types.Type) error {
+	if bat == nil || len(bat.Vecs) != len(typs) {
+		return moerr.NewInternalErrorNoCtx("M0: physical rewrite column count differs from source layout")
+	}
+	for i, typ := range typs {
+		if bat.Vecs[i] == nil || *bat.Vecs[i].GetType() != typ {
+			return moerr.NewInternalErrorNoCtx("M0: physical rewrite vector type differs from source layout")
+		}
+	}
+	return nil
+}
+
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
@@ -2326,8 +2580,23 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, "", nil, err
 	}
 
+	rewrite, err := activeM0PrepareWorkspacePhysicalRewrite(ctx, tbl, obj, fs)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	writeDef, seqnums, typs := tbl.tableDef, tbl.seqnums, tbl.typs
+	readCtx := tbl.getTxn().proc.Ctx
+	var readLayout *m0read.ObjectReadLayout
+	if activeM0Enabled {
+		readLayout = &m0read.ObjectReadLayout{ObjectName: obj.ObjectLocation().Name().String()}
+	}
+	if rewrite != nil {
+		writeDef, seqnums, typs = rewrite.tableDef, rewrite.seqnums, rewrite.typs
+		readCtx = ctx
+	}
+
 	s3Writer := colexec.NewCNS3DataWriterForService(
-		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
+		proc.GetService(), proc.Mp(), fs, writeDef, -1, false,
 		tbl.getTxn().SinkerCapacityOption(),
 	)
 
@@ -2340,8 +2609,25 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		// instead of dropping the last reference to persisted files
 		// (issue #25590 round-19 review).
 		persisted = s3Writer.AbandonAndRetainableNames()
-		if closeErr := s3Writer.Close(); err == nil {
-			err = closeErr
+		panicValue := recover()
+		closeErr := func() (closeErr error) {
+			defer func() {
+				if p := recover(); p != nil {
+					closeErr = moerr.ConvertPanicError(ctx, p)
+				}
+			}()
+			return s3Writer.Close()
+		}()
+		err = errors.Join(err, closeErr)
+		if panicValue != nil {
+			err = errors.Join(err, moerr.ConvertPanicError(ctx, panicValue))
+			if rewrite != nil {
+				err = errors.Join(err, moerr.NewInternalErrorNoCtxf("M0: rewrite panic objects=%s", strings.Join(persisted, ",")))
+			}
+		}
+		if err != nil && bat != nil {
+			bat.Clean(proc.Mp())
+			bat = nil
 		}
 	}()
 
@@ -2369,22 +2655,35 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
 			slices.Sort(deletes)
+			deletes = slices.Compact(deletes)
 			if rowsBat == nil {
-				rowsBat = batch.NewWithSize(len(tbl.seqnums))
+				rowsBat = batch.NewWithSize(len(seqnums))
 			}
 			rowsBat.CleanOnlyData()
 
 			if err = blockio.CopyBlockData(
-				tbl.getTxn().proc.Ctx,
+				readCtx,
 				blk.MetaLoc[:],
 				deletes,
-				tbl.seqnums,
-				tbl.typs,
+				seqnums,
+				typs,
 				rowsBat,
 				tbl.getTxn().engine.fs,
 				tbl.getTxn().proc.GetMPool(),
+				readLayout,
 			); err != nil {
 				return false
+			}
+
+			if rewrite != nil {
+				if err = validateWorkspacePhysicalTypes(rowsBat, typs); err != nil {
+					return false
+				}
+				blockID := int(blk.MetaLocation().ID())
+				if blockID >= len(rewrite.rows) || uint64(rowsBat.RowCount())+uint64(len(deletes)) != uint64(rewrite.rows[blockID]) {
+					err = moerr.NewInternalErrorNoCtx("M0: workspace rewrite row count differs from physical metadata")
+					return false
+				}
 			}
 
 			if rowsBat.RowCount() == 0 {
@@ -2406,6 +2705,12 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
 		return nil, fileName, persisted, err
+	}
+
+	if rewrite != nil {
+		if err = activeM0WorkspaceRewriteAfterSync(ctx, s3Writer.PersistedNames()); err != nil {
+			return nil, fileName, persisted, err
+		}
 	}
 
 	if infoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
@@ -2750,6 +3055,9 @@ func (tbl *txnTable) BuildReaders(
 	tombstonePolicy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	if err := activeM0CheckReadEvolution(ctx, tbl); err != nil {
+		return nil, err
+	}
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 
@@ -2786,7 +3094,7 @@ func (tbl *txnTable) BuildReaders(
 	}
 
 	def := tbl.GetTableDef(ctx)
-	shards := relData.Split(newNum)
+	shards := activeM0ReadShards(ctx, def, relData, newNum, orderBy)
 
 	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
 		filterHint,

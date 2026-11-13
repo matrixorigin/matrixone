@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -36,6 +38,7 @@ func TestTxnTableGetTableDefCatalogProperties(t *testing.T) {
 			constraint := &engine.ConstraintDef{Cts: []engine.Constraint{
 				&engine.StreamConfigsDef{Configs: []*plan.Property{
 					{Key: "RELKIND", Value: "stale"}, custom[0],
+					{Key: catalog.PropSchemaExtra, Value: "stale schema extra"},
 					{Key: "REL_COMMENT", Value: "stale comment"},
 				}},
 				&engine.StreamConfigsDef{Configs: []*plan.Property{
@@ -45,7 +48,9 @@ func TestTxnTableGetTableDefCatalogProperties(t *testing.T) {
 			}}
 			wire, err := constraint.MarshalBinary()
 			require.NoError(t, err)
-			table := &txnTable{db: &txnDatabase{}, relKind: catalog.SystemOrdinaryRel, constraint: wire}
+			evolution := &api.M0EvolutionContract{FormatVersion: 1, RootId: []byte("root")}
+			table := &txnTable{db: &txnDatabase{}, relKind: catalog.SystemOrdinaryRel, constraint: wire,
+				extraInfo: &api.SchemaExtra{M0Evolution: evolution}}
 			var want []*plan.Property
 			if populated {
 				table.comment, table.createSql = "current comment", "create table t(id int)"
@@ -56,6 +61,7 @@ func TestTxnTableGetTableDefCatalogProperties(t *testing.T) {
 			if populated {
 				want = append(want, &plan.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: table.createSql})
 			}
+			want = append(want, &plan.Property{Key: catalog.PropSchemaExtra, Value: string(api.MustMarshalTblExtra(table.extraInfo))})
 			var stableWire []byte
 			for round := 0; round < 3; round++ {
 				before := bytes.Clone(table.constraint)
@@ -69,6 +75,9 @@ func TestTxnTableGetTableDefCatalogProperties(t *testing.T) {
 					properties = append(properties, def.GetProperties().GetProperties()...)
 				}
 				require.Equal(t, want, properties, "round %d", round)
+				actualEvolution, err := m0read.PlanEvolution(decoded)
+				require.NoError(t, err)
+				require.Equal(t, evolution, actualEvolution)
 				table.constraint, err = engine.PlanDefToCstrDef(decoded).MarshalBinary()
 				require.NoError(t, err)
 				if round == 0 {

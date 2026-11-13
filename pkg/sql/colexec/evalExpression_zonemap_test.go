@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"strings"
 	"testing"
@@ -394,6 +395,41 @@ func TestEvaluateFilterByZoneMapNullComparisonsPrune(t *testing.T) {
 		selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 	})
+}
+
+func TestEvaluateFilterByZoneMapM0MissingColumnUsesExplicitLayout(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+	column := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "added"},
+		},
+	}
+
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	readLayout := &m0read.ObjectReadLayout{Evolution: true,
+		ObjectName: "customer-object", WrittenSize: 1, SchemaSize: 2,
+	}
+	for _, test := range []struct {
+		name   string
+		funcID string
+		want   bool
+	}{
+		{name: "is null", funcID: "isnull", want: true},
+		{name: "is not null", funcID: "isnotnull", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, test.funcID, []*plan.Expr{column})
+			require.NoError(t, err)
+			zms, vecs := makeZoneMapEvalScratch(expr)
+			selected := colexec.EvaluateFilterByZoneMap(
+				ctx, proc, expr, meta, map[int]int{1: 1}, zms, vecs, readLayout,
+			)
+			require.Equal(t, test.want, selected)
+		})
+	}
 }
 
 func TestEvaluateFilterByZoneMapInListWithUnknownMemberIsConservative(t *testing.T) {

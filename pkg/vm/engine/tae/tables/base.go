@@ -637,6 +637,11 @@ func (obj *baseObject) FillBlockTombstones(
 	if !obj.meta.Load().IsTombstone {
 		panic("logic err")
 	}
+	// The caller may be scanning an M0 data object. Its proof is bound to
+	// that data object's identity and must not authorize or reject reads from
+	// this separate tombstone object. Tombstone columns retain the ordinary
+	// physical missing-column checks.
+
 	return node.FillBlockTombstones(ctx, txn, blkID, deletes, deleteStartOffset, mp)
 }
 

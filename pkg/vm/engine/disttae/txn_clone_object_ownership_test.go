@@ -116,3 +116,24 @@ func TestCloneDeleteOwnershipFlowsToObjectSummary(t *testing.T) {
 	})
 	require.Equal(t, 1, lookups)
 }
+
+func TestResolveCompactTablesRejectsOtherTableSummary(t *testing.T) {
+	const (
+		ownerTable uint64 = 100
+		otherTable uint64 = 200
+	)
+	rowID := types.RandomRowid()
+	blockID, _ := rowID.Decode()
+	txn := &Transaction{
+		cnObjsSummary: map[uint64]map[types.Objectid]Summary{},
+		deletedBlocks: &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
+	}
+	txn.registerCNObjects(*blockID.Object(), 1, 10, ownerTable, nil, "db", "owner", 0, false)
+	txn.deletedBlocks.addDeletedBlocks(otherTable, blockID, []int64{0})
+
+	txn.Lock()
+	tables, err := txn.resolveCompactTablesLocked(t.Context())
+	txn.Unlock()
+	require.Nil(t, tables)
+	require.ErrorContains(t, err, "workspace object has no relation-qualified summary")
+}

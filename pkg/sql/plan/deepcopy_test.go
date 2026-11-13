@@ -106,6 +106,15 @@ func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	require.Equal(t, source, cloned)
 }
 
+func TestDeepCopyColDefPreservesNotNull(t *testing.T) {
+	source := &planpb.ColDef{Name: "amount", NotNull: true}
+	cloned := DeepCopyColDef(source)
+	require.NotSame(t, source, cloned)
+	require.True(t, cloned.NotNull)
+	cloned.NotNull = false
+	require.True(t, source.NotNull)
+}
+
 func TestDeepCopyIndexSearchScanOwnsNestedMetadata(t *testing.T) {
 	source := &planpb.IndexSearchScan{
 		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},

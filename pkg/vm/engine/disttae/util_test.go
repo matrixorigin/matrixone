@@ -675,6 +675,18 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 		otherTableRows = append(otherTableRows, row)
 	})
 	require.Empty(t, otherTableRows)
+	// Different cloned relations can point to the same physical block.
+	delBlks.addDeletedBlocks(tableID+1, &selected, []int64{99})
+	delBlks.getDeletedRowIDsForBlocks(tableID+1, []types.Blockid{selected}, func(row types.Rowid) {
+		otherTableRows = append(otherTableRows, row)
+	})
+	require.Len(t, otherTableRows, 1)
+	require.Equal(t, uint32(99), otherTableRows[0].GetRowOffset())
+	scoped = scoped[:0]
+	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
+		scoped = append(scoped, row)
+	})
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 }
 
 func TestConcurrentExecutor_Run(t *testing.T) {

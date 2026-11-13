@@ -6070,6 +6070,32 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 		"the dump's recorded objects are the only owned obligations")
 	require.Zero(t, inFlight)
 
+	t.Run("worker_panic_preserves_workspace", func(t *testing.T) {
+		compactTable := txn.tableOps.existAndActive(genTableKey(1, "ctbl", 7, "db"))
+		require.NotNil(t, compactTable)
+		require.Nil(t, compactTable.seqnums)
+		require.Nil(t, compactTable.typs)
+		savedDef := compactTable.tableDef
+		compactTable.tableDef = nil // the worker panics while preparing the physical layout
+		defer func() { compactTable.tableDef = savedDef }()
+		beforeBytes := txn.proc.Mp().CurrNB()
+		var panicErr error
+		func() {
+			txn.Lock()
+			defer txn.Unlock()
+			panicErr = txn.compactDeletionOnObjsLocked(ctx)
+		}()
+		require.ErrorContains(t, panicErr, "panic")
+		require.Len(t, txn.writes, 1)
+		require.Same(t, metaBat, txn.writes[metaIdx].bat)
+		require.Equal(t, 1, txn.deletedBlocks.size())
+		require.Len(t, txn.deletedBlocks.offsets[ctblID][tailFirstBlock], 2)
+		require.Empty(t, txn.pendingObjectCleanup)
+		require.Equal(t, dumpedNames, failFS.persistedSnapshot())
+		require.Equal(t, beforeBytes, txn.proc.Mp().CurrNB(), "staged republication batches must be released")
+		require.NoError(t, txn.checkWorkspaceAccountingLocked())
+	})
+
 	// Saturate the real memory controller before clean-object republication.
 	// It must refuse its owned copy before rewriting or retiring any object.
 	account := txn.workspaceAccount

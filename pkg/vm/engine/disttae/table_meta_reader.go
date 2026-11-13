@@ -389,9 +389,12 @@ func (r *TableMetaReader) collect(
 	// txn-local object stats up to the reader's write boundary.
 	var uncommittedObjs []objectio.ObjectStats
 	if isTombstone {
-		uncommittedObjs, _ = r.table.collectUnCommittedTombstoneObjs(r.txnOffset)
+		uncommittedObjs, _, err = r.table.collectUnCommittedTombstoneObjs(ctx, r.txnOffset)
 	} else {
-		uncommittedObjs, _ = r.table.collectUnCommittedDataObjs(r.txnOffset)
+		uncommittedObjs, _, err = r.table.collectUnCommittedDataObjs(ctx, r.txnOffset)
+	}
+	if err != nil {
+		return nil, err
 	}
 	for i := range uncommittedObjs {
 		if err = appendObjectStats(&uncommittedObjs[i], cloneObjectFromTxnWorkspace); err != nil {

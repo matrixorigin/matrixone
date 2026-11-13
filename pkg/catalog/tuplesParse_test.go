@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,41 @@ func TestGenCreateTableTuplePreservesExplicitCreatedTime(t *testing.T) {
 	defer bat.Clean(m)
 	require.Equal(t, want,
 		vector.MustFixedColNoTypeCheck[types.Timestamp](bat.Vecs[MO_TABLES_CREATED_TIME_IDX])[0])
+}
+
+func TestGenCreateTablesPreservesCatalogVersions(t *testing.T) {
+	m := mpool.MustNew("create-table-versions")
+	defer mpool.DeleteMPool(m)
+	packer := types.NewPacker()
+	defer packer.Close()
+	versions := []uint32{0, 2, 4}
+	var tables *batch.Batch
+	for i, version := range versions {
+		row, err := GenCreateTableTuple(Table{TableId: uint64(10001 + i), Version: version}, m, packer)
+		require.NoError(t, err)
+		defer row.Clean(m)
+		if tables == nil {
+			tables = row
+		} else {
+			require.NoError(t, tables.UnionOne(row, 0, m))
+		}
+	}
+	cmds := genCreateTables(GenRows(tables))
+	require.Len(t, cmds, len(versions))
+	for i, want := range versions {
+		require.Equal(t, uint64(10001+i), cmds[i].TableId)
+		var found []uint32
+		for _, def := range cmds[i].Defs {
+			if version, ok := def.(*engine.VersionDef); ok {
+				found = append(found, version.Version)
+			}
+		}
+		if want == 0 {
+			require.Empty(t, found, "zero-version definitions must retain the default encoding")
+		} else {
+			require.Equal(t, []uint32{want}, found)
+		}
+	}
 }
 
 func mustToPBBatch(bat *batch.Batch) *api.Batch {

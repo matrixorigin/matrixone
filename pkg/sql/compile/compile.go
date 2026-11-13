@@ -50,8 +50,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -264,6 +266,9 @@ func (c *Compile) Release() {
 		// caller that has no compiled plan.
 		c.proc.ClearPlanSnapshotTS()
 	}
+	// Prepared compiles may stay cached without clear(). Readers hold their
+	// own references until Close; the execution owner must not remain cached.
+	c.releaseStatementView()
 	doCompileRelease(c)
 }
 
@@ -416,6 +421,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	}
 	c.startAt = startAt
 	c.TxnOffset = txnOffsetOfCompile(c.proc)
+	if err := c.captureStatementView(c.pn); err != nil {
+		return err
+	}
 	if c.proc.GetTxnOperator() != nil {
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
@@ -570,6 +578,7 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 	c.clearDependentSourceMetadata()
+	c.releaseStatementView()
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
@@ -586,6 +595,10 @@ func (c *Compile) clear() {
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
+	// A remote Compile is allocated directly from this pool and does not run
+	// NewCompile's workspace-offset initialization. Never reuse a prior scan's
+	// offset for the remote reader's empty workspace.
+	c.TxnOffset = 0
 	c.runSqlToken = 0
 	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
@@ -11019,6 +11032,7 @@ func collectTombstones(
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx, _ := scanSnapshotContext(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
+	ctx = m0read.WithStatementReadView(ctx, c.statementView)
 	//-----------------------------------------------------------------------------------------------------
 
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
@@ -11078,6 +11092,7 @@ func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
+	ctx = m0read.WithStatementReadView(ctx, c.statementView)
 	preAllocBlocks := 2
 	if policy&engine.Policy_CollectCommittedPersistedData != 0 {
 		if !c.IsTpQuery() {
@@ -11121,10 +11136,27 @@ func (c *Compile) expandRanges(
 }
 
 func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.Relation, engine.Database, context.Context, error) {
+	return c.handleDbRelContextWithPipeline(node, onRemoteCN, nil)
+}
+
+// A remote ranges owner may have a pipeline context that can be canceled
+// independently from the query's top context. Resolve the account using the
+// existing query/snapshot rules, then bind it to that pipeline context before
+// opening the relation or selecting ranges.
+func (c *Compile) handleDbRelContextWithPipeline(node *plan.Node, onRemoteCN bool, pipelineCtx context.Context) (engine.Relation, engine.Database, context.Context, error) {
+	return c.handleDbRelContextWithBoundTxn(node, onRemoteCN, pipelineCtx, nil)
+}
+
+func (c *Compile) handleDbRelContextWithBoundTxn(node *plan.Node, onRemoteCN bool, pipelineCtx context.Context, bound client.TxnOperator) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var txnOp client.TxnOperator
+	if pipelineCtx != nil {
+		if err := pipelineCtx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 
 	if onRemoteCN {
 		// Workspace may have been created earlier in remote run scenario (e.g., in remoterunServer.go).
@@ -11137,7 +11169,24 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	txnOp, ctx := scanSnapshotTxn(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
+	ctx := c.proc.GetTopContext()
+	if ctx == nil && pipelineCtx != nil {
+		return nil, nil, nil, moerr.NewInternalErrorNoCtx("M0: remote range selection has no query context")
+	}
+	if bound == nil {
+		txnOp, ctx = scanSnapshotTxn(ctx, c.proc.GetTxnOperator(), node.ScanSnapshot)
+	} else {
+		ctx, _ = scanSnapshotContext(ctx, c.proc.GetTxnOperator(), node.ScanSnapshot)
+		expected := c.proc.GetTxnOperator().Txn().SnapshotTS
+		if snapshot := node.GetScanSnapshot().GetTS(); snapshot != nil && !snapshot.IsEmpty() && snapshot.Less(expected) {
+			expected = *snapshot
+		}
+		if !activeM0Enabled || !onRemoteCN || !bound.SnapshotTS().Equal(expected) ||
+			!bytes.Equal(bound.Txn().ID, c.proc.GetTxnOperator().Txn().ID) {
+			return nil, nil, nil, moerr.NewTxnNeedRetryNoCtx()
+		}
+		txnOp = bound
+	}
 	//-------------------------------------------------------------------------------------------------------------
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -11147,6 +11196,16 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if pipelineCtx != nil {
+		if err := pipelineCtx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		account, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		ctx = defines.AttachAccountId(pipelineCtx, account)
 	}
 
 	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
@@ -11162,6 +11221,9 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	if !metadataAggregateAllowed(node) {
+		return nil, nil, nil
+	}
 	partialResults := make([]any, len(node.AggList))
 	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)
@@ -11171,6 +11233,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 		args := agg.F.Args[0]
 		switch name {
 		case "starcount":
+			if !metadataStarCountAllowed(agg.F) {
+				return nil, nil, nil
+			}
 			partialResults[i] = int64(0)
 			partialResultTypes[i] = types.T_int64
 		case "count":
@@ -11199,17 +11264,22 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				if node.TableDef == nil {
 					return nil, nil, nil
 				}
-				colPos := int(col.Col.ColPos)
-				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
+				colPos := plan2.M0ResolveColumnPosition(node.TableDef, col.Col.Name, int(col.Col.ColPos))
+				if colPos < 0 || colPos >= len(node.TableDef.Cols) || node.TableDef.Cols[colPos] == nil {
 					return nil, nil, nil
 				}
 				// Check if column is NOT NULL
-				if node.TableDef.Cols[colPos].Typ.NotNullable {
+				if node.TableDef.Cols[colPos].Typ.NotNullable && args.Typ.NotNullable &&
+					!activeM0DisableCountNotNullRewrite && !plan2.M0AppendDomain(node.TableDef) {
 					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 				} else {
-					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
+					key, seq := int(col.Col.ColPos), int(node.TableDef.Cols[colPos].Seqnum)
+					if previous, exists := columnMap[key]; exists && previous != seq {
+						return nil, nil, nil
+					}
+					columnMap[key] = seq
 				}
 			}
 		case "min", "max":
@@ -11221,14 +11291,22 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			if node.TableDef == nil {
 				return nil, nil, nil
 			}
+			colPos := plan2.M0ResolveColumnPosition(node.TableDef, col.Col.Name, int(col.Col.ColPos))
+			if colPos < 0 || colPos >= len(node.TableDef.Cols) || node.TableDef.Cols[colPos] == nil {
+				return nil, nil, nil
+			}
 			// Zone-map metadata cannot replace scanning this block: tae zonemaps
 			// intentionally skip T_decimal256 maintenance (zm.go), so a
 			// decimal256 MIN/MAX would contribute a nil partial and drop the
 			// block's real rows. Decline the complete aggregate.
-			if types.T(node.TableDef.Cols[col.Col.ColPos].Typ.Id) == types.T_decimal256 {
+			if types.T(node.TableDef.Cols[colPos].Typ.Id) == types.T_decimal256 {
 				return nil, nil, nil
 			}
-			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+			key, seq := int(col.Col.ColPos), int(node.TableDef.Cols[colPos].Seqnum)
+			if previous, exists := columnMap[key]; exists && previous != seq {
+				return nil, nil, nil
+			}
+			columnMap[key] = seq
 		default:
 			return nil, nil, nil
 		}
@@ -11251,6 +11329,29 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 		return err
 	}
 	blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
+	if activeM0DisableCountNotNullRewrite {
+		// An unbound relation may still contain an old or malformed object.
+		// Do not use missing metadata as an aggregate result: fall back to
+		// the strict reader, which owns missing-column interpretation.
+		for _, expr := range node.AggList {
+			agg := expr.GetF()
+			if agg.Func.ObjName == "starcount" {
+				continue
+			}
+			col := agg.Args[0].GetCol()
+			if col == nil {
+				return m0read.ErrMissingColumnWithoutProof
+			}
+			pos := plan2.M0ResolveColumnPosition(node.TableDef, col.Name, int(col.ColPos))
+			seq, ok := columnMap[int(col.ColPos)]
+			if !ok || pos < 0 || pos >= len(node.TableDef.Cols) || node.TableDef.Cols[pos] == nil ||
+				seq < 0 || seq >= int(objectio.SEQNUM_UPPER) || seq > int(blkMeta.GetMaxSeqnum()) ||
+				seq >= int(blkMeta.GetMetaColumnCount()) || blkMeta.ColumnMeta(uint16(seq)).DataType() == 0 ||
+				int32(blkMeta.ColumnMeta(uint16(seq)).DataType()) != node.TableDef.Cols[pos].Typ.Id {
+				return m0read.ErrMissingColumnWithoutProof
+			}
+		}
+	}
 	for i := range node.AggList {
 		agg := node.AggList[i].Expr.(*plan.Expr_F)
 		name := agg.F.Func.ObjName
@@ -11617,15 +11718,29 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
-	return c.runSqlWithResultAndMaintenance(sql, accountId, options, nil, nil)
+	return c.runSqlWithResultAndBindings(sql, accountId, options, nil, nil, nil)
+}
+
+// CREATE authority is scoped to this internal statement, never inherited by
+// unrelated index-maintenance SQL.
+func (c *Compile) runSqlWithResultAndOptionsAndExtra(
+	sql string, accountId int32, options executor.StatementOption,
+	adjustExtra func(*api.SchemaExtra) error,
+) (executor.Result, error) {
+	return c.runSqlWithResultAndBindings(sql, accountId, options, adjustExtra, nil, nil)
 }
 
 func (c *Compile) runSqlWithResultAndMaintenance(
-	sql string,
-	accountId int32,
-	options executor.StatementOption,
-	spec *executor.IndexMaintenanceSpec,
-	validator executor.IndexMaintenanceValidator,
+	sql string, accountId int32, options executor.StatementOption,
+	spec *executor.IndexMaintenanceSpec, validator executor.IndexMaintenanceValidator,
+) (executor.Result, error) {
+	return c.runSqlWithResultAndBindings(sql, accountId, options, nil, spec, validator)
+}
+
+func (c *Compile) runSqlWithResultAndBindings(
+	sql string, accountId int32, options executor.StatementOption,
+	adjustExtra func(*api.SchemaExtra) error,
+	spec *executor.IndexMaintenanceSpec, validator executor.IndexMaintenanceValidator,
 ) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -11676,6 +11791,9 @@ func (c *Compile) runSqlWithResultAndMaintenance(
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
 		WithFrontend(c.proc.Base.IsFrontend)
+	if adjustExtra != nil {
+		opts = opts.WithAdjustTableExtraFunc(adjustExtra)
+	}
 	if spec != nil || validator != nil {
 		opts = opts.WithIndexMaintenanceSpec(spec).WithIndexMaintenanceValidator(validator)
 	}
@@ -11971,6 +12089,23 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 // before physical compilation or Compile.Reset. Zero keeps ordinary statements
 // fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }
+
+func (c *Compile) releaseStatementView() {
+	if c.statementView != nil {
+		c.statementView.Release()
+		c.statementView = nil
+	}
+}
+
+func (c *Compile) captureStatementView(p *plan.Plan) error {
+	c.releaseStatementView()
+	view, err := activeM0CaptureStatementView(c, p)
+	if err != nil {
+		return err
+	}
+	c.statementView = view
+	return nil
+}
 
 // Boolean EXISTS needs only an exact TRUE witness. NULL comparisons do not
 // witness existence, unlike an ordinary MARK whose UNKNOWN is observable.

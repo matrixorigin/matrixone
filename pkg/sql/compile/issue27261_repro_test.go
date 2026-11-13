@@ -24,6 +24,7 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -55,26 +56,71 @@ type issue27261BlockingRelation struct {
 }
 
 func TestReaderContextFollowsSourceScopeBeforeCompileFallback(t *testing.T) {
-	source := testutil.NewProcess(t)
-	defer source.Free()
-	fallback := testutil.NewProcess(t)
-	defer fallback.Free()
-
 	type contextKey struct{}
-	sourceCtx := context.WithValue(source.Ctx, contextKey{}, "source")
-	fallbackCtx := context.WithValue(fallback.Ctx, contextKey{}, "fallback")
-	source.Ctx = sourceCtx
-	fallback.Ctx = fallbackCtx
-	compile := &Compile{proc: fallback}
+	for _, path := range []struct {
+		name       string
+		scope      func(*process.Process) *Scope
+		wantSource bool
+	}{
+		{"source", func(p *process.Process) *Scope { return &Scope{Proc: p} }, true},
+		{"no source", func(*process.Process) *Scope { return &Scope{} }, false},
+		{"nil source context", func(*process.Process) *Scope { return &Scope{Proc: &process.Process{}} }, false},
+		{"nil scope", func(*process.Process) *Scope { return nil }, false},
+	} {
+		for _, withView := range []bool{false, true} {
+			name := "nil view"
+			if withView {
+				name = "compile view"
+			}
+			t.Run(path.name+"/"+name, func(t *testing.T) {
+				sourceCtx, cancelSource := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "source"))
+				t.Cleanup(cancelSource)
+				fallbackCtx, cancelFallback := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "fallback"))
+				t.Cleanup(cancelFallback)
+				sourceParentView := new(m0CountedView)
+				fallbackParentView := new(m0CountedView)
+				sourceCtx = m0read.WithStatementReadView(sourceCtx, sourceParentView)
+				fallbackCtx = m0read.WithStatementReadView(fallbackCtx, fallbackParentView)
+				source := &process.Process{Ctx: sourceCtx}
+				compile := &Compile{proc: &process.Process{Ctx: fallbackCtx}}
+				view := new(m0CountedView)
+				if withView {
+					compile.statementView = view
+				}
 
-	readerScope := &Scope{Proc: source}
-	require.Same(t, sourceCtx, readerScope.readerContext(compile))
-	require.Equal(t, "source", readerScope.readerContext(compile).Value(contextKey{}))
+				readerCtx := path.scope(source).readerContext(compile)
+				require.NotNil(t, readerCtx)
+				if path.wantSource {
+					require.Equal(t, "source", readerCtx.Value(contextKey{}))
+					cancelFallback()
+				} else {
+					require.Equal(t, "fallback", readerCtx.Value(contextKey{}))
+					cancelSource()
+				}
+				require.NoError(t, readerCtx.Err(), "the unselected context must not cancel the reader")
+				if withView {
+					require.Same(t, view, m0read.GetStatementReadView(readerCtx))
+				} else {
+					require.Nil(t, m0read.GetStatementReadView(readerCtx), "a nil compile view must mask the parent view")
+				}
+				require.Same(t, sourceParentView, m0read.GetStatementReadView(sourceCtx))
+				require.Same(t, fallbackParentView, m0read.GetStatementReadView(fallbackCtx))
+				if path.wantSource {
+					cancelSource()
+				} else {
+					cancelFallback()
+				}
+				require.ErrorIs(t, readerCtx.Err(), context.Canceled)
+			})
+		}
+	}
 
-	noSourceScope := &Scope{}
-	require.Same(t, fallbackCtx, noSourceScope.readerContext(compile))
-	require.Equal(t, "fallback", noSourceScope.readerContext(compile).Value(contextKey{}))
-	require.Nil(t, noSourceScope.readerContext(nil))
+	parentView := new(m0CountedView)
+	parentCtx := m0read.WithStatementReadView(context.WithValue(context.Background(), contextKey{}, "source"), parentView)
+	readerCtx := (&Scope{Proc: &process.Process{Ctx: parentCtx}}).readerContext(nil)
+	require.Equal(t, "source", readerCtx.Value(contextKey{}))
+	require.Same(t, parentView, m0read.GetStatementReadView(readerCtx))
+	require.Nil(t, (&Scope{}).readerContext(nil))
 }
 
 func (r *issue27261BlockingRelation) BuildReaders(

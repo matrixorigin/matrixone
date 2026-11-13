@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -101,29 +102,39 @@ func (e *TestEngine) BindSchema(schema *catalog.Schema) { e.schema = schema }
 func (e *TestEngine) BindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
 func (e *TestEngine) Restart(ctx context.Context, opts ...*options.Options) {
-	_ = e.DB.Close()
-	var err error
-	if len(opts) > 0 {
-		e.Opts = opts[0]
-	}
-	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
-	// only ut executes this checker
-	e.DB.DiskCleaner.GetCleaner().AddChecker(
-		func(item any) bool {
-			min := e.DB.TxnMgr.MinTSForTest()
-			ckp := item.(*checkpoint.CheckpointEntry)
-			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			end := ckp.GetEnd()
-			return !end.GE(&min)
-		}, cmd_util.CheckerKeyMinTS)
-	assert.NoError(e.T, err)
+	e.T.Helper()
+	require.NoError(e.T, e.restart(ctx, false, opts...))
 }
 
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
-	_ = e.DB.Close()
-	var err error
-	e.Opts.GCCfg.GCTTL = 100 * time.Second
-	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
+	e.T.Helper()
+	require.NoError(e.T, e.restart(ctx, true))
+}
+
+func (e *TestEngine) restart(ctx context.Context, disableGC bool, opts ...*options.Options) error {
+	if e.DB == nil {
+		return errors.New("test engine is not open")
+	}
+	previous := e.DB
+	err := previous.Close()
+	// Closing the old generation stops its checker, which refers to e.DB.
+	// Do not publish a partially opened new generation to that checker or to cleanup.
+	e.DB = nil
+	if err != nil {
+		return err
+	}
+	nextOpts := previous.Opts
+	if len(opts) > 0 {
+		nextOpts = opts[0]
+	}
+	if disableGC {
+		nextOpts.GCCfg.GCTTL = 100 * time.Second
+	}
+	next, err := db.Open(ctx, previous.Dir, nextOpts)
+	if err != nil {
+		return err
+	}
+	e.DB = next
 	// only ut executes this checker
 	e.DB.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
@@ -133,11 +144,14 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			end := ckp.GetEnd()
 			return !end.GE(&min)
 		}, cmd_util.CheckerKeyMinTS)
-	assert.NoError(e.T, err)
+	return nil
 }
 
 func (e *TestEngine) Close() error {
 	ioutil.Stop("")
+	if e.DB == nil {
+		return nil
+	}
 	err := e.DB.Close()
 	return err
 }
