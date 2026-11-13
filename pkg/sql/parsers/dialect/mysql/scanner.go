@@ -238,7 +238,11 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 
 		if ch == '_' {
-			if s.isCharsetIntroducer() {
+			// A qualified-name component never consumes the introducer: after
+			// `t.`, `_utf8mb4` must stay a plain identifier even when an
+			// introducer-shaped literal follows, preserving the token stream
+			// qualified names had before introducer consumption (issue #22157).
+			if !s.identifierAfterDot && s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
 				if s.cur() == '\'' {
