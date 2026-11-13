@@ -463,8 +463,9 @@ func (h *AObjectHandle) nextPrefetchTarget(
 // shouldReadBlock decides whether one block may contain rows in [start, end].
 //
 // For checkpoint-range recovery of TN-created non-appendable objects, this
-// method uses commit-ts zonemap to skip irrelevant blocks. If strict mode is
-// enabled and commit-ts zonemap is unavailable, it returns ErrFileNotFound so
+// method uses commit-ts zonemap to skip irrelevant blocks. PK column zonemaps
+// can also prune persisted data and tombstone blocks. If strict commit-ts mode
+// is enabled and its zonemap is unavailable, it returns ErrFileNotFound so the
 // caller can fall back to exact visible-state reconstruction.
 func (h *AObjectHandle) shouldReadBlock(
 	ctx context.Context,
@@ -475,12 +476,9 @@ func (h *AObjectHandle) shouldReadBlock(
 		return false, nil
 	}
 	changes := h.p.changesHandle
-	if !changes.enableCommitTSBlockPrune {
-		return true, nil
-	}
-	// Row-commit-ts pruning is only meaningful for TN-created non-appendable
-	// objects. Appendable objects are kept on the existing path.
-	if obj.GetAppendable() || obj.GetCNCreated() {
+	// Appendable objects do not use commit-TS block pruning, but persisted
+	// appendable objects in a checkpoint can still be pruned by their PK column.
+	if !h.pruneByCommitTS(obj) && (changes.pkFilter == nil || len(changes.pkFilter.Segments) == 0) {
 		return true, nil
 	}
 	key := obj.ObjectShortName().ShortString()
@@ -495,7 +493,7 @@ func (h *AObjectHandle) shouldReadBlock(
 		}
 	}
 	if !plan.evaluable {
-		if changes.strictCommitTSBlockPrune {
+		if h.pruneByCommitTS(obj) && changes.strictCommitTSBlockPrune {
 			logutil.Warn(
 				"ChangesHandle-CommitTSBlockPlan strict fallback",
 				zap.String("object", obj.ObjectShortName().ShortString()),
@@ -519,6 +517,10 @@ func (h *AObjectHandle) shouldReadBlock(
 		return false, nil
 	}
 	return plan.shouldReadByBlks[blk], nil
+}
+
+func (h *AObjectHandle) pruneByCommitTS(obj *objectio.ObjectEntry) bool {
+	return h.p.changesHandle.enableCommitTSBlockPrune && !obj.GetAppendable() && !obj.GetCNCreated()
 }
 
 func (h *AObjectHandle) buildBlockPlan(
@@ -556,9 +558,15 @@ func (h *AObjectHandle) buildBlockPlan(
 	overlapBlockCnt := 0
 	pkf := h.p.changesHandle.pkFilter
 	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
+	if h.isTombstone {
+		pkSeqnum = objectio.TombstoneAttr_PK_SeqNum
+	}
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
-		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
+		overlap, evaluable, reason, detail := true, true, "", "commit-ts pruning not required"
+		if h.pruneByCommitTS(obj) {
+			overlap, evaluable, reason, detail = blockCommitTSOverlapsRange(blk, h.start, h.end)
+		}
 		if !evaluable {
 			plan.nonEvaluableReasons[reason]++
 			if len(plan.nonEvaluableSamples) < 5 {
@@ -599,8 +607,8 @@ func (h *AObjectHandle) buildBlockPlan(
 			)
 		}
 	}
-	// "evaluable" here means at least one block exposes usable commit-ts zonemap.
-	// If none does, strict mode can still choose the exact-scan fallback path.
+	// When commit-ts pruning is required, at least one block must expose a
+	// usable commit-ts zonemap. Otherwise PK-only plans are evaluable without it.
 	plan.evaluable = evaluableBlockCnt > 0
 	plan.evaluableBlocks = evaluableBlockCnt
 	plan.overlapBlocks = overlapBlockCnt
@@ -898,7 +906,7 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(
 		ctx, rowIter, rowIterKind, pkFilterApplied, start, end, tombstone, mp,
 	)
-	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
+	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end, tombstone)
 	if p.changesHandle.enableDeleteChainResolve {
 		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
 			ctx, start, end, aobj, tnByCreateTS, tnCreateTSKeys, tombstone, "appendable",
@@ -1137,6 +1145,7 @@ func (p *baseHandle) getBatchesFromRowIterator(
 func (p *baseHandle) getObjectEntries(
 	objIter btree.IterG[objectio.ObjectEntry],
 	start, end types.TS,
+	tombstone bool,
 ) (
 	aobj, cnObj []*objectio.ObjectEntry,
 	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
@@ -1170,12 +1179,9 @@ func (p *baseHandle) getObjectEntries(
 			}
 			// PK zonemap pruning: skip appendable objects whose sort-key range
 			// does not overlap with the requested PK values.
-			if pkf != nil && len(pkf.Segments) > 0 {
-				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
-					prunedAppendable++
-					continue
-				}
+			if !objectMayMatchPK(entry, pkf, tombstone) {
+				prunedAppendable++
+				continue
 			}
 			aobj = append(aobj, &entryCopy)
 		} else {
@@ -1184,12 +1190,9 @@ func (p *baseHandle) getObjectEntries(
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
-				if pkf != nil && len(pkf.Segments) > 0 {
-					zm := entry.SortKeyZoneMap()
-					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
-						prunedCNCreated++
-						continue
-					}
+				if !objectMayMatchPK(entry, pkf, tombstone) {
+					prunedCNCreated++
+					continue
 				}
 				cnObj = append(cnObj, &entryCopy)
 				continue
@@ -1199,12 +1202,9 @@ func (p *baseHandle) getObjectEntries(
 				continue
 			}
 			// PK zonemap pruning for TN non-appendable objects.
-			if pkf != nil && len(pkf.Segments) > 0 {
-				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
-					prunedTNStatic++
-					continue
-				}
+			if !objectMayMatchPK(entry, pkf, tombstone) {
+				prunedTNStatic++
+				continue
 			}
 			// Keep every TN-produced non-appendable object in the create-time index so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
@@ -1244,6 +1244,18 @@ func (p *baseHandle) getObjectEntries(
 		)
 	}
 	return
+}
+
+// A tombstone object's sort key is the deleted rowid, not the user PK. Likewise,
+// a data object's cluster-by key cannot be compared to a user-PK predicate.
+// Unknown object zonemaps stay eligible; block pruning can still inspect the
+// actual PK column before loading row data.
+func objectMayMatchPK(obj objectio.ObjectEntry, filter *engine.PKFilter, tombstone bool) bool {
+	if tombstone || filter == nil || !filter.ObjectZMIsPK || len(filter.Segments) == 0 {
+		return true
+	}
+	zm := obj.SortKeyZoneMap()
+	return !zm.IsInited() || index.AnySegmentOverlaps(zm, filter.Segments)
 }
 
 func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
@@ -1675,6 +1687,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		primarySeqnum:            primarySeqnum,
 		mp:                       mp,
 		scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
+		pkFilter:                 engine.PKFilterFromContext(ctx),
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
@@ -1747,6 +1760,7 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
+		pkFilter:       engine.PKFilterFromContext(ctx),
 		debugLabel:     engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:    engine.RetainRowIDFromContext(ctx),
 	}
@@ -1844,6 +1858,7 @@ func getObjectsFromCheckpointEntries(
 	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
+	pkFilter := engine.PKFilterFromContext(ctx)
 	readers := make([]checkpointEntryReader, 0)
 	for _, entry := range checkpoint {
 		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
@@ -1863,6 +1878,9 @@ func getObjectsFromCheckpointEntries(
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
 			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+				if !objectMayMatchPK(obj, pkFilter, isTombstone) {
+					return nil
+				}
 				switch classifyCheckpointObject(obj, isTombstone, start, end, selection) {
 				case checkpointObjectKindRowCommitTS:
 					if isTombstone {
