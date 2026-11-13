@@ -36,7 +36,8 @@ select * from issue26068_view_dst.v;
 data branch delete database issue26068_view_dst;
 select count(*) as view_branch_exists from mo_catalog.mo_database where datname = 'issue26068_view_dst';
 
--- Sequence-only source database: sequences are excluded from branch-table validation.
+-- 4.2's existing clone object filter excludes sequences. The resulting empty
+-- branch must still be marked/deletable, and its source sequence must survive.
 create database issue26068_sequence_src;
 create sequence issue26068_sequence_src.s increment 3 start with 7;
 select count(*) as source_sequences from mo_catalog.mo_tables
@@ -46,6 +47,8 @@ select count(*) as cloned_sequences from mo_catalog.mo_tables
   where reldatabase = 'issue26068_sequence_dst' and relkind = 'S';
 data branch delete database issue26068_sequence_dst;
 select count(*) as sequence_branch_exists from mo_catalog.mo_database where datname = 'issue26068_sequence_dst';
+select count(*) as preserved_source_sequences from mo_catalog.mo_tables
+  where reldatabase = 'issue26068_sequence_src' and relkind = 'S';
 
 -- A database branch remains identifiable after every cloned table is dropped.
 create database issue26068_dropall_src;
