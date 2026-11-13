@@ -795,7 +795,7 @@ func constructCreateTableSQLWithFormat(
 				return "", nil, err
 			}
 		}
-		createStr += formatExternalTableOptionsForShowCreate(param)
+		createStr += formatExternalTableOptionsForShowCreate(param, noBackslashEscapes)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -1241,11 +1241,11 @@ func formatDDLComment(value string, noBackslashEscapes bool) string {
 	return formatDDLString(strings.ReplaceAll(value, "''", "'"), noBackslashEscapes)
 }
 
-func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	if param.ScanType == tree.S3 {
-		return formatS3ExternalOptionsForShowCreate(param)
+		return formatS3ExternalOptionsForShowCreate(param, noBackslashEscapes)
 	}
-	return formatInfileExternalOptionsForShowCreate(param)
+	return formatInfileExternalOptionsForShowCreate(param, noBackslashEscapes)
 }
 
 func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
@@ -1412,7 +1412,7 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config) string {
 	return builder.String()
 }
 
-func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	if pattern, writable := GetWriteFilePattern(param); writable {
 		// Writable external tables must be recreatable from their own DDL:
 		// snapshot/PITR restore replays SHOW CREATE output, so masking the
@@ -1420,15 +1420,15 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		// option validator rejects — e.g. 'JSONDATA'='') would silently
 		// produce a table that can write but not read its files.
 		parts := make([]string, 0, 6)
-		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
-		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
-		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
-		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
-		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern, noBackslashEscapes)
 		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
 		// encloses colliding first fields), so the marker affects readback and
 		// must round-trip; omitted when unset.
-		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), noBackslashEscapes)
 		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
 	filepath := ""
@@ -1436,61 +1436,61 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		filepath = param.Filepath
 	}
 	parts := []string{
-		"'FILEPATH'=" + formatStrLit(filepath),
-		"'COMPRESSION'=" + formatStrLit(param.CompressType),
-		"'FORMAT'=" + formatStrLit(param.Format),
-		"'JSONDATA'=" + formatStrLit(param.JsonData),
+		"'FILEPATH'=" + formatDDLString(filepath, noBackslashEscapes),
+		"'COMPRESSION'=" + formatDDLString(param.CompressType, noBackslashEscapes),
+		"'FORMAT'=" + formatDDLString(param.Format, noBackslashEscapes),
+		"'JSONDATA'=" + formatDDLString(param.JsonData, noBackslashEscapes),
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
-	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), noBackslashEscapes)
+	appendHivePartitionOptionsForShowCreate(&parts, param, true, noBackslashEscapes)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
 
 // appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
 // non-empty (the read-side option validators reject empty values for keys
 // like jsondata, so omitted is the recreatable form of "unset").
-func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+func appendInfileOptionForShowCreate(parts *[]string, key, value string, noBackslashEscapes bool) {
 	if value == "" {
 		return
 	}
-	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
+	*parts = append(*parts, "'"+key+"'="+formatDDLString(value, noBackslashEscapes))
 }
 
-func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	parts := make([]string, 0, len(param.Option)/2+2)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
-		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false, noBackslashEscapes)
 		if hasExternalOption(param, "access_key_id") {
-			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true, noBackslashEscapes)
 		}
 		if hasExternalOption(param, "secret_access_key") {
-			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true, noBackslashEscapes)
 		}
-		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false, noBackslashEscapes)
 	}
-	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false, noBackslashEscapes)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
-		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
-		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false, noBackslashEscapes)
 	}
-	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
-	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
-	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false, noBackslashEscapes)
 	if pattern, ok := GetWriteFilePattern(param); ok {
-		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false, noBackslashEscapes)
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
-	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false, noBackslashEscapes)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false, noBackslashEscapes)
 	return " URL s3option{" + strings.Join(parts, ",") + "}"
 }
 
-func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey, noBackslashEscapes bool) {
 	if !param.HivePartitioning {
 		return
 	}
@@ -1500,18 +1500,18 @@ func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.Extern
 		hivePartitioningKey = "HIVE_PARTITIONING"
 		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
 	}
-	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
-	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false, noBackslashEscapes)
 }
 
-func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask, noBackslashEscapes bool) {
 	if value == "" && !mask {
 		return
 	}
 	if mask {
 		value = "******"
 	}
-	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+	*parts = append(*parts, formatDDLString(key, noBackslashEscapes)+"="+formatDDLString(value, noBackslashEscapes))
 }
 
 func hasExternalOption(param *tree.ExternParam, key string) bool {

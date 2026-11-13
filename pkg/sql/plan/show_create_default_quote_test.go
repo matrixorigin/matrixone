@@ -212,6 +212,46 @@ func TestShowCreateExternalFieldsReplayWithoutBackslashEscapes(t *testing.T) {
 	require.Contains(t, ddl, "FIELDS TERMINATED BY ''")
 }
 
+func TestShowCreateExternalCommentReplaysInSessionMode(t *testing.T) {
+	for _, marker := range []string{`#\t`, "plain"} {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			t.Run(marker+"/"+mode, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+					ScanType: tree.INFILE,
+					Filepath: "/data/example.csv",
+					Format:   tree.CSV,
+					Option:   []string{"filepath", "/data/example.csv", "format", tree.CSV, "comment", marker},
+				}}
+				encoded, err := json.Marshal(param)
+				require.NoError(t, err)
+				source := &plan.TableDef{
+					Name: "show_external_comment", TableType: catalog.SystemExternalRel, Createsql: string(encoded),
+					Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}}},
+				}
+				mock.ctxt.tables[source.Name] = source
+				mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+				mock.ctxt.SetSqlModeOverride(mode)
+
+				show, err := mysql.ParseOneWithSQLMode(t.Context(), "show create table show_external_comment", 1, mode)
+				require.NoError(t, err)
+				shown, err := BuildPlan(&mock.ctxt, show, false)
+				show.Free()
+				require.NoError(t, err)
+				query := shown.GetQuery()
+				root := query.GetNodes()[query.GetSteps()[0]]
+				ddl := root.ProjectList[1].GetLit().GetSval()
+				replay, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
+				require.NoError(t, err, ddl)
+				create, ok := replay.(*tree.CreateTable)
+				require.True(t, ok)
+				require.Equal(t, marker, GetCSVComment(create.Param), ddl)
+				replay.Free()
+			})
+		}
+	}
+}
+
 func TestDefaultWithoutBackslashEscapesRejectsInvalidScalar(t *testing.T) {
 	for _, origin := range []string{"'unterminated", "'a\\b', 2", "'a\\b' as alias", "'a\\b' from t", "'a\\b' where true", "'a\\b' limit 1"} {
 		t.Run(origin, func(t *testing.T) {
