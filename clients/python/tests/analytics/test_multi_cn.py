@@ -38,7 +38,6 @@ def rows(c, sql):
         return out.to_arrow().to_pylist()
 
 
-@pytest.mark.usefixtures('native_arrow_load')
 def test_cross_cn_arrow_visibility(trial, cn2):
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
@@ -49,9 +48,7 @@ def test_cross_cn_arrow_visibility(trial, cn2):
 
 
 @pytest.mark.parametrize('source', ['arrow', 'file'])
-def test_cross_cn_pk_conflict_is_atomic(trial, cn2, source, native_arrow_load_check):
-    if source == 'arrow':
-        native_arrow_load_check()
+def test_cross_cn_pk_conflict_is_atomic(trial, cn2, source):
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
 
@@ -88,9 +85,7 @@ def test_cross_cn_external_and_import(trial, cn2):
 
 
 @pytest.mark.parametrize('source', ['arrow', 'file'])
-def test_cross_cn_read_after_failed_append(trial, cn2, source, native_arrow_load_check):
-    if source == 'arrow':
-        native_arrow_load_check()
+def test_cross_cn_read_after_failed_append(trial, cn2, source):
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
 

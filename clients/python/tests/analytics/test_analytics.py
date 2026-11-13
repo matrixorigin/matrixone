@@ -105,16 +105,11 @@ def test_native_arrow_load_outcome_preserves_table_and_pool(analytics, tmp_path,
             with pytest.raises(QueryError) as native_error:
                 analytics.client.execute(native)
             assert native_error.value.errno == 20300
-            with pytest.raises(QueryError) as upload_error:
-                analytics.upload_arrow(table, data, tmp_path)
-            assert upload_error.value.phase == 'capability'
-            assert upload_error.value.committed is False and upload_error.value.errno == 20300
-            assert table not in {row[0] for row in analytics.client.execute('SHOW TABLES').rows}
-            record_property('matrixone.feature.native_arrow_upload', 'native-rejected:20300')
+            record_property('matrixone.feature.native_arrow_upload', 'native-rejected:20300;upload=parquet')
         else:
-            assert analytics.upload_arrow(table, data, tmp_path) == 2
-            assert _query(analytics, 'SELECT id FROM ' + table + ' ORDER BY id').equals(data)
             record_property('matrixone.feature.native_arrow_upload', 'supported')
+        assert analytics.upload_arrow(table, data, tmp_path) == 2
+        assert _query(analytics, 'SELECT id FROM ' + table + ' ORDER BY id').equals(data)
         assert not list(tmp_path.glob('mo_py_arrow_*'))
         assert analytics.engine.pool.checkedout() == 0
     finally:
@@ -239,7 +234,6 @@ def test_query_errors_cleanup_and_pool_reuse(analytics, tmp_path):
     assert _query(analytics, "SELECT 7 AS n").to_pylist() == [{"n": 7}]
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_arrow_upload_scalar_roundtrip(analytics, tmp_path):
     schema = pa.schema(
         [
@@ -277,7 +271,6 @@ def test_arrow_upload_scalar_roundtrip(analytics, tmp_path):
         analytics.client.execute("DROP TABLE IF EXISTS analytics_roundtrip")
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_dataframe_pandas_polars_and_append(analytics, tmp_path):
     import pandas as pd
     import polars as pl
@@ -297,7 +290,6 @@ def test_dataframe_pandas_polars_and_append(analytics, tmp_path):
         analytics.client.execute("DROP TABLE IF EXISTS analytics_df")
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_arrow_reader_batches_and_empty_table(analytics, tmp_path):
     schema = pa.schema([("id", pa.int64())])
     reader = pa.RecordBatchReader.from_batches(schema, [pa.record_batch({"id": [1, 2]}), pa.record_batch({"id": [3]})])
@@ -313,7 +305,6 @@ def test_arrow_reader_batches_and_empty_table(analytics, tmp_path):
         analytics.client.execute("DROP TABLE IF EXISTS analytics_empty")
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_upload_failures_atomic_and_cleanup(analytics, tmp_path):
     try:
         analytics.client.execute("CREATE TABLE analytics_atomic (id BIGINT PRIMARY KEY)")
@@ -361,9 +352,7 @@ def test_early_close_and_bound_batch(analytics, tmp_path):
 
 
 @pytest.mark.parametrize('write_format', ['arrow', 'file'])
-def test_file_import_and_timezone_pool_isolation(analytics, tmp_path, write_format, native_arrow_load_check):
-    if write_format == 'arrow':
-        native_arrow_load_check()
+def test_file_import_and_timezone_pool_isolation(analytics, tmp_path, write_format):
     pq.write_table(pa.table({"id": [1, 2]}), tmp_path / "a.parquet")
     try:
         analytics.client.execute("CREATE TABLE analytics_import(id BIGINT)")
@@ -410,7 +399,6 @@ def test_reject_lossy_union_promotion(analytics, tmp_path):
             analytics.read_parquet(str(tmp_path / "*.parquet"), union_by_name=True)
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_dictionary_and_timezone_normalization(analytics, tmp_path):
     table = pa.table(
         {
@@ -448,7 +436,6 @@ def test_protocol_time_duration_and_boolean(analytics):
         _query(analytics, "SELECT CAST('-25:00:00' AS TIME) AS span", schema=pa.schema([("span", pa.time64("us"))]))
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_upload_rollback_after_target_creation(analytics, tmp_path):
     with pytest.raises(Exception):
         analytics.upload_arrow(
@@ -458,7 +445,6 @@ def test_upload_rollback_after_target_creation(analytics, tmp_path):
     assert not list(tmp_path.glob("mo_py_arrow_*"))
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_append_type_overflow_rollback(analytics, tmp_path):
     try:
         analytics.client.execute("CREATE TABLE analytics_narrow(id TINYINT)")
@@ -608,7 +594,6 @@ def test_parquet_scalar_types_and_large_text(analytics, tmp_path):
         assert result.equals(source)
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_input_reader_failure_and_not_null_cleanup(analytics, tmp_path):
     def fail():
         yield pa.record_batch({"id": [1]})

@@ -211,7 +211,8 @@ def test_boolean_metadata_reflection(mysql_engine, connection_params, record_pro
                     "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME='flag'",
                     (database, current.name),
                 ).one()
-                assert metadata[0] == 'tinyint' and metadata[1].upper() == 'BOOLEAN'
+                expected_data_type = 'BOOL' if os.environ.get('MO_SDK_SOURCE_LINE') == '4.2' else 'tinyint'
+                assert metadata[0] == expected_data_type and metadata[1].upper() == 'BOOLEAN'
                 native_type = conn.exec_driver_sql(
                     'SELECT mo_show_visible_bin(atttyp,2) FROM mo_catalog.mo_columns '
                     "WHERE att_database=%s AND att_relname=%s AND attname='flag'",

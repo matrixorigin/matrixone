@@ -12,19 +12,32 @@ import pytest
 import sqlalchemy as sa
 
 from matrixone.sqlalchemy_ext.vector_type import VectorType
+from matrixone.exceptions import QueryError
 
 
-def _skip_unsupported_block_vector(client, kind):
-    # These verified releases predate VECF8/VECF4. Do not infer that
-    # other or unknown versions lack support from a failed statement: that
-    # could turn an actual server or reflection regression into a skip.
+def _block_vector_unavailable(client, kind):
+    # Only the declared 4.2 contract permits the explicit rejection oracle.
+    # Main and unknown targets always retain the complete positive checks.
     target = os.environ.get('MO_SDK_TARGET')
+    if kind in ('vecf8', 'vecf4') and target == 'current-source' and os.environ.get('MO_SDK_SOURCE_LINE') == '4.2':
+        return True
     if kind in ('vecf8', 'vecf4') and target in ('4.2.5', '4.2.8'):
         rows = client.execute('SELECT version()').rows
         banner = rows[0][0] if rows else None
         match = re.search(r'(?:^|-)MatrixOne-v([0-9]+\.[0-9]+\.[0-9]+)(?:$|[-+])', banner or '')
         if match and match.group(1) == target:
-            pytest.skip(f'MatrixOne {target} does not support VECF8/VECF4')
+            return True
+    return False
+
+
+def _assert_native_type_unavailable(client, sql, table, kind, record_property):
+    with pytest.raises(QueryError) as caught:
+        client.execute(sql)
+    assert caught.value.errno == 1064 and 'syntax error' in str(caught.value).lower()
+    assert client.execute(
+        'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?', (table,)
+    ).rows == [(0,)]
+    record_property('matrixone.feature.' + kind, 'native-type-unavailable:1064;positive-reflection-not-applicable')
 
 
 @pytest.mark.parametrize(
@@ -52,29 +65,40 @@ def _skip_unsupported_block_vector(client, kind):
 def test_block_vector_version_gate(monkeypatch, target, version, kind, skipped):
     from types import SimpleNamespace
 
+    monkeypatch.delenv('MO_SDK_SOURCE_LINE', raising=False)
     if target is None:
         monkeypatch.delenv('MO_SDK_TARGET', raising=False)
     else:
         monkeypatch.setenv('MO_SDK_TARGET', target)
     client = SimpleNamespace(execute=lambda sql: SimpleNamespace(rows=[(version,)]))
-    if skipped:
-        with pytest.raises(pytest.skip.Exception):
-            _skip_unsupported_block_vector(client, kind)
-    else:
-        _skip_unsupported_block_vector(client, kind)
+    assert _block_vector_unavailable(client, kind) is skipped
+
+
+@pytest.mark.parametrize('line', ['4.2', 'main', 'unknown'])
+@pytest.mark.parametrize('kind', ['vecf8', 'vecf4', 'vecf16'])
+def test_block_vector_source_line_contract(monkeypatch, line, kind):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv('MO_SDK_TARGET', 'current-source')
+    monkeypatch.setenv('MO_SDK_SOURCE_LINE', line)
+    client = SimpleNamespace(execute=lambda sql: SimpleNamespace(rows=[('8.0.30-MatrixOne-vsource',)]))
+    assert _block_vector_unavailable(client, kind) is (line == '4.2' and kind in ('vecf8', 'vecf4'))
 
 
 @pytest.mark.online
 @pytest.mark.parametrize('kind', ['vecf8', 'vecf4', 'vecf16', 'vecf32'])
-def test_reflect_vector_table_and_views(test_client, kind):
-    _skip_unsupported_block_vector(test_client, kind)
+def test_reflect_vector_table_and_views(test_client, kind, record_property):
     suffix = uuid4().hex[:12]
     table_name = f'test_vector_reflect_{suffix}'
     view_name = f'test_vector_view_{suffix}'
     nested_name = f'test_vector_nested_{suffix}'
     engine = test_client.get_sqlalchemy_engine()
     try:
-        test_client.execute(f'CREATE TABLE {table_name} (id INT PRIMARY KEY, v {kind}(4))')
+        ddl = f'CREATE TABLE {table_name} (id INT PRIMARY KEY, v {kind}(4))'
+        if _block_vector_unavailable(test_client, kind):
+            _assert_native_type_unavailable(test_client, ddl, table_name, kind, record_property)
+            return
+        test_client.execute(ddl)
         test_client.execute(f'CREATE VIEW {view_name} AS SELECT * FROM {table_name}')
         test_client.execute(f'CREATE VIEW {nested_name} AS SELECT * FROM {view_name}')
         table = sa.Table(table_name, sa.MetaData(), autoload_with=engine)
@@ -119,23 +143,30 @@ def test_reflect_vector_table_and_views(test_client, kind):
 
 
 @pytest.mark.online
-@pytest.mark.parametrize('kind', ['vecf8', 'vecf4'])
-def test_adopt_engine_after_mysql_parser_was_used(test_client, kind):
+@pytest.mark.parametrize('kind', ['vecf8', 'vecf4', 'vecf16', 'vecf32'])
+def test_adopt_engine_after_mysql_parser_was_used(test_client, kind, record_property):
     from matrixone import Client
 
-    _skip_unsupported_block_vector(test_client, kind)
     suffix = uuid4().hex[:12]
     plain = f'test_vector_plain_{suffix}'
     vectors = f'test_vector_warm_{suffix}'
     engine = sa.create_engine(test_client.get_sqlalchemy_engine().url)
     try:
         test_client.execute(f'CREATE TABLE {plain} (id INT PRIMARY KEY)')
-        test_client.execute(f'CREATE TABLE {vectors} (id INT PRIMARY KEY, v {kind}(4))')
+        unavailable = _block_vector_unavailable(test_client, kind)
+        ddl = f'CREATE TABLE {vectors} (id INT PRIMARY KEY, v {kind}(4))'
+        if unavailable:
+            _assert_native_type_unavailable(test_client, ddl, vectors, kind, record_property)
+        else:
+            test_client.execute(ddl)
         # This creates and uses MySQL's memoized parser before SDK adoption.
         assert [col['name'] for col in sa.inspect(engine).get_columns(plain)] == ['id']
         parser = engine.dialect._tabledef_parser
         adopted = Client.from_engine(engine)
         assert adopted.get_sqlalchemy_engine().dialect._tabledef_parser is parser
+        if unavailable:
+            assert [col['name'] for col in sa.inspect(adopted.get_sqlalchemy_engine()).get_columns(plain)] == ['id']
+            return
         # A new inspector ensures any cached schema data cannot hide the result.
         columns = sa.inspect(adopted.get_sqlalchemy_engine()).get_columns(vectors)
         dtype = columns[1]['type']

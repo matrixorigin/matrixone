@@ -75,12 +75,7 @@ async def test_async_upload_capability_and_complete_values(trial, async_client):
     table = trial.table()
     data = pa.table({'id': [1, 2, 3], 'txt': ['a', '', None]})
     capability = (await async_client.get_capabilities())['arrow_load']
-    if capability.state in ('unsupported', 'disabled'):
-        with pytest.raises(QueryError) as caught:
-            await async_client.analytics.upload_arrow(table, data, trial.directory)
-        assert caught.value.phase == 'capability' and caught.value.committed is False
-        assert not trial.exists(table)
-        return  # Explicit negative server qualification, not a skipped roundtrip.
+    assert capability.state in ('supported', 'unsupported', 'unknown')
     assert await async_client.analytics.upload_arrow(table, data, trial.directory, batch_size=1) == 3
     async with async_client.analytics.query('SELECT * FROM ' + table + ' ORDER BY id') as stream:
         actual = await stream.to_arrow()
@@ -106,15 +101,25 @@ async def test_pool_wait_cancellation_preserves_borrowed_owner(async_client):
 
 
 @pytest.mark.asyncio
-async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, async_client):
-    capability = (await async_client.get_capabilities())['arrow_load']
-    if capability.state in ('unsupported', 'disabled'):
-        # Query streaming remains available on servers without Arrow LOAD.
-        async with async_client.analytics.query('SELECT 7 AS n') as stream:
-            assert (await stream.to_arrow())['n'].to_pylist() == [7]
-        return
-    stream = async_client.analytics.query('SELECT 7 AS n', batch_size=1)
-    await stream.__aenter__()
+async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, async_client, monkeypatch):
+    manager = async_client.analytics
+    original_probe = manager._upload_format
+    probes_ready, start_staging = asyncio.Event(), asyncio.Event()
+    qualified = 0
+
+    async def probe_then_wait(engine, generation):
+        nonlocal qualified
+        file_format = await original_probe(engine, generation)
+        qualified += 1
+        if qualified == 2:
+            probes_ready.set()
+        await start_staging.wait()
+        return file_format
+
+    # Complete the real, short format probes before holding the only checkout.
+    # This barrier retains the original two-producer CPU/DB wait-cycle oracle.
+    monkeypatch.setattr(manager, '_upload_format', probe_then_wait)
+    stream = manager.query('SELECT 7 AS n', batch_size=1)
     uploads = [
         asyncio.create_task(
             async_client.analytics.upload_arrow(trial.table(), pa.table({'id': [index, index + 10]}), trial.directory)
@@ -130,12 +135,17 @@ async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, 
             await asyncio.sleep(0.001)  # wait for observable producer completion
 
     try:
+        await asyncio.wait_for(probes_ready.wait(), 5)
+        assert async_client._engine.pool.checkedout() == 0
+        await stream.__aenter__()
+        start_staging.set()
         await asyncio.wait_for(staged(), 5)
         assert async_client._engine.pool.checkedout() == 1
         assert len(list(trial.directory.glob('mo_py_arrow_*'))) == 2
         assert (await stream.to_arrow())['n'].to_pylist() == [7]
         assert await asyncio.gather(*uploads) == [2, 2]
     finally:
+        start_staging.set()
         await stream.close()
         for task in uploads:
             if not task.done():
@@ -144,16 +154,44 @@ async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, 
 
 
 @pytest.mark.asyncio
+async def test_upload_probe_pool_wait_cancellation_preserves_stream_owner(trial, async_client, monkeypatch):
+    manager = async_client.analytics
+    original_probe = manager._upload_format
+    probe_entered = asyncio.Event()
+
+    async def observed_probe(engine, generation):
+        probe_entered.set()
+        return await original_probe(engine, generation)
+
+    monkeypatch.setattr(manager, '_upload_format', observed_probe)
+    stream = manager.query('SELECT 7 AS n', batch_size=1)
+    await stream.__aenter__()
+    table = trial.table()
+    task = asyncio.create_task(manager.upload_arrow(table, pa.table({'id': [1]}), trial.directory))
+    try:
+        await asyncio.wait_for(probe_entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert async_client._engine.pool.checkedout() == 1
+        assert manager.pending_operations() == ()
+        assert not list(trial.directory.glob('mo_py_arrow_*'))
+        assert not trial.exists(table)
+        assert (await stream.to_arrow())['n'].to_pylist() == [7]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await stream.close()
+    assert async_client._engine.pool.checkedout() == 0
+    assert await manager.upload_arrow(table, pa.table({'id': [1]}), trial.directory) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['read', 'load', 'commit'])
 async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(trial, fault):
     from sqlalchemy import event
     from mysql_fault_proxy import FaultProxy
 
-    capability = trial.client.get_capabilities()['arrow_load']
-    if fault != 'read' and capability.state in ('unsupported', 'disabled'):
-        with pytest.raises(QueryError):
-            await _unsupported_upload_control(trial)
-        return
     port = trial.client._engine.url.port
     table = trial.table()
     with FaultProxy(
@@ -206,23 +244,12 @@ async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(tri
             await client.disconnect()
 
 
-async def _unsupported_upload_control(trial):
-    engine = create_async_engine(trial.client._engine.url.set(drivername='mysql+aiomysql'))
-    client = AsyncClient.from_engine(engine)
-    try:
-        await client.analytics.upload_arrow(trial.table(), pa.table({'id': [1]}), trial.directory)
-    finally:
-        await client.disconnect()
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize('source', ['arrow', 'file'])
-async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source, native_arrow_load_check):
+async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source):
     import os
     from decimal import Decimal
 
-    if source == 'arrow':
-        native_arrow_load_check()
     port = os.environ.get('MO_SECOND_CN_PORT')
     if not port:
         pytest.skip('second CN required for the cross-CN qualification')

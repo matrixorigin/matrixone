@@ -142,21 +142,31 @@ def _raise_arrow_rejection(error):
         raise error
 
 
-def check_arrow_load(connection):
+def check_arrow_load(connection, allow_parquet=False):
     """Qualify only this selected write checkout; pooled observations are hints."""
     try:
         result = connection.exec_driver_sql(_probe_statement('arrow_load', PROBES['arrow_load']))
         result.close()
     except DBAPIError as error:
+        if allow_parquet and error.connection_invalidated:
+            raise
+        if allow_parquet and failed_observation(error, (), 'arrow_load').state == 'unsupported':
+            return 'parquet'
         _raise_arrow_rejection(error)
+    return 'arrow' if allow_parquet else None
 
 
-async def check_arrow_load_async(connection):
+async def check_arrow_load_async(connection, allow_parquet=False):
     try:
         result = await connection.exec_driver_sql(_probe_statement('arrow_load', PROBES['arrow_load']))
         result.close()
     except DBAPIError as error:
+        if allow_parquet and error.connection_invalidated:
+            raise
+        if allow_parquet and failed_observation(error, (), 'arrow_load').state == 'unsupported':
+            return 'parquet'
         _raise_arrow_rejection(error)
+    return 'arrow' if allow_parquet else None
 
 
 def get_capabilities(client, refresh=False):

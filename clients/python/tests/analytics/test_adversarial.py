@@ -83,7 +83,6 @@ INTEGER_TYPES = [pa.int8(), pa.uint8(), pa.int16(), pa.uint16(), pa.int32(), pa.
 
 @pytest.mark.parametrize("dtype", INTEGER_TYPES, ids=str)
 @pytest.mark.parametrize("batch_size", [1, 7, 1024])
-@pytest.mark.usefixtures("native_arrow_load")
 def test_integer_endpoints(trial, dtype, batch_size):
     bits = dtype.bit_width
     low = 0 if pa.types.is_unsigned_integer(dtype) else -(1 << (bits - 1))
@@ -99,7 +98,6 @@ def test_integer_endpoints(trial, dtype, batch_size):
 
 
 @pytest.mark.parametrize("precision,scale", [(1, 0), (8, 2), (18, 0), (18, 18), (19, 2), (38, 0), (38, 18), (38, 38)])
-@pytest.mark.usefixtures("native_arrow_load")
 def test_decimal_extremes(trial, precision, scale):
     from decimal import localcontext
 
@@ -116,7 +114,6 @@ def test_decimal_extremes(trial, precision, scale):
 
 
 @pytest.mark.parametrize("dtype", [pa.float32(), pa.float64()], ids=str)
-@pytest.mark.usefixtures("native_arrow_load")
 def test_float_special_values(trial, dtype):
     values = [0.0, -0.0, 1.5, -1.5, math.inf, -math.inf, math.nan, None]
     data = pa.table({"v": pa.array(values, type=dtype)})
@@ -133,7 +130,6 @@ def test_float_special_values(trial, dtype):
 
 
 @pytest.mark.parametrize("seed", range(16))
-@pytest.mark.usefixtures("native_arrow_load")
 def test_random_mixed_roundtrip(trial, seed):
     rng = random.Random(seed)
     n = 157
@@ -267,7 +263,6 @@ def test_file_import_strict_under_permissive_session(trial):
 
 
 @pytest.mark.parametrize("name", ["x`); DROP TABLE victim; --", "百分%号", "select", "e\u0301", "😀列"])
-@pytest.mark.usefixtures("native_arrow_load")
 def test_hostile_column_names(trial, name):
     source = pa.table({name: ["'\\%\x00😀", None]})
     table = trial.table()
@@ -276,7 +271,6 @@ def test_hostile_column_names(trial, name):
     assert sorted(str(v) for v in result[name].to_pylist()) == sorted(str(v) for v in source[name].to_pylist())
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_concurrent_same_target_exactly_one_creator(trial):
     table = trial.table()
 
@@ -293,7 +287,6 @@ def test_concurrent_same_target_exactly_one_creator(trial):
     assert trial.rows(table)["id"].to_pylist() == winners
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_concurrent_duplicate_append_no_partial_rows(trial):
     table = trial.table()
     trial.client.execute("CREATE TABLE " + table + "(id BIGINT PRIMARY KEY)")
@@ -311,7 +304,6 @@ def test_concurrent_duplicate_append_no_partial_rows(trial):
     assert sorted(trial.rows(table)["id"].to_pylist()) == [0, winners[0]]
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_rollback_if_late_batch_duplicate(trial):
     table = trial.table()
     trial.client.execute("CREATE TABLE " + table + "(id BIGINT PRIMARY KEY)")
@@ -373,7 +365,6 @@ def test_small_pool_exhaustion_recovers(trial):
         c.disconnect()
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_session_restore_failure_reports_committed_write(trial):
     table = trial.table()
 
@@ -391,7 +382,6 @@ def test_session_restore_failure_reports_committed_write(trial):
     assert getattr(caught.value, "committed", None) is True, "failure must distinguish already committed data"
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_all_null_explicit_schema(trial):
     schema = pa.schema([("id", pa.int64()), ("text", pa.string()), ("d", pa.decimal128(8, 2))])
     data = pa.Table.from_pylist([dict.fromkeys(schema.names)] * 33, schema=schema)
@@ -452,7 +442,6 @@ def test_csv_embedded_newline_and_bom(trial):
         assert result.to_pylist() == [{'id': 1, 'name': 'hello\nworld'}, {'id': 2, 'name': 'a"b'}]
 
 
-@pytest.mark.usefixtures("native_arrow_load")
 def test_wide_table_roundtrip(trial):
     data = pa.table({'c%d' % i: pa.array([i, None, i + 1], type=pa.int32()) for i in range(256)})
     name = trial.table()

@@ -158,14 +158,22 @@ observations in one bounded slot on the selected physical connection. Same-build
 CNs and different pooled sessions do not share observations. Missing server IDs
 use fresh, uncached observations. Ordinary SQL performs no capability discovery.
 Use `refresh=True` after manual session-setting changes; these are point-in-time
-observations, not a guarantee about a later proxy-selected backend. Uploads do not treat an observation
-from a different pooled connection as a veto: they probe the actual selected
-write checkout before CREATE/LOAD. A bounded owned staging file may therefore
-be created and cleaned before an unavailable-server rejection. Explicit
-unsupported/disabled overrides reject before staging; a supported assertion does
-not bypass an actual server rejection. Unknown observations remain unknown.
-MatrixOne 4.2.5 rejects native Arrow LOAD, while ordinary Arrow query/file scanning
-can still work. Explicit caller overrides are assertions, not SDK certification.
+observations, not a guarantee about a later proxy-selected backend. Uploads first
+use a short read-only checkout to select the staging format, then close it before
+converting the input. Only the exact native Arrow-format rejection selects
+Parquet; successful or inconclusive probes retain Arrow. A lost connection
+propagates its error. Native `arrow_load` capability facts remain unchanged.
+
+Both formats use the same checked scalar conversion, batch and byte limits, one
+owned staging file, and atomic CREATE/LOAD transaction. The final write checkout
+is probed again before DDL. If it now rejects staged Arrow, the operation fails
+without creating the target; an already staged Parquet file remains Parquet.
+Input is consumed once and writes are never retried. Async probing uses the
+existing bounded upload and cleanup owners, aborts acquired connections on
+failure/cancellation, and rejects stale checkouts after reconnect. Explicit
+unsupported/disabled overrides still reject before staging or SQL. Caller
+overrides are assertions, not SDK certification. MatrixOne 4.2.8 rejects native
+Arrow LOAD; its SDK uploads use this checked Parquet path.
 
 SQL text logging now defaults to `off`, as do the logger factories. Driver error
 logs retain category/code without rendering SQL, parameters or server-echoed

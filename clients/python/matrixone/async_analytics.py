@@ -6,7 +6,7 @@ import asyncio
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +18,7 @@ from .analytics import (
     AnalyticsCommitUnknownError,
     AnalyticsCommitRejectedError,
     _commit_was_rejected,
+    _check_upload_client,
     _arrow,
     _ddl_columns,
     _identifier,
@@ -525,6 +526,29 @@ class AsyncAnalyticsManager:
             raise RuntimeError('Connect the MatrixOne client first')
         return self.client._engine
 
+    async def _upload_format(self, engine, generation):
+        from .capabilities import check_arrow_load_async
+
+        connection = None
+        try:
+            _check_upload_client(self.client, engine, generation)
+            pool_wait()
+            connection = await engine.connect()
+            _check_upload_client(self.client, engine, generation)
+            file_format = await check_arrow_load_async(connection, allow_parquet=True)
+            _check_upload_client(self.client, engine, generation)
+            return file_format
+        except BaseException:
+            _abort(connection)
+            raise
+        finally:
+            if connection is not None:
+                try:
+                    await self._cleanup(connection.close(), sys.exc_info()[1])
+                except BaseException:
+                    _abort(connection)
+                    raise
+
     async def _cleanup(self, coroutine, primary=None):
         task = asyncio.ensure_future(coroutine)
 
@@ -630,16 +654,32 @@ class AsyncAnalyticsManager:
         from .capabilities import require_arrow_override, check_arrow_load_async
 
         require_arrow_override(self.client)
+        engine = self.engine
+        generation = getattr(self.client, '_compatibility_generation', None)
         operation = await self._workers.upload()
         rows = None
         committed = False
-        operation_phase = 'staging'
+        operation_phase = 'capability'
         try:
-            staged = await operation.prepare(_stage_arrow, data, staging_dir, schema, batch_size, max_staging_bytes)
+            await self._offload(_arrow)
+            await self._offload(Path(staging_dir).resolve, strict=True)
+            file_format = await self._upload_format(engine, generation)
+            operation_phase = 'staging'
+            staged = await operation.prepare(
+                partial(_stage_arrow, file_format=file_format), data, staging_dir, schema, batch_size, max_staging_bytes
+            )
             rows = staged.rows
             server_path = _server_staging_path(server_staging_dir or Path(staged.path).parent, Path(staged.path).name)
+            _check_upload_client(self.client, engine, generation)
             async with _write_transaction(self, rows) as connection:
-                await check_arrow_load_async(connection)
+                _check_upload_client(self.client, engine, generation)
+                selected_format = await check_arrow_load_async(connection, allow_parquet=True)
+                if file_format == 'arrow' and selected_format != 'arrow':
+                    from .exceptions import QueryError
+
+                    raise QueryError(
+                        'Selected checkout rejects the staged Arrow format', phase='capability', committed=False
+                    )
                 operation_phase = 'ddl_table'
                 if create:
                     (
@@ -648,7 +688,8 @@ class AsyncAnalyticsManager:
                 operation_phase = 'load'
                 (
                     await connection.exec_driver_sql(
-                        "LOAD DATA INFILE {'filepath'=%s, 'format'='arrow'} INTO TABLE " + target, (server_path,)
+                        "LOAD DATA INFILE {'filepath'=%s, 'format'='" + file_format + "'} INTO TABLE " + target,
+                        (server_path,),
                     )
                 ).close()
             committed = True

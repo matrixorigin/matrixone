@@ -17,6 +17,160 @@ async def settled():
 
 
 @pytest.mark.asyncio
+async def test_upload_probe_cancellation_aborts_driver_and_releases_checkout():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from matrixone import AsyncClient
+
+    client = AsyncClient()
+    manager = client.analytics
+    entered = asyncio.Event()
+    driver = SimpleNamespace(close=Mock())
+    active = [1]
+
+    async def execute(sql):
+        assert sql.startswith('EXPLAIN LOAD DATA')
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def close():
+        active[0] -= 1
+
+    connection = SimpleNamespace(
+        exec_driver_sql=execute,
+        close=AsyncMock(side_effect=close),
+        sync_connection=SimpleNamespace(_dbapi_connection=SimpleNamespace(driver_connection=driver)),
+    )
+    engine = client._engine = SimpleNamespace(connect=AsyncMock(return_value=connection))
+    task = asyncio.create_task(manager._upload_format(engine, client._compatibility_generation))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        driver.close.assert_called_once()
+        connection.close.assert_awaited_once()
+        assert active == [0]
+        assert not manager._finalizers
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager.disconnect()
+        client._engine = None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('checkpoint', ['checkout', 'probe'])
+async def test_upload_probe_rejects_late_connection_after_generation_change(checkpoint):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from matrixone import AsyncClient
+
+    client = AsyncClient()
+    manager = client.analytics
+    entered, release = asyncio.Event(), asyncio.Event()
+    driver = SimpleNamespace(close=Mock())
+    result = SimpleNamespace(close=Mock())
+
+    async def checkout():
+        if checkpoint == 'checkout':
+            entered.set()
+            await release.wait()
+        return connection
+
+    async def execute(sql):
+        assert sql.startswith('EXPLAIN LOAD DATA')
+        entered.set()
+        await release.wait()
+        return result
+
+    connection = SimpleNamespace(
+        exec_driver_sql=AsyncMock(side_effect=execute),
+        close=AsyncMock(),
+        sync_connection=SimpleNamespace(_dbapi_connection=SimpleNamespace(driver_connection=driver)),
+    )
+    engine = client._engine = SimpleNamespace(connect=AsyncMock(side_effect=checkout))
+    task = asyncio.create_task(manager._upload_format(engine, client._compatibility_generation))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        client._engine = object()
+        client._compatibility_generation += 1
+        release.set()
+        with pytest.raises(RuntimeError, match='connection changed'):
+            await asyncio.wait_for(task, 5)
+        driver.close.assert_called_once()
+        connection.close.assert_awaited_once()
+        assert connection.exec_driver_sql.await_count == (checkpoint == 'probe')
+        if checkpoint == 'probe':
+            result.close.assert_called_once()
+        assert not manager._finalizers
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager.disconnect()
+        client._engine = None
+
+
+@pytest.mark.asyncio
+async def test_upload_probe_preserves_primary_error_when_close_fails():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from matrixone import AsyncClient
+
+    client = AsyncClient()
+    manager = client.analytics
+    primary, secondary = RuntimeError('probe failed'), RuntimeError('close failed')
+    driver = SimpleNamespace(close=Mock())
+    connection = SimpleNamespace(
+        exec_driver_sql=AsyncMock(side_effect=primary),
+        close=AsyncMock(side_effect=secondary),
+        sync_connection=SimpleNamespace(_dbapi_connection=SimpleNamespace(driver_connection=driver)),
+    )
+    engine = client._engine = SimpleNamespace(connect=AsyncMock(return_value=connection))
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await manager._upload_format(engine, client._compatibility_generation)
+        assert caught.value is primary and caught.value.cleanup_error is secondary
+        driver.close.assert_called_once()
+        connection.close.assert_awaited_once()
+        assert not manager._finalizers
+    finally:
+        await manager.disconnect()
+        client._engine = None
+
+
+@pytest.mark.asyncio
+async def test_upload_probe_close_failure_aborts_a_successful_probe():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from matrixone import AsyncClient
+
+    client = AsyncClient()
+    manager = client.analytics
+    secondary = RuntimeError('successful probe close failed')
+    driver = SimpleNamespace(close=Mock())
+    result = SimpleNamespace(close=Mock())
+    connection = SimpleNamespace(
+        exec_driver_sql=AsyncMock(return_value=result),
+        close=AsyncMock(side_effect=secondary),
+        sync_connection=SimpleNamespace(_dbapi_connection=SimpleNamespace(driver_connection=driver)),
+    )
+    engine = client._engine = SimpleNamespace(connect=AsyncMock(return_value=connection))
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await manager._upload_format(engine, client._compatibility_generation)
+        assert caught.value is secondary
+        result.close.assert_called_once()
+        driver.close.assert_called_once()
+        connection.close.assert_awaited_once()
+        assert not manager._finalizers
+    finally:
+        await manager.disconnect()
+        client._engine = None
+
+
+@pytest.mark.asyncio
 async def test_canceled_producers_keep_file_and_admission_until_real_exit(tmp_path):
     workers = AnalyticsWorkers()
     loop = asyncio.get_running_loop()
