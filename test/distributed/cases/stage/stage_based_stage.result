@@ -41,7 +41,7 @@ t1  ¦  CREATE TABLE `t1` (
   `col1` date NOT NULL,
   `col2` datetime DEFAULT NULL,
   `col3` timestamp NULL DEFAULT NULL,
-  `col4` bool DEFAULT NULL
+  `col4` boolean DEFAULT NULL
 )
 drop table t1;
 drop stage stage01;

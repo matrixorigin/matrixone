@@ -1,8 +1,8 @@
 create table t1(a int, b uuid);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    UUID(0)    YES        null        
+a    int    YES        null        
+b    uuid    YES        null        
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` uuid DEFAULT NULL\n)

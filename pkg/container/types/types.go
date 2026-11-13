@@ -204,7 +204,7 @@ func (t *Type) Marshal() ([]byte, error) {
 // Unmarshal is used by gogoproto.
 func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
-		panic("invalid byte slice")
+		return moerr.NewInvalidInputNoCtx("short type encoding")
 	}
 	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
 	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))

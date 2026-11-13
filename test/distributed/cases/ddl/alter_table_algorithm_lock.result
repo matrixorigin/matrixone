@@ -12,13 +12,13 @@ ALTER TABLE t_alg_lock ALGORITHM=INSTANT, LOCK=DEFAULT, RENAME COLUMN c5 TO c5_n
 ALTER TABLE t_alg_lock ALGORITHM=COPY, RENAME COLUMN c4 TO c4_new;
 SHOW COLUMNS FROM t_alg_lock;
 Field	Type	Null	Key	Default	Extra	Comment
-a	INT(32)	YES	MUL	null
-b	INT(32)	YES	MUL	null
-c1	INT(32)	YES		null
-c2	INT(32)	YES		null
-c3	INT(32)	YES		null
-c4_new	INT(32)	YES		null
-c5_new	INT(32)	YES		null
+a	int	YES	MUL	null
+b	int	YES	MUL	null
+c1	int	YES		null
+c2	int	YES		null
+c3	int	YES		null
+c4_new	int	YES		null
+c5_new	int	YES		null
 ALTER TABLE t_alg_lock ALGORITHM=INPLACE, ADD COLUMN cf1 INT;
 invalid input: ALGORITHM=INPLACE is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.
 ALTER TABLE t_alg_lock ALGORITHM=INSTANT, ADD COLUMN cf2 INT;
@@ -31,13 +31,13 @@ ALTER TABLE t_alg_lock ALGORITHM=INPLACE, LOCK=NONE, DROP COLUMN c1;
 invalid input: ALGORITHM=INPLACE is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.
 SHOW COLUMNS FROM t_alg_lock;
 Field	Type	Null	Key	Default	Extra	Comment
-a	INT(32)	YES	MUL	null
-b	INT(32)	YES	MUL	null
-c1	INT(32)	YES		null
-c2	INT(32)	YES		null
-c3	INT(32)	YES		null
-c4_new	INT(32)	YES		null
-c5_new	INT(32)	YES		null
+a	int	YES	MUL	null
+b	int	YES	MUL	null
+c1	int	YES		null
+c2	int	YES		null
+c3	int	YES		null
+c4_new	int	YES		null
+c5_new	int	YES		null
 drop table if exists t_alg_lock;
 
 create temporary table tmp_alg_lock(a INT, b INT);

@@ -7,10 +7,10 @@ CREATE TABLE tb_dept1(id INT(11) PRIMARY KEY, name VARCHAR(22) NOT NULL,location
 CREATE TABLE tb_emp6 (id INT(11) PRIMARY KEY,name VARCHAR(25),deptId INT(11),salary FLOAT,CONSTRAINT fk_emp_dept1 FOREIGN KEY(deptId) REFERENCES tb_dept1(id) );
 desc tb_emp6;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
-name    VARCHAR(25)    YES        null        
-deptId    INT(32)    YES    MUL    null        
-salary    FLOAT(0)    YES        null        
+id    int    NO    PRI    null        
+name    varchar(25)    YES        null        
+deptId    int    YES    MUL    null        
+salary    float    YES        null        
 show create table tb_emp6;
 Table    Create Table
 tb_emp6    CREATE TABLE `tb_emp6` (\n  `id` int NOT NULL,\n  `name` varchar(25) DEFAULT NULL,\n  `deptId` int DEFAULT NULL,\n  `salary` float DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_emp_dept1` FOREIGN KEY (`deptId`) REFERENCES `tb_dept1` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
@@ -24,9 +24,9 @@ create table t1(a int primary key, b varchar(5));
 create table t2(a int ,b varchar(5), c int, constraint `c1` foreign key(c) references t1(a));
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    VARCHAR(5)    YES        null        
-c    INT(32)    YES    MUL    null        
+a    int    YES        null        
+b    varchar(5)    YES        null        
+c    int    YES    MUL    null        
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` int DEFAULT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)

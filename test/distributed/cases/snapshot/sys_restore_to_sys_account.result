@@ -1090,8 +1090,8 @@ col1    col2
 234222    -3923
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null
-col2    DECIMAL(38,0)    YES        null
+col1    int    NO    PRI    null
+col2    decimal(38,0)    YES        null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1

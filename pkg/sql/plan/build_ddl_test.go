@@ -46,6 +46,46 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+func TestViewColumnsPreserveEnumSetDomains(t *testing.T) {
+	for _, domain := range []struct {
+		name string
+		typ  plan.Type
+	}{
+		{name: "enum", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "UP,O'Brien,Down", NotNullable: true}},
+		{name: "empty enum", typ: plan.Type{Id: int32(types.T_enum), NotNullable: true}},
+		{name: "set", typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: "UP,O'Brien,Down", NotNullable: true}},
+	} {
+		t.Run(domain.name, func(t *testing.T) {
+			for _, query := range []string{
+				"select n_name, cast(n_name as char(20)), concat(n_name,'') from nation",
+				"select n_name, cast(n_name as char(20)), concat(n_name,'') from (select n_name from nation) d",
+				"with d as (select n_name from nation) select n_name, cast(n_name as char(20)), concat(n_name,'') from d",
+			} {
+				mock := NewMockOptimizer(false)
+				mock.ctxt.tables["nation"].Cols[1].Typ = domain.typ
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+					"create view metadata_v (domain_col, cast_col, concat_col) as "+query, 1)
+				require.NoError(t, err)
+				func() {
+					defer stmt.Free()
+					pl, err := BuildPlan(&mock.ctxt, stmt, false)
+					require.NoError(t, err, query)
+					cols := pl.GetDdl().GetCreateView().GetTableDef().GetCols()
+					require.Len(t, cols, 3, query)
+					require.Equal(t, "domain_col", cols[0].Name)
+					require.Equal(t, domain.typ.Id, cols[0].Typ.Id, query)
+					require.Equal(t, domain.typ.Enumvalues, cols[0].Typ.Enumvalues, query)
+					require.True(t, cols[0].Typ.NotNullable, query)
+					for _, col := range cols[1:] {
+						require.True(t, types.T(col.Typ.Id).IsMySQLString(), query)
+						require.Empty(t, col.Typ.Enumvalues, query)
+					}
+				}()
+			}
+		})
+	}
+}
+
 func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),

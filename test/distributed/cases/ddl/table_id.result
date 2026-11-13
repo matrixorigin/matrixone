@@ -14,9 +14,9 @@ alter table t2 drop column a;
 alter table t2 alter column c set default true;
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null
-b    VARCHAR(100)    YES        null
-c    BOOL(0)    YES        true
+id    int    NO    PRI    null
+b    varchar(100)    YES        null
+c    boolean    YES        true
 insert into t2(id, b) values (1, 'abc');
 select id, b, c from t2 order by id;
 id    b    c
@@ -38,8 +38,8 @@ truncate table t4;
 alter table t4 drop column v;
 show columns from t4;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null
-comment    VARCHAR(50)    YES        null
+id    int    NO    PRI    null
+comment    varchar(50)    YES        null
 insert into t4(id, comment) values (1, 'ok');
 select id, comment from t4 order by id;
 id    comment
@@ -115,8 +115,8 @@ insert into t8 values (1, 10), (2, 20);
 alter table t8 rename column a to a_new;
 show columns from t8;
 Field    Type    Null    Key    Default    Extra    Comment
-a_new    INT(32)    YES        null
-b    INT(32)    YES        null
+a_new    int    YES        null
+b    int    YES        null
 update t8 set a_new = a_new + 1 where b = 10;
 delete from t8 where a_new > 3;
 select a_new, b from t8 order by a_new;

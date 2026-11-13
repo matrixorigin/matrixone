@@ -37,13 +37,13 @@ default_probe  ¦  CREATE TABLE `default_probe` (
 )
 desc default_probe;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-missing  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-explicit_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-quoted_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-empty_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
-text_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
-numeric_value  ¦  INT(32)  ¦  YES  ¦    ¦  7  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+missing  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+explicit_null  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+quoted_null  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+empty_value  ¦  varchar(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+text_value  ¦  varchar(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
+numeric_value  ¦  int  ¦  YES  ¦    ¦  7  ¦    ¦  
 insert into default_probe(id) values (1);
 select id, missing is null, explicit_null is null,
 hex(quoted_null) as quoted_null_hex, quoted_null is null as quoted_null_is_null,
@@ -81,13 +81,13 @@ default_probe  ¦  CREATE TABLE `default_probe` (
 )
 desc default_probe;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-missing  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-explicit_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-quoted_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-empty_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
-text_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
-numeric_value  ¦  INT(32)  ¦  YES  ¦    ¦  7  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+missing  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+explicit_null  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+quoted_null  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+empty_value  ¦  varchar(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+text_value  ¦  varchar(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
+numeric_value  ¦  int  ¦  YES  ¦    ¦  7  ¦    ¦  
 use truncate_column_default;
 select column_name, column_default, column_default is null as default_is_null,
 hex(column_default) as default_hex, is_nullable
