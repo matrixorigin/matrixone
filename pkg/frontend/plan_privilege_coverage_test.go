@@ -97,7 +97,7 @@ func TestPlanPrivilegeCoverageIsPerObject(t *testing.T) {
 			if cached != tc.want {
 				t.Errorf("cache evaluator: got %t, want %t", cached, tc.want)
 			}
-			cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+			cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, cold, "catalog evaluator")
 		})
@@ -119,7 +119,7 @@ func TestEmptyPlanPrivilegeTipsCannotAuthorize(t *testing.T) {
 	bh.init()
 	roles := &btree.Set[int64]{}
 	roles.Insert(5)
-	cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+	cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 	require.NoError(t, err)
 	require.False(t, cold)
 	require.Empty(t, bh.executedSQLs)
@@ -176,7 +176,7 @@ func TestPlanPrivilegeCoverageRespectsLightGuards(t *testing.T) {
 			cached, err := checkPrivilegeInCache(t.Context(), ses, priv, true)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, cached, "cache evaluator")
-			cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+			cold, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, cold, "catalog evaluator")
 		})
@@ -202,7 +202,7 @@ func TestPlanPrivilegeCoverageFailsClosedOnCatalogError(t *testing.T) {
 	convertPrivilegeTipsToPrivilege(priv, privilegeTipsArray{{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "src", tableName: "s"}})
 	roles := &btree.Set[int64]{}
 	roles.Insert(5)
-	ok, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+	ok, _, err := determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 	require.False(t, ok)
 	require.ErrorIs(t, err, failure)
 	require.Equal(t, []string{query}, bh.executedSQLs, "an error must not fall through to covering grants")
@@ -226,7 +226,7 @@ func TestPlanPrivilegeCoverageCanceledPolicyFailsClosed(t *testing.T) {
 	bh.init()
 	roles := &btree.Set[int64]{}
 	roles.Insert(5)
-	ok, _, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, false)
+	ok, _, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 	require.False(t, ok)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, bh.executedSQLs)
