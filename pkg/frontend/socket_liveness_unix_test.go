@@ -19,7 +19,9 @@ package frontend
 import (
 	"bytes"
 	"crypto/tls"
+	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +58,42 @@ func tcpConnectionPair(t *testing.T) (net.Conn, net.Conn) {
 		t.Fatal("timed out accepting test TCP connection")
 	}
 	return nil, nil
+}
+
+type firstWriteResult struct {
+	n   int
+	err error
+}
+
+type firstWriteConn struct {
+	net.Conn
+	once  sync.Once
+	first chan firstWriteResult
+}
+
+func (c *firstWriteConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.once.Do(func() { c.first <- firstWriteResult{n: n, err: err} })
+	return n, err
+}
+
+// stageTLSReadAhead reproduces one frontend read containing the SSLRequest and
+// a real ClientHello, independently of how TCP segments the client write.
+func stageTLSReadAhead(t *testing.T, server net.Conn, conn *Conn, written <-chan firstWriteResult, packetSize int) int {
+	t.Helper()
+	var first firstWriteResult
+	select {
+	case first = <-written:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for SSLRequest and TLS ClientHello")
+	}
+	require.NoError(t, first.err)
+	require.Greater(t, first.n, packetSize)
+	require.LessOrEqual(t, first.n, conn.fixBuf.AvailableSpaceLen())
+	_, err := io.ReadFull(server, conn.fixBuf.AvailableSpace()[:first.n])
+	require.NoError(t, err)
+	conn.fixBuf.IncWriteIndex(first.n)
+	return first.n - packetSize
 }
 
 func TestConnectionPeerClosedDoesNotConsumeProtocolBytes(t *testing.T) {
@@ -148,30 +186,51 @@ func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
 	})
 
 	certificate := newTestTLSCertificate(t)
+	request := bytes.Repeat([]byte{0x01}, 32)
+	packet := makePacket(request, 1)
+	written := make(chan firstWriteResult, 1)
 	clientTLS := tls.Client(&prefixWriteConn{
-		Conn:   clientRaw,
-		prefix: makePacket(bytes.Repeat([]byte{0x01}, 32), 1),
+		Conn:   &firstWriteConn{Conn: clientRaw, first: written},
+		prefix: packet,
 	}, &tls.Config{
 		InsecureSkipVerify: true, // test certificate is intentionally self-signed
 		MinVersion:         tls.VersionTLS12,
 	})
-	serverRaw.SetDeadline(time.Now().Add(5 * time.Second))
-	clientRaw.SetDeadline(time.Now().Add(5 * time.Second))
+	require.NoError(t, serverRaw.SetDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, clientRaw.SetDeadline(time.Now().Add(10*time.Second)))
 	clientHandshake := make(chan error, 1)
+	handshakeDone := make(chan struct{})
 	go func() {
+		defer close(handshakeDone)
 		clientHandshake <- clientTLS.Handshake()
 	}()
+	t.Cleanup(func() {
+		_ = serverRaw.Close()
+		_ = clientRaw.Close()
+		select {
+		case <-handshakeDone:
+		case <-time.After(5 * time.Second):
+			t.Error("TLS client handshake did not exit after closing sockets")
+		}
+	})
 
+	pending := stageTLSReadAhead(t, serverRaw, conn, written, len(packet))
 	payload, err := conn.Read()
 	require.NoError(t, err)
-	require.Equal(t, bytes.Repeat([]byte{0x01}, 32), payload)
+	require.Equal(t, request, payload)
+	require.Equal(t, pending, conn.fixBuf.AvailableDataLen())
 	tlsConn := tls.Server(conn.connForTLS(), &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS12,
 	})
 	require.NotSame(t, serverRaw, tlsConn.NetConn())
 	require.NoError(t, tlsConn.Handshake())
-	require.NoError(t, <-clientHandshake)
+	select {
+	case err = <-clientHandshake:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for TLS client handshake")
+	}
 	conn.UseConn(tlsConn)
 
 	// Close the raw client socket instead of sending TLS close_notify. The
