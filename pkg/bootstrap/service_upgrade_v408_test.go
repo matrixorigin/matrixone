@@ -70,3 +70,33 @@ func TestV408CreatesRouteFromV407Offset41(t *testing.T) {
 		require.False(t, s.upgrade.finalVersionCompleted.Load())
 	})
 }
+
+func TestV408RetainsInterruptedUpgradeRoute(t *testing.T) {
+	for _, state := range []int32{versions.StateCreated, versions.StateUpgradingTenant, versions.StateReady} {
+		t.Run(fmt.Sprint(state), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				reads := 0
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+						return newBootstrapStringResult("mo_catalog"), nil
+					case sql == versions.LatestVersionSQL:
+						return recoveryVersionResult(t, versions.Version{Version: "4.0.8", VersionOffset: 3, State: versions.StateCreated}), nil
+					case strings.Contains(sql, "from mo_upgrade"):
+						reads++
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, state, "4.0.7", "4.0.8", 3, 0, versions.Yes, versions.Yes, 2, 1)), nil
+					case strings.HasPrefix(sql, "select state from mo_version"):
+						return crossingStateResult(t, versions.StateCreated), nil
+					default:
+						return executor.Result{}, fmt.Errorf("must retain 4.0.8 route without mutation: %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, (*service).initUpgrade)
+				t.Cleanup(s.stopper.Stop)
+				require.NoError(t, s.doCheckUpgrade(t.Context()))
+				require.Positive(t, reads)
+				require.False(t, s.upgrade.finalVersionCompleted.Load())
+			})
+		})
+	}
+}
