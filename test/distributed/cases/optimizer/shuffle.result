@@ -158,6 +158,43 @@ select count(*) from t1 group by c2 limit 5;
 1  𝄀
 1  𝄀
 1
+select rn, supplier, amount from (
+select c1 as supplier, sum(c3) as amount,
+row_number() over (order by sum(c3) desc) as rn
+from t1 group by c1
+) ranked where rn <= 5 order by rn;
+➤ rn[-5,64,0]  ¦  supplier[4,32,0]  ¦  amount[-5,64,0]  𝄀
+1  ¦  5000000  ¦  5000000  𝄀
+2  ¦  4999999  ¦  4999999  𝄀
+3  ¦  4999998  ¦  4999998  𝄀
+4  ¦  4999997  ¦  4999997  𝄀
+5  ¦  4999996  ¦  4999996
+select count(*) from (
+select c1 as supplier, sum(c3) as amount,
+row_number() over (order by sum(c3) desc) as rn
+from t1 group by c1 order by amount desc limit 5
+) ranked;
+➤ count(*)[-5,64,0]  𝄀
+5
+select rn, supplier, amount from (
+select rn, supplier, amount from (
+select c1 as supplier, sum(c3) as amount,
+row_number() over (order by sum(c3) desc) as rn
+from t1 group by c1
+) ranked where rn <= 5
+union all
+select 6 as rn, null as supplier, sum(amount) as amount from (
+select c1 as supplier, sum(c3) as amount
+from t1 group by c1 order by amount desc limit 5
+) top_five
+) report order by rn;
+➤ rn[-5,64,0]  ¦  supplier[4,32,0]  ¦  amount[-5,64,0]  𝄀
+1  ¦  5000000  ¦  5000000  𝄀
+2  ¦  4999999  ¦  4999999  𝄀
+3  ¦  4999998  ¦  4999998  𝄀
+4  ¦  4999997  ¦  4999997  𝄀
+5  ¦  4999996  ¦  4999996  𝄀
+6  ¦  null  ¦  24999990
 explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 ➤ AP QUERY PLAN ON MULTICN(4 core)[12,0,0]  𝄀
 Project  𝄀

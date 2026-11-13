@@ -306,12 +306,23 @@ func (mo *MOServer) startTempTableGC(interval time.Duration) {
 }
 
 func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
+	// The connection goroutine owns both handshake and request-loop failures.
+	// Recover outside cleanup so one failed client cannot terminate the CN.
+	defer func() {
+		if v := recover(); v != nil {
+			logutil.Error("connection handler panic", zap.Error(moerr.ConvertPanicError(ctx, v)))
+		}
+	}()
 	var rs *Conn
 	var err error
 	defer func() {
 		if rs != nil {
 			if err := rs.Close(); err != nil {
 				logutil.LogConnectionCloseError("Close conn error", err)
+			}
+		} else {
+			if err := conn.Close(); err != nil {
+				logutil.LogConnectionCloseError("Close raw conn error", err)
 			}
 		}
 	}()

@@ -678,8 +678,15 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	return err
 }
 
-func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
-	var runtimeInExprList []*plan.Expr
+// runtimeFilterExpr retains the specification that produced an IN expression.
+// PASS messages do not produce expressions, so expression positions cannot index specs.
+type runtimeFilterExpr struct {
+	expr    *plan.Expr
+	notOnPK bool
+}
+
+func (s *Scope) waitForRuntimeFilters(c *Compile) ([]runtimeFilterExpr, bool, error) {
+	var runtimeInExprList []runtimeFilterExpr
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -688,13 +695,20 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			if ctxDone {
-				return nil, false, nil
+			if ctxDone || s.Proc.Ctx.Err() != nil {
+				return nil, false, s.Proc.Ctx.Err()
 			}
+			// Parallel shuffle builds may all publish PASS. Data-bearing filters,
+			// however, must have one producer: conjuncting duplicate IN payloads
+			// can lose rows, and mixing PASS/DROP with IN is not a valid domain.
 			for i := range msgs {
 				msg, ok := msgs[i].(message.RuntimeFilterMessage)
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
+				}
+				if len(msgs) > 1 && msg.Typ != message.RuntimeFilter_PASS {
+					return nil, false, moerr.NewInternalErrorf(s.Proc.Ctx,
+						"conflicting runtime filter messages for tag %d: got %d", spec.Tag, len(msgs))
 				}
 				switch msg.Typ {
 				case message.RuntimeFilter_PASS:
@@ -703,7 +717,7 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 					return nil, true, nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
+					runtimeInExprList = append(runtimeInExprList, runtimeFilterExpr{expr: inExpr, notOnPK: spec.NotOnPk})
 
 					// TODO: implement BETWEEN expression
 				}
@@ -714,20 +728,21 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 	return runtimeInExprList, false, nil
 }
 
-func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []runtimeFilterExpr) ([]*plan.Expr, error) {
 	var nonPkFilters, pkFilters []*plan.Expr
+	runtimeExprs := make([]*plan.Expr, 0, len(runtimeInExprList)+len(s.DataSource.BlockFilterList))
 
-	rfSpecs := s.DataSource.RuntimeFilterSpecs
-	for i := range runtimeInExprList {
-		fn := runtimeInExprList[i].GetF()
+	for _, filter := range runtimeInExprList {
+		fn := filter.expr.GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		if rfSpecs[i].NotOnPk {
-			nonPkFilters = append(nonPkFilters, runtimeInExprList[i])
+		runtimeExprs = append(runtimeExprs, filter.expr)
+		if filter.notOnPK {
+			nonPkFilters = append(nonPkFilters, filter.expr)
 		} else {
-			pkFilters = append(pkFilters, runtimeInExprList[i])
+			pkFilters = append(pkFilters, filter.expr)
 		}
 	}
 
@@ -762,7 +777,7 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		}
 	}
 
-	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
+	return append(runtimeExprs, s.DataSource.BlockFilterList...), nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -1086,7 +1101,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	// receive runtime filter and optimize the datasource.
-	var runtimeFilterList, blockFilterList []*plan.Expr
+	var runtimeFilterList []runtimeFilterExpr
+	var blockFilterList []*plan.Expr
 	var emptyScan bool
 	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
 	if err != nil {

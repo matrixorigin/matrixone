@@ -43,6 +43,31 @@ select count(*) from t1 group by c1 limit 5;
 -- @separator:table
 explain select count(*) from t1 group by c2 limit 5;
 select count(*) from t1 group by c2 limit 5;
+-- A global window must keep each CN's shuffle aggregate buckets together.
+select rn, supplier, amount from (
+    select c1 as supplier, sum(c3) as amount,
+           row_number() over (order by sum(c3) desc) as rn
+    from t1 group by c1
+) ranked where rn <= 5 order by rn;
+-- COUNT wrapping must retain a valid remote tree even when rn is not projected.
+select count(*) from (
+    select c1 as supplier, sum(c3) as amount,
+           row_number() over (order by sum(c3) desc) as rn
+    from t1 group by c1 order by amount desc limit 5
+) ranked;
+-- Verify both the ranked rows and their total through UNION ALL.
+select rn, supplier, amount from (
+    select rn, supplier, amount from (
+        select c1 as supplier, sum(c3) as amount,
+               row_number() over (order by sum(c3) desc) as rn
+        from t1 group by c1
+    ) ranked where rn <= 5
+    union all
+    select 6 as rn, null as supplier, sum(amount) as amount from (
+        select c1 as supplier, sum(c3) as amount
+        from t1 group by c1 order by amount desc limit 5
+    ) top_five
+) report order by rn;
 -- @bvt:issue#19733
 -- @separator:table
 explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
