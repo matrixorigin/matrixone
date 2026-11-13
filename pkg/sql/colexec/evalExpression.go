@@ -1872,30 +1872,64 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
-	if expr.selectedNullResult == nil {
-		var err error
-		expr.selectedNullResult, err = newExpressionConstNull(
-			runtimeType, 1, expr.allocation,
-		)
-		if err != nil {
+	sourceData, destinationData := selectedResult.GetData(), result.GetData()
+	// Copy performs mutation admission. Amortize it only when each value
+	// avoids at least three NULL-placeholder appends; keep dense masks on
+	// the existing append loop.
+	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
+		runtimePrepareParamKind == vector.PrepareParamNone &&
+		!selectedResult.IsConst() && !selectedResult.IsDictionary() &&
+		selectedResult.DataBackingKind() == vector.OwnedMPoolUnique &&
+		result.DataBackingKind() == vector.OwnedMPoolUnique &&
+		!selectedResult.HasBorrowedBacking() && !result.HasBorrowedBacking() &&
+		!selectedResult.HasPrepareParamKind() && !selectedResult.HasBinaryStringMetadata() &&
+		!selectedResult.HasStringSourceMetadata() && !selectedResult.HasGrouping() &&
+		cap(sourceData) > 0 && cap(destinationData) > 0 &&
+		&sourceData[:1][0] != &destinationData[:1][0]
+	if scatterFixed {
+		// Reserve for the runtime type before publishing its full logical domain.
+		// The wrapper normally already admitted this storage; refinements may
+		// change the physical result width.
+		if err := result.PreExtend(rowCount, proc.Mp()); err != nil {
 			return nil, err
 		}
-	} else {
-		expr.selectedNullResult.SetType(runtimeType)
-		expr.selectedNullResult.SetLength(1)
-	}
-	expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
-	selectedRow := int64(0)
-	for row := 0; row < rowCount; row++ {
-		if selectList[row] {
-			if err := result.UnionOne(selectedResult, selectedRow, proc.Mp()); err != nil {
+		if err := result.PreExtendNulls(rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+		result.SetLength(rowCount)
+		result.GetNulls().AddRange(0, uint64(rowCount))
+		for compactRow, row := range expr.selectedRows {
+			if err := result.Copy(selectedResult, row, int64(compactRow), proc.Mp()); err != nil {
 				return nil, err
 			}
-			selectedRow++
-		} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
-			return nil, err
+		}
+	} else {
+		if expr.selectedNullResult == nil {
+			var err error
+			expr.selectedNullResult, err = newExpressionConstNull(
+				runtimeType, 1, expr.allocation,
+			)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			expr.selectedNullResult.SetType(runtimeType)
+			expr.selectedNullResult.SetLength(1)
+		}
+		expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
+		selectedRow := int64(0)
+		for row := 0; row < rowCount; row++ {
+			if selectList[row] {
+				if err := result.UnionOne(selectedResult, selectedRow, proc.Mp()); err != nil {
+					return nil, err
+				}
+				selectedRow++
+			} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 	}
+
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		if err := expr.applyFlowControlPrepareParamKinds(result, rowCount, proc.Mp()); err != nil {
 			return nil, err
