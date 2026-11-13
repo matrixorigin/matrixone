@@ -32,7 +32,9 @@ import (
 // ObjectPrefetch asks to download, ahead of the read, the object at FilePath, of Size
 // bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
 // it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
-// With Ranges, only those ranges of the object, of Size bytes in all, are downloaded.
+// With Ranges, only those ranges of the object, of Size bytes in all, are downloaded,
+// unless they pass the disk cache's column bound: then the whole object, of ObjectSize
+// bytes, is.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
@@ -40,7 +42,9 @@ type ObjectPrefetch struct {
 	Reads    int
 	Blocks   int
 	Ranges   []PrefetchRange
-	Scan     *PrefetchScan
+	// ObjectSize is the size of the whole object of a request of Ranges, 0 when unknown.
+	ObjectSize int64
+	Scan       *PrefetchScan
 	// deletes is the file service's count of deleted objects when the request was made.
 	deletes uint64
 }
@@ -467,6 +471,10 @@ func downloadStarted(ctx context.Context) {
 
 func (s *S3FS) PrefetchObject(_ context.Context, req ObjectPrefetch) error {
 	if s.prefetcher != nil && req.Size > 0 {
+		// Columns past the bound download with their object, to a file.
+		if len(req.Ranges) > 0 && req.ObjectSize > 0 && req.Size > s.diskCache.columnPrefetchMax {
+			req.Ranges, req.Size = nil, req.ObjectSize
+		}
 		req.deletes = s.diskCache.prefetched.deletes.Load()
 		s.prefetcher.add(req)
 	}

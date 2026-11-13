@@ -209,8 +209,31 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 
 	busyPrefetcher(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
-	readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10)
-	require.True(t, fs.prefetcher.isQueued("object"), "a column read does not join a whole-object download")
+	require.Equal(t, data[150<<10:150<<10+10], readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10))
+	require.False(t, fs.prefetcher.isQueued("object"), "a column read joins a whole-object download")
+	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")) },
+		10*time.Second, time.Millisecond)
+}
+
+// A column prefetch of more bytes than the column bound downloads the whole object.
+func TestS3FSColumnPrefetchPastBoundDownloadsObject(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	fs.diskCache.columnPrefetchMax = 20
+	busyPrefetcher(t, fs)
+	ctx := context.Background()
+	ranges := []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}}
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 30, Ranges: ranges, ObjectSize: int64(len(data)), Due: 1 << 62}))
+	fs.prefetcher.mu.Lock()
+	req := fs.prefetcher.entries["object"].req
+	fs.prefetcher.mu.Unlock()
+	require.Empty(t, req.Ranges)
+	require.Equal(t, int64(len(data)), req.Size)
+
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "small", Size: 10, Ranges: ranges[:1], ObjectSize: int64(len(data)), Due: 1 << 62}))
+	fs.prefetcher.mu.Lock()
+	req = fs.prefetcher.entries["small"].req
+	fs.prefetcher.mu.Unlock()
+	require.Equal(t, ranges[:1], req.Ranges, "within the bound it stays a column prefetch")
 }
 
 // A column read whose entries have bytes between them reads each one, however close, and

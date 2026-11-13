@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -67,7 +68,9 @@ type DiskCache struct {
 	downloadMaxExtraWait time.Duration
 	prefetchRange        prefetchRangeConfig
 	objectSplit          objectSplitConfig
-	prefetched           prefetchedObjects
+	// columnPrefetchMax is the most bytes of columns a column prefetch downloads as ranges.
+	columnPrefetchMax int64
+	prefetched        prefetchedObjects
 	// downloadConns counts the object-storage connections whole-object downloads hold,
 	// at most maxDownloadConns.
 	downloadConns    atomic.Int64
@@ -112,8 +115,10 @@ type DiskCache struct {
 	beforeEvictionStart func(path string)
 	// deletes counts the deletes of objects; see objectDeletes.
 	deletes objectDeletes
-	// prefetchFlightBytes is the most bytes of prefetch range runs under way.
+	// prefetchFlightBytes, when set, is the most bytes of prefetch range runs under way,
+	// instead of flightBudget.
 	prefetchFlightBytes int64
+	flightBudget        flightBudget
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -176,6 +181,9 @@ type diskCacheOptions struct {
 	prefetchRange prefetchRangeConfig
 	// objectSplit sets the parts a whole-object download reads at once.
 	objectSplit objectSplitConfig
+	// columnPrefetchMax is the most bytes of columns a column prefetch downloads as
+	// ranges; 0 is DefaultDiskPrefetchColumnMax.
+	columnPrefetchMax int64
 }
 
 func newDiskCache(
@@ -222,9 +230,9 @@ func newDiskCache(
 		downloadMaxExtraWait: opts.downloadMaxExtraWait,
 		prefetchRange:        opts.prefetchRange,
 		objectSplit:          opts.objectSplit,
+		columnPrefetchMax:    cmp.Or(opts.columnPrefetchMax, DefaultDiskPrefetchColumnMax),
 		preloads:             newPreloadUsage(),
 		maxDownloadConns:     int64(maxConnsPerHost / 2),
-		prefetchFlightBytes:  prefetchFlightBytesMax,
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {

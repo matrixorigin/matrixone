@@ -161,7 +161,8 @@ func TestPrefetchRangeSkipsDiskCacheReads(t *testing.T) {
 // the bytes of runs that end are given back.
 func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	fs.diskCache.prefetchFlightBytes = 4096
+	// A run's buffer is at least 64 KiB, the bytes it counts for.
+	fs.diskCache.prefetchFlightBytes = 64 << 10
 	f := &fs.diskCache.prefetchFlights
 	f.mu.Lock()
 	f.bytes = 1

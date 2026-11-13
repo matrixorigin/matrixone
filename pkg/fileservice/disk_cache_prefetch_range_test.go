@@ -610,3 +610,47 @@ func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(recreated)), Data: recreated}}, Policy: SkipDiskCache | SkipMemoryCache}))
 	require.Equal(t, recreated[30000:30010], readRangeOf(t, fs, 0, 30000, 10))
 }
+
+// A flight's buffer is kept for reuse only once the flight is forgotten and no read copies
+// from it. Buffers are of a power-of-two size up to 32 MiB, past which a flight allocates
+// its own.
+func TestPrefetchFlightBufferReusedAfterLastHolder(t *testing.T) {
+	fl := newPrefetchFlight(0, 100<<10, time.Now())
+	fl.buf = getFlightBuf(100 << 10)
+	require.Equal(t, 128<<10, cap(fl.buf))
+	fl.hold()
+	fl.release()
+	require.NotNil(t, fl.buf, "the flight still holds it")
+	fl.release()
+	require.Nil(t, fl.buf)
+
+	require.Equal(t, int64(64<<10), flightBufSize(1))
+	require.Equal(t, int64(32<<20), flightBufSize(20<<20))
+	require.Equal(t, int64(40<<20), flightBufSize(40<<20), "past the pooled sizes, its own size")
+	require.Len(t, getFlightBuf(40<<20), 40<<20)
+	putFlightBuf(make([]byte, 40<<20))
+	putFlightBuf(make([]byte, 100))
+}
+
+// The bytes of the flights under way are a share of the memory available, measured at
+// most once per refresh, and at least one column prefetch's bytes.
+func TestFlightBytesFollowAvailableMemory(t *testing.T) {
+	prev := memoryAvailable
+	t.Cleanup(func() { memoryAvailable = prev })
+	var calls int
+	avail := uint64(10 << 30)
+	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
+	d := &DiskCache{columnPrefetchMax: 32 << 20}
+	share := int64(avail / 100 * flightMemoryPercent)
+	require.Equal(t, share, d.flightBytes())
+	avail = 1 << 20
+	require.Equal(t, share, d.flightBytes(), "measured once per refresh")
+	require.Equal(t, 1, calls)
+	d.flightBudget.at.Store(0)
+	require.Equal(t, int64(32<<20), d.flightBytes(), "at least one column prefetch")
+	memoryAvailable = func() (uint64, bool) { return 0, false }
+	d.flightBudget.at.Store(0)
+	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
+	d.prefetchFlightBytes = 7
+	require.Equal(t, int64(7), d.flightBytes())
+}

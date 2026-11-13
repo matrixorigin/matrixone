@@ -58,9 +58,13 @@ type CacheConfig struct {
 	// DiskPrefetchObjectSplitMin is the size of the smallest object whose download is
 	// split. Default DefaultDiskPrefetchObjectSplitMin.
 	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
-	RemoteCacheEnabled         bool           `toml:"remote-cache-enabled"`
-	RPC                        morpc.Config   `toml:"rpc"`
-	CheckOverlaps              bool           `toml:"check-overlaps"`
+	// DiskPrefetchColumnMax is the most bytes of the columns of an object a column
+	// prefetch downloads as ranges; past it the prefetch downloads the whole object.
+	// Default DefaultDiskPrefetchColumnMax.
+	DiskPrefetchColumnMax *toml.ByteSize `toml:"disk-prefetch-column-max"`
+	RemoteCacheEnabled    bool           `toml:"remote-cache-enabled"`
+	RPC                   morpc.Config   `toml:"rpc"`
+	CheckOverlaps         bool           `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -190,6 +194,7 @@ func newFileServiceCaches(
 				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
 				prefetchRange:        prefetchRangeConfig{on: true},
 				objectSplit:          config.diskObjectSplit(),
+				columnPrefetchMax:    config.diskColumnPrefetchMax(),
 			},
 		)
 		if err != nil {
@@ -243,7 +248,16 @@ const (
 	DefaultDiskPrefetchObjectSplitMin = 16 << 20
 	// diskPrefetchObjectSplitMax is the most ranges a whole-object download reads at once.
 	diskPrefetchObjectSplitMax = 4
+	// DefaultDiskPrefetchColumnMax is the default DiskPrefetchColumnMax.
+	DefaultDiskPrefetchColumnMax = 32 << 20
 )
+
+func (c *CacheConfig) diskColumnPrefetchMax() int64 {
+	if c.DiskPrefetchColumnMax != nil && *c.DiskPrefetchColumnMax > 0 {
+		return int64(*c.DiskPrefetchColumnMax)
+	}
+	return DefaultDiskPrefetchColumnMax
+}
 
 func (c *CacheConfig) diskObjectSplit() objectSplitConfig {
 	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin}
