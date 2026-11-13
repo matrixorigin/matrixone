@@ -2,19 +2,29 @@
 Custom JSON type for MatrixOne with SQLAlchemy standard syntax support.
 
 This module provides enhanced JSON type that supports:
-- column['key'] dictionary-style access
+- column['key'] object access and column[index] array access
 - .astext property for automatic quote removal
 - Better Python type mapping
 """
 
 import json
+from typing import Union
 
-from sqlalchemy import cast, String
+from sqlalchemy import and_, cast, func, or_, String
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.sql.expression import ColumnElement
+from sqlalchemy.sql.visitors import InternalTraversal
 
 from .json_functions import json_extract, json_extract_string
+
+
+def _path_component(key: Union[str, int]) -> str:
+    if isinstance(key, int) and not isinstance(key, bool):
+        if key < 0:
+            raise ValueError('JSON array indices must be non-negative')
+        return f'[{key}]'
+    return '.' + json.dumps(str(key), ensure_ascii=False)
 
 
 class JSONPathElement(ColumnElement):
@@ -26,18 +36,24 @@ class JSONPathElement(ColumnElement):
     """
 
     __visit_name__ = 'json_path_element'
+    # Cloning and alias adaptation must visit the source expression. The full
+    # member path also distinguishes compiled statements for sibling keys.
+    _traverse_internals = [
+        ('column', InternalTraversal.dp_clauseelement),
+        ('_current_path', InternalTraversal.dp_string),
+    ]
     # SQLAlchemy uses expression identity for anonymous labels, even when
     # equality builds a SQL predicate.
     __hash__ = ColumnElement.__hash__
 
-    def __init__(self, column: ColumnElement, key: str):
+    def __init__(self, column: ColumnElement, key: Union[str, int]):
         self.column = column
         self.key = key
-        self._current_path = '$.' + json.dumps(str(key), ensure_ascii=False)
+        self._current_path = '$' + _path_component(key)
         # Call parent init
         super().__init__()
 
-    def __getitem__(self, key: str) -> 'JSONPathElement':
+    def __getitem__(self, key: Union[str, int]) -> 'JSONPathElement':
         """
         Support nested access: column['key1']['key2']
 
@@ -48,7 +64,7 @@ class JSONPathElement(ColumnElement):
         new_element = JSONPathElement.__new__(JSONPathElement)
         new_element.column = self.column
         new_element.key = key
-        new_element._current_path = self._current_path + '.' + json.dumps(str(key), ensure_ascii=False)
+        new_element._current_path = self._current_path + _path_component(key)
         return new_element
 
     @property
@@ -118,39 +134,71 @@ class JSONPathElement(ColumnElement):
         # Extract value and compare
         extracted = json_extract(self.column, self._current_path)
 
-        # Smart quote handling
+        if isinstance(other, bool):
+            # SQL boolean literals would pair JSON with BOOL, which released
+            # MatrixOne servers cannot cast. Compare in the string domain,
+            # scoped to JSON booleans by json_type, so JSON booleans stay a
+            # separate category from JSON strings.
+            return and_(
+                func.json_type(extracted) == 'BOOLEAN',
+                cast(extracted, String) == ('true' if other else 'false'),
+            )
         if isinstance(other, str):
-            # Don't add quotes for boolean strings or if already quoted
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            if other in ('true', 'false', 'null'):
+                # Untyped JSON scalar keywords are ordinary strings for the
+                # caller: they match JSON strings holding these words, never
+                # the JSON literal true/false/null values. json_type keeps
+                # the categories apart; json_extract_string compares the
+                # unquoted string value.
+                return and_(
+                    func.json_type(extracted) == 'STRING',
+                    json_extract_string(
+                        self.column, self._current_path
+                    ) == other,
+                )
+            # Preserve explicitly quoted JSON inputs; normal Python strings
+            # are JSON strings
+            if other.startswith('"'):
                 other_value = other
             else:
                 # Add quotes for regular strings
                 other_value = json.dumps(other, ensure_ascii=False)
-        elif isinstance(other, bool):
-            # Convert Python bool to JSON boolean string
-            other_value = 'true' if other else 'false'
-        else:
-            # Numbers and other types: use as-is
-            other_value = other
-
-        return extracted == other_value
+            return extracted == other_value
+        # Numbers and other types: use as-is
+        return extracted == other
 
     def __ne__(self, other):
         """Support inequality comparison with smart quote handling."""
+        # Extract value and compare
         extracted = json_extract(self.column, self._current_path)
 
-        # Smart quote handling (same as __eq__)
+        if isinstance(other, bool):
+            # SQL boolean literals would pair JSON with BOOL, which released
+            # MatrixOne servers cannot cast. Negate the string-domain form:
+            # keep rows that are not JSON booleans, or whose serialized
+            # literal differs from the comparand.
+            return or_(
+                func.json_type(extracted) != 'BOOLEAN',
+                cast(extracted, String) != ('true' if other else 'false'),
+            )
         if isinstance(other, str):
-            if other in ('true', 'false', 'null') or other.startswith('"'):
+            if other in ('true', 'false', 'null'):
+                # Untyped JSON scalar keywords are ordinary strings for the
+                # caller: they match JSON strings holding these words, never
+                # the JSON literal true/false/null values.
+                return or_(
+                    func.json_type(extracted) != 'STRING',
+                    json_extract_string(
+                        self.column, self._current_path
+                    ) != other,
+                )
+            if other.startswith('"'):
                 other_value = other
             else:
                 other_value = json.dumps(other, ensure_ascii=False)
-        elif isinstance(other, bool):
-            other_value = 'true' if other else 'false'
-        else:
-            other_value = other
-
-        return extracted != other_value
+            return extracted != other_value
+        # Numbers and other types: use as-is
+        return extracted != other
 
     def __gt__(self, other):
         """Support greater than comparison."""
@@ -223,12 +271,12 @@ class JSON(TypeDecorator):
     class Comparator(MySQLJSON.Comparator):
         """Custom comparator for JSON column operations."""
 
-        def __getitem__(self, key: str) -> JSONPathElement:
+        def __getitem__(self, key: Union[str, int]) -> JSONPathElement:
             """
-            Enable dictionary-style access: column['key']
+            Enable object or array access: column['key'] or column[index]
 
             Args:
-                key: JSON object key
+                key: JSON object key or non-negative integer array index
 
             Returns:
                 JSONPathElement that can be further accessed or compared

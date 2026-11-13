@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -560,6 +561,14 @@ func TestRunSQLWithFrontend(t *testing.T) {
 				name, query string
 				want        []string
 			}{
+				{"future comment has no result", "/*!99999 select 42 */;", nil},
+				{"future comment in mixed statements", "select 1; /*!99999 select 2; select 3 */; select 4", []string{"1", "4"}},
+				{"overlong version", "select 2 /*!999999999 */", []string{"2"}},
+				{"whole long guard with matching five-digit prefix", "select 2 /*!800300 + 1 */", []string{"2"}},
+				{"current version", "select /*!80030 6 */", []string{"6"}},
+				{"unversioned comment", "select /*! 6 */", []string{"6"}},
+				{"future SET has no mode side effect", "/*!99999 set sql_mode='ANSI_QUOTES' */; select @@sql_mode", []string{""}},
+				{"future SET during staged execution", "set sql_mode='NO_BACKSLASH_ESCAPES'; /*!99999 set sql_mode='ANSI_QUOTES'; select 99 */; select @@sql_mode", []string{"NO_BACKSLASH_ESCAPES"}},
 				{"versioned comment", "/*!50000 select 1; select 2 */;", []string{"1", "2"}},
 				{"ordinary prefix", "select 1; /*!50000 select 2; select 3 */;", []string{"1", "2", "3"}},
 				{"final inner delimiter", "/*! select 1; select 2; */;", []string{"1", "2"}},
@@ -599,22 +608,31 @@ func TestRunSQLWithFrontend(t *testing.T) {
 					})
 				}
 			}
-			// A failed continuation must leave the connection and parser reusable.
-			t.Run("invalid continuation and recovery", func(t *testing.T) {
-				rows, err := conn.QueryContext(ctx, "/*! set sql_mode='ANSI_QUOTES'; select from */")
-				if err == nil {
-					defer rows.Close()
-					for rows.NextResultSet() {
-						for rows.Next() {
+			// Errors may arrive in a later result set; drain before checking recovery.
+			for _, query := range []string{
+				"/*! set sql_mode='ANSI_QUOTES'; select from */",
+				"select /*!99999 6 */",
+				"select 1; select /*!99999 6 */",
+			} {
+				t.Run("invalid query and recovery/"+query, func(t *testing.T) {
+					rows, err := conn.QueryContext(ctx, query)
+					if err == nil {
+						defer rows.Close()
+						for {
+							for rows.Next() {
+							}
+							if !rows.NextResultSet() {
+								break
+							}
 						}
+						err = rows.Err()
 					}
-					err = rows.Err()
-				}
-				require.Error(t, err)
-				var value int
-				require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
-				require.Equal(t, 9, value)
-			})
+					require.Error(t, err)
+					var value int
+					require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
+					require.Equal(t, 9, value)
+				})
+			}
 		},
 	)
 }
@@ -1653,7 +1671,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 	require.NoError(t, err)
 }
 
-func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+func TestRetiredTransactionTracePreservesHistoricalArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
 	require.NoError(t, CloseBaseClusterTests())
@@ -1708,13 +1726,17 @@ load-to-mo = true
 		if seed {
 			var count int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
-			require.Equal(t, 9, count)
-			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='disable'").Scan(&count))
-			require.Equal(t, 5, count)
-			// Historical collector rows are seeded through its former internal SQL
-			// ownership path; public writes remain subject to catalog authorization.
+			require.Zero(t, count, "fresh clusters must not create retired trace tables")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='mo_debug'").Scan(&count))
+			require.Zero(t, count, "fresh clusters must not create the retired trace database")
+			// Recreate the relevant released layout through internal SQL to exercise
+			// preservation; public writes remain subject to catalog authorization.
 			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
 			for _, query := range []string{
+				"create database mo_debug",
+				trace.TraceStatementTableSQL,
+				trace.FeaturesTablesSQL,
+				"insert into mo_debug.trace_features values ('txn','disable'),('txn-action','disable'),('data','disable'),('statement','disable'),('txn-workspace','disable')",
 				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
 				"update mo_debug.trace_features set state='enable'",
 			} {

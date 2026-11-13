@@ -50,7 +50,10 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 	for _, cteRef := range builder.cteRefs {
 		producerRootID, hashBuildOccurrences, ok := builder.reusableCTEProducer(cteRef, rootID)
 		if !ok {
-			continue
+			cteRef, producerRootID, hashBuildOccurrences, ok = builder.reusableWindowCTEInput(cteRef, rootID)
+			if !ok {
+				continue
+			}
 		}
 
 		producer := cteRef.occurrences[0]
@@ -140,6 +143,14 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	ReCalcNodeStats(producerRootID, builder, true, false, true)
 	stats := builder.qry.Nodes[producerRootID].Stats
 	producerCost := builder.cteProducerCost(producerRootID, make(map[int32]bool))
+	if stats != nil && !cteReuseIsProfitable(producerCost, stats.Outcnt, float64(len(cteRef.occurrences))) &&
+		builder.cteHasUncostedScan(producerRootID, make(map[int32]bool)) {
+		// Reuse runs before ordinary scan costing. Do not reject expensive
+		// producers solely from the binder's placeholder scan cardinalities.
+		ReCalcNodeStats(producerRootID, builder, true, true, true)
+		stats = builder.qry.Nodes[producerRootID].Stats
+		producerCost = builder.cteProducerCost(producerRootID, make(map[int32]bool))
+	}
 	if stats == nil || stats.Cost <= 0 || producerCost <= 0 ||
 		!finitePositive(stats.Cost) || !finitePositive(producerCost) {
 		discardProducerFilter()
@@ -150,11 +161,15 @@ func (builder *QueryBuilder) reusableCTEProducer(
 		len(cteRef.occurrences) >= 3 && cteReuseIsProfitableWithSafetyFactor(
 			producerCost, stats.Outcnt, refCount, cteReuseSpillCostSafetyFactor)
 	storageStats := stats
+	if rows, ok := builder.cteConstrainedGroupingRows(producerRootID); ok && rows < stats.Outcnt {
+		storageStats = DeepCopyStats(stats)
+		storageStats.Outcnt = rows
+	}
 	storageTypes := first.types
 	if requiredTypes, narrowed := builder.cteStorageOutputTypes(rootID, cteRef.occurrences); narrowed {
 		storageTypes = requiredTypes
 		if rowSize, fixed := fixedOutputRowSize(requiredTypes); fixed {
-			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
+			storageStats = &planpb.Stats{Outcnt: storageStats.Outcnt, Rowsize: rowSize}
 		}
 	}
 	if !cteReuseFitsStorage(storageStats, storageTypes, spillEligible) {
@@ -533,13 +548,52 @@ func (builder *QueryBuilder) cteExprIsTotal(
 		return true
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
-		fn.Args[1].GetT() == nil || !singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ) {
+	if fn == nil || fn.Func == nil {
 		return false
 	}
 	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
-	return ok && !overload.CannotFold() && !overload.IsRealTimeRelated() &&
-		builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting)
+	if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.Obj)
+	switch functionID {
+	case function.CASE:
+		if len(fn.Args) < 3 || len(fn.Args)%2 == 0 {
+			return false
+		}
+		for i, arg := range fn.Args {
+			if arg == nil || i < len(fn.Args)-1 && i%2 == 0 && types.T(arg.Typ.Id) != types.T_bool ||
+				!builder.cteExprIsTotal(rootID, arg, ctx, visiting) {
+				return false
+			}
+		}
+		return true
+	case function.EQUAL:
+		return types.T(expr.Typ.Id) == types.T_bool && hasNonNilFunctionArgs(fn, 2) &&
+			comparisonEvaluationIsTotal(functionID, fn.Args[0].Typ, fn.Args[1].Typ) &&
+			builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting) &&
+			builder.cteExprIsTotal(rootID, fn.Args[1], ctx, visiting)
+	default:
+		if fn.Func.ObjName != "cast" || !hasNonNilFunctionArgs(fn, 2) || fn.Args[1].GetT() == nil {
+			return false
+		}
+		if literal := fn.Args[0].GetLit(); literal != nil {
+			source, target := types.T(fn.Args[0].Typ.Id), types.T(expr.Typ.Id)
+			if literal.Isnull && source == types.T_any {
+				return !target.IsDecimal() || validDecimalPlanType(expr.Typ)
+			}
+			if text, ok := literal.Value.(*planpb.Literal_Sval); ok &&
+				(source == types.T_char || source == types.T_varchar) &&
+				(target == types.T_char || target == types.T_varchar) && expr.Typ.Width > 0 &&
+				len(text.Sval) <= int(expr.Typ.Width) && isASCII(text.Sval) {
+				// Literal value fits without a charset conversion, truncation or
+				// warning. Keep the executable cast and its comparison semantics.
+				return true
+			}
+		}
+		return singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ) &&
+			builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting)
+	}
 }
 
 func (builder *QueryBuilder) cteAggregateIsTotal(
@@ -703,7 +757,7 @@ func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEl
 	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
 		return true
 	}
-	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	declaredRowSize, sizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	return spillEligible && sizeKnown &&
 		declaredRowSize <= float64(materialized.MaxSpillBatchBytes)/2 &&
 		estimatedBytes <= cteReuseEstimatedSpillBytesLimit
@@ -716,7 +770,7 @@ func cteEstimatedMaterializedBytes(
 	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
 		return 0, false, false
 	}
-	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	declaredRowSize, sizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	if !sizeKnown {
 		return 0, false, false
 	}
@@ -835,6 +889,25 @@ func cteReuseIsProfitableWithSafetyFactor(
 	// Divide instead of multiplying sharedCost so the safety check cannot
 	// overflow after all individual terms have passed the finite guards.
 	return sharedCost < inlineCost/safetyFactor
+}
+
+// cteHasUncostedScan identifies binder placeholders, not merely small tables.
+func (builder *QueryBuilder) cteHasUncostedScan(nodeID int32, seen map[int32]bool) bool {
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == planpb.Node_TABLE_SCAN && node.ObjRef != nil &&
+		node.Stats != nil && IsDefaultStats(node.Stats) {
+		return true
+	}
+	for _, childID := range node.Children {
+		if builder.cteHasUncostedScan(childID, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 // Node Stats.Cost is not uniformly cumulative: lightweight PROJECT nodes can
@@ -1143,6 +1216,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 	drainedOccurrences := make(map[int32]bool)
 	requiredBuildChildByJoin := make(map[int32]int32)
 	hasDrainWitness := false
+	var scalarRowBounds map[int32]uint64
 
 	for _, occurrence := range occurrences {
 		// replaceCTEOccurrences rewrites only the tree below rootID. An
@@ -1188,13 +1262,23 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			if path.inputDrained && len(node.Children) > 1 && node.NodeType != planpb.Node_JOIN {
 				path.inputDrained = false
 			}
-			// LIMIT can stop the subtree before it completes. Only a positive
-			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
-			// compiled without its input steps, and a dynamic limit may be zero at
-			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil &&
-				(!cteLimitIsPositive(node.Limit) || !path.inputDrained && !cteLimitPreservesFullInput(node)) {
-				continue
+			// LIMIT 0 is compiled without its input steps, and a dynamic limit
+			// may be zero at execution time. A positive literal cannot truncate
+			// a blocking input or a structurally bounded scalar UNION ALL whose
+			// entire output fits. OFFSET is not used to relax the latter bound.
+			if node.Limit != nil {
+				if !cteLimitIsPositive(node.Limit) {
+					continue
+				}
+				if !path.inputDrained && !cteLimitPreservesFullInput(node) {
+					if scalarRowBounds == nil {
+						scalarRowBounds = make(map[int32]uint64)
+					}
+					bound := builder.cteScalarUnionRowBound(path.nodeID, scalarRowBounds)
+					if bound == 0 || bound > node.Limit.GetLit().GetU64Val() {
+						continue
+					}
+				}
 			}
 			// APPLY may skip its right input when the left side is empty. Block
 			// sampling can terminate successfully after a subset of its input.
@@ -1331,8 +1415,8 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 // optimizeFilters moves a direct parent Filter equality into Join.OnList. The
 // later optimizer pass is mandatory for SELECT plans, so this is the same
 // physical equality proof as IsEquiJoin, observed one phase earlier. Only a
-// direct, non-barrier Filter is accepted; LIMIT/OFFSET and outer-scope or
-// volatile expressions keep the conservative inline plan.
+// unique-parent INNER path to a non-barrier Filter is accepted; LIMIT/OFFSET,
+// outer-scope and volatile expressions keep the conservative inline plan.
 func (builder *QueryBuilder) cteInnerJoinGetsEquiCondition(
 	nodeID int32,
 	parents map[int32][]int32,
@@ -1345,7 +1429,17 @@ func (builder *QueryBuilder) cteInnerJoinGetsEquiCondition(
 		len(node.Children) != 2 || len(parents[nodeID]) != 1 {
 		return false
 	}
-	parent := builder.qry.Nodes[parents[nodeID][0]]
+	parentID := parents[nodeID][0]
+	parent := builder.qry.Nodes[parentID]
+	for depth := 0; parent != nil && parent.NodeType == planpb.Node_JOIN; depth++ {
+		if depth >= len(builder.qry.Nodes) || parent.JoinType != planpb.Node_INNER ||
+			joinNodeHasLocalSemantics(parent) || parent.FilterIsBarrier ||
+			len(parent.SourceStep) != 0 || len(parents[parentID]) != 1 {
+			return false
+		}
+		parentID = parents[parentID][0]
+		parent = builder.qry.Nodes[parentID]
+	}
 	if parent == nil || parent.NodeType != planpb.Node_FILTER || parent.FilterIsBarrier ||
 		parent.Limit != nil || parent.Offset != nil {
 		return false
@@ -1368,6 +1462,44 @@ func (builder *QueryBuilder) cteInnerJoinGetsEquiCondition(
 		}
 	}
 	return false
+}
+
+// cteScalarUnionRowBound proves a positive output bound rooted in blocking
+// scalar aggregates. Zero means unknown, never an empty input. Do not tighten
+// this bound with LIMIT, predicates or estimates: doing so could let an early
+// consumer skip another branch's work/errors while appearing to fit the bound.
+// Unsupported operators remain barriers, and the caller still proves every
+// occurrence's path (including inner limits and conditional joins) separately.
+func (builder *QueryBuilder) cteScalarUnionRowBound(nodeID int32, memo map[int32]uint64) uint64 {
+	if bound, ok := memo[nodeID]; ok {
+		return bound
+	}
+	memo[nodeID] = 0
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return 0
+	}
+	node := builder.qry.Nodes[nodeID]
+	var bound uint64
+	switch node.NodeType {
+	case planpb.Node_AGG:
+		if len(node.Children) == 1 && len(node.GroupBy) == 0 && len(node.GroupingFlag) == 0 {
+			bound = 1
+		}
+	case planpb.Node_PROJECT, planpb.Node_FILTER, planpb.Node_WINDOW, planpb.Node_SORT:
+		if len(node.Children) == 1 {
+			bound = builder.cteScalarUnionRowBound(node.Children[0], memo)
+		}
+	case planpb.Node_UNION_ALL:
+		if len(node.Children) == 2 {
+			left := builder.cteScalarUnionRowBound(node.Children[0], memo)
+			right := builder.cteScalarUnionRowBound(node.Children[1], memo)
+			if left > 0 && right > 0 && left <= math.MaxUint64-right {
+				bound = left + right
+			}
+		}
+	}
+	memo[nodeID] = bound
+	return bound
 }
 
 func cteLimitPreservesFullInput(node *planpb.Node) bool {
@@ -1751,12 +1883,14 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicatesWithDrainRequirement(
 				continue
 			}
 			if !isTruncationSafePredicateExpr(predicate) {
-				// The ordinary filter optimizer can move this deterministic local
-				// predicate below the CTE output, but copying it into an OR across
-				// consumers could introduce new evaluation failures. Omit it from
-				// the producer bound and remember that the row domain is inexact.
+				// A value-proved literal cast can still provide a safe producer
+				// bound. Do not let this broader routing proof certify an exact
+				// output-evaluation domain: sharing must retain the existing
+				// total-producer/output guards for these newly admitted bounds.
 				domainComplete = false
-				continue
+				if !localCTEGuardedPredicateSafe(predicate) {
+					continue
+				}
 			}
 			predicates = append(predicates, predicate)
 		}

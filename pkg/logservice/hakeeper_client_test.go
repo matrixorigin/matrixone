@@ -169,6 +169,59 @@ func TestHAKeeperClientConstructorsRejectContextWithoutDeadline(t *testing.T) {
 	}
 }
 
+func TestHAKeeperConstructorValidationOrderAndDefaults(t *testing.T) {
+	original := newHAKeeperClientFunc
+	t.Cleanup(func() { newHAKeeperClientFunc = original })
+	dialErr := errors.New("dial failed")
+	var captured HAKeeperClientConfig
+	calls := 0
+	newHAKeeperClientFunc = func(_ context.Context, _ string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+		calls++
+		captured = cfg
+		return nil, dialErr
+	}
+	constructors := []struct {
+		name string
+		fn   func(context.Context, string, HAKeeperClientConfig) (any, error)
+	}{
+		{"cluster", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewClusterHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"cn", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewCNHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"tn", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewTNHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"log", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewLogHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"proxy", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewProxyHAKeeperClient(ctx, sid, cfg)
+		}},
+	}
+	for _, c := range constructors {
+		t.Run(c.name, func(t *testing.T) {
+			invalid := HAKeeperClientConfig{}
+			invalid.BackendReadTimeout.Duration = -time.Second
+			before := calls
+			client, err := c.fn(context.Background(), "service", invalid)
+			require.Nil(t, client)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig), "%v", err)
+			require.Equal(t, before, calls)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			client, err = c.fn(ctx, "service", HAKeeperClientConfig{})
+			require.ErrorIs(t, err, dialErr)
+			require.True(t, client != nil, "constructor preserves a typed nil on dial failure")
+			require.Equal(t, before+1, calls)
+			require.Equal(t, []string{DefaultLogServiceServiceAddress}, captured.ServiceAddresses)
+			require.EqualValues(t, 100, captured.AllocateIDBatch)
+			require.Equal(t, defaultBackendReadTimeout, captured.BackendReadTimeout.Duration)
+		})
+	}
+}
+
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
@@ -842,6 +895,116 @@ func TestManagedHAKeeperClientResetIsGenerationScoped(t *testing.T) {
 	client.mu.RUnlock()
 	require.Nil(t, current,
 		"a failure from the current generation must invalidate that generation")
+}
+
+type deadlineHeartbeatRPCClient struct {
+	countingErrorRPCClient
+	started chan struct{}
+}
+
+func (c *deadlineHeartbeatRPCClient) Send(
+	ctx context.Context, _ string, request morpc.Message,
+) (*morpc.Future, error) {
+	c.sends.Add(1)
+	request.(*RPCRequest).Release()
+	if c.started != nil {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestLogHeartbeatDeadlineReplacesSelectedClient(t *testing.T) {
+	pool := &sync.Pool{}
+	pool.New = func() any { return &RPCRequest{pool: pool} }
+	transport := &deadlineHeartbeatRPCClient{}
+	selected := &hakeeperClient{pool: pool, client: transport}
+	client := &managedHAKeeperClient{}
+	client.mu.client = selected
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	_, err := client.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int32(1), transport.sends.Load())
+	require.Equal(t, int32(1), transport.closes.Load())
+	require.Nil(t, client.getCurrentClient())
+}
+
+func TestLogHeartbeatDeadlineBeforeSendIsNotAttempted(t *testing.T) {
+	pool := &sync.Pool{}
+	pool.New = func() any { return &RPCRequest{pool: pool} }
+	transport := &deadlineHeartbeatRPCClient{}
+	selected := &hakeeperClient{pool: pool, client: transport}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, attempted, err := selected.sendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.False(t, attempted)
+	require.Zero(t, transport.sends.Load())
+}
+
+func TestLogHeartbeatDoesNotReplaceClientBeforeAttemptOrOnCancellation(t *testing.T) {
+	pool := &sync.Pool{}
+	pool.New = func() any { return &RPCRequest{pool: pool} }
+	transport := &deadlineHeartbeatRPCClient{started: make(chan struct{})}
+	selected := &hakeeperClient{pool: pool, client: transport}
+	client := &managedHAKeeperClient{}
+	client.mu.client = selected
+	defer func() { require.NoError(t, client.Close()) }()
+
+	expired, expire := context.WithTimeout(context.Background(), time.Second)
+	expire()
+	_, err := client.SendLogHeartbeat(expired, pb.LogStoreHeartbeat{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, transport.sends.Load())
+	require.Same(t, selected, client.getCurrentClient())
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	_, err = client.SendLogHeartbeat(deadlineCtx, pb.LogStoreHeartbeat{})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, transport.sends.Load())
+	require.Same(t, selected, client.getCurrentClient())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	go func() {
+		select {
+		case <-transport.started:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	_, err = client.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Same(t, selected, client.getCurrentClient())
+}
+
+func TestLogHeartbeatMovesOffUnansweredEndpoint(t *testing.T) {
+	runServiceTest(t, true, true, func(t *testing.T, s *Service) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg := HAKeeperClientConfig{ServiceAddresses: []string{address}}
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer connectCancel()
+		base, err := NewLogHAKeeperClient(connectCtx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, base.Close()) }()
+		client := base.(*managedHAKeeperClient)
+		client.cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+
+		attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer attemptCancel()
+		_, err = base.SendLogHeartbeat(attemptCtx, s.store.getHeartbeatMessage())
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, client.getCurrentClient())
+
+		retryCtx, retryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer retryCancel()
+		_, err = base.SendLogHeartbeat(retryCtx, s.store.getHeartbeatMessage())
+		require.NoError(t, err)
+		require.Equal(t, s.cfg.LogServiceServiceAddr(), client.getCurrentClient().addr)
+	})
 }
 
 func TestManagedHAKeeperClientRejectsNilPreparedClient(t *testing.T) {

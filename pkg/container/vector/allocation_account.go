@@ -33,13 +33,15 @@ func allocationAccountInvalid(message string) error {
 }
 
 // AllocationAccountSelection is an immutable choice for the first owned
-// off-heap allocations of a Vector. The physical MPool allocation metadata
-// remains the sole owner of the resulting charge.
+// off-heap allocations of a Vector. It normally identifies an allocation
+// account; JSON readers can instead use a transient admission. Physical MPool
+// metadata remains the sole owner of each resulting allocation charge.
 //
 // A selection may be shared by all vectors owned by one Batch. Views do not
 // copy it: they share storage and therefore must not create a second charge.
 type AllocationAccountSelection struct {
 	account       *mpool.AllocationAccount
+	transient     JSONReaderMemoryAdmission
 	owner         mpool.AllocationOwner
 	dataSite      mpool.AllocationSite
 	areaSite      mpool.AllocationSite
@@ -58,6 +60,9 @@ func AllocationAccountSelectionsEqual(
 	if left == right {
 		return true
 	}
+	if left != nil && left.transient != nil || right != nil && right.transient != nil {
+		return false
+	}
 	return left != nil && right != nil &&
 		left.account == right.account &&
 		left.owner == right.owner &&
@@ -71,6 +76,12 @@ func AllocationAccountSelectionsEqual(
 func allocationAccountSelectionsShareProvenance(
 	left, right *AllocationAccountSelection,
 ) bool {
+	if left != nil && left == right {
+		return true
+	}
+	if left != nil && left.transient != nil || right != nil && right.transient != nil {
+		return false
+	}
 	return left != nil && right != nil &&
 		left.account == right.account &&
 		left.owner == right.owner &&
@@ -130,6 +141,19 @@ func (v *Vector) UnionBatchWithAllocationAccount(
 		v.allocationAccount = ordinary
 	}()
 	return v.UnionBatch(source, offset, count, flags, mp)
+}
+
+// NewAccountedBuffer creates owned auxiliary bytes under this destination's
+// immutable provenance and capacity class. The caller must Free the buffer or
+// transfer it to an owner that releases it through its MPool.
+func (s *AllocationAccountSelection) NewAccountedBuffer(mp *mpool.MPool) (*mpool.AccountedBuffer, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if s.transient != nil {
+		return mpool.NewAdmittedBuffer(mp, s.admitPhysical)
+	}
+	return mpool.NewAccountedBufferWithCapacityClass(mp, s.account, s.owner, s.dataSite, s.capacityClass)
 }
 
 func NewAllocationAccountSelection(
@@ -305,6 +329,9 @@ func NewConstArrayWithAllocation[T types.ArrayElement](
 }
 
 func (s *AllocationAccountSelection) validate() error {
+	if s != nil && s.transient != nil && s.account == nil {
+		return nil
+	}
 	if s == nil || s.account == nil || s.account.Handle() == 0 ||
 		s.owner < mpool.AllocationOwnerMin ||
 		s.owner > mpool.AllocationOwnerCatalogMax ||
@@ -315,6 +342,28 @@ func (s *AllocationAccountSelection) validate() error {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil
+}
+
+// ReservePinnedCapacity accounts for a non-MPool backing retained by a reader.
+// The caller owns the returned lease and releases it when the final retained
+// view or result no longer pins that physical allocation.
+func (s *AllocationAccountSelection) ReservePinnedCapacity(capacity uint64) (*mpool.CapacityLease, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if s.transient != nil {
+		return mpool.NewAdmittedCapacityLease(capacity, mpool.PhysicalMemoryAdmission(s.transient))
+	}
+	reservation, err := s.account.ReserveCapacityWithClass(capacity, s.capacityClass, s.owner, s.areaSite)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := reservation.Commit(capacity)
+	if err != nil {
+		reservation.Abort()
+		return nil, err
+	}
+	return lease, nil
 }
 
 // AllocationAccountSelection returns the immutable selection used by this
@@ -355,7 +404,7 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 ||
+	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -376,7 +425,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
 // after replacement. Accounted bitmap storage is explicit external storage.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.dataLease != nil || v.areaLease != nil ||
+	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||
@@ -481,9 +530,8 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 		rows = v.Capacity()
 	}
 	if v.allocationAccount != nil {
-		// InplaceSort has an infallible public API and reorders all row
-		// metadata together. Reserve its NULL and grouping sidecars while an
-		// MPool is available, before publishing binary row metadata.
+		// Reserve the NULL and grouping sidecars alongside binary row
+		// metadata so later row reordering can move all bitmaps together.
 		if err := v.ensureNullCapacity(rows, mp); err != nil {
 			return err
 		}
@@ -590,14 +638,7 @@ func (v *Vector) allocateBitmapGrowth(
 	if !ok || newBytes > int64(math.MaxInt) || newBytes%8 != 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	next, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-		int(newBytes/8),
-		mp,
-		v.allocationAccount.account,
-		v.allocationAccount.owner,
-		site,
-		v.allocationAccount.capacityClass,
-	)
+	next, err := makeSelectedSlice[uint64](v.allocationAccount, int(newBytes/8), mp, site)
 	if err != nil {
 		return nil, err
 	}
@@ -653,6 +694,9 @@ func (v *Vector) allocOwned(
 		return nil, allocationAccountInvalid(
 			"accounted allocation must be off-heap",
 		)
+	}
+	if v.allocationAccount.transient != nil {
+		return mp.AllocAdmitted(size, v.allocationAccount.admitPhysical)
 	}
 	site := v.allocationAccount.areaSite
 	if data {

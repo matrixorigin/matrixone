@@ -146,11 +146,10 @@ def create_query(query_type, client, columns, snapshot=None, transaction_wrapper
     if model is None:
         expressions = [item for item in projection if not isinstance(item, str)]
         sources = select(*expressions).get_final_froms() if expressions else []
-        if len(sources) == 1:
+        if sources:
             query._source_selectable = query._root_selectable = sources[0]
             query._table_name = getattr(sources[0], 'name', None)
-        elif len(sources) > 1:
-            raise ValueError('Ambiguous query sources; provide a model and explicit JOIN')
+            query._check_projection_sources = True
         else:
             for item in projection:
                 if isinstance(item, str) and '.' in item:
@@ -489,8 +488,7 @@ class Query:
 
     def first(self) -> Optional:
         """Execute query and return first result"""
-        self._limit_count = 1
-        results = self.all()
+        results = _first_query(self).all()
         return results[0] if results else None
 
     def one(self):
@@ -787,6 +785,7 @@ class BaseMatrixOneQuery:
         self._source_selectable = selectable_of(model_class)
         self._root_selectable = self._source_selectable
         self._joined_selectables = []
+        self._check_projection_sources = False
         self._having_conditions = []
         self._having_params = []
         self._order_by_columns = []
@@ -969,11 +968,7 @@ class BaseMatrixOneQuery:
 
     def _detect_sqlalchemy_model(self) -> bool:
         """Detect if the model class is a SQLAlchemy model"""
-        return (
-            hasattr(self.model_class, "__tablename__")
-            and hasattr(self.model_class, "__mapper__")
-            and hasattr(self.model_class, "__table__")
-        )
+        return hasattr(self.model_class, "__mapper__") and hasattr(self.model_class, "__table__")
 
     def select(self, *columns) -> "BaseMatrixOneQuery":
         """Add SELECT columns - SQLAlchemy style"""
@@ -1198,11 +1193,23 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
+    def _validate_projection_sources(self):
+        if self._check_projection_sources:
+            from sqlalchemy.sql import select
+
+            expressions = [normalize_expression(col) for col in self._select_columns if not isinstance(col, str)]
+            sources = select(*expressions).get_final_froms() if expressions else []
+            admitted = [self._source_selectable] + self._joined_selectables
+            known = {id(source._deannotate()) for source in admitted if source is not None}
+            if any(id(source._deannotate()) not in known for source in sources):
+                raise ValueError('Ambiguous query sources; provide an explicit JOIN')
+
     @statement_compilation
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
 
+        self._validate_projection_sources()
         builder = MatrixOneSQLBuilder()
 
         # Build CTE clause if any CTEs are defined
@@ -1451,6 +1458,7 @@ class BaseMatrixOneQuery:
         """
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         if not self._update_set_columns:
@@ -1481,6 +1489,7 @@ class BaseMatrixOneQuery:
         """Build DELETE SQL query using unified SQL builder"""
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         from .sql_builder import build_delete_query
@@ -1920,10 +1929,40 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         return ExportManager(self.client if not self.transaction_wrapper else self.transaction_wrapper)
 
     def _parse_export_format(self, format: str):
-        """Parse format string to ExportFormat enum"""
-        from .export import ExportFormat
+        """Validate the formats supported by the current export manager."""
+        if not isinstance(format, str) or format.lower() not in ('csv', 'jsonline'):
+            raise ValueError("Export format must be 'csv' or 'jsonline'")
+        return format.lower()
 
-        return ExportFormat.CSV if format.lower() == 'csv' else ExportFormat.JSONLINE
+    def _export_to_path(
+        self,
+        path,
+        format,
+        fields_terminated_by,
+        fields_enclosed_by,
+        lines_terminated_by,
+        header,
+        max_file_size,
+        force_quote,
+    ):
+        format = self._parse_export_format(format)
+        if max_file_size is not None or force_quote is not None:
+            raise ValueError('max_file_size and force_quote are not supported by the export manager')
+        manager = self._get_export_manager()
+        if format == 'csv':
+            return manager.to_csv(
+                path,
+                self,
+                sep=',' if fields_terminated_by is None else fields_terminated_by,
+                quotechar=fields_enclosed_by,
+                lineterminator='\n' if lines_terminated_by is None else lines_terminated_by,
+                header=header,
+            )
+        if header or any(
+            value is not None for value in (fields_terminated_by, fields_enclosed_by, lines_terminated_by)
+        ):
+            raise ValueError('CSV options require CSV export format')
+        return manager.to_jsonl(path, self)
 
     def export_to_file(
         self,
@@ -1946,51 +1985,42 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             filepath: Absolute path on server filesystem where file will be created
             format: Export file format ('csv' or 'jsonline')
             fields_terminated_by: Field delimiter (default: ',' for CSV)
-            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
+            fields_enclosed_by: Field enclosure character (default: no enclosure)
             lines_terminated_by: Line terminator (default: '\\n')
-            header: Whether to include column headers (default: False)
-            max_file_size: Maximum size per file in bytes (for splitting large exports)
-            force_quote: List of column names/indices to always quote
+            header: Defaults to False; True warns because headers are unsupported
+            max_file_size: Reserved; non-None values raise ValueError
+            force_quote: Reserved; non-None values raise ValueError
 
         Returns:
             ResultSet with export operation results
 
         Examples:
-            >>> # Export filtered users to CSV with headers
+            >>> # Export filtered users to CSV
             >>> client.query(User).filter(User.age > 25).export_to_file(
             ...     filepath="/tmp/users_over_25.csv",
             ...     format='csv',
-            ...     header=True
             ... )
 
             >>> # Export aggregated data
             >>> from sqlalchemy import func
             >>> client.query(Order, func.sum(Order.amount).label('total')) \\
             ...     .group_by(Order.customer_id) \\
-            ...     .export_to_file("/tmp/customer_totals.csv", format='csv', header=True)
+            ...     .export_to_file("/tmp/customer_totals.csv", format='csv')
 
         Note:
             - The filepath must be on the MatrixOne server's filesystem
             - The MatrixOne server process must have write permissions
-            - For more control, use client.export.to_file() with the query's SQL
+            - For more control, use client.export.to_csv() or client.export.to_jsonl()
         """
-        # Build the SELECT query SQL
-        sql, params = self._build_sql()
-
-        # Use the export manager to export
-        export_manager = self._get_export_manager()
-        export_format = self._parse_export_format(format)
-
-        return export_manager.to_file(
-            query=sql,
-            filepath=filepath,
-            format=export_format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
-            header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
+        return self._export_to_path(
+            filepath,
+            format,
+            fields_terminated_by,
+            fields_enclosed_by,
+            lines_terminated_by,
+            header,
+            max_file_size,
+            force_quote,
         )
 
     def export_to_stage(
@@ -2017,24 +2047,22 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             filename: Filename to create in the stage
             format: Export file format ('csv' or 'jsonline')
             fields_terminated_by: Field delimiter (default: ',' for CSV)
-            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
+            fields_enclosed_by: Field enclosure character (default: no enclosure)
             lines_terminated_by: Line terminator (default: '\\n')
-            header: Whether to include column headers (default: False)
-            max_file_size: Maximum size per file in bytes (for splitting large exports)
-            force_quote: List of column names/indices to always quote
-            compression: Compression format (e.g., 'gzip', 'bzip2')
+            header: Defaults to False; True warns because headers are unsupported
+            max_file_size: Reserved; non-None values raise ValueError
+            force_quote: Reserved; non-None values raise ValueError
+            compression: Reserved; non-None values raise ValueError
 
         Returns:
             ResultSet with export operation results
 
         Examples:
-            >>> # Export users to S3 stage with compression
+            >>> # Export users to an S3 stage
             >>> client.query(User).filter(User.active == True).export_to_stage(
             ...     stage_name='s3_backup',
             ...     filename='active_users.csv',
             ...     format='csv',
-            ...     header=True,
-            ...     compression='gzip'
             ... )
 
             >>> # Export aggregated sales data
@@ -2043,7 +2071,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             ...     .select(Sale.product_id, func.sum(Sale.quantity).label('total_sold')) \\
             ...     .group_by(Sale.product_id) \\
             ...     .having(func.sum(Sale.quantity) > 100) \\
-            ...     .export_to_stage('data_warehouse', 'sales_summary.csv', header=True)
+            ...     .export_to_stage('data_warehouse', 'sales_summary.csv')
 
             >>> # Export to JSONLINE format
             >>> client.query(Event).filter(Event.timestamp > '2025-01-01').export_to_stage(
@@ -2055,28 +2083,22 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         Note:
             - The stage must exist before exporting
             - The stage must have appropriate write permissions
-            - Use compression for large exports to save storage and transfer costs
+            - Compression, max_file_size and force_quote are not supported
             - This is more flexible than export_to_file() as it supports cloud storage
         """
-        # Build the SELECT query SQL
-        sql, params = self._build_sql()
+        from ._utils import stage_file_uri
 
-        # Use the export manager to export
-        export_manager = self._get_export_manager()
-        export_format = self._parse_export_format(format)
-
-        return export_manager.to_stage(
-            query=sql,
-            stage_name=stage_name,
-            filename=filename,
-            format=export_format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
-            header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
-            compression=compression,
+        if compression is not None:
+            raise ValueError('compression is not supported by the export manager')
+        return self._export_to_path(
+            stage_file_uri(stage_name, filename),
+            format,
+            fields_terminated_by,
+            fields_enclosed_by,
+            lines_terminated_by,
+            header,
+            max_file_size,
+            force_quote,
         )
 
     def export_to(self, stage_or_filepath: str, filename: Optional[str] = None, **kwargs) -> Any:
@@ -2101,23 +2123,19 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             ...     'my_stage',
             ...     'users_over_25.csv',
             ...     format='csv',
-            ...     header=True
             ... )
 
             >>> # Export to file
             >>> client.query(Order).filter(Order.status == 'completed').export_to(
             ...     '/tmp/completed_orders.csv',
             ...     format='csv',
-            ...     header=True
             ... )
 
-            >>> # Export with compression
+            >>> # Export events to a stage
             >>> client.query(Event).export_to(
             ...     'event_archive',
             ...     'events_2025.csv',
             ...     format='csv',
-            ...     header=True,
-            ...     compression='gzip'
             ... )
 
         Note:

@@ -124,21 +124,9 @@ func InspectFile(
 	if options.FileShard != nil {
 		return nil, moerr.NewInvalidInput(ctx, "Arrow IPC File planning cannot consume a shard")
 	}
-	rangeReader := fileservice.NewLeasedRangeReader(fs)
-	if options.ExpectedIdentity != nil {
-		expected := *options.ExpectedIdentity
-		if err := expected.Validate(); err != nil {
-			return nil, err
-		}
-		if expected.Size != size {
-			return nil, moerr.NewInvalidInputf(ctx,
-				"Arrow object identity size %d does not match planned size %d", expected.Size, size)
-		}
-		conditional, ok := rangeReader.(fileservice.ConditionalLeasedRangeReader)
-		if !ok {
-			return nil, moerr.NewNotSupported(ctx, "conditional Arrow object reads")
-		}
-		rangeReader = fixedIdentityRangeReader{reader: conditional, expected: expected}
+	rangeReader, err := newIdentityRangeReader(ctx, fs, size, options.ExpectedIdentity)
+	if err != nil {
+		return nil, err
 	}
 	ownedAllocator := newAdmissionAllocator(ctx, admission)
 	defer ownedAllocator.releaseAll()

@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -384,6 +385,7 @@ func extractPKAsString(
 
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
+	// typeswitch:partial vecf8/vecf4 cannot be primary key columns (rejected at DDL)
 	switch vec.GetType().Oid {
 	case types.T_json:
 		return types.DecodeJson(vec.GetBytesAt(rowIdx))
@@ -544,7 +546,10 @@ func materializeValuesUnified(
 	}
 
 	// Sort for segment construction (and deterministic hashmap ordering).
-	vec.InplaceSort()
+	if err := vec.InplaceSort(mp); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
 
 	// Put all PK values into the hashmap.  keyCols=[0] because the Vec has
 	// exactly one column (the PK).
@@ -625,7 +630,9 @@ func materializeCompositeValuesUnified(
 	*encodedVec.GetType() = pkType
 
 	// Sort the encoded vector (lexicographic order preserves composite key ordering).
-	encodedVec.InplaceSort()
+	if err := encodedVec.InplaceSort(mp); err != nil {
+		return nil, err
+	}
 
 	// Put into hashmap.
 	if err = pickKeyHashmap.PutByVectors([]*vector.Vector{encodedVec}, []int{0}); err != nil {
@@ -759,7 +766,7 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select)
+	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1303,6 +1310,13 @@ func appendExprToVecWithPrepareParams(
 	case *tree.NumVal:
 		return appendNumValToVec(vec, e, pkType, tz, mp)
 	case *tree.UnaryExpr:
+		if pkType.Oid == types.T_binary || pkType.Oid == types.T_varbinary {
+			// Signed numeric spellings have no byte-preserving key semantics for
+			// BINARY/VARBINARY; explicitly reject instead of appending their
+			// ASCII text as if it were a real stored key.
+			return moerr.NewInvalidInputNoCtxf(
+				"unary expression not supported for %s primary key", pkType.Oid.String())
+		}
 		operand := unwrapPickKeyParens(e.Expr)
 		num, ok := operand.(*tree.NumVal)
 		if !ok {
@@ -1356,6 +1370,9 @@ func unwrapPickKeyParens(expr tree.Expr) tree.Expr {
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	if pkType.Oid == types.T_binary || pkType.Oid == types.T_varbinary {
+		return appendBinaryNumValToVec(vec, val, pkType, mp)
+	}
 	if shouldNormalizeIntegerNumVal(val, pkType) {
 		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
 	}
@@ -1425,6 +1442,88 @@ func appendIntegerNumValToVec(
 		n.Neg(n)
 	}
 	return appendNumericStringToVec(vec, n.String(), pkType, tz, mp)
+}
+
+// appendBinaryNumValToVec converts a KEYS literal for a BINARY/VARBINARY
+// primary key by routing on the AST literal category. Only the hexadecimal
+// literal forms decode hex; ordinary string literals contribute their
+// verbatim parsed bytes, and every other literal category is rejected so no
+// numeric or bit marker silently becomes its ASCII spelling.
+func appendBinaryNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, mp *mpool.MPool) error {
+	switch val.ValType {
+	case tree.P_char, tree.P_ScoreBinary:
+		// Plain and _binary-introduced string literals: parser-decoded bytes,
+		// no second unescape. '0x61' stays four ASCII bytes.
+		return appendBinaryKeyBytesToVec(vec, []byte(val.String()), pkType, mp)
+	case tree.P_hexnum, tree.P_ScoreBinaryHexnum:
+		// x'NN' and 0xNN (with or without a _binary introducer).
+		raw, err := decodePickBinaryHexLiteral(val.String())
+		if err != nil {
+			return err
+		}
+		return appendBinaryKeyBytesToVec(vec, raw, pkType, mp)
+	default:
+		return moerr.NewInvalidInputNoCtxf(
+			"literal %q is not a string or hexadecimal value for %s primary key",
+			val.String(), pkType.Oid.String())
+	}
+}
+
+// decodePickBinaryHexLiteral decodes the scanner-normalized hexadecimal
+// literal text (both x'NN' and 0xNN spellings produce 0xNN) to raw bytes.
+// The x'NN' spelling guarantees an even digit count at scan time; the plain
+// 0xNN spelling permits odd digits, which are compensated with a high zero
+// nibble.
+func decodePickBinaryHexLiteral(s string) ([]byte, error) {
+	if len(s) < 2 || (s[:2] != "0x" && s[:2] != "0X") {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+	}
+	digits := s[2:]
+	if len(digits)%2 != 0 {
+		digits = "0" + digits
+	}
+	raw, err := hex.DecodeString(digits)
+	if err != nil {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+	}
+	return raw, nil
+}
+
+// appendBinaryKeyBytesToVec appends raw key bytes to a BINARY/VARBINARY
+// vector following the ordinary string-to-binary assignment contract
+// (func_cast.strToStr): lengths count bytes, BINARY zero-pads to the declared
+// width, VARBINARY keeps the original bytes, and over-capacity input fails
+// with a controlled error instead of truncating into a different real key.
+// Padding is bounded by the DDL-validated column width — the same per-row
+// allocation the stored value already pays — and illegal declared widths
+// (negative or beyond the DDL limit) are rejected before any allocation.
+func appendBinaryKeyBytesToVec(vec *vector.Vector, raw []byte, pkType types.Type, mp *mpool.MPool) error {
+	if pkType.Oid != types.T_binary && pkType.Oid != types.T_varbinary {
+		return moerr.NewInvalidInputNoCtxf(
+			"%s primary key is not BINARY or VARBINARY", pkType.Oid.String())
+	}
+	// The declared width comes from table metadata; reject corrupt values up
+	// front instead of letting them drive an unbounded make. These are the
+	// same limits getTypeFromAst enforces at CREATE TABLE; legitimate width 0
+	// and empty keys keep the assignment contract.
+	maxDeclared := int32(types.MaxVarBinaryLen)
+	if pkType.Oid == types.T_binary {
+		maxDeclared = types.MaxBinaryLen
+	}
+	if pkType.Width < 0 || pkType.Width > maxDeclared {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid declared length %d for %s primary key",
+			pkType.Width, pkType.Oid.String())
+	}
+	if len(raw) > int(pkType.Width) {
+		return moerr.NewOutOfRangeNoCtxf(
+			fmt.Sprintf("%s(%d)", pkType.Oid.String(), pkType.Width),
+			"value 0x%x", raw)
+	}
+	if pkType.Oid == types.T_binary && len(raw) < int(pkType.Width) {
+		raw = append(raw, make([]byte, int(pkType.Width)-len(raw))...)
+	}
+	return vector.AppendBytes(vec, raw, false, mp)
 }
 
 func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
@@ -1503,6 +1602,11 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
 		return vector.AppendBytes(vec, []byte(s), false, mp)
+	case types.T_binary, types.T_varbinary:
+		// Raw byte content from string constants and prepare parameters: no
+		// UNHEX and no charset conversion. BINARY zero-pads to the declared
+		// byte width; VARBINARY keeps the original byte length.
+		return appendBinaryKeyBytesToVec(vec, []byte(s), pkType, mp)
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(s, pkType.Width, pkType.Scale)
 		if err != nil {

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1661,6 +1663,91 @@ func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
 }
 
+func TestDedupPrimaryKeyRuntimeFilterWithStaleStats(t *testing.T) {
+	setPlanTestGlobalVariable(t, "", "runtime_filter_limit_in", int64(32))
+	for _, tc := range []struct {
+		name   string
+		single bool
+		ndv    float64
+		mutate func(*QueryBuilder)
+		want   bool
+	}{
+		{name: "serialized composite key", ndv: 64, want: true},
+		{name: "single primary key", single: true, ndv: 64, want: true},
+		{name: "unknown NDV", ndv: -1, want: true},
+		{name: "empty statistics", ndv: 0, want: true},
+		{name: "at exact IN budget", ndv: 64, want: true, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 32
+			b.qry.Nodes[1].Stats.Outcnt = 32
+		}},
+		{name: "above exact IN budget", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 33
+			b.qry.Nodes[1].Stats.Outcnt = 33
+		}},
+		{name: "ordinary join retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].JoinType = planpb.Node_INNER
+		}},
+		{name: "right dedup preserves probe", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].IsRightJoin = true
+		}},
+		{name: "partial composite key retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			probe := b.qry.Nodes[0]
+			typ := probe.TableDef.Cols[0].Typ
+			b.qry.Nodes[1].TableDef.Cols[0].Typ = typ
+			b.qry.Nodes[2].OnList = []*planpb.Expr{makeRuntimeFilterTestEq(typ, 1, 2, 0, 0)}
+		}},
+		{name: "nonleading primary key retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].TableDef.ClusterBy = &planpb.ClusterByDef{Name: "a"}
+		}},
+		{name: "limited probe is not truncated", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].Limit = makePlan2Uint64ConstExprWithType(1)
+		}},
+		{name: "incompatible equality encoding", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].OnList[0].GetF().Args[1].Typ.Id = int32(types.T_int64)
+		}},
+		{name: "large build retains existing guard", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[1].Stats.Outcnt = 320001
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newRuntimeFilterSingleTestBuilder(t, false)
+			probe, build, join := b.qry.Nodes[0], b.qry.Nodes[1], b.qry.Nodes[2]
+			keyPos := int32(0)
+			if !tc.single {
+				configureRuntimeFilterCompositePK(b)
+				keyPos = 2
+			}
+			keyType := probe.TableDef.Cols[keyPos].Typ
+			build.TableDef.Cols[0].Typ = keyType
+			join.JoinType = planpb.Node_DEDUP
+			join.OnList = []*planpb.Expr{makeRuntimeFilterTestEq(keyType, 1, 2, keyPos, 0)}
+			join.Stats.HashmapStats.HashmapSize = 16
+			build.Stats.Outcnt = 16
+			probe.TableDef.TblId = 41
+			probe.Stats.TableCnt, probe.Stats.Outcnt = 64, 64
+			ctx := &statsCacheCompilerContext{MockCompilerContext: b.compCtx.(*MockCompilerContext), statsCache: NewStatsCache()}
+			ctx.statsCache.Set(41, &statspb.StatsInfo{NdvMap: map[string]float64{probe.TableDef.Pkey.PkeyColName: tc.ndv}})
+			b.compCtx = ctx
+			b.tag2Table = map[int32]*TableDef{1: probe.TableDef}
+			if tc.mutate != nil {
+				tc.mutate(b)
+			}
+			b.generateRuntimeFilters(2)
+			require.Equal(t, tc.want, len(join.RuntimeFilterBuildList) == 1)
+			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
+			if tc.want {
+				buildSpec, probeSpec := join.RuntimeFilterBuildList[0], probe.RuntimeFilterProbeList[0]
+				require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+				require.Equal(t, int32(32), buildSpec.UpperLimit)
+				require.Equal(t, keyPos, probeSpec.Expr.GetCol().ColPos)
+				require.False(t, probeSpec.NotOnPk)
+				require.False(t, probeSpec.MatchPrefix)
+				require.Empty(t, build.RuntimeFilterProbeList)
+			}
+		})
+	}
+}
+
 func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		ndv  float64
@@ -1683,4 +1770,133 @@ func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
 		})
 	}
+}
+
+// runtimeFilterContextTrace verifies the planner does not obtain session state
+// before the exact-filter contract actually needs it.
+type runtimeFilterContextTrace struct {
+	CompilerContext
+	calls []string
+}
+
+func (c *runtimeFilterContextTrace) GetContext() context.Context {
+	c.calls = append(c.calls, "context")
+	return c.CompilerContext.GetContext()
+}
+func (c *runtimeFilterContextTrace) GetProcess() *process.Process {
+	c.calls = append(c.calls, "process")
+	return c.CompilerContext.GetProcess()
+}
+
+func TestExactRuntimeFilterDependencyOrder(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
+	trace := &runtimeFilterContextTrace{CompilerContext: builder.compCtx}
+	rt := moruntime.ServiceRuntime(trace.CompilerContext.GetProcess().GetService())
+	old, hadOld := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOld {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+			return
+		}
+		if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	builder.compCtx = trace
+	intType := types.T_int64.ToType()
+	scaled := types.T_float32.ToType()
+	scaled.Scale = 2
+	decimal := types.T_decimal64.ToType()
+	decimal.Width = 18
+	decimal.Scale = 2
+	float := types.T_float64.ToType()
+	mismatchedDecimal := decimal
+	mismatchedDecimal.Scale++
+	intExpr := planpb.Type{Id: int32(types.T_int64)}
+	probe := GetColExpr(intExpr, 1, 0)
+	build := GetColExpr(intExpr, -1, 0)
+	tests := []struct {
+		name    string
+		version int64
+		run     func() bool
+		want    bool
+		calls   []string
+	}{
+		{"invalid pair", defines.MORPCVersion7, func() bool {
+			_, _, ok := builder.makeExactRuntimeFilterPair(1, false, 10, nil, nil, false)
+			return ok
+		}, false, nil},
+		{"unsupported scaled float", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(scaled, scaled, false)
+			return ok
+		}, false, nil},
+		{"incompatible decimal scales", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, mismatchedDecimal, false)
+			return ok
+		}, false, nil},
+		{"legacy raw encoding", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(intType, intType, false)
+			return ok
+		}, true, []string{"context"}},
+		{"legacy raw pair", defines.MORPCVersion7, func() bool {
+			_, _, ok := builder.makeExactRuntimeFilterPair(1, false, 10, probe, build, false)
+			return ok
+		}, true, []string{"context", "process"}},
+		{"decimal rejected without protocol", -1, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, false, []string{"process"}},
+		{"decimal rejected by old protocol", defines.MORPCVersion7, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, false, []string{"process"}},
+		{"decimal admitted by new protocol", defines.MORPCVersion8, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(decimal, decimal, false)
+			return ok
+		}, true, []string{"process", "context"}},
+		{"float admitted by new protocol", defines.MORPCVersion8, func() bool {
+			_, ok := builder.exactRuntimeFilterPlanEncoding(float, float, false)
+			return ok
+		}, true, []string{"process", "context"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.version < 0 {
+				if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+				}
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+			}
+			trace.calls = nil
+			require.Equal(t, tc.want, tc.run())
+			require.Equal(t, tc.calls, trace.calls)
+		})
+	}
+	t.Run("nil process retains the legacy raw contract", func(t *testing.T) {
+		compiler := trace.CompilerContext.(*MockCompilerContext)
+		previousGetProcess := compiler.GetProcessFunc
+		compiler.GetProcessFunc = func() *process.Process { return nil }
+		defer func() { compiler.GetProcessFunc = previousGetProcess }()
+
+		defaultRuntime := moruntime.ServiceRuntime("")
+		previous, hadPrevious := defaultRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadPrevious {
+				defaultRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+			} else if current, ok := defaultRuntime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				defaultRuntime.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+			}
+		}()
+		defaultRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion7))
+		trace.calls = nil
+		consumer, producer, ok := builder.makeExactRuntimeFilterPair(1, false, 10, probe, build, false)
+		require.True(t, ok)
+		require.NotNil(t, consumer)
+		require.NotNil(t, producer)
+		require.NotNil(t, producer.Expr)
+		require.NotNil(t, producer.BuildExpr)
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1, producer.KeyEncoding)
+		require.Equal(t, []string{"context", "process"}, trace.calls)
+	})
 }

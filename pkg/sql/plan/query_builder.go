@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -110,6 +111,13 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
 	}
+	// D11 carrier two: standalone DDL binders take no QueryBuilder and no
+	// BindContext, so the boolean-semantics statement setting rides this same
+	// carrier. A native-mode session authors persisted expressions with the
+	// exact pre-contract behavior, byte-identical to what SELECT binds.
+	if !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess()) {
+		bound = function.WithMySQLConditionalBooleanContracts(bound, false)
+	}
 	return bound
 }
 
@@ -137,6 +145,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
 	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
+	// D11 two-carrier scalar: resolve the statement's MatrixOneNativeMode
+	// decision with the same single resolver the BindContext and DDL
+	// expression contexts use, so the builder-scoped DML paths that resolve
+	// through QueryBuilder.GetContext (UPDATE / ODKU assignment casts,
+	// projected rewrites, plan checks) bind with the statement's actual
+	// boolean-contracts decision instead of the absent-scalar MySQL default.
+	matrixOneNativeMode := !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess())
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -200,6 +215,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		noUnsignedSubtraction:    noUnsignedSubtraction,
+		matrixOneNativeMode:      matrixOneNativeMode,
 		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
@@ -768,6 +784,36 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A set-operation column that combines DATE and TIME inputs must keep both
+// domains: MySQL types it as DATETIME so the time-of-day survives, while
+// coalesce-style scoring prefers DATE and silently discards it. Null-only
+// branches are already filtered out of source. Any non-temporal input keeps
+// the existing resolution, and a DATETIME or TIMESTAMP input contributes
+// only its fractional-second precision. The result carries the widest
+// fractional-second precision of the temporal inputs.
+func setOperationDateTimeCommonType(source []types.Type) (types.Type, bool) {
+	hasDate, hasTime := false, false
+	var scale int32
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_date:
+			hasDate = true
+		case types.T_time:
+			hasTime = true
+		case types.T_datetime, types.T_timestamp:
+		default:
+			return types.Type{}, false
+		}
+		if typ.Scale > scale {
+			scale = typ.Scale
+		}
+	}
+	if !hasDate || !hasTime {
+		return types.Type{}, false
+	}
+	return types.New(types.T_datetime, scale, scale), true
+}
+
 // Fixed-width binary branches must share one padded representation before a
 // set operation compares or materializes their rows. A nonpositive width
 // denotes an unspecified bound, so it must remain unbounded rather than
@@ -790,6 +836,36 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 			result.Width = typ.Width
 		}
 	}
+	return result, true
+}
+
+// A set operation whose value-bearing branches are all legal BIT columns keeps
+// the BIT domain. The coalesce resolver falls back to the integer domain and
+// silently drops the declared bit width, which changes LENGTH bytes and the
+// outer predicates of the materialized column. The common type keeps the
+// widest declared width: narrower branches align through the supported
+// bit->bit widening cast, and an empty typed branch still contributes its
+// static width. A width outside 1..MaxBitLen is not a declared bound this rule
+// understands, so such an input keeps the historical coalesce resolution
+// instead of being silently capped.
+func setOperationPureBitCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	var maxWidth int32
+	for _, typ := range source {
+		if typ.Oid != types.T_bit {
+			return types.Type{}, false
+		}
+		if typ.Width < 1 || typ.Width > types.MaxBitLen {
+			return types.Type{}, false
+		}
+		if typ.Width > maxWidth {
+			maxWidth = typ.Width
+		}
+	}
+	result := types.T_bit.ToType()
+	result.Width = maxWidth
 	return result, true
 }
 
@@ -4388,6 +4464,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizerHints.pushDownLimitToScan = 1
 		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
 	}
+	pointBudget := uint64(maxCompositePointBytes)
 	for i, rootID := range builder.qry.Steps {
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -4397,7 +4474,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID, err = builder.optimizeFilters(rootID)
+		var points compositePointCapture
+		rootID, points, err = builder.optimizeFilters(rootID, &pointBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -4434,6 +4512,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
 		builder.pushdownLimitToTableScan(rootID)
+		builder.attachProjectedFullTextMatches(rootID)
 		// Seed base-relation statistics so the early vector access-path builder
 		// can cost the hidden entries work before replacing the source scan.
 		ReCalcNodeStats(rootID, builder, true, false, true)
@@ -4475,9 +4554,20 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		rootID = builder.pushDownGroupedSums(rootID)
+		// Preserve INNER-join reordering before introducing an existence boundary.
+		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
+		builder.reduceSetMembershipJoins(rootID, i)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		// Compare unique filtering joins against ANTI on their original fact-key
+		// domain after the legacy existence-pushdown pass has finished.
+		if !builder.outerAntiPlanningDisabled() &&
+			(builder.optimizerHints == nil || builder.optimizerHints.joinOrdering == 0) {
+			rootID, _ = builder.applyAntiJoinPreservedSideRule(rootID)
+		}
+		builder.pruneGroupedOuterDomains(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -4508,14 +4598,17 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 		if err == nil {
+			builder.qry.Steps[i] = rootID
 			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
-		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		builder.qry.Steps[i] = rootID
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true, nil)
 		if needsLate {
+			points.revalidate(builder)
 			builder.mergeFiltersOnCompositeKey(rootID, false)
 			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 		}
@@ -4526,6 +4619,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			sortFilterListByStats(builder.GetContext(), rootID, builder)
 			clear(colRefCnt)
 			builder.countColRefs(rootID, colRefCnt)
+			points.snapshot()
 		}
 
 		builder.generateRuntimeFilters(rootID)
@@ -4541,6 +4635,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
+		if err = points.publish(builder, rootID); err != nil {
+			return nil, err
+		}
 
 		rootNode := builder.qry.Nodes[rootID]
 
@@ -4628,6 +4725,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//for i := 1; i < len(builder.qry.Steps); i++ {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
+	builder.pushdownGroupingExpressions()
+	if len(builder.userWindowNodes) > 1 {
+		for _, rootID := range builder.qry.Steps {
+			builder.fuseWindowNodes(rootID, make(map[int32]bool))
+		}
+	}
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {
@@ -4645,6 +4748,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				node.ExtraOptions = PreparedBlockFilterDisabledScanOption
 			}
 		}
+	}
+	if builder.optimizerHints == nil || builder.optimizerHints.runtimeFilter == 0 {
+		builder.qry.LocalRuntimeFilterDomains = LocalRuntimeFilterDomains(builder.qry, func(scan *plan.Node, column string) float64 {
+			stats := builder.getStatsInfoByTableID(scan.TableDef.TblId)
+			if stats == nil || stats.GetStats() == nil {
+				return -1
+			}
+			return stats.GetStats().NdvMap[column]
+		})
 	}
 	return builder.qry, nil
 }
@@ -4880,12 +4992,16 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			var targetArgType types.Type
 			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
-			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+			if temporalType, ok := setOperationDateTimeCommonType(tmpArgsType); ok {
+				targetArgType = temporalType
+			} else if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
 			} else if pureFixedBinary {
 				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
+			} else if pureBitType, ok := setOperationPureBitCommonType(tmpArgsType); ok {
+				targetArgType = pureBitType
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
@@ -5710,7 +5826,14 @@ const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
+const NameVectorMatmul = "vector_matmul"
 const NameQuantileExactWeighted = "quantileExactWeighted"
+const NameEwmMean = "ewmmean"
+const NameEwmVar = "ewmvar"
+const NameEwmStd = "ewmstd"
+const NameEwmCov = "ewmcov"
+const NameEwmCorr = "ewmcorr"
+const NameEwmHalfLifeTag = "halflife"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -6269,8 +6392,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.integerPrecisionTransparentBoundary = true
 	}
 	defer func() {
-		if err == nil && isRoot && builder.integerPrecision != nil {
-			builder.captureIntegerPrecisionOutputs(ctx)
+		if err == nil && isRoot {
+			builder.captureEnumSetResultTypes(ctx)
+			if builder.integerPrecision != nil {
+				builder.captureIntegerPrecisionOutputs(ctx)
+			}
 		}
 	}()
 
@@ -6824,7 +6950,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
+				field := enumSetResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+				if field != nil {
+					provenance := ctx.outputColumnProvenanceForProject(int32(i))
+					provenance.EnumSetResultType = field
+					ctx.setOutputColumnProvenance(int32(i), provenance)
+				}
 			}
 			// Window functions run above AGG, so their raw argument, partition,
 			// and ordering expressions must be materialized by the aggregate
@@ -7521,17 +7653,6 @@ func numericProjectionTableKey(ctx *BindContext, table string) string {
 	return tree.NewCStr(table, ctx.lower).Compare()
 }
 
-func storeNumericTableProjectionTargets(
-	targetsByTable map[string][]Type,
-	ambiguousByTable map[string][]bool,
-	table string,
-	targets []Type,
-) bool {
-	return storeNumericTableProjectionTargetsWithMerge(
-		targetsByTable, ambiguousByTable, strings.ToLower(table), targets, false,
-	)
-}
-
 func storeNumericTableProjectionTargetsWithMerge(
 	targetsByTable map[string][]Type,
 	ambiguousByTable map[string][]bool,
@@ -7623,7 +7744,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 			return nil
 		}
 	}
-	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot)
+	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot, nil)
 	if err != nil || tableDef == nil {
 		return nil
 	}
@@ -8562,10 +8683,15 @@ func rollupWindowOutputAliasWithProvenance(selectExpr tree.SelectExpr) (*tree.CS
 		expr = parenExpr.Expr
 	}
 	if heading, ok := tree.NameConstHeading(expr); ok {
-		return tree.NewCStr(heading, 1), headingProvenance{}
+		return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), headingProvenance{}
 	}
 	heading, provenance := formatSelectExpressionHeading(expr)
-	return tree.NewCStr(heading, 1), provenance
+	// This alias is the rewrite-GENERATED output heading: the rewritten outer
+	// SELECT consumes it through the genuine-alias branch, which copies
+	// As.Origin verbatim and bypasses the general generated-heading sanitizer.
+	// Enforce the wire contract here, at the real producer of the generated
+	// name; explicit user aliases and catalog column names above stay intact.
+	return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), provenance
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -9419,7 +9545,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// tree) restrict the row set the lock observes -- otherwise rows that the
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
-		lockTargets := builder.collectLockTargets(nodeID, ctx)
+		lockTargets, lockErr := builder.collectLockTargets(nodeID, ctx, selectLockMode)
+		if lockErr != nil {
+			err = lockErr
+			return
+		}
 		for _, target := range lockTargets {
 			target.Mode = selectLockMode
 			target.NoWait = selectLockNoWait
@@ -9516,6 +9646,16 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
+	var matchedSqlAutoIsNull bool
+	whereList, matchedSqlAutoIsNull, err = builder.rewriteSqlAutoIsNull(convertedExpr, whereList, nodeID)
+	if err != nil {
+		return
+	}
+	if matchedSqlAutoIsNull {
+		// The rewrite decision depends on a session variable, so a plan built
+		// under either flag value must never enter the session plan cache.
+		notCacheable = true
+	}
 	if preserveGapFillFilters {
 		ctx.gapFillWhereFilters = DeepCopyExprList(whereList)
 	}
@@ -9572,7 +9712,270 @@ func (builder *QueryBuilder) bindWhere(
 	return
 }
 
-// isAccountConvertibleTable checks if a binding refers to statement_info or metric table.
+// sqlAutoIsNullVariableName is the MySQL session system variable that enables
+// the rewrite implemented by rewriteSqlAutoIsNull.
+const sqlAutoIsNullVariableName = "sql_auto_is_null"
+
+// rewriteSqlAutoIsNull implements the MySQL sql_auto_is_null contract as
+// evidenced by MySQL's own regression suite (mysql-test suite
+// engines/funcs/r/ai_sql_auto_is_null.result and r/odbc.result):
+//
+//   - With sql_auto_is_null = 1, a query whose whole WHERE clause is exactly
+//     `<AUTO_INCREMENT column> IS NULL` is rewritten to
+//     `<AUTO_INCREMENT column> = last_insert_id()`, returning the row
+//     generated by this session's most recent successful INSERT. For a
+//     multi-row INSERT that is the row holding the first generated value,
+//     following LAST_INSERT_ID() semantics.
+//   - Composite predicates (`id IS NULL AND b = 2`), HAVING, the SELECT list
+//     and LEFT-JOIN null-extended references are never rewritten; they keep
+//     plain IS NULL semantics, exactly as MySQL's tests show.
+//   - With sql_auto_is_null = 0 nothing is rewritten.
+//
+// matchedSqlAutoIsNull reports that the WHERE clause matched the whole-clause
+// shape on an AUTO_INCREMENT column regardless of the variable value. Such
+// statements are always plan-cache-rejected: the rewrite decision depends on
+// a session variable, so a cached plan would freeze whichever flag value
+// built the plan first and SET toggling the flag would silently reuse the
+// stale decision. The rewritten comparison keeps last_insert_id() a volatile
+// runtime function, so prepared plans still evaluate the session value
+// fresh on every execution.
+func (builder *QueryBuilder) rewriteSqlAutoIsNull(
+	whereAst tree.Expr,
+	boundFilters []*plan.Expr,
+	fromNodeID int32,
+) (rewritten []*plan.Expr, matchedSqlAutoIsNull bool, err error) {
+	// Parentheses are surface syntax: MySQL resolves
+	// `WHERE (auto_increment_column IS NULL)` to the very same expression and
+	// rewrites it, so the shape gate unwraps them before matching.
+	for {
+		paren, ok := whereAst.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		whereAst = paren.Expr
+	}
+	if !sqlAutoIsNullWholeClauseExpr(whereAst) || len(boundFilters) != 1 {
+		return boundFilters, false, nil
+	}
+	isNullFn := boundFilters[0].GetF()
+	if isNullFn == nil || isNullFn.Func == nil || isNullFn.Func.ObjName != "isnull" ||
+		len(isNullFn.Args) != 1 || isNullFn.Args[0].GetCol() == nil {
+		return boundFilters, false, nil
+	}
+	colExpr := isNullFn.Args[0]
+	// Typ.AutoIncr marks the table's AUTO_INCREMENT column. The bound type
+	// keeps the declared column nullability, so the null-extended side of an
+	// outer join must be excluded structurally below.
+	if !colExpr.Typ.AutoIncr || !colExpr.Typ.NotNullable {
+		return boundFilters, false, nil
+	}
+	// MySQL gates the sql_auto_is_null rewrite on the IS NULL argument being
+	// a FIELD_ITEM (Item_func_isnull::fix_fields, item_cmpfunc.cc): a column
+	// reference that resolves through a mergeable derived table or view
+	// binding is an Item_view_ref (REF_ITEM) there, never a FIELD_ITEM, so
+	// every outer derived/view reference keeps plain IS NULL semantics
+	// (review 5693247633). Only a raw base-table binding stays eligible.
+	if !builder.sqlAutoIsNullBaseFieldRef(fromNodeID, colExpr.GetCol()) {
+		return boundFilters, false, nil
+	}
+	if builder.colRefOnOuterJoinNullSide(fromNodeID, colExpr.GetCol()) {
+		// References reached through the null-extended side of an outer join
+		// never participate in the rewrite: per MySQL's odbc.result they keep
+		// plain IS NULL semantics and select the null-extended join rows.
+		return boundFilters, false, nil
+	}
+	// The statement matched the MySQL `WHERE <auto_incr> IS NULL` shape.
+	// Unless the session enables the rewrite, plain IS NULL semantics keep
+	// applying, but the statement still must not enter the plan cache.
+	value, resolveErr := builder.compCtx.ResolveVariable(sqlAutoIsNullVariableName, true, false)
+	if resolveErr != nil || !sqlAutoIsNullEnabled(value) {
+		return boundFilters, true, nil
+	}
+	lastInsertID, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "last_insert_id", nil)
+	if bindErr != nil {
+		return nil, false, bindErr
+	}
+	eqExpr, bindErr := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*plan.Expr{DeepCopyExpr(colExpr), lastInsertID})
+	if bindErr != nil {
+		return nil, false, bindErr
+	}
+	return []*plan.Expr{eqExpr}, true, nil
+}
+
+// sqlAutoIsNullWholeClauseExpr reports whether the already paren-unwrapped
+// whole-WHERE expression can carry the sql_auto_is_null rewrite. MySQL
+// resolves the one-argument builtin ISNULL(x) to the same comparison
+// predicate as x IS NULL (Item_func_isnull, item_create.cc, with the
+// compatibility rewrite in item_cmpfunc.cc), so the whole-clause shape is
+// exactly the IS NULL expression or the builtin function call with a single
+// argument. Every other shape - qualified or user-defined functions, zero-
+// or multi-argument calls, composite predicates - stays out. The argument
+// itself keeps being judged by the bound-filter checks below, which retain
+// every existing eligibility guard (raw base-table AUTO_INCREMENT field,
+// outer-join null-side exclusion, session variable).
+func sqlAutoIsNullWholeClauseExpr(whereAst tree.Expr) bool {
+	switch expr := whereAst.(type) {
+	case *tree.IsNullExpr:
+		return true
+	case *tree.FuncExpr:
+		return len(expr.Exprs) == 1 &&
+			expr.FuncName != nil && expr.FuncName.Compare() == "isnull"
+	default:
+		return false
+	}
+}
+
+// sqlAutoIsNullEnabled interprets a resolved sql_auto_is_null value. Boolean
+// system variables surface through more than one Go type depending on the
+// resolving path (session store, compatibility cast, protocol text), so the
+// accepted set stays explicit: any unknown representation disables the
+// rewrite rather than guessing. A nil value comes from contexts that do not
+// carry the variable (for example background sessions); the registered
+// default of sql_auto_is_null is 1, so nil enables the rewrite.
+func sqlAutoIsNullEnabled(value interface{}) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int8:
+		return v != 0
+	case int16:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case uint:
+		return v != 0
+	case uint8:
+		return v != 0
+	case uint16:
+		return v != 0
+	case uint32:
+		return v != 0
+	case uint64:
+		return v != 0
+	case float32:
+		return v != 0
+	case float64:
+		return v != 0
+	case string:
+		switch strings.ToLower(v) {
+		case "1", "on", "true":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+// colOnOuterJoinNullSide reports whether the bound column's tag belongs to a
+// relation that an outer join in the FROM tree rooted at fromNodeID
+// null-extends. RIGHT joins are already rewritten to LEFT before WHERE
+// binding, so the right children of LEFT (and ASOF LEFT) joins are the
+// ordinary null-extended sides; a FULL OUTER join null-extends both sides.
+func (builder *QueryBuilder) colOnOuterJoinNullSide(fromNodeID int32, tag int32) bool {
+	tags := make(map[int32]struct{})
+	builder.collectOuterJoinNullSideTags(fromNodeID, tags)
+	_, ok := tags[tag]
+	return ok
+}
+
+func (builder *QueryBuilder) collectOuterJoinNullSideTags(nodeID int32, into map[int32]struct{}) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return
+	}
+	node := builder.qry.Nodes[nodeID]
+	switch node.JoinType {
+	case plan.Node_LEFT, plan.Node_ASOF_LEFT:
+		if len(node.Children) == 2 {
+			builder.collectSqlAutoIsNullScopeTags(node.Children[1], into)
+		}
+	case plan.Node_OUTER:
+		for _, child := range node.Children {
+			builder.collectSqlAutoIsNullScopeTags(child, into)
+		}
+	}
+	for _, child := range node.Children {
+		builder.collectOuterJoinNullSideTags(child, into)
+	}
+}
+
+// collectSqlAutoIsNullScopeTags adds every binding tag registered under the
+// nodeID subtree; the sql_auto_is_null gate uses it to detect references that
+// reach a relation an outer join null-extends.
+func (builder *QueryBuilder) collectSqlAutoIsNullScopeTags(nodeID int32, into map[int32]struct{}) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return
+	}
+	node := builder.qry.Nodes[nodeID]
+	for _, tag := range node.BindingTags {
+		into[tag] = struct{}{}
+	}
+	for _, child := range node.Children {
+		builder.collectSqlAutoIsNullScopeTags(child, into)
+	}
+}
+
+// colRefOnOuterJoinNullSide reports whether a bound reference reaches a
+// relation an outer join null-extends. Only bare raw bindings can reach this
+// check: sqlAutoIsNullBaseFieldRef already rejected every projected or
+// materialized binding as a REF_ITEM, so a direct tag match decides. A
+// null-extended reference keeps plain IS NULL semantics and selects the
+// join's null-extended rows, exactly the MySQL odbc.result contract.
+func (builder *QueryBuilder) colRefOnOuterJoinNullSide(fromNodeID int32, col *plan.ColRef) bool {
+	if col == nil {
+		return false
+	}
+	nullSideTags := make(map[int32]struct{})
+	builder.collectOuterJoinNullSideTags(fromNodeID, nullSideTags)
+	_, ok := nullSideTags[col.RelPos]
+	return ok
+}
+
+// sqlAutoIsNullRawScanNode mirrors the relation node types addBinding treats
+// as raw bindings; a reference landing on one is a plain column reference,
+// not a materialized block output.
+func sqlAutoIsNullRawScanNode(t plan.Node_NodeType) bool {
+	switch t {
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN,
+		plan.Node_FUNCTION_SCAN, plan.Node_VALUE_SCAN, plan.Node_SINK_SCAN,
+		plan.Node_RECURSIVE_SCAN:
+		return true
+	}
+	return false
+}
+
+// sqlAutoIsNullBaseFieldRef reports whether the bound column reference lands
+// on a raw base-table binding: the MySQL FIELD_ITEM case. MySQL's
+// Item_func_isnull::fix_fields enters the sql_auto_is_null rewrite only when
+// args[0]->type() == FIELD_ITEM; a reference to a derived-table or view
+// column resolves to an Item_view_ref (REF_ITEM) even when the derived table
+// is mergeable, so every outer reference to a projected binding keeps plain
+// IS NULL semantics (review 5693247633).
+func (builder *QueryBuilder) sqlAutoIsNullBaseFieldRef(fromNodeID int32, col *plan.ColRef) bool {
+	if col == nil || fromNodeID < 0 || int(fromNodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[fromNodeID]
+	if slices.Contains(node.BindingTags, col.RelPos) {
+		return len(node.ProjectList) == 0 && sqlAutoIsNullRawScanNode(node.NodeType)
+	}
+	for _, child := range node.Children {
+		if builder.sqlAutoIsNullBaseFieldRef(child, col) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAccountConvertibleTable checks whether a binding refers to statement_info or metric table.
 // It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name.
 func isAccountConvertibleTable(binding *Binding, builder *QueryBuilder, dbName, tableName string) bool {
 	if binding == nil {
@@ -11439,11 +11842,12 @@ func (builder *QueryBuilder) appendNonAggregateHavingNode(
 		newFilterList = append(newFilterList, expr)
 	}
 
-	return builder.appendNode(&plan.Node{
+	nodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{nodeID},
 		FilterList: newFilterList,
-	}, ctx), nil
+	}, ctx)
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) appendSampleNode(
@@ -12290,7 +12694,7 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(tree.String(expr, dialect.MYSQL), headingProvenance{})
+				ctx.appendHeading(legalUTF8GeneratedHeading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12310,10 +12714,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(heading, headingProvenance{})
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), headingProvenance{})
 				} else {
 					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(heading, provenance)
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), provenance)
 				}
 			}
 
@@ -12435,6 +12839,18 @@ func qualifyGroupingSetHiddenOrderExpr(
 	orderCtx := *ctx
 	orderCtx.aliasMap = aliasMap
 	return orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
+}
+
+// legalUTF8GeneratedHeading enforces the wire contract for GENERATED select
+// headings only: a driver-facing column name must be legal UTF-8. The source
+// text of an unaliased expression can carry raw literal bytes (e.g. a _binary
+// literal), so the derived name gets invalid sequences replaced. Aliases and
+// catalog names are appended by other sites and are intentionally untouched.
+func legalUTF8GeneratedHeading(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
 }
 
 // DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string literals.
@@ -12582,6 +12998,12 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_MINUS:
+		// Their global deduplication phase is an aggregate, including set
+		// nodes synthesized outside the SELECT binder.
+		node.SpillMem = builder.aggSpillMem
+	}
 	if ctx != nil && len(node.ViewPath) == 0 {
 		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
@@ -12824,6 +13246,9 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+	if err = protectHistoricalTableListing(builder.GetContext(), schema, table, viewData.Stmt, snapshot, viewStmt.AsSource); err != nil {
+		return 0, err
 	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
@@ -13555,10 +13980,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
-		// Published View SQL keeps its creation namespace. Only its implicit
-		// source lookup uses the subscriber name for catalog routing.
+		// Published View SQL keeps its creation namespace. Both qualified and
+		// implicit references to that source use the subscriber alias for the
+		// database probe; resolving a publisher spelling in the subscriber's
+		// catalog would incorrectly require a same-named local database.
 		catalogDatabase := schema
-		if tbl.SchemaName == "" && len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
+		if len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
 			view := ctx.viewPath[len(ctx.viewPath)-1]
 			if view.SubscriptionName != "" {
 				if sub := builder.compCtx.GetQueryingSubscription(); sub != nil &&
@@ -13585,8 +14012,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Preserve the existing probe; full resolution below owns error handling.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
-		// TODO
-		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
+		// SHOW sources retain their exact AST-bound authorization route.
+		parent := showIndexGeneratedSource(builder.GetContext(), tbl)
+		var obj *ObjectRef
+		var tableDef *TableDef
+		var borrow *BorrowedTable
+		if parent != nil {
+			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot, nil)
+		} else if resolver := builder.borrowingCompiler(); resolver != nil {
+			var resolved TableResolution
+			obj, tableDef, err = resolveIndexMaintenanceSource(resolver, tbl, catalogDatabase, table, snapshot, &resolved)
+			borrow = resolved.Borrow
+		} else {
+			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot, nil)
+		}
 		if err != nil {
 			return 0, "", err
 		}
@@ -13618,6 +14057,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the
 		// immutable column definitions, indexes, constraints, or expressions.
+		fullTableDef := tableDef
 		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
@@ -13705,7 +14145,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Database:       mongoEnv.Database,
 					Collection:     mongoEnv.Collection,
 					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
-					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
+					ProjectedPaths: sqlmongodb.ProjectedPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
 				}
 			} else if externType == plan.ExternType_DATASTREAM_TB {
@@ -13890,11 +14330,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			NodeType:     nodeType,
 			Stats:        nil,
 			ObjRef:       obj,
+			ParentObjRef: DeepCopyObjectRef(parent),
 			TableDef:     tableDef,
 			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
+		builder.rememberScanBorrow(nodeID, obj, fullTableDef, borrow)
 
 		node := builder.qry.Nodes[nodeID]
 		if node.TableDef != nil {
@@ -14040,6 +14482,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
+			if mayHaveVirtualTimestampRead(midNode.TableDef) &&
+				len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
+				nodeID, err = builder.stageLegacyVirtualTimestampColumns(nodeID, ctx)
+				if err != nil {
+					return 0, "", err
+				}
+			}
 		}
 		return
 	case *tree.StatementSource:
@@ -14051,19 +14500,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 	}
 
 	return
-}
-
-func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
-	result := make([]string, 0, len(columns))
-	seen := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		if _, ok := seen[column.Path]; ok {
-			continue
-		}
-		seen[column.Path] = struct{}{}
-		result = append(result, column.Path)
-	}
-	return result
 }
 
 // refreshMongoScanPushdown produces plan-time EXPLAIN evidence from the DDL
@@ -14079,12 +14515,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 		return moerr.NewInternalError(builder.GetContext(), "MongoDB external scan is missing its table definition")
 	}
 	scan := node.ExternScan.MongodbScan
-	names := make([]string, 0, len(node.TableDef.Cols))
-	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(node.TableDef.Cols)
 	columns, err := sqlmongodb.ProjectColumnsByName(
 		builder.GetContext(), sqlmongodb.ColumnsFromPlan(scan.Columns), names)
 	if err != nil {
@@ -14146,6 +14577,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			// evaluated locally when a persisted TableDef is rebound. Keep this
 			// final read boundary in addition to the writer-side DDL checks.
 			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
+			// Same-version cross-mode boundary: a definition that needs the
+			// conditional boolean contracts evaluates with those kernels only on
+			// a MySQL-mode statement. A native-mode session fails closed here
+			// instead of mis-executing the persisted JSON conditions or the
+			// ENUM storage-truth casts.
+			if err := RequireMySQLConditionalBooleanConsumption(
 				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
 				return err
 			}
@@ -14361,6 +14801,12 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if len(tbl.Option) == 0 {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "CENTROIDX without optype")
 		}
+		// the index the option names is written by the operator, which only internal SQL may ask
+		if opt, err := tree.ParseCentroidxOption(tbl.Option); err != nil || opt.Config != "" {
+			if !defines.IsInternalExecutor(builder.GetContext()) {
+				return 0, moerr.NewNotSupported(builder.GetContext(), "CENTROIDX with index parameters")
+			}
+		}
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
@@ -14385,6 +14831,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftChildID, _, err := builder.buildTable(tbl.Left, leftCtx, nil)
 	if err != nil {
 		return 0, err
+	}
+	if scope := builder.updateTargetScope; scope != nil && scope.join == tbl {
+		scope.context = leftCtx
 	}
 
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
@@ -14470,6 +14919,18 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	// Expressions bound above this join must distinguish a missing child row
+	// from a real row whose generated expression happens to return a value.
+	if joinType == plan.Node_RIGHT || joinType == plan.Node_OUTER {
+		for _, binding := range leftCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
+	}
+	if joinType == plan.Node_LEFT || joinType == plan.Node_ASOF_LEFT || joinType == plan.Node_OUTER {
+		for _, binding := range rightCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
 	}
 	if ctx.bindingTree != nil {
 		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
@@ -14787,6 +15248,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "stage_list":
 			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
+		case "desc_file":
+			nodeId, err = builder.buildDescFile(tbl, ctx, exprs, nil)
 		case "moplugin_table":
 			nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, nil)
 		case "parse_jsonl_data":
@@ -14848,7 +15311,14 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
-	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	ctx = function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	// D11 carrier completion: the builder-scoped DML assignment casts and
+	// projected rewrites resolve through this context, so the statement's
+	// boolean-contracts scalar rides it exactly like the BindContext and DDL
+	// carriers. Without it a native-mode UPDATE / ODKU statement saw the
+	// MySQL default and folded BOOL-target BIT-literal assignments that base
+	// keeps rejecting on the raw payload.
+	return function.WithMySQLConditionalBooleanContracts(ctx, !builder.matrixOneNativeMode)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {
@@ -15278,22 +15748,26 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // (typically the flattened body of an EXISTS / IN / scalar subquery) does not
 // contribute to the outer result rows and must not be locked, matching MySQL's
 // rule that an outer FOR UPDATE does not lock subquery tables.
-func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindContext) []*plan.LockTarget {
+func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindContext, mode lockpb.LockMode) ([]*plan.LockTarget, error) {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
 
 	nodeCtx := builder.ctxByNode[nodeID]
 	if callerCtx != nil && !callerCtx.bindingCte() && nodeCtx != nil && nodeCtx.bindingCte() {
-		return targets
+		return targets, nil
 	}
 
 	if node.NodeType == plan.Node_JOIN {
 		switch node.JoinType {
 		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 			if len(node.Children) > 0 {
-				targets = append(targets, builder.collectLockTargets(node.Children[0], callerCtx)...)
+				var err error
+				targets, err = builder.collectLockTargets(node.Children[0], callerCtx, mode)
+				if err != nil {
+					return nil, err
+				}
 			}
-			return targets
+			return targets, nil
 		}
 	}
 
@@ -15320,14 +15794,36 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindCon
 					}
 				}
 
+				if mode == lockpb.LockMode_Exclusive {
+					obj := node.ObjRef
+					if node.ParentObjRef != nil {
+						obj = node.ParentObjRef
+					}
+					if obj == nil || obj.SchemaName == "" || obj.ObjName == "" {
+						return nil, moerr.NewInternalError(builder.GetContext(), "missing SELECT lock authorization target")
+					}
+					identity := DeepCopyObjectRef(obj)
+					if node.ScanSnapshot != nil {
+						identity.Snapshot = DeepCopySnapshot(node.ScanSnapshot)
+					}
+					builder.qry.SelectLockReferences = append(builder.qry.SelectLockReferences, &plan.SelectLockReference{
+						IsClusterTable: tableDef.TableType == catalog.SystemClusterRel,
+						ObjectRef:      identity,
+						ViewPath:       DeepCopyViewPath(node.ViewPath),
+					})
+				}
 				targets = append(targets, lockTarget)
 			}
 		}
 	}
 
 	for _, childID := range node.Children {
-		targets = append(targets, builder.collectLockTargets(childID, callerCtx)...)
+		childTargets, err := builder.collectLockTargets(childID, callerCtx, mode)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, childTargets...)
 	}
 
-	return targets
+	return targets, nil
 }

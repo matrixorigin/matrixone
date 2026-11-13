@@ -16,6 +16,10 @@ package logservice
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,7 +32,53 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type pausedExportRenameFS struct {
+	vfs.FS
+	entered chan struct{}
+	release chan struct{}
+	pause   sync.Once
+	unblock sync.Once
+}
+
+func (fs *pausedExportRenameFS) Rename(oldname, newname string) error {
+	if strings.Contains(oldname, ".generating") &&
+		strings.Contains(newname, "shard-1/replica-2/snapshot-") {
+		fs.pause.Do(func() {
+			close(fs.entered)
+			<-fs.release
+		})
+	}
+	return fs.FS.Rename(oldname, newname)
+}
+
+func (fs *pausedExportRenameFS) resume() {
+	fs.unblock.Do(func() { close(fs.release) })
+}
+
+// controlledDeadlineContext lets the test expire an accepted request at a
+// known phase without relying on a short wall-clock deadline.
+type controlledDeadlineContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (c *controlledDeadlineContext) expire() { c.once.Do(func() { close(c.done) }) }
+
+func (c *controlledDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *controlledDeadlineContext) Done() <-chan struct{}       { return c.done }
+func (c *controlledDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
 
 func TestTruncationExportSnapshot(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
@@ -90,6 +140,147 @@ func TestTruncationExportSnapshot(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestExportSnapshotTimeoutAfterAdmissionReconcilesLateCompletion(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	fs := &pausedExportRenameFS{
+		FS: cfg.FS, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fs.resume()
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+
+	const shardID, replicaID = uint64(1), uint64(2)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+	_, err = l.append(ctx, shardID, getTestUserEntry())
+	require.NoError(t, err)
+
+	exportCtx := &controlledDeadlineContext{
+		Context: context.Background(), deadline: time.Now().Add(30 * time.Second),
+		done: make(chan struct{}),
+	}
+	t.Cleanup(exportCtx.expire)
+	result := make(chan error, 1)
+	go func() { result <- l.exportSnapshot(exportCtx, shardID, replicaID) }()
+	select {
+	case <-fs.entered:
+	case err := <-result:
+		t.Fatalf("export returned before finalization: %v", err)
+	case <-ctx.Done():
+		t.Fatal("export did not reach finalization")
+	}
+	exportCtx.expire()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, dragonboat.ErrTimeout)
+	case <-ctx.Done():
+		t.Fatal("timed-out request did not return")
+	}
+
+	// The first reconciliation precedes finalization, so it cannot yet
+	// register the export. The uncertainty must survive this scan.
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+	fs.resume()
+
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	var index uint64
+	require.Eventually(t, func() bool {
+		names, err := fs.List(l.snapshotMgr.exportPath(shardID, replicaID))
+		if err != nil {
+			return false
+		}
+		for _, name := range names {
+			var candidate uint64
+			count, err := fmt.Sscanf(name, snapshotPathPattern, &candidate)
+			if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, candidate) {
+				continue
+			}
+			files, err := fs.List(l.snapshotMgr.snapshotPath(nid, snapshotIndex(candidate)))
+			if err == nil && len(files) == 2 {
+				index = candidate
+				return true
+			}
+		}
+		return false
+	}, testIOTimeout, 10*time.Millisecond, "late export must become a complete final directory")
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+	dir, importedIndex := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, index)
+	require.Equal(t, l.snapshotMgr.snapshotPath(nid, snapshotIndex(index)), dir)
+	require.Equal(t, index, importedIndex)
+
+	require.NoError(t, l.truncateLog(ctx, shardID, Lsn(index)))
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+	_, err = fs.Stat(dir)
+	require.True(t, os.IsNotExist(err), "later import must remove the timed-out export")
+}
+
+func TestUncertainExportReconcilesLateCompletion(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, l *store) {
+		const shardID, replicaID = uint64(1), uint64(2)
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		require.NoError(t, l.getOrExtendTNLease(ctx, shardID, 100))
+		l.cfg.MaxExportedSnapshot = 2
+		nid := nodeID{shardID: shardID, replicaID: replicaID}
+		writeFinal := func(index snapshotIndex) {
+			dir := l.snapshotMgr.snapshotPath(nid, index)
+			require.NoError(t, l.cfg.FS.MkdirAll(dir, defaultExportedDirMode))
+			for _, name := range []string{
+				fmt.Sprintf(snapshotPathPattern+".gbsnap", index),
+				"snapshot.metadata",
+			} {
+				f, err := l.cfg.FS.Create(l.cfg.FS.PathJoin(dir, name))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+			}
+		}
+
+		// The completed directory can appear after the first scan. Keep
+		// reconciling this replica until it is discovered on a later tick.
+		l.snapshotMgr.MarkExportUncertain(shardID, replicaID)
+		require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+		require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+
+		writeFinal(100)
+		writeFinal(200)
+		require.NoError(t, l.snapshotMgr.Add(shardID, replicaID, 200))
+		require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+		require.Equal(t, 2, l.snapshotMgr.Count(shardID, replicaID))
+		require.False(t, l.shouldDoExport(ctx, shardID, replicaID))
+		dir, index := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, 150)
+		require.Equal(t, l.snapshotMgr.snapshotPath(nid, 100), dir)
+		require.Equal(t, uint64(100), index)
+		require.NoError(t, l.snapshotMgr.Remove(shardID, replicaID, 150))
+		_, err := l.cfg.FS.Stat(dir)
+		require.True(t, os.IsNotExist(err))
+
+		// The unknown-result flag remains active across scans: another late
+		// final directory is registered before the next quota decision.
+		writeFinal(300)
+		writeFinal(400)
+		l.shardSnapshotInfo.forwardSnapshot(shardID, 400)
+		require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+		require.Equal(t, 2, l.snapshotMgr.Count(shardID, replicaID))
+		require.Equal(t, uint64(300), l.shardSnapshotInfo.getSnapshotIndex(shardID))
+		require.False(t, l.shouldDoExport(ctx, shardID, replicaID))
+		_, err = l.cfg.FS.Stat(l.snapshotMgr.snapshotPath(nid, 400))
+		require.True(t, os.IsNotExist(err), "excess newest export must be reclaimed")
+	})
 }
 
 func TestTruncationSkipsStaleReplicaMetadata(t *testing.T) {

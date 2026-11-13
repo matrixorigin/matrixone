@@ -153,6 +153,8 @@ var (
 		"task_status=?, " +
 		"update_at=?, " +
 		"end_at=? where task_id=?"
+	requestDaemonTaskStatus = "update sys_daemon_task set task_status=? where task_id=? and account_id=? and task_status=? and (task_runner=? or (task_runner is null and ?='')) and last_run <=> ?"
+	updateCDCDaemonStatus   = "update sys_daemon_task set task_status=? where task_id=?"
 
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=? and task_runner=? and last_run=?"
 	validateDaemonTask  = "select 1 from sys_daemon_task where task_id=? and task_runner=? and task_status in (?,?) and last_run <=> ? limit 1"
@@ -197,26 +199,11 @@ var (
 		"updated_at) values " +
 		"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
-	updateSQLTask = "update sql_task set " +
-		"task_name=?," +
-		"account_id=?," +
-		"database_name=?," +
-		"cron_expr=?," +
-		"`timezone`=?," +
-		"sql_body=?," +
-		"gate_condition=?," +
-		"retry_limit=?," +
-		"timeout_seconds=?," +
-		"enabled=?," +
-		"next_fire_time=?," +
-		"trigger_count=?," +
-		"creator=?," +
-		"creator_user_id=?," +
-		"creator_role_id=?," +
-		"created_at=?," +
-		"updated_at=? where task_id=?"
-
-	selectSQLTaskIDForUpdate = "select task_id from sql_task where 1=1"
+	selectSQLTaskIDForUpdate   = "select task_id from sql_task where 1=1"
+	lockOwnedSQLTaskAdmission  = "select task_id, account_id, task_name, enabled, schedule_generation, trigger_count from sql_task where task_id=? and account_id=? and task_name=? for update"
+	lockSQLTaskAsyncClaim      = "select task_id, task_status, task_runner, task_epoch, task_parent_id, task_metadata_id, task_metadata_executor, sql_task_run_id from sys_async_task where task_id=? for update"
+	setSQLTaskAsyncClaim       = "update sys_async_task set sql_task_run_id=? where task_id=? and sql_task_run_id=0"
+	selectRunningSQLTaskByName = "select run_id from sql_task_run where account_id=? and task_name=? and status=? limit 1"
 
 	sqlTaskRunSelectColumns = "" +
 		"run_id," +
@@ -250,6 +237,7 @@ var (
 		"enabled," +
 		"next_fire_time," +
 		"trigger_count," +
+		"schedule_generation," +
 		"creator," +
 		"creator_user_id," +
 		"creator_role_id," +
@@ -273,25 +261,6 @@ var (
 		"gate_result," +
 		"runner_cn) values " +
 		"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-
-	updateSQLTaskRun = "update sql_task_run set " +
-		"task_id=?," +
-		"task_name=?," +
-		"account_id=?," +
-		"scheduled_at=?," +
-		"started_at=?," +
-		"finished_at=?," +
-		"duration_seconds=?," +
-		"status=?," +
-		"trigger_type=?," +
-		"attempt_number=?," +
-		"rows_affected=?," +
-		"error_code=?," +
-		"error_message=?," +
-		"gate_result=?," +
-		"runner_cn=? where run_id=?"
-	completeSQLTaskRun = updateSQLTaskRun +
-		" and status=? and runner_cn=? and attempt_number=?"
 
 	selectSQLTaskRun = "select " + sqlTaskRunSelectColumns + " from sql_task_run where 1=1"
 
@@ -339,6 +308,24 @@ func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
 	return m.db.PingContext(ctx)
 }
 
+// buildTaskInsertSQL builds one placeholder group per task without repeatedly
+// copying the accumulated SQL for each row.
+func buildTaskInsertSQL(prefix, row, suffix string, count int) string {
+	if count == 1 {
+		return prefix + row + suffix
+	}
+	var sql strings.Builder
+	sql.WriteString(prefix)
+	for i := 0; i < count; i++ {
+		if i != 0 {
+			sql.WriteByte(',')
+		}
+		sql.WriteString(row)
+	}
+	sql.WriteString(suffix)
+	return sql.String()
+}
+
 func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.AsyncTask) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
@@ -348,7 +335,6 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		return 0, nil
 	}
 
-	sqlStr := insertAsyncTask
 	vals := make([]any, 0, len(tasks)*13)
 
 	for _, t := range tasks {
@@ -357,7 +343,6 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 			return 0, err
 		}
 
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
 		vals = append(vals, t.Metadata.ID,
 			t.Metadata.Executor,
 			t.Metadata.Context,
@@ -372,12 +357,9 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		)
 	}
 
-	if sqlStr == insertAsyncTask {
-		return 0, nil
-	}
-	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
+	exec, err := m.db.ExecContext(ctx, buildTaskInsertSQL(insertAsyncTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), vals...)
 	if err != nil {
-		dup, err := removeDuplicateAsyncTasks(err, tasks)
+		dup, err := removeDuplicateTasks(err, tasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 		if err != nil {
 			return 0, err
 		}
@@ -552,11 +534,8 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 
-	sqlStr := insertCronTask
 	vals := make([]any, 0)
 	for _, t := range cronTask {
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?),"
-
 		j, err := json.Marshal(t.Metadata.Options)
 		if err != nil {
 			return 0, err
@@ -574,7 +553,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.UpdateAt,
 		)
 	}
-	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1]+cronTaskOnDuplicate, vals...)
+	exec, err := m.db.ExecContext(ctx, buildTaskInsertSQL(insertCronTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?)", cronTaskOnDuplicate, len(cronTask)), vals...)
 	if err != nil {
 		return 0, err
 	}
@@ -802,43 +781,66 @@ func (m *mysqlTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (in
 	return n, nil
 }
 
-func (m *mysqlTaskStorage) UpdateSQLTask(ctx context.Context, tasks []SQLTask, conds ...Condition) (int, error) {
+func (m *mysqlTaskStorage) AlterSQLTask(ctx context.Context, observed, updated SQLTask, action SQLTaskAlterAction) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	n := 0
-	updateSQL := updateSQLTask + buildSQLTaskWhereClause(newConditions(conds...))
-	for _, t := range tasks {
-		exec, err := m.db.ExecContext(ctx, updateSQL,
-			t.TaskName,
-			t.AccountID,
-			t.DatabaseName,
-			t.CronExpr,
-			t.Timezone,
-			t.SQLBody,
-			t.GateCondition,
-			t.RetryLimit,
-			t.TimeoutSeconds,
-			sqlTaskEnabledValue(t.Enabled),
-			t.NextFireTime,
-			t.TriggerCount,
-			t.Creator,
-			t.CreatorUserID,
-			t.CreatorRoleID,
-			nullTime(t.CreatedAt),
-			nullTime(t.UpdatedAt),
-			t.TaskID,
-		)
-		if err != nil {
-			return n, err
-		}
-		affected, err := exec.RowsAffected()
-		if err != nil {
-			return n, err
-		}
-		n += int(affected)
+	if observed.TaskID != updated.TaskID || observed.AccountID != updated.AccountID {
+		return 0, moerr.NewInvalidInputNoCtx("sql task identity changed during alter")
 	}
-	return n, nil
+	var query string
+	var args []any
+	switch action {
+	case SQLTaskSuspend, SQLTaskSetSchedule:
+		// Single-table UPDATE evaluates assignments left to right. Advance from
+		// the locked row, then copy the new generation to the trigger counter.
+		query = "update sql_task set schedule_generation=greatest(trigger_count, schedule_generation)+1, trigger_count=schedule_generation, "
+		if action == SQLTaskSuspend {
+			query += "enabled=0, updated_at=?"
+			args = []any{nullTime(updated.UpdatedAt)}
+		} else {
+			query += "cron_expr=?, `timezone`=?, next_fire_time=?, updated_at=?"
+			args = []any{updated.CronExpr, updated.Timezone, updated.NextFireTime, nullTime(updated.UpdatedAt)}
+		}
+		query += " where task_id=? and account_id=? and schedule_generation=? and trigger_count < 9223372036854775807 and schedule_generation < 9223372036854775807"
+		args = append(args, observed.TaskID, observed.AccountID, observed.ScheduleGeneration)
+	case SQLTaskResume:
+		query = "update sql_task set enabled=1, next_fire_time=?, updated_at=? where task_id=? and account_id=? and schedule_generation=?"
+		args = []any{updated.NextFireTime, nullTime(updated.UpdatedAt), observed.TaskID, observed.AccountID, observed.ScheduleGeneration}
+	case SQLTaskSetGate:
+		query = "update sql_task set gate_condition=?, updated_at=? where task_id=? and account_id=?"
+		args = []any{updated.GateCondition, nullTime(updated.UpdatedAt), observed.TaskID, observed.AccountID}
+	case SQLTaskSetRetry:
+		query = "update sql_task set retry_limit=?, updated_at=? where task_id=? and account_id=?"
+		args = []any{updated.RetryLimit, nullTime(updated.UpdatedAt), observed.TaskID, observed.AccountID}
+	case SQLTaskSetTimeout:
+		query = "update sql_task set timeout_seconds=?, updated_at=? where task_id=? and account_id=?"
+		args = []any{updated.TimeoutSeconds, nullTime(updated.UpdatedAt), observed.TaskID, observed.AccountID}
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("unknown sql task alter action")
+	}
+	result, err := m.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 && (action == SQLTaskSuspend || action == SQLTaskSetSchedule) {
+		var count, generation uint64
+		err = m.db.QueryRowContext(ctx, "select trigger_count, schedule_generation from sql_task where task_id=? and account_id=? and schedule_generation=?", observed.TaskID, observed.AccountID, observed.ScheduleGeneration).Scan(&count, &generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if _, err = nextSQLTaskInvalidationSequence(SQLTask{TriggerCount: count, ScheduleGeneration: generation}); err != nil {
+			return 0, err
+		}
+	}
+	return int(affected), err
 }
 
 func (m *mysqlTaskStorage) DeleteSQLTask(ctx context.Context, conds ...Condition) (int, error) {
@@ -949,6 +951,7 @@ func (m *mysqlTaskStorage) QuerySQLTask(ctx context.Context, conds ...Condition)
 			&enabled,
 			&t.NextFireTime,
 			&t.TriggerCount,
+			&t.ScheduleGeneration,
 			&t.Creator,
 			&t.CreatorUserID,
 			&t.CreatorRoleID,
@@ -961,78 +964,6 @@ func (m *mysqlTaskStorage) QuerySQLTask(ctx context.Context, conds ...Condition)
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
-}
-
-func (m *mysqlTaskStorage) AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error) {
-	if taskFrameworkDisabled() {
-		return 0, nil
-	}
-	n := 0
-	for _, run := range runs {
-		exec, err := m.db.ExecContext(ctx, insertSQLTaskRun,
-			run.TaskID,
-			run.TaskName,
-			run.AccountID,
-			nullTime(run.ScheduledAt),
-			nullTime(run.StartedAt),
-			nullTime(run.FinishedAt),
-			run.DurationSeconds,
-			run.Status,
-			run.TriggerType,
-			run.AttemptNumber,
-			run.RowsAffected,
-			run.ErrorCode,
-			nullString(run.ErrorMessage),
-			sqlTaskEnabledValue(run.GateResult),
-			run.RunnerCN,
-		)
-		if err != nil {
-			return n, err
-		}
-		affected, err := exec.RowsAffected()
-		if err != nil {
-			return n, err
-		}
-		n += int(affected)
-	}
-	return n, nil
-}
-
-func (m *mysqlTaskStorage) UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conds ...Condition) (int, error) {
-	if taskFrameworkDisabled() {
-		return 0, nil
-	}
-	n := 0
-	updateSQL := updateSQLTaskRun + buildSQLTaskRunWhereClause(newConditions(conds...))
-	for _, run := range runs {
-		exec, err := m.db.ExecContext(ctx, updateSQL,
-			run.TaskID,
-			run.TaskName,
-			run.AccountID,
-			nullTime(run.ScheduledAt),
-			nullTime(run.StartedAt),
-			nullTime(run.FinishedAt),
-			run.DurationSeconds,
-			run.Status,
-			run.TriggerType,
-			run.AttemptNumber,
-			run.RowsAffected,
-			run.ErrorCode,
-			nullString(run.ErrorMessage),
-			sqlTaskEnabledValue(run.GateResult),
-			run.RunnerCN,
-			run.RunID,
-		)
-		if err != nil {
-			return n, err
-		}
-		affected, err := exec.RowsAffected()
-		if err != nil {
-			return n, err
-		}
-		n += int(affected)
-	}
-	return n, nil
 }
 
 func (m *mysqlTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Condition) ([]SQLTaskRun, error) {
@@ -1139,184 +1070,103 @@ func scanSQLTaskRuns(rows *sql.Rows) ([]SQLTaskRun, error) {
 	return runs, rows.Err()
 }
 
-func (m *mysqlTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error) {
+func (m *mysqlTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun, admission *SQLTaskRunAdmission) (uint64, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
+	if err := validateSQLTaskAdmission(sqlTask, run, admission); err != nil {
 		return 0, err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	var taskID uint64
-	if err := tx.QueryRowContext(
-		ctx,
-		"select task_id from sql_task where task_id=? for update",
-		sqlTask.TaskID,
-	).Scan(&taskID); err != nil {
+	// Bind a scheduled firing to its exact execution in the same transaction
+	// that creates the durable RUNNING barrier.
+	var runID uint64
+	committed, err := runSQLTaskMetadataTransaction(ctx, m.db, func(ctx context.Context, conn *sql.Conn) error {
+		var current SQLTask
+		var enabled uint8
+		err := conn.QueryRowContext(ctx, lockOwnedSQLTaskAdmission,
+			sqlTask.TaskID, sqlTask.AccountID, sqlTask.TaskName,
+		).Scan(&current.TaskID, &current.AccountID, &current.TaskName, &enabled, &current.ScheduleGeneration, &current.TriggerCount)
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, ErrSQLTaskNotFound
+			return ErrSQLTaskNotFound
 		}
-		return 0, err
-	}
-
-	var running int
-	if err := tx.QueryRowContext(
-		ctx,
-		"select count(*) from sql_task_run where task_id=? and status=?",
-		sqlTask.TaskID,
-		SQLTaskStatusRunning,
-	).Scan(&running); err != nil {
-		return 0, err
-	}
-	if running > 0 {
-		blocked, err := m.reapStaleSQLTaskRunsTx(ctx, tx, sqlTask, time.Now())
 		if err != nil {
-			return 0, err
+			return err
 		}
-		if blocked {
-			return 0, ErrSQLTaskOverlap
+		if current.TaskID != sqlTask.TaskID || current.AccountID != sqlTask.AccountID || current.TaskName != sqlTask.TaskName {
+			return ErrSQLTaskNotFound
 		}
-	}
-
-	inserted, err := tx.ExecContext(
-		ctx,
-		insertSQLTaskRun,
-		run.TaskID,
-		run.TaskName,
-		run.AccountID,
-		nullTime(run.ScheduledAt),
-		nullTime(run.StartedAt),
-		nullTime(run.FinishedAt),
-		run.DurationSeconds,
-		run.Status,
-		run.TriggerType,
-		run.AttemptNumber,
-		run.RowsAffected,
-		run.ErrorCode,
-		nullString(run.ErrorMessage),
-		sqlTaskEnabledValue(run.GateResult),
-		run.RunnerCN,
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	runID, err := inserted.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return uint64(runID), nil
-}
-
-func (m *mysqlTaskStorage) reapStaleSQLTaskRunsTx(ctx context.Context, tx *sql.Tx, sqlTask SQLTask, now time.Time) (bool, error) {
-	rows, err := tx.QueryContext(
-		ctx,
-		"select "+sqlTaskRunSelectColumns+" from sql_task_run where task_id=? and status=? for update",
-		sqlTask.TaskID,
-		SQLTaskStatusRunning,
-	)
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	runs, err := scanSQLTaskRuns(rows)
-	if err != nil {
-		return false, err
-	}
-
-	for _, run := range runs {
-		if !isStaleSQLTaskRun(sqlTask, run, now) {
-			return true, nil
+		current.Enabled = enabled != 0
+		if admission.AsyncTaskID != 0 {
+			var async task.AsyncTask
+			var pointer uint64
+			err = conn.QueryRowContext(ctx, lockSQLTaskAsyncClaim,
+				admission.AsyncTaskID,
+			).Scan(&async.ID, &async.Status, &async.TaskRunner, &async.Epoch, &async.ParentTaskID, &async.Metadata.ID, &async.Metadata.Executor, &pointer)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSQLTaskStaleFiring
+			}
+			if err != nil {
+				return err
+			}
+			if err = validateSQLTaskClaim(current, run, async, pointer, admission); err != nil {
+				return err
+			}
 		}
-		markStaleSQLTaskRun(sqlTask, &run, now)
-		if _, err := execUpdateSQLTaskRun(ctx, tx, run); err != nil {
-			return false, err
+		if !admission.Reserve(current.AccountID, current.TaskName) {
+			return ErrSQLTaskRecoveryCapacity
 		}
-	}
-	return false, nil
-}
-
-func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error) {
-	if taskFrameworkDisabled() {
-		return 0, nil
-	}
-	exec, err := execCompleteSQLTaskRun(ctx, m.db, run)
-	if err != nil {
+		var blockingID uint64
+		err = conn.QueryRowContext(ctx, selectRunningSQLTaskByName,
+			current.AccountID, current.TaskName, SQLTaskStatusRunning).Scan(&blockingID)
+		if err == nil {
+			return ErrSQLTaskOverlap
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		run.TaskID, run.AccountID, run.TaskName = current.TaskID, current.AccountID, current.TaskName
+		inserted, err := conn.ExecContext(ctx, insertSQLTaskRun,
+			run.TaskID, run.TaskName, run.AccountID, nullTime(run.ScheduledAt), nullTime(run.StartedAt),
+			nullTime(run.FinishedAt), run.DurationSeconds, run.Status, run.TriggerType, run.AttemptNumber,
+			run.RowsAffected, run.ErrorCode, nullString(run.ErrorMessage), sqlTaskEnabledValue(run.GateResult), run.RunnerCN)
+		if err != nil {
+			return err
+		}
+		insertedID, err := inserted.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if insertedID <= 0 {
+			return moerr.NewInternalErrorNoCtx("SQL task admission did not return a run ID")
+		}
+		runID = uint64(insertedID)
+		if admission.AsyncTaskID != 0 {
+			updated, err := conn.ExecContext(ctx, setSQLTaskAsyncClaim, runID, admission.AsyncTaskID)
+			if err != nil {
+				return err
+			}
+			count, err := updated.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return ErrSQLTaskClaimed
+			}
+		}
+		return nil
+	})
+	if err != nil && !committed {
 		return 0, err
 	}
-	affected, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return int(affected), nil
-}
-
-func execCompleteSQLTaskRun(ctx context.Context, exec sqlTaskRunExecer, run SQLTaskRun) (sql.Result, error) {
-	return exec.ExecContext(
-		ctx,
-		completeSQLTaskRun,
-		run.TaskID,
-		run.TaskName,
-		run.AccountID,
-		nullTime(run.ScheduledAt),
-		nullTime(run.StartedAt),
-		nullTime(run.FinishedAt),
-		run.DurationSeconds,
-		run.Status,
-		run.TriggerType,
-		run.AttemptNumber,
-		run.RowsAffected,
-		run.ErrorCode,
-		nullString(run.ErrorMessage),
-		sqlTaskEnabledValue(run.GateResult),
-		run.RunnerCN,
-		run.RunID,
-		SQLTaskStatusRunning,
-		run.RunnerCN,
-		run.AttemptNumber,
-	)
-}
-
-type sqlTaskRunExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func execUpdateSQLTaskRun(ctx context.Context, exec sqlTaskRunExecer, run SQLTaskRun) (sql.Result, error) {
-	return exec.ExecContext(
-		ctx,
-		updateSQLTaskRun,
-		run.TaskID,
-		run.TaskName,
-		run.AccountID,
-		nullTime(run.ScheduledAt),
-		nullTime(run.StartedAt),
-		nullTime(run.FinishedAt),
-		run.DurationSeconds,
-		run.Status,
-		run.TriggerType,
-		run.AttemptNumber,
-		run.RowsAffected,
-		run.ErrorCode,
-		nullString(run.ErrorMessage),
-		sqlTaskEnabledValue(run.GateResult),
-		run.RunnerCN,
-		run.RunID,
-	)
+	return runID, err
 }
 
 func (m *mysqlTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
+	}
+	if err := validateSQLTaskTriggerSequence(sqlTask.TriggerCount); err != nil {
+		return 0, err
 	}
 
 	tx, err := m.db.BeginTx(ctx, nil)
@@ -1345,11 +1195,12 @@ func (m *mysqlTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, 
 
 	updated, err := tx.ExecContext(
 		ctx,
-		"update sql_task set trigger_count=?, next_fire_time=?, updated_at=? where task_id=? and trigger_count=?",
+		"update sql_task set trigger_count=?, next_fire_time=?, updated_at=? where task_id=? and enabled=1 and schedule_generation=? and trigger_count=?",
 		sqlTask.TriggerCount,
 		sqlTask.NextFireTime,
 		nullTime(sqlTask.UpdatedAt),
 		sqlTask.TaskID,
+		sqlTask.ScheduleGeneration,
 		sqlTask.TriggerCount-1,
 	)
 	if err != nil {
@@ -1512,34 +1363,14 @@ func sqlTaskEnabledValue(v bool) uint8 {
 	return 0
 }
 
-func removeDuplicateAsyncTasks(err error, tasks []task.AsyncTask) ([]task.AsyncTask, error) {
+func removeDuplicateTasks[T any](err error, tasks []T, taskID func(T) string) ([]T, error) {
 	var me *mysql.MySQLError
-	if ok := errors.As(err, &me); !ok {
-		return nil, err
-	}
-	if me.Number != moerr.ER_DUP_ENTRY {
+	if !errors.As(err, &me) || me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
 	b := tasks[:0]
 	for _, t := range tasks {
-		if !strings.Contains(me.Message, t.Metadata.ID) {
-			b = append(b, t)
-		}
-	}
-	return b, nil
-}
-
-func removeDuplicateDaemonTasks(err error, tasks []task.DaemonTask) ([]task.DaemonTask, error) {
-	var me *mysql.MySQLError
-	if ok := errors.As(err, &me); !ok {
-		return nil, err
-	}
-	if me.Number != moerr.ER_DUP_ENTRY {
-		return nil, err
-	}
-	b := tasks[:0]
-	for _, t := range tasks {
-		if !strings.Contains(me.Message, t.Metadata.ID) {
+		if !strings.Contains(me.Message, taskID(t)) {
 			b = append(b, t)
 		}
 	}
@@ -1550,6 +1381,19 @@ type SqlExecutor interface {
 	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}
+
+// ExecRowsAffected executes a statement and returns its affected-row count.
+func ExecRowsAffected(ctx context.Context, tx SqlExecutor, query string, args ...interface{}) (int64, error) {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
 }
 
 func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.DaemonTask) (int, error) {
@@ -1564,12 +1408,11 @@ func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.Daem
 }
 
 func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor, tasks ...task.DaemonTask) (int, error) {
-
-	sqlStr := insertDaemonTask
+	if len(tasks) == 0 {
+		return 0, nil
+	}
 	values := make([]any, 0)
 	for _, t := range tasks {
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
-
 		j, err := json.Marshal(t.Metadata.Options)
 		if err != nil {
 			return 0, err
@@ -1593,12 +1436,9 @@ func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor,
 			details,
 		)
 	}
-	if sqlStr == insertDaemonTask {
-		return 0, nil
-	}
-	exec, err := db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], values...)
+	exec, err := db.ExecContext(ctx, buildTaskInsertSQL(insertDaemonTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), values...)
 	if err != nil {
-		dup, err := removeDuplicateDaemonTasks(err, tasks)
+		dup, err := removeDuplicateTasks(err, tasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 		if err != nil {
 			return 0, err
 		}
@@ -1787,6 +1627,27 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
 		return 0, err
 	}
 	return int(affected), nil
+}
+
+func (m *mysqlTaskStorage) RequestDaemonTaskStatus(
+	ctx context.Context, observed task.DaemonTask, status task.TaskStatus,
+) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.runRequestDaemonTaskStatus(ctx, m.db, observed, status)
+}
+
+func (m *mysqlTaskStorage) runRequestDaemonTaskStatus(
+	ctx context.Context, db SqlExecutor, observed task.DaemonTask, status task.TaskStatus,
+) (int, error) {
+	result, err := db.ExecContext(ctx, requestDaemonTaskStatus,
+		status, observed.ID, observed.AccountID, observed.TaskStatus, observed.TaskRunner, observed.TaskRunner, nullTime(observed.LastRun))
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
 }
 
 func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error) {
@@ -2016,14 +1877,8 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 		return 0, err
 	}
 	defer func() {
-		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				err = errors.Join(e, err)
-			}
-		} else {
-			if e := tx.Commit(); e != nil {
-				err = errors.Join(e, err)
-			}
+		if e := tx.Rollback(); e != nil && !errors.Is(e, sql.ErrTxDone) && err != nil {
+			err = errors.Join(err, e)
 		}
 	}()
 
@@ -2045,8 +1900,10 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 		err = moerr.NewInternalError(ctx, "add cdc task status failed.")
 		return 0, err
 	}
-	n = daemonTaskRowsAffected
-	return
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return daemonTaskRowsAffected, nil
 }
 
 func (m *mysqlTaskStorage) UpdateCDCTask(
@@ -2059,7 +1916,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		SqlExecutor,
 	) (int, error),
 	condition ...Condition,
-) (int, error) {
+) (n int, err error) {
 	if taskFrameworkDisabled() || taskCollector == nil {
 		return 0, nil
 	}
@@ -2069,14 +1926,8 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		return 0, err
 	}
 	defer func() {
-		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				err = errors.Join(e, err)
-			}
-		} else {
-			if e := tx.Commit(); e != nil {
-				err = errors.Join(e, err)
-			}
+		if e := tx.Rollback(); e != nil && !errors.Is(e, sql.ErrTxDone) && err != nil {
+			err = errors.Join(err, e)
 		}
 	}()
 
@@ -2091,6 +1942,9 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	}
 
 	if len(taskKeyMap) == 0 {
+		if err = tx.Commit(); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 
@@ -2158,26 +2012,32 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 					)
 				}
 			}
-			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)
 		}
 	}
 
 	//step5: update daemon task status
-	if len(updateTasks) > 0 {
-		affectedTaskRow, err = m.RunUpdateDaemonTask(ctx, updateTasks, tx)
+	for _, observed := range updateTasks {
+		// CDC account post-processing occurs after the account transaction has
+		// committed, so an ownership change must not introduce a new conflict.
+		// Preserve the existing status-write semantics without restoring a stale
+		// runner, heartbeat, or other fields from the earlier snapshot.
+		result, err := tx.ExecContext(ctx, updateCDCDaemonStatus, targetStatus, observed.ID)
 		if err != nil {
 			return 0, err
 		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		affectedTaskRow = int(rows)
 		affectedCdcRow += affectedTaskRow
 	}
 
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
 	return affectedCdcRow, nil
-}
-
-func buildDaemonTaskWhereClause(c *conditions) string {
-	clause, _ := buildDaemonTaskWhereClauseWithArgs(c)
-	return clause
 }
 
 func buildDaemonTaskWhereClauseWithArgs(c *conditions) (string, []any) {
@@ -2188,8 +2048,11 @@ func buildDaemonTaskWhereClauseWithArgs(c *conditions) (string, []any) {
 		if cond, ok := (*c)[cond]; ok {
 			clauseBuilder.WriteString(" AND ")
 			clauseBuilder.WriteString(cond.sql())
-			if claim, ok := cond.(*lastRunCond); ok {
-				args = append(args, nullTime(claim.value))
+			switch value := cond.(type) {
+			case *lastRunCond:
+				args = append(args, nullTime(value.value))
+			case *accountCond:
+				args = append(args, value.account)
 			}
 		}
 	}

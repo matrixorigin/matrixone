@@ -30,14 +30,17 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -48,26 +51,40 @@ var hnsw_runSql = sqlexec.RunSql
 var hnsw_runStreamingSql = sqlexec.RunStreamingSql
 
 type hnswCreateState struct {
-	inited bool
-	build  hnswBuilder
-	param  vectorindex.HnswParam
-	tblcfg vectorindex.IndexTableConfig
-	idxcfg vectorindex.IndexConfig
+	inited         bool
+	started        bool
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	build          hnswBuilder
+	param          vectorindex.HnswParam
+	tblcfg         vectorindex.IndexTableConfig
+	idxcfg         vectorindex.IndexConfig
 	// bounds is the range of an int8/uint8 index, written to its dict table by end.
 	bounds hnsw.QuantizeBounds
+	// ignored leaves out the rows the index cannot store; nil without an ignored table.
+	ignored *ignoredBuild
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
+	if !u.started || u.policy == nil {
+		return nil
+	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
 
 	// The TVF owns clear+rebuild (the compile layer no longer pre-deletes on the sync path).
 	// Without table names we cannot clear (a bare "DELETE FROM " with an empty identifier is
 	// invalid), so skip rather than run malformed SQL.
 	if u.tblcfg.MetadataTable == "" || u.tblcfg.IndexTable == "" {
 		return nil
+	}
+	if u.ignored != nil {
+		if err := u.ignored.allBad(); err != nil {
+			return err
+		}
 	}
 
 	// Clear the old index unconditionally — even when nothing was built (REBUILD to zero docs must
@@ -78,7 +95,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	var sqls []string
 
 	ts := time.Now().UnixMicro()
-	provenance := metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable)
+	provenance := metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable, u.policy)
 	if u.build != nil {
 		insertSqls, err := u.build.PreparePersistence(ts, buildSnapshotTS(proc), provenance)
 		if err != nil {
@@ -89,37 +106,40 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	if u.tblcfg.DictTable != "" && u.bounds.Set {
 		sqls = append(sqls, hnsw.DictBoundsSql(u.tblcfg.DbName, u.tblcfg.DictTable, u.bounds))
 	}
+	buildTs := buildSnapshotTS(proc)
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
-		for _, sql := range deletes {
+		run := func(sql string) error {
 			res, err := exec.Exec(sql, stmt)
 			res.Close()
-			if err != nil {
+			return err
+		}
+		for _, sql := range deletes {
+			if err := run(sql); err != nil {
 				return err
 			}
 		}
-		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
-		if err != nil {
-			return err
-		}
 		if u.build != nil {
-			if err := u.build.PersistChunks(writer); err != nil {
+			if err := u.build.WriteIndexFiles(sqlproc, exec.Txn(), run); err != nil {
 				return err
 			}
 		}
 		for _, sql := range sqls {
-			res, err := exec.Exec(sql, stmt)
-			res.Close()
-			if err != nil {
+			if err := run(sql); err != nil {
 				return err
 			}
+		}
+		if u.ignored != nil {
+			return u.ignored.sqls(u.tblcfg, buildTs, run)
 		}
 		return nil
 	})
 }
 
 func (u *hnswCreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.policy = nil
+	u.started = false
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -145,6 +165,7 @@ func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelin
 	if u.build != nil {
 		u.build.Destroy()
 	}
+	u.ignored.close()
 }
 
 func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -164,11 +185,47 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 // sizes the models from the host memory budget, trains the range of an int8/uint8 index from a
 // sample, then reads every vector and adds it to the build. end persists the result.
 func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	defer func() {
+		if err != nil {
+			u.policy, u.started, u.inited = nil, false, false
+			if u.build != nil {
+				u.build.Destroy()
+				u.build = nil
+			}
+			if u.ignored != nil {
+				u.ignored.close()
+				u.ignored = nil
+			}
+			if u.batch != nil {
+				u.batch.Clean(proc.Mp())
+				u.batch = nil
+			}
+		} else {
+			u.started, u.inited = true, true
+		}
+	}()
+	admit := func() error {
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar || !cfgVec.IsConst() {
+			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig must be a string constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "hnsw_create", cfgstr, u.admittedConfig, u.inited, hnswrt.MaintenanceOperands)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+		return nil
+	}
+	if u.inited && u.policy == nil {
+		if err = admit(); err != nil {
+			return err
+		}
+	}
 	if u.inited {
 		u.batch.CleanOnlyData()
 		return nil
 	}
-	u.inited = true
 	u.batch = tf.createResultBatch()
 
 	if len(tf.Params) > 0 {
@@ -208,19 +265,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Usearch.ExpansionSearch = uint(val)
 	}
 
-	// IndexTableConfig
-	cfgVec := tf.ctr.argVecs[0]
-	if cfgVec.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
-	}
-	if !cfgVec.IsConst() {
-		return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
-	}
-	cfgstr := cfgVec.UnsafeGetStringAt(0)
-	if len(cfgstr) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
-	}
-	if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+	if err = admit(); err != nil {
 		return err
 	}
 	if u.tblcfg.PKey == "" || u.tblcfg.KeyPart == "" || u.tblcfg.KeyPartWidth <= 0 {
@@ -235,7 +280,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	u.idxcfg.Usearch.Dimensions = uint(u.tblcfg.KeyPartWidth)
 	u.idxcfg.Type = vectorindex.HNSW
 
-	rows, err := fetchSrcTableRowCount(proc, hnsw_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+	rows, err := fetchSrcTableRowCount(proc, hnsw_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart, u.policy)
 	if err != nil {
 		return err
 	}
@@ -257,7 +302,9 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	if hnsw.NeedsQuantizeBounds(u.idxcfg.Usearch.Quantization) {
 		u.bounds = hnsw.BaseBounds(partType)
 		if !u.bounds.Set && rows > 0 {
-			u.bounds, err = hnsw.SampleQuantizeBounds(sqlexec.NewSqlProcess(proc), u.tblcfg, int(u.tblcfg.KeyPartWidth))
+			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.IndexRelationPolicy = u.policy
+			u.bounds, err = hnsw.SampleQuantizeBounds(sqlproc, u.tblcfg, int(u.tblcfg.KeyPartWidth))
 			if err != nil {
 				return err
 			}
@@ -267,8 +314,11 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		return nil
 	}
 
+	u.ignored = newIgnoredBuild(u.tblcfg, vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
 	uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
-	u.build, err = newHnswBuilder(sqlexec.NewSqlProcess(proc), uid, partType, u.idxcfg, u.tblcfg)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
+	u.build, err = newHnswBuilder(sqlproc, uid, partType, u.idxcfg, u.tblcfg)
 	if err == nil {
 		u.build.SetQuantizeBounds(u.bounds)
 		u.build.SetRowCount(rows)
@@ -298,7 +348,9 @@ func (u *hnswCreateState) addAll(proc *process.Process) (err error) {
 			close(streamCh)
 			wg.Done()
 		}()
-		if _, err := hnsw_runStreamingSql(ctx, sqlexec.NewSqlProcess(proc), sql, streamCh, errCh); err != nil {
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		if _, err := hnsw_runStreamingSql(ctx, sqlproc, sql, streamCh, errCh); err != nil {
 			errCh <- err
 		}
 	}()
@@ -347,7 +399,19 @@ func (u *hnswCreateState) addResult(res executor.Result) error {
 			if idVec.IsNull(uint64(i)) || faVec.IsNull(uint64(i)) {
 				continue
 			}
-			if err := u.build.addBytes(vector.GetFixedAtNoTypeCheck[int64](idVec, i), faVec.GetBytesAt(i)); err != nil {
+			id := vector.GetFixedAtNoTypeCheck[int64](idVec, i)
+			err := u.build.addBytes(id, faVec.GetBytesAt(i))
+			if u.ignored == nil {
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			if err == nil {
+				u.ignored.stored()
+				continue
+			}
+			if err := u.ignored.leaveOut(strconv.FormatInt(id, 10), err); err != nil {
 				return err
 			}
 		}
@@ -360,21 +424,26 @@ type hnswBuilder interface {
 	SetQuantizeBounds(hnsw.QuantizeBounds)
 	SetRowCount(int64)
 	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
-	PersistChunks(*sqlexec.ChunkInserter) error
+	WriteIndexFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error
 	Destroy() error
-	// addBytes adds a vector given in the column's encoding.
+	// addBytes adds a vector given in the column's encoding; an error with an unstorable code
+	// tells why the index cannot store it.
 	addBytes(id int64, data []byte) error
 }
 
 type typedHnswBuilder[T types.ArrayElement] struct {
 	*hnsw.HnswBuild[T]
-	dim uint
+	dim  uint
+	kind usearch.Quantization
 }
 
 func (b typedHnswBuilder[T]) addBytes(id int64, data []byte) error {
 	vec := types.BytesToArray[T](data)
 	if uint(len(vec)) != b.dim {
-		return moerr.NewInternalErrorNoCtx("vector dimension mismatch")
+		return moerr.NewIndexVectorDimensionNoCtx(fmt.Sprintf("%d, the index has %d", len(vec), b.dim))
+	}
+	if err := hnsw.CheckStorable(vec, b.kind); err != nil {
+		return err
 	}
 	return b.Add(id, vec)
 }
@@ -385,12 +454,13 @@ func newTypedHnswBuilder[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid 
 	if err != nil {
 		return nil, err
 	}
-	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions}, nil
+	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions, kind: idxcfg.Usearch.Quantization}, nil
 }
 
 // newHnswBuilder returns a build that takes vectors of the column type partType as they are.
 func newHnswBuilder(sqlproc *sqlexec.SqlProcess, uid string, partType int32,
 	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (hnswBuilder, error) {
+	// typeswitch:partial vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch types.T(partType) {
 	case types.T_array_float32:
 		return newTypedHnswBuilder[float32](sqlproc, uid, idxcfg, tblcfg)

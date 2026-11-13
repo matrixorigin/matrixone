@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"path"
 	"strings"
@@ -25,7 +26,92 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestObjectExistsCancellationAndErrors(t *testing.T) {
+	notFound := errors.New("missing")
+	failure := errors.New("unavailable")
+	calls := 0
+	stat := func(_ context.Context, _ string) (int, error) {
+		calls++
+		return 0, failure
+	}
+	classify := func(err error) bool { return errors.Is(err, notFound) }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	exists, err := objectExists(ctx, "object", stat, classify)
+	require.False(t, exists)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls)
+
+	exists, err = objectExists(context.Background(), "object", stat, classify)
+	require.False(t, exists)
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, calls)
+
+	exists, err = objectExists(context.Background(), "object", func(context.Context, string) (int, error) {
+		return 0, notFound
+	}, classify)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestDeleteObjectKeysBatchingAndCancellation(t *testing.T) {
+	keys := make([]string, 2001)
+	var batches []int
+	var singles []string
+	failure := errors.New("delete failed")
+	deleteSingle := func(_ context.Context, key string) error {
+		singles = append(singles, key)
+		return failure
+	}
+	deleteBatch := func(_ context.Context, keys ...string) (bool, error) {
+		batches = append(batches, len(keys))
+		if len(batches) == 2 {
+			return false, failure
+		}
+		return true, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, deleteObjectKeys(ctx, nil, 1000, deleteSingle, deleteBatch), context.Canceled)
+	require.Empty(t, singles)
+	require.Empty(t, batches)
+	require.NoError(t, deleteObjectKeys(context.Background(), nil, 1000, deleteSingle, deleteBatch))
+	require.ErrorIs(t, deleteObjectKeys(context.Background(), []string{"one"}, 1000, deleteSingle, deleteBatch), failure)
+	require.Equal(t, []string{"one"}, singles)
+	require.ErrorIs(t, deleteObjectKeys(context.Background(), keys, 1000, deleteSingle, deleteBatch), failure)
+	require.Equal(t, []int{1000, 1000}, batches, "stop before the third batch")
+
+	batches = nil
+	require.NoError(t, deleteObjectKeys(context.Background(), keys, 1000, deleteSingle,
+		func(_ context.Context, keys ...string) (bool, error) {
+			batches = append(batches, len(keys))
+			return true, nil
+		}))
+	require.Equal(t, []int{1000, 1000, 1}, batches)
+
+	batches = nil
+	require.NoError(t, deleteObjectKeys(context.Background(), keys, 0, deleteSingle, deleteBatch))
+	require.Equal(t, []int{2001}, batches, "delegate unlimited batches to the provider")
+}
+
+// testOrdinaryObjectReadRanges checks the shared behavior against each provider's HTTP fixture.
+func testOrdinaryObjectReadRanges(t *testing.T, storage ObjectStorage) {
+	t.Helper()
+	t.Run("ordinary ranges", func(t *testing.T) {
+		min, max := int64(1), int64(4)
+		for _, end := range []*int64{&max, nil} {
+			reader, err := storage.Read(context.Background(), "object", &min, end)
+			require.NoError(t, err)
+			data, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			require.NoError(t, reader.Close())
+			require.Equal(t, "bcd", string(data))
+		}
+	})
+}
 
 func testObjectStorage[T ObjectStorage](
 	t *testing.T,
@@ -50,7 +136,15 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 	sdkName string,
 	parentCtx context.Context,
 	newStorage func(*testing.T, context.Context) T,
+	basePrefixes ...string,
 ) {
+	prefixForTest := func() string {
+		prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+		if len(basePrefixes) > 0 && basePrefixes[0] != "" {
+			return path.Join(basePrefixes[0], prefix)
+		}
+		return prefix
+	}
 	t.Run(sdkName, func(t *testing.T) {
 		testCtx, cancel := context.WithTimeout(parentCtx, 3*time.Minute)
 		defer cancel()
@@ -59,7 +153,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
 
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 			name := path.Join(prefix, "foo")
 
 			// write
@@ -181,7 +275,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 		t.Run("invalid write length", func(t *testing.T) {
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 
 			name := path.Join(prefix, "foo")
 
@@ -205,7 +299,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 		t.Run("write empty", func(t *testing.T) {
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 
 			name := path.Join(prefix, "foo")
 
@@ -251,6 +345,18 @@ func TestObjectStorages(t *testing.T) {
 					}
 					return storage
 				})
+
+			case args.IsMinio:
+				if args.Name == "cs-s3" {
+					prepareCITestStorage(t, args)
+				}
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				}, args.KeyPrefix)
 
 			case strings.Contains(args.Endpoint, "aliyun"):
 				// aliyun
@@ -337,7 +443,7 @@ func TestObjectStorages(t *testing.T) {
 				})
 
 			default:
-				t.Fatalf("not handle spec: %+v", args)
+				t.Fatal("unsupported object storage test endpoint")
 
 			}
 

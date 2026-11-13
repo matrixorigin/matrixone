@@ -200,6 +200,8 @@ type testTS struct {
 	created   chan struct{}
 }
 
+func (*testTS) SQLTaskService() taskservice.TaskService { return nil }
+
 type controlledCronTaskService struct {
 	*testTS
 	create func(context.Context, task.TaskMetadata, string) error
@@ -383,6 +385,10 @@ func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask,
 
 func (ts *testTS) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
 	panic("unexpected UpdateDaemonTaskError")
+}
+
+func (ts *testTS) RequestDaemonTaskStatus(context.Context, task.DaemonTask, task.TaskStatus) (int, error) {
+	panic("unexpected RequestDaemonTaskStatus")
 }
 
 func (ts *testTS) UpdateDaemonTaskStatus(

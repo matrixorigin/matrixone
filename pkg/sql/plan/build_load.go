@@ -567,6 +567,25 @@ func totalLoadFileSize(fileSize []int64) int64 {
 	return total
 }
 
+// loadFieldDelimiters translates LOAD field options into scan delimiters.
+func loadFieldDelimiters(fields *tree.Fields) (string, []byte, []byte) {
+	terminated := tree.DefaultFieldsTerminated
+	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
+	escapedBy := []byte{0}
+	if fields != nil {
+		if fields.EnclosedBy != nil && fields.EnclosedBy.Value != 0 {
+			enclosedBy = []byte{fields.EnclosedBy.Value}
+		}
+		if fields.EscapedBy != nil && fields.EscapedBy.Value != 0 {
+			escapedBy = []byte{fields.EscapedBy.Value}
+		}
+		if fields.Terminated != nil {
+			terminated = fields.Terminated.Value
+		}
+	}
+	return terminated, enclosedBy, escapedBy
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -636,58 +655,17 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
-	var offset int64 = 0
-	// A pattern that survived checkFileExist matched more than one file, so the
-	// load fans out whole files and never splits one by byte offset.  The
-	// prescan exists only to seed that split: it would stamp one file's header
-	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
-	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
-		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
-		offset, err = IgnoredLines(stmt.Param, ctx)
-		if err != nil {
-			return nil, err
-		}
-		stmt.Param.FileStartOff = offset
+	offset, err := prepareLoadScan(stmt.Param, noCompress, ctx, tableDef)
+	if err != nil {
+		return nil, err
 	}
-	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
-		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
-
-	stmt.Param.Tail.ColumnList = nil
-	stmt.Param.Tail.Assignments = nil
-	if stmt.Param.ScanType != tree.INLINE {
-		json_byte, err := json.Marshal(stmt.Param)
-		if err != nil {
-			return nil, err
-		}
-		tableDef.Createsql = string(json_byte)
-	}
-
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(ctx, stmt, originTableDef)
 	if err != nil {
 		return nil, err
 	}
 	bindCtx := NewBindContext(builder, nil)
-	terminated := ","
-	enclosedBy := []byte("\"")
-	escapedBy := []byte{0}
-	if stmt.Param.Tail.Fields != nil {
-		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
-				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.EscapedBy != nil {
-			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
-				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.Terminated != nil {
-			terminated = stmt.Param.Tail.Fields.Terminated.Value
-		}
-	}
+	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
@@ -761,7 +739,24 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			}
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions)
+	// Under statement IGNORE the omitted defaults staged here read the fill
+	// adjustment through the same reference coalesce the INSERT pre-insert
+	// projection applies, so buildInsertPlans' later PRE_INSERT fill and the
+	// staged defaults observe one row image. The gate covers exactly the
+	// columns the row can still carry a NULL through: file-supplied columns
+	// and SET assignments (mirroring appendLoadDefaultProjections' own
+	// supplied test).
+	var ignoreSupplied map[string]*Expr
+	if tree.IsIgnoreStatement(stmt) {
+		ignoreSupplied = make(map[string]*Expr, len(colToIndex)+len(setExpressions))
+		for name := range colToIndex {
+			ignoreSupplied[name] = nil
+		}
+		for name := range setExpressions {
+			ignoreSupplied[name] = nil
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions, ignoreSupplied)
 	if err != nil {
 		return nil, err
 	}
@@ -1007,7 +1002,7 @@ func getProjectNode(
 			continue
 		}
 
-		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], ctx.GetProcess(), loadAssignmentIgnore(stmt))
+		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], tableDef.DbName, ctx.GetProcess(), loadAssignmentIgnore(stmt))
 		if err != nil {
 			return false, err
 		}
@@ -1024,12 +1019,19 @@ func getProjectNode(
 // LOAD builds physical (child-batch) references directly, unlike INSERT's
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
+// Under statement IGNORE (ignoreSupplied non-nil, carrying the file-supplied
+// and SET-assigned columns) a staged omit-default expression reads its NOT
+// NULL sources through the fill adjustment: coalesceGeneratedColIgnoreFillRefs
+// rebuilds each such reference as coalesce(reference, implicit default), the
+// same rewrite the INSERT pre-insert projection applies, because the staged
+// defaults evaluate before the PRE_INSERT fill adjusts the batch.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
 	bindCtx *BindContext,
 	node *plan.Node,
 	tableDef *TableDef,
 	supplied map[string]int32,
 	setExpressions map[string]*plan.Expr,
+	ignoreSupplied map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
@@ -1057,6 +1059,13 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
+			if ignoreSupplied != nil {
+				wrapped, wrapErr := builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, expr)
+				if wrapErr != nil {
+					return 0, wrapErr
+				}
+				expr = wrapped
+			}
 			materialize[pos] = true
 			order = append(order, pos)
 		}
@@ -1079,11 +1088,65 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 	return id, nil
 }
 
+// marshalLoadSourceParam serializes the parsed source param of a LOAD into the
+// execution-time transport (TableDef.Createsql). Both planner surfaces use it,
+// so file-backed and inline loads carry the same reader-visible options
+// (SET NULLIF sentinels, the FIELDS/LINES tails, ignored lines, format and
+// JSON type); options dropped here are silently ignored by execution. The
+// inline payload travels once, in ExternScan.Data: strip it instead of
+// duplicating it in the plan. The binding-consumed column list and assignment
+// trees stay out of the transport as well.
+//
+// The caller's AST outlives this serialization: PREPARE retains it and a
+// mode-driven rebuild (rebuildPreparePlan) replans that same object, and
+// InitNullMap keeps already-normalized rules only while the consumed
+// assignments stay attached to it. Strip the payload and the consumed trees on
+// a copy here instead of consuming the caller's binding state.
+func marshalLoadSourceParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	copied.Data = ""
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		copiedTail.Assignments = nil
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+// hasUnconsumedColumnNullIf reports whether an assignment still carries a
+// column-NULLIF expression awaiting consumption by InitNullMap. Row-variable
+// wrappers are excluded: they carry no NullMap rules, and binding must keep
+// them attached so a later plan of the same statement can rebind them.
+func hasUnconsumedColumnNullIf(assignments tree.UpdateExprs) bool {
+	for _, assignment := range assignments {
+		if assignment == nil || assignment.Expr == nil {
+			continue
+		}
+		expr, _ := loadNullIfFunction(assignment.Expr)
+		if expr == nil {
+			continue
+		}
+		if _, isVariable := expr.Exprs[0].(*tree.VarExpr); !isVariable {
+			return true
+		}
+	}
+	return false
+}
+
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
-	// Binding consumes assignment expressions before serializing ExternParam.
-	// A consumed first assignment means this AST was already normalized; keep
-	// its rules when PREPARE or a transaction retry builds another plan.
-	if param.NullMap != nil && len(param.Tail.Assignments) > 0 && param.Tail.Assignments[0].Expr == nil {
+	// Binding consumes column-NULLIF expressions before serializing
+	// ExternParam. The statement is already normalized when no column form
+	// remains unconsumed; keep its rules when PREPARE or a transaction retry
+	// builds another plan. A pass that failed after consuming some expressions
+	// does not count as normalized here, so every replan re-derives - and
+	// reproduces - the same result instead of skipping validation.
+	if param.NullMap != nil && len(param.Tail.Assignments) > 0 &&
+		!hasUnconsumedColumnNullIf(param.Tail.Assignments) {
 		return nil
 	}
 	param.NullMap = make(map[string][]string)
@@ -1098,7 +1161,11 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
 			if _, isVariable := expr.Exprs[0].(*tree.VarExpr); isVariable {
-				param.Tail.Assignments[i].Expr = nil
+				// The row-variable wrapper is the rebinding information for the
+				// projection: both planner surfaces re-derive the scan column
+				// and the NULLIF assignment expression from it on every pass.
+				// Consuming it here would leave a replan without a projection,
+				// and the insert would silently use the target column default.
 				continue
 			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")

@@ -17,7 +17,7 @@ not supported: fulltext index only support char, varchar, text, datalink and jso
 drop  index fdx_04 on articles(title, body) with PARSER ngram;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 31 near "(title, body) with PARSER ngram;";
 drop  index fdx_04 on articles;
-internal error: not found index: fdx_04
+Can't DROP 'fdx_04'; check that column/key exists
 drop table articles;
 create table src (id bigint primary key, json1 json, json2 json);
 create fulltext index ftidx1 on src(json1) with parser json;

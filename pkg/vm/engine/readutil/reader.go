@@ -291,6 +291,9 @@ type reader struct {
 
 	source engine.DataSource
 
+	readBlockCnt uint64 // count of blocks this reader has read
+	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
+
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
 
@@ -302,6 +305,14 @@ type mergeReader struct {
 }
 
 type EmptyReader struct {
+}
+
+// SupportsScanCutoff admits a single ordered reader. A merge reader reports
+// the order of any one child and therefore cannot prove all its children have
+// the ordered-scan contract needed to apply a shared cutoff.
+func SupportsScanCutoff(r engine.Reader) bool {
+	single, ok := r.(*reader)
+	return ok && single != nil && len(single.GetOrderBy()) == 1
 }
 
 func NewMergeReader(readers []engine.Reader) *mergeReader {
@@ -389,7 +400,7 @@ func (r *mergeReader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (bool, error) {
@@ -397,7 +408,7 @@ func (r *mergeReader) ReadWithFilter(
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 
@@ -416,7 +427,7 @@ func (r *mergeReader) ReadWithFilter(
 		} else {
 			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
 			if err == nil && !isEnd && !outBatch.IsEmpty() {
-				_, err = filter(outBatch, nil)
+				_, err = filter.Apply(outBatch, nil)
 			}
 		}
 		if err != nil {
@@ -442,7 +453,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -451,7 +462,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 
@@ -470,7 +481,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 		} else {
 			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
 			if err == nil && !isEnd && !outBatch.IsEmpty() {
-				_, err = filter(outBatch, nil)
+				_, err = filter.Apply(outBatch, nil)
 			}
 		}
 		if err != nil {
@@ -501,6 +512,7 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
+	threshHold uint64,
 	filterHint engine.FilterHint,
 ) (r *reader, err error) {
 	defer func() {
@@ -578,6 +590,7 @@ func NewReader(
 	r.filterState.filter = blockFilter
 	r.filterState.memFilter = memFilter
 	r.filterState.hasBF = filterHint.BF != nil && filterHint.BF.Valid()
+	r.threshHold = threshHold
 	return r, nil
 }
 
@@ -794,11 +807,11 @@ func (r *reader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, false)
@@ -809,12 +822,12 @@ func (r *reader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, topKApplied bool, err error) {
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 	// Keep the distance heap across blocks read by this reader. Re-parsing the
@@ -845,7 +858,7 @@ func (r *reader) read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 	earlyColumns []int,
-	readerFilter engine.ReaderFilter,
+	readerFilter *engine.ReaderFilterRequest,
 	filterBeforeTopK bool,
 ) (isEnd bool, lateMaterialized bool, err error) {
 	outBatch.CleanOnlyData()
@@ -923,6 +936,12 @@ func (r *reader) read(
 	}()
 
 	r.tryUpdateColumns(cols)
+	if publication := objectio.JSONReadSetFromContext(ctx); publication.MatchesJSONColumns(r.columns.colTypes) {
+		publication.BindColumns(r.columns.seqnums)
+		if r.orderByLimit != nil || r.withFilterMixin.filterState.filter.Valid {
+			publication.Disable()
+		}
+	}
 
 	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
 	// For vector TopN pushdown we may have an extra distVec appended in the previous
@@ -953,8 +972,15 @@ func (r *reader) read(
 		}
 	}()
 
+	// Source.Next may read spill/metadata objects before assembling the
+	// final memory batch. Those nested reads cannot publish an outer column
+	// version; only persisted materialization below or memory delivery can.
+	sourceCtx := ctx
+	if objectio.JSONReadSetFromContext(ctx) != nil {
+		sourceCtx = objectio.WithJSONReadSet(ctx, nil)
+	}
 	blkInfo, state, err := r.source.Next(
-		ctx,
+		sourceCtx,
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
@@ -973,7 +999,7 @@ func (r *reader) read(
 	}
 	if state == engine.InMem {
 		if readerFilter != nil && filterBeforeTopK && !outBatch.IsEmpty() {
-			if _, err = readerFilter(outBatch, nil); err != nil {
+			if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 				return false, false, err
 			}
 		}
@@ -1005,9 +1031,12 @@ func (r *reader) read(
 		}
 
 		if readerFilter != nil && !filterBeforeTopK && !outBatch.IsEmpty() {
-			if _, err = readerFilter(outBatch, nil); err != nil {
+			if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 				return false, false, err
 			}
+		}
+		if err = objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(outBatch.Vecs, mp, outBatch.RowCount()); err != nil {
+			return false, false, err
 		}
 		return false, false, nil
 	}
@@ -1026,8 +1055,10 @@ func (r *reader) read(
 
 	policy := fileservice.GetFileServicePolicy(ctx)
 
-	// The cache owns admission, eviction and pressure limits. Preserve the
-	// caller policy instead of disabling writes based on scan position.
+	if r.readBlockCnt > r.threshHold {
+		policy |= fileservice.MemoryCacheNoEvict
+	}
+	r.readBlockCnt++
 
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 2)
@@ -1113,10 +1144,17 @@ func (r *reader) read(
 	}
 
 	if readerFilter != nil && !lateMaterialized && !outBatch.IsEmpty() {
-		if _, err = readerFilter(outBatch, nil); err != nil {
+		if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 			return false, false, err
 		}
 	}
 
 	return false, lateMaterialized, nil
+}
+
+func GetThresholdForReader(readerNum int) uint64 {
+	if readerNum <= 8 {
+		return uint64(1024 / readerNum)
+	}
+	return 128
 }

@@ -253,6 +253,9 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
 		return published, err
 	}
+	if published != nil && len(published.ByteRangeMap) > 0 && (tbl.db.op.IsSnapOp() || !tbl.getTxn().Readonly()) {
+		published = transientTableStats(published, published.TableCnt)
+	}
 	if tbl.remoteWorkspace {
 		if plan2.StatsInfoUsableForCache(published) && tbl.getTxn().Readonly() {
 			return published, nil
@@ -333,6 +336,7 @@ func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
 			}
 		}
 	}
+	stats.ByteRangeMap = nil
 	stats.TableName = ""
 	stats.TableCnt = rows
 	return &stats
@@ -705,12 +709,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(zms[idx], zm.GetMaxBuf())
-				index.UpdateZM(zms[idx], zm.GetMinBuf())
+				index.MergeZM(zms[idx], zm)
 			}
 		} else {
 			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap().Clone()
 				tableTypes[idx] = uint8(cols[idx].Typ.Id)
 			}
 			inited = true
@@ -932,9 +935,9 @@ func (tbl *txnTable) collectTombstones(
 			tombstone.AppendInMemory(row)
 		}
 		if blocks == nil {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDs(appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDs(tbl.tableId, appendDeletedRow)
 		} else {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(blocks, appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(tbl.tableId, blocks, appendDeletedRow)
 		}
 
 		//collect uncommitted persisted tombstones.
@@ -1821,7 +1824,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 				}
 			}
 		}
@@ -2256,7 +2259,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
@@ -2296,38 +2299,67 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
+// rewriteObjectByDeletion rewrites obj's surviving rows — every block
+// minus its pending deleted offsets — into a fresh storage object and
+// returns the replacement's metadata batch, its file name, the names of
+// the objects the rewrite persisted (or may have persisted through a
+// commit-ambiguous Sync error; the snapshot is taken BEFORE the writer's
+// close drops its tracked references), and any error. The writer carries
+// this transaction's per-object capacity option, so a persisted
+// replacement object reserves one in-flight unit under the admission
+// bound BEFORE it goes durable and a saturated ledger refuses the spill
+// with nothing half-persisted behind it; the parent that called the
+// rewrite records the result, and only a recorded result retires the
+// original — a refused or failed rewrite's persisted names are the
+// caller's to retain for asynchronous cleanup (issue #25590 round-19
+// review, finding 1).
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
+) (bat *batch.Batch, fileName string, persisted []string, err error) {
 
 	proc := tbl.proc.Load()
 
-	var (
-		err error
-		fs  fileservice.FileService
-	)
-
+	var fs fileservice.FileService
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
 		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
-	)
-
-	defer func() { s3Writer.Close() }()
-
-	var (
-		bat      *batch.Batch
-		stats    []objectio.ObjectStats
-		fileName string
+		tbl.getTxn().SinkerCapacityOption(),
 	)
 
 	defer func() {
-		if bat != nil {
-			bat.Clean(proc.Mp())
+		// The ownership snapshot of this rewrite's objects is taken before
+		// the close drops the sinker's tracked references — done by the
+		// deferred epilogue because every return path takes it, and
+		// handed out so a caller whose record never lands can transfer
+		// the physical objects to its asynchronous cleanup owner
+		// instead of dropping the last reference to persisted files
+		// (issue #25590 round-19 review).
+		persisted = s3Writer.AbandonAndRetainableNames()
+		if closeErr := s3Writer.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	var stats []objectio.ObjectStats
+	var infoBat *batch.Batch
+	var rowsBat *batch.Batch
+
+	defer func() {
+		// The rows batch is the rewrite's scratch — its surviving rows
+		// stream block by block into the writer — and the fill batch
+		// feeds the caller's copy, so every interrupted path and the
+		// successful return settle both here while only the duplicated
+		// result leaves the function.
+		if rowsBat != nil {
+			rowsBat.Clean(proc.Mp())
+		}
+		if infoBat != nil {
+			infoBat.Clean(proc.Mp())
 		}
 	}()
 
@@ -2337,10 +2369,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
 			slices.Sort(deletes)
-			if bat == nil {
-				bat = batch.NewWithSize(len(tbl.seqnums))
+			if rowsBat == nil {
+				rowsBat = batch.NewWithSize(len(tbl.seqnums))
 			}
-			bat.CleanOnlyData()
+			rowsBat.CleanOnlyData()
 
 			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
@@ -2348,18 +2380,18 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				deletes,
 				tbl.seqnums,
 				tbl.typs,
-				bat,
+				rowsBat,
 				tbl.getTxn().engine.fs,
 				tbl.getTxn().proc.GetMPool(),
 			); err != nil {
 				return false
 			}
 
-			if bat.RowCount() == 0 {
+			if rowsBat.RowCount() == 0 {
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, bat); err != nil {
+			if err = s3Writer.Write(ctx, rowsBat); err != nil {
 				return false
 			}
 
@@ -2369,24 +2401,37 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
+	if infoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		return nil, fileName, persisted, err
 	}
 
-	if len(stats) != 0 {
-		fileName = stats[0].ObjectLocation().String()
+	// A rewrite whose deletions removed the object's every row persists
+	// no replacement object (round-32 review, finding 1): an empty
+	// metadata batch would stage and publish an EMPTY workspace entry —
+	// merges skip its rows, but only nil slots ever compact (issue
+	// #25590 invariant I1), so repeated same-PK mutations spilling
+	// between statements would leave one inert entry per fully
+	// superseded object and rebuild the history-bound rescans the fix
+	// retired. The fully deleted rewrite is therefore NO replacement
+	// record: the caller stages nothing, and the original entry retires
+	// through the pass's own loop below while the original object GCs
+	// with it. The temporary info batch releases through the deferred
+	// epilogue, so no temporary batch outlives the call.
+	if len(stats) == 0 {
+		return nil, "", persisted, nil
 	}
 
-	ret, err := bat.Dup(proc.Mp())
+	fileName = stats[0].ObjectLocation().String()
+	bat, err = infoBat.Dup(proc.Mp())
 
-	return ret, fileName, err
+	return bat, fileName, persisted, err
 }
 
 func (tbl *txnTable) Delete(
@@ -2408,7 +2453,11 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		var err error
+		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -2485,7 +2534,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
@@ -2774,6 +2823,7 @@ func (tbl *txnTable) BuildReaders(
 			tbl.db.op.SnapshotTS(),
 			expr,
 			ds,
+			readutil.GetThresholdForReader(newNum),
 			hint,
 		)
 		if err != nil {
@@ -2929,6 +2979,64 @@ func pkCommitTSMatchedInRange(
 	return false, true
 }
 
+// pkCheckZoneMapUsable rejects absent or incompatible bounds. AnyIn returns
+// false for an uninitialized ZM; that is not proof that a PK is absent.
+func pkCheckZoneMapUsable(zm objectio.ZoneMap, typ *types.Type) bool {
+	scale := typ.Scale
+	if typ.Oid.IsInteger() && scale == -1 {
+		// SQL integer types use -1 for unspecified scale. ZoneMap.SetScale
+		// stores six bits, so the same type reads back as 63 in persisted ZMs.
+		scale = int32(uint8(scale) & 0x3f)
+	}
+	return len(zm) == index.ZMSize && zm.IsInited() &&
+		zm.GetType() == typ.Oid && zm.GetScale() == scale
+}
+
+// collectPKCheckObjects only inspects snapshot metadata. Complete this phase
+// before any file reads so a large unknown working set still bails out cheaply.
+// keys is sorted and NULL-free. A fake PK's sort-key ZM may describe another
+// column, so only real PK stats can prove an object irrelevant.
+func collectPKCheckObjects(
+	ctx context.Context,
+	p *logtailreplay.PartitionState,
+	created, deleted map[objectio.ObjectNameShort]struct{},
+	keys *vector.Vector,
+	isFakePK bool,
+) ([]objectio.ObjectEntry, bool, error) {
+	candidates := make([]objectio.ObjectEntry, 0, maxChangedObjectsForIO)
+	for i, objects := range []map[objectio.ObjectNameShort]struct{}{created, deleted} {
+		for name := range objects {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			if i == 1 {
+				if _, counted := created[name]; counted {
+					continue
+				}
+			}
+			obj, ok := p.GetObject(name)
+			if !ok {
+				return nil, true, nil
+			}
+			if !isFakePK {
+				zm := obj.SortKeyZoneMap()
+				if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+					continue
+				}
+			}
+			// Count both created and deleted objects that can require I/O. Do
+			// not let unrelated, metadata-proven negatives force a SQL retry.
+			if pkCheckBailoutOnChangedObjects(len(candidates) + 1) {
+				return nil, true, nil
+			}
+			candidates = append(candidates, obj)
+		}
+	}
+	return candidates, false, ctx.Err()
+}
+
+// PKPersistedBetween may sort keys in place; the public PK-check entry point
+// supplies an owned, NULL-free copy of the caller's vector.
 func (tbl *txnTable) PKPersistedBetween(
 	ctx context.Context,
 	p *logtailreplay.PartitionState,
@@ -2998,6 +3106,11 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
+	// AnyIn/SubVecIn binary-search NULL-free vectors. Establish ordering
+	// before even the snapshot-only pruning, not just before row filtering.
+	if err := keys.InplaceSort(tbl.proc.Load().GetMPool()); err != nil {
+		return false, err
+	}
 
 	var (
 		meta objectio.ObjectDataMeta
@@ -3011,92 +3124,95 @@ func (tbl *txnTable) PKPersistedBetween(
 	// from.Next(), weakening the PK-conflict check at that exact boundary.
 	delObjs, cObjs = p.GetChangedObjsBetween(from, types.MaxTs())
 
-	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
-		reason = "changed_objects_bailout"
+	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
+	objects, unknown, err := collectPKCheckObjects(ctx, p, cObjs, delObjs, keys, isFakePK)
+	if err != nil {
+		return false, err
+	}
+	if unknown {
+		reason = "data_objects_bailout"
 		return true, nil
 	}
 
-	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
-	if err := ForeachCommittedObjects(cObjs, delObjs, p,
-		func(obj objectio.ObjectEntry) (err2 error) {
-			if err2 = ctx.Err(); err2 != nil {
-				return
-			}
-			var zmCkecked bool
-			if !isFakePK {
-				// if the object info contains a pk zonemap, fast-check with the zonemap
-				if !obj.ZMIsEmpty() {
-					if !obj.SortKeyZoneMap().AnyIn(keys) {
-						return
-					}
-					zmCkecked = true
-				}
-			}
+	checkObject := func(obj objectio.ObjectEntry) (err2 error) {
+		if err2 = ctx.Err(); err2 != nil {
+			return
+		}
+		var objMeta objectio.ObjectMeta
+		location := obj.Location()
 
-			var objMeta objectio.ObjectMeta
-			location := obj.Location()
+		// load object metadata
+		if objMeta, err2 = objectio.FastLoadObjectMeta(
+			ctx, &location, false, fs,
+		); err2 != nil {
+			return
+		}
 
-			// load object metadata
-			if objMeta, err2 = objectio.FastLoadObjectMeta(
-				ctx, &location, false, fs,
+		// reset bloom filter to nil for each object
+		meta = objMeta.MustDataMeta()
+
+		zm := meta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
+		if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+			return
+		}
+
+		bf = nil
+		//fake pk has no bf
+		if !isFakePK {
+			if bf, err2 = objectio.LoadBFWithMeta(
+				ctx, meta, location, fs,
 			); err2 != nil {
 				return
 			}
+		}
 
-			// reset bloom filter to nil for each object
-			meta = objMeta.MustDataMeta()
-
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
-					return
+		objectio.ForeachBlkInObjStatsList(false, meta,
+			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				var blockZM objectio.ZoneMap
+				if !blkMeta.IsEmpty() {
+					blockZM = blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
 				}
-			}
-
-			bf = nil
-			//fake pk has no bf
-			if !isFakePK {
-				if bf, err2 = objectio.LoadBFWithMeta(
-					ctx, meta, location, fs,
-				); err2 != nil {
-					return
+				usableZM := pkCheckZoneMapUsable(blockZM, keys.GetType())
+				if usableZM && !blockZM.AnyIn(keys) {
+					return true
 				}
-			}
-
-			objectio.ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-					if !blkMeta.IsEmpty() &&
-						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+				//fake pk has no bf
+				if !isFakePK {
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBloomFilter()
+					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+						return false
+					}
+					var exist bool
+					lowerBound, upperBound := 0, keys.Length()
+					if usableZM {
+						lowerBound, upperBound = blockZM.SubVecIn(keys)
+					}
+					if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
 						return true
 					}
-					//fake pk has no bf
-					if !isFakePK {
-						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-						blkBfIdx := index.NewEmptyBloomFilter()
-						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-							return false
-						}
-						var exist bool
-						lowerBound, upperBound := blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().SubVecIn(keys)
-						if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
-							return true
-						}
-					}
+				}
 
-					blk.SetFlagByObjStats(&obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-					candidateBlks[blk.BlockID] = &blk
-					return true
-				}, obj.ObjectStats)
+				candidateBlks[blk.BlockID] = &blk
+				return true
+			}, obj.ObjectStats)
 
-			return
-		}); err != nil {
-		reason = "data_object_check_error"
-		return true, err
+		return
+	}
+	// At most 64 objects can reach metadata/BF I/O, including deleted objects.
+	for _, obj := range objects {
+		if err := checkObject(obj); err != nil {
+			if !checkTombstone && pkCheckObsoleteObjectMissing(obj, to, err) {
+				reason = "data_history_unavailable"
+				return true, moerr.NewTxnNeedRetry(ctx)
+			}
+			reason = "data_object_check_error"
+			return true, err
+		}
 	}
 
-	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
@@ -3204,6 +3320,12 @@ func (tbl *txnTable) PKPersistedBetween(
 			if err != nil {
 				releasePKCheckSemaphore()
 				reason = "data_block_read_error"
+				if !checkTombstone {
+					obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
+					if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
+						return true, moerr.NewTxnNeedRetry(ctx)
+					}
+				}
 				return true, err
 			}
 			if !usable || matched {
@@ -3384,6 +3506,15 @@ func tombstonePKExistsInRange(
 	return false, "", nil
 }
 
+// A missing source already obsolete at the caller's snapshot is unavailable
+// history, not proof of no conflict. Missing currently visible data stays fatal.
+func pkCheckObsoleteObjectMissing(obj objectio.ObjectEntry, to types.TS, err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+		!obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&to)
+}
+
+// PrimaryKeysMayBeUpserted returns ErrTxnNeedRetry for unavailable history. The
+// generated-ID caller must refresh its allocation before retrying that signal.
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
@@ -3391,6 +3522,9 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	batch *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false, false)
 }
@@ -3514,6 +3648,16 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	checkTombstone bool,
 	requireSubscribed bool,
 ) (bool, error) {
+	return tbl.primaryKeysMayBeChangedWithHistory(ctx, from, to, keysVector, checkTombstone, requireSubscribed, false)
+}
+
+// requireHistory protects optimistic writes whose older dependency snapshot can
+// outlive the operator's advanced RC read snapshot. A truncated interval is
+// unknown, never evidence that those writes had no competitors.
+func (tbl *txnTable) primaryKeysMayBeChangedWithHistory(
+	ctx context.Context, from, to types.TS, keysVector *vector.Vector,
+	checkTombstone, requireSubscribed, requireHistory bool,
+) (bool, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnPKMayBeChangedDurationHistogram.Observe(time.Since(start).Seconds())
@@ -3537,6 +3681,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
+	}
+
+	if !requireSubscribed && from.GE(&to) {
+		return false, nil
 	}
 
 	var snap *logtailreplay.PartitionState
@@ -3567,6 +3715,27 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 			return false, err
 		}
 		snap = part.Snapshot()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if requireHistory && !snap.CanServe(from) {
+		return true, nil
+	}
+
+	historyStart, _ := snap.GetDuration()
+	// Only generated-ID probes recover their allocation window. Ordinary
+	// modification probes retain their existing row/object checks. An empty
+	// partition's MaxTs start is a sentinel, not a history-GC lower bound.
+	if !requireSubscribed && !snap.IsEmpty() && from.LT(&historyStart) {
+		created, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !created {
+			return true, moerr.NewTxnNeedRetry(ctx)
+		}
 	}
 
 	var packer *types.Packer

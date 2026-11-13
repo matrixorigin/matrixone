@@ -96,6 +96,50 @@ func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 }
 
 func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
+	for _, commute := range []bool{false, true} {
+		t.Run(fmt.Sprintf("moves unique inner join below anti, commuted=%t", commute), func(t *testing.T) {
+			builder := newAntiJoinAssociativityBuilder(t, commute)
+
+			root, changed := builder.applyAntiJoinPreservedSideRule(4)
+
+			require.True(t, changed)
+			require.Equal(t, int32(3), root)
+			require.Equal(t, planpb.Node_ANTI, builder.qry.Nodes[root].JoinType)
+			require.Equal(t, []int32{4, 1}, builder.qry.Nodes[3].Children)
+			require.Equal(t, []int32{0, 2}, builder.qry.Nodes[4].Children)
+			// Physical costing must use the same active key domain rather than
+			// building the retained fact rows from a stale tiny INNER estimate.
+			builder.qry.Nodes[4].Stats.Outcnt = 1
+			builder.qry.Nodes[root].IsRightJoin = true
+			builder.determineBuildAndProbeSide(root, false)
+			require.False(t, builder.qry.Nodes[root].IsRightJoin)
+			builder.qry.Nodes[2].Stats.Outcnt = 1
+			builder.determineBuildAndProbeSide(root, false)
+			require.True(t, builder.qry.Nodes[root].IsRightJoin, "a truly smaller fact input can still build")
+		})
+	}
+	for _, unsafeInput := range []int32{0, 1, 2} {
+		t.Run(fmt.Sprintf("anti keeps fallible input %d", unsafeInput), func(t *testing.T) {
+			builder := newAntiJoinAssociativityBuilder(t, false)
+			builder.qry.Nodes[unsafeInput].FilterList = []*planpb.Expr{
+				associativityUnsafeCastEqExpr(t, builder, unsafeInput+1, unsafeInput+1),
+			}
+
+			root, changed := builder.applyAntiJoinPreservedSideRule(4)
+
+			require.False(t, changed)
+			require.Equal(t, int32(4), root)
+			require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
+		})
+	}
+	t.Run("anti retains stronger existence filter", func(t *testing.T) {
+		builder := newAntiJoinAssociativityBuilder(t, false)
+		builder.qry.Nodes[1].Stats.Outcnt = 99
+		root, changed := builder.applyAntiJoinPreservedSideRule(4)
+		require.False(t, changed)
+		require.Equal(t, int32(4), root)
+		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
+	})
 	t.Run("moves unique inner join below left join", func(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(t, true, false)
 
@@ -275,6 +319,26 @@ func TestOuterJoinAssociativityReportsNoChangeForInnerOnlyTree(t *testing.T) {
 	require.Equal(t, int32(4), root)
 }
 
+func newAntiJoinAssociativityBuilder(t testing.TB, commute bool) *QueryBuilder {
+	builder := newOuterJoinAssociativityBuilder(t, true, commute)
+	builder.qry.Nodes[3].JoinType = planpb.Node_ANTI
+	cache := NewStatsCache()
+	builder.tag2Table = make(map[int32]*planpb.TableDef)
+	for _, node := range builder.qry.Nodes[:3] {
+		node.TableDef.TblId = uint64(node.NodeId + 1)
+		builder.tag2Table[node.BindingTags[0]] = node.TableDef
+		info := NewStatsInfo()
+		info.TableCnt, info.NdvMap["id"] = 100, 100
+		cache.Set(node.TableDef.TblId, info)
+	}
+	builder.qry.Nodes[1].Stats.Outcnt = 10
+	builder.qry.Nodes[2].Stats.Outcnt = 10
+	builder.compCtx = &statsCacheCompilerContext{
+		MockCompilerContext: builder.compCtx.(*MockCompilerContext), statsCache: cache,
+	}
+	return builder
+}
+
 func newOuterJoinAssociativityBuilder(t testing.TB, uniqueInner, commuteUpper bool) *QueryBuilder {
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	scan := func(id, tag int32, name string) *planpb.Node {
@@ -418,6 +482,37 @@ func TestJoinRewritesPreserveDiagnosticInputs(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAssociativeLawDoesNotReuseHashOnPKProof(t *testing.T) {
+	for _, rule := range []int{1, 2} {
+		t.Run(fmt.Sprintf("rule%d", rule), func(t *testing.T) {
+			builder := newOuterJoinAssociativityBuilder(t, true, false)
+			inner, outer := builder.qry.Nodes[3], builder.qry.Nodes[4]
+			inner.JoinType = planpb.Node_INNER
+			builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			if rule == 1 {
+				outer.Children, inner.Children = []int32{0, 3}, []int32{1, 2}
+				outer.OnList = []*planpb.Expr{associativityEqExpr(1, 3)}
+				inner.OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+				builder.qry.Nodes[1].Stats.Outcnt = 10
+			} else {
+				builder.qry.Nodes[2].Stats.Selectivity = 0.1
+			}
+			determineHashOnPK(4, builder)
+			require.True(t, outer.Stats.HashmapStats.HashOnPK, "the original equality has a valid proof")
+			children := append([]int32(nil), outer.Children...)
+			var root int32
+			if rule == 1 {
+				root = builder.applyAssociativeLawRule1(4)
+			} else {
+				root = builder.applyAssociativeLawRule2(4)
+			}
+			require.Equal(t, int32(4), root, "the candidate pair has no connecting equality")
+			require.Equal(t, children, outer.Children)
+			require.True(t, outer.Stats.HashmapStats.HashOnPK, "rejected trial restores the original proof")
+		})
 	}
 }
 

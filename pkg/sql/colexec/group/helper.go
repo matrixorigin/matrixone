@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -151,6 +152,42 @@ func (w *spillRecordWriter) WriteSelectedFixedRows(
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedVarlenaRows(
+	values []types.Varlena,
+	area []byte,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if fast, ok := w.target.(interface {
+		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int32) (int, error)
+	}); ok {
+		n, err := fast.WriteSelectedVarlenaRows(values, area, rows)
+		w.written += int64(n)
+		return n, err
+	}
+	start := w.written
+	var encoded [4]byte
+	for _, row := range rows {
+		if row < 0 || int(row) >= len(values) {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("invalid varlena group spill row")
+		}
+		value := values[row].GetByteSlice(area)
+		if len(value) > math.MaxInt32 {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("group spill value exceeds wire format")
+		}
+		binary.LittleEndian.PutUint32(encoded[:], uint32(len(value)))
+		if err := types.WriteFull(w, encoded[:]); err != nil {
+			return int(w.written - start), err
+		}
+		if err := types.WriteFull(w, value); err != nil {
+			return int(w.written - start), err
+		}
+	}
+	return int(w.written - start), nil
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,
@@ -199,16 +236,20 @@ func unmarshalSpillGroupByRows(
 }
 
 type ResHashRelated struct {
-	mp         *mpool.MPool
-	Hash       hashmap.HashMap
-	TxnItr     hashmap.TransactionalIterator
-	insertPlan hashmap.InsertPlan
+	mp              *mpool.MPool
+	Hash            hashmap.HashMap
+	TxnItr          hashmap.TransactionalIterator
+	insertPlan      hashmap.InsertPlan
+	compact         *compactGroupLookup
+	compactRows     int
+	compactDisabled bool
 }
 
 type groupInsertPreview struct {
-	values    []uint64
-	inserted  []uint8
-	newGroups int
+	values       []uint64
+	inserted     []uint8
+	newGroups    int
+	existingOnly bool
 }
 
 type groupKeySourcePublication struct {
@@ -248,6 +289,9 @@ func (ctr *container) commitGroupByChunk(
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	if preview.existingOnly {
+		return preview.values, 0, nil
+	}
 	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
 	if !hasStringSourceMetadata {
 		for _, vec := range vectors {
@@ -502,6 +546,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		return moerr.NewInternalError(ctx, "hr.map mpool reset to different mpool")
 	}
 	if rebuild {
+		hr.freeCompactGroups()
 		if hr.Hash != nil {
 			hr.Hash.Free()
 			hr.Hash = nil
@@ -571,6 +616,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 func (hr *ResHashRelated) Free0() {
+	hr.freeCompactGroups()
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
@@ -861,6 +907,11 @@ func (ctr *container) writeSpillRecord(
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	return ctr.spillDataToDiskWithInput(proc, opAnalyzer, parentBkt, false)
+}
+
+// retainInput is used only when retrying a partially consumed input batch.
+func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket, retainInput bool) (int64, int64, error) {
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
@@ -1100,7 +1151,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	// reset ctr for next spill
-	ctr.resetForSpill()
+	ctr.resetSpillState(retainInput)
 	return totalBytes, totalRows, nil
 }
 
@@ -1999,7 +2050,7 @@ func hllVectorStateSupported(
 	}
 	switch types.T(args[0].Typ.Id) {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

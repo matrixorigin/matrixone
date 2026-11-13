@@ -202,3 +202,50 @@ func TestTemporalOwnedFilterRespectsRowGuard(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, sink.warningCount)
 }
+
+func TestTemporalDiagnosticScopeAcrossSiblings(t *testing.T) {
+	for _, guardedFirst := range []bool{true, false} {
+		name := "guarded-first"
+		if !guardedFirst {
+			name = "guarded-last"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			defer proc.Free()
+			proc.SetBaseProcessRunningStatus(true)
+			sink := &preparedCastWarningSession{}
+			proc.WarningSink = sink
+			str := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+			bad := bindTestFunction(t, proc, "date", str)
+			flag := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			null := &plan.Expr{Typ: types.T_date.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+			guarded := bindTestFunction(t, proc, "if", flag, bad, null)
+			left, right := guarded, bad
+			if !guardedFirst {
+				left, right = right, left
+			}
+			root := bindTestFunction(t, proc, "=", left, right)
+			execs, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{root})
+			require.NoError(t, err)
+			defer execs[0].Free()
+			b := batch.NewWithSize(1)
+			defer b.Clean(proc.Mp())
+			b.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+			require.NoError(t, vector.AppendFixedList(b.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
+			b.SetRowCount(3)
+			for _, want := range []int{3, 5} {
+				result, err := execs[0].Eval(proc, []*batch.Batch{b}, nil)
+				require.NoError(t, err)
+				require.Equal(t, 3, result.Length())
+				for row := uint64(0); row < 3; row++ {
+					require.True(t, result.IsNull(row))
+				}
+				require.Equal(t, want, sink.warningCount)
+			}
+			execs[0].ResetForNextQuery()
+			_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+			require.NoError(t, err)
+			require.Equal(t, 8, sink.warningCount)
+		})
+	}
+}

@@ -495,7 +495,11 @@ type HashBuild struct {
 	JoinMapRefCnt                 int32
 	ShuffleIdx                    int32
 	RuntimeFilterSpec             *plan.RuntimeFilterSpec
-	SpillThreshold                int64
+	// OptionalRuntimeFilterMaxKeyBytes bounds each variable-length key component
+	// before copying. When positive, the optional filter's UpperLimit also bounds
+	// retained key count. Zero keeps ordinary runtime-filter collection unchanged.
+	OptionalRuntimeFilterMaxKeyBytes int
+	SpillThreshold                   int64
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
@@ -741,7 +745,8 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
-		len(builder.UniqueJoinKeys) != 0 ||
+		len(builder.uniqueKeys.first.vecs) != 0 ||
+		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||
 		builder.IgnoreRows != nil || builder.DelRows != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}

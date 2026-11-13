@@ -21,6 +21,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand"
 	"net"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -737,17 +739,6 @@ type mysqlProtocolSessionState struct {
 	connectAttrs  map[string]string
 }
 
-func cloneProtocolStringMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
 func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -760,7 +751,7 @@ func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
 		collationID:   mp.collationID,
 		collationName: mp.collationName,
 		charset:       mp.charset,
-		connectAttrs:  cloneProtocolStringMap(mp.connectAttrs),
+		connectAttrs:  maps.Clone(mp.connectAttrs),
 	}
 }
 
@@ -778,7 +769,7 @@ func (mp *MysqlProtocolImpl) setSessionState(state mysqlProtocolSessionState) {
 	mp.collationID = state.collationID
 	mp.collationName = state.collationName
 	mp.charset = state.charset
-	mp.connectAttrs = cloneProtocolStringMap(state.connectAttrs)
+	mp.connectAttrs = maps.Clone(state.connectAttrs)
 }
 
 func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequest) {
@@ -896,6 +887,12 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
+	if _, showColumns := stmt.PrepareStmt.(*tree.ShowColumns); showColumns {
+		stmt.ColDefData, err = makeStatementColumnDefData(ctx, mp, stmt.PrepareStmt, columns)
+		if err != nil {
+			return err
+		}
+	}
 
 	var data []byte
 	// status ok

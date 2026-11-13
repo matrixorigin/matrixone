@@ -479,7 +479,8 @@ func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 	mgr.logtailQueue.Enqueue(txn)
 }
 
-// GetReader get a snapshot of all txn prepared between from and to.
+// GetReader returns a reader for transactions prepared between from and to.
+// See GetDirty for the conservative results after block compaction.
 func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	return &Reader{
 		from:  from,

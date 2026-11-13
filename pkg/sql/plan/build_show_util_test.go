@@ -622,7 +622,7 @@ func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
 		)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(&mock.ctxt, stmt, false)
+		built, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}
@@ -821,7 +821,7 @@ func TestConstructCreateTableSQLPreservesPropertiesAcrossSQLModes(t *testing.T) 
 			sourceStmt, err := mysql.ParseOneWithSQLMode(t.Context(), tc.sourceSQL, 1, tc.mode)
 			require.NoError(t, err)
 			t.Cleanup(sourceStmt.Free)
-			sourcePlan, err := BuildPlan(&mock.ctxt, sourceStmt, false)
+			sourcePlan, err := BuildPlan(&mock.ctxt, sourceStmt, false, nil)
 			require.NoError(t, err)
 			sourceDef := sourcePlan.GetDdl().GetCreateTable().GetTableDef()
 
@@ -832,12 +832,12 @@ func TestConstructCreateTableSQLPreservesPropertiesAcrossSQLModes(t *testing.T) 
 			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.mode)
 			require.NoError(t, err, showSQL)
 			t.Cleanup(replayedStmt.Free)
-			replayedPlan, err := BuildPlan(&mock.ctxt, replayedStmt, false)
+			replayedPlan, err := BuildPlan(&mock.ctxt, replayedStmt, false, nil)
 			require.NoError(t, err)
 			replayedDef := replayedPlan.GetDdl().GetCreateTable().GetTableDef()
 
 			require.Equal(t, tablePropertiesForTest(sourceDef), tablePropertiesForTest(replayedDef))
-			internalPlan, err := BuildPlan(&mock.ctxt, rewritten, false)
+			internalPlan, err := BuildPlan(&mock.ctxt, rewritten, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tablePropertiesForTest(sourceDef), tablePropertiesForTest(internalPlan.GetDdl().GetCreateTable().GetTableDef()))
 		})
@@ -868,7 +868,7 @@ func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()
-	ddlPlan, err := BuildPlan(context, statements[0], false)
+	ddlPlan, err := BuildPlan(context, statements[0], false, nil)
 	//if ddlPlan != nil {
 	//	testDeepCopy(ddlPlan)
 	//}
@@ -1164,6 +1164,8 @@ func TestFormatColTypeVector(t *testing.T) {
 	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
 	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
 	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+	require.Equal(t, "VECF8(3)", FormatColType(plan.Type{Id: int32(types.T_array_float8), Width: 3}))
+	require.Equal(t, "VECF4(1024)", FormatColType(plan.Type{Id: int32(types.T_array_float4), Width: 1024}))
 }
 
 // TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
@@ -1794,7 +1796,7 @@ func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
 				empty_enum enum(''), enum_flag enum(%s), set_flag set(%s))`, tc.members, tc.members), 1, tc.mode)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			original := p.GetDdl().GetCreateTable().GetTableDef()
 			for _, name := range []string{"enum_flag", "set_flag"} {
@@ -1817,7 +1819,7 @@ func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
 				require.NoError(t, err)
 				func() {
 					defer parsed.Free()
-					replayed, err := BuildPlan(ctx, parsed, false)
+					replayed, err := BuildPlan(ctx, parsed, false, nil)
 					require.NoError(t, err)
 					cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
 					for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {

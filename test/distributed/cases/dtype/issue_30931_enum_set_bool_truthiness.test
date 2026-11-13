@@ -1,0 +1,53 @@
+-- @suite
+-- @case
+-- @desc: ENUM/SET numeric storage truthiness in boolean contexts (#30931)
+-- @label:bvt
+
+drop database if exists issue_30931_enum_set_truth;
+create database issue_30931_enum_set_truth;
+use issue_30931_enum_set_truth;
+
+create table t(id int primary key, e enum('a','b'), s set('a','b'));
+insert into t values
+  (1,'a','a'),(2,'b','b'),(3,null,null),(4,'a','');
+
+-- ordinal 0 sentinel from INSERT IGNORE: falsy like numeric zero.
+set @truth_saved_mode = @@session.sql_mode;
+set sql_mode='';
+insert ignore into t values (5,'bad','a,b');
+set sql_mode = @truth_saved_mode;
+select id,e+0,s+0 from t order by id;
+
+-- IF() condition consumes the stored ordinal/bitmap, never the display label.
+select id, if(e,1,0), if(s,1,0), if(e+0,1,0), if(s+0,1,0) from t order by id;
+
+-- CASE WHEN conditions share the truthiness contract.
+select id, case when e then 'yes' else 'no' end, case when s then 'yes' else 'no' end from t order by id;
+
+-- bare predicates keep nonzero ordinal/mask rows and drop zero/null rows.
+select id from t where e order by id;
+select id from t where s order by id;
+select id from t where not e order by id;
+select id from t where e or s order by id;
+select id from t where e and id < 4 order by id;
+
+-- logical operators and IS TRUE/FALSE use storage truthiness.
+select id, e and 1, s or 0, e is true, e is false, s is not true from t order by id;
+
+-- display-string comparisons remain label-based (regression control).
+select id from t where e = 'a' order by id;
+select id from t where s = 'a,b' order by id;
+
+-- CTAS materializes the boolean results and keeps rows after a boundary.
+drop table if exists ctas_t;
+create table ctas_t as select id, if(e,1,0) ie, if(s,1,0) ism, e and 1 eand from t;
+select * from ctas_t order by id;
+
+-- server-prepared statements bind the same boolean semantics.
+prepare p1 from select id, if(e,1,0), if(s,1,0) from t where e order by id;
+execute p1;
+execute p1;
+deallocate prepare p1;
+
+drop table if exists ctas_t;
+drop database if exists issue_30931_enum_set_truth;

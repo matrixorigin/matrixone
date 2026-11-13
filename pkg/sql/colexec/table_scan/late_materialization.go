@@ -36,7 +36,8 @@ import (
 // payload types are always candidates.
 const lateMaterializationMinVarlenBlockBytes = 768 << 10
 
-func isLateMaterializationCandidate(typ plan.Type) bool {
+// IsLateMaterializationCandidate reports whether a column can benefit from selected-row reads.
+func IsLateMaterializationCandidate(typ plan.Type) bool {
 	switch types.T(typ.Id) {
 	case types.T_text,
 		types.T_blob,
@@ -49,7 +50,9 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_bf16,
 		types.T_array_float16,
 		types.T_array_int8,
-		types.T_array_uint8:
+		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		return typ.Width > 0 &&
@@ -59,7 +62,8 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 	}
 }
 
-func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
+// CollectFilterColumnPositions records the input columns needed to evaluate a filter.
+func CollectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -79,7 +83,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.F.Args {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -89,7 +93,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.List.List {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -98,7 +102,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 		if item.Lit == nil {
 			return false
 		}
-		return collectFilterColumnPositions(item.Lit.Src, columns)
+		return CollectFilterColumnPositions(item.Lit.Src, columns)
 	case *plan.Expr_P:
 		return item.P != nil
 	case *plan.Expr_V:
@@ -134,12 +138,12 @@ func (tableScan *TableScan) configureLateMaterialization() {
 
 	filterColumns := make([]bool, len(tableScan.Types))
 	for _, expr := range tableScan.RuntimeFilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
 	for _, expr := range tableScan.FilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
@@ -148,7 +152,7 @@ func (tableScan *TableScan) configureLateMaterialization() {
 	}
 
 	for pos, typ := range tableScan.Types {
-		if !filterColumns[pos] && isLateMaterializationCandidate(typ) {
+		if !filterColumns[pos] && IsLateMaterializationCandidate(typ) {
 			tableScan.ctr.lateColumns = append(tableScan.ctr.lateColumns, pos)
 		} else {
 			tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, pos)
@@ -208,7 +212,9 @@ func (tableScan *TableScan) applyReaderFilter(
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
 	tableScan.recordFilterInput(bat, loadedColumns)
-	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
+	// A fallback can load the entire schema through this callback. Only a
+	// proper subset leaves late-column bytes to account for after filtering.
+	tableScan.ctr.filterLateMaterialized = loadedColumns != nil && len(loadedColumns) < len(tableScan.Types)
 	return tableScan.evalFilter(proc, bat, loadedColumns)
 }
 

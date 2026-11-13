@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -104,6 +103,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -189,6 +189,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.OptionalRuntimeFilterMaxKeyBytes = t.OptionalRuntimeFilterMaxKeyBytes
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
@@ -224,6 +225,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.HashJoin:
 		t := sourceOp.(*hashjoin.HashJoin)
 		op := hashjoin.NewArgument()
+		op.ExistenceOnly = t.ExistenceOnly
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
@@ -300,6 +302,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*order.Order)
 		op := order.NewArgument()
 		op.OrderBySpec = t.OrderBySpec
+		op.ScanCutoffLimit = t.ScanCutoffLimit
+		op.ScanCutoffTag = t.ScanCutoffTag
+		op.ScanCutoff = t.ScanCutoff
 		op.SetInfo(&info)
 		return op
 	case vm.Product:
@@ -317,6 +322,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.VectorOpType = t.VectorOpType
+		op.Ignored = t.Ignored
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -438,6 +444,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
+		op.IndexMaintenance = t.IndexMaintenance.Clone()
 		op.Limit = t.Limit
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
@@ -495,7 +502,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		sourceArg := sourceOp.(*shuffle.Shuffle)
 		pool := dupCtx.shufflePools[sourceArg]
 		if pool == nil {
-			pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			if sourceArg.OwnedOutput {
+				pool = shuffle.NewOwnedShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.OwnedColumnCount)
+			} else {
+				pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			}
 			dupCtx.shufflePools[sourceArg] = pool
 		}
 		op := shuffle.NewArgument()
@@ -511,7 +522,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.OwnedOutput = sourceArg.OwnedOutput
+		op.OwnedColumnCount = sourceArg.OwnedColumnCount
 		op.StringHashKey = sourceArg.StringHashKey
+		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -630,6 +644,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.LocalDomainBuilds = t.LocalDomainBuilds
+		op.LocalDomainProbes = t.LocalDomainProbes
+		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
@@ -663,6 +680,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TableFunction.Attrs = t.TableFunction.Attrs
 			op.TableFunction.Params = t.TableFunction.Params
 			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.IndexMaintenance = t.TableFunction.IndexMaintenance.Clone()
 			op.TableFunction.Limit = t.TableFunction.Limit
 			op.TableFunction.SetInfo(&info)
 		}
@@ -899,23 +917,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.GetTopContext()
-	txnOp := proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(proc.GetTxnOperator().Txn().SnapshotTS) {
-			if proc.GetCloneTxnOperator() != nil {
-				txnOp = proc.GetCloneTxnOperator()
-			} else {
-				txnOp = proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(proc.GetTopContext(), proc.GetTxnOperator(), node.ScanSnapshot)
 
 	if preCtx.Ref.SchemaName != "" {
 		_, err := eng.Database(ctx, preCtx.Ref.SchemaName, txnOp)
@@ -1623,11 +1625,17 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 // broadcast hash MARK contract accepts them. Clone before normalization to
 // avoid mutating a reusable plan.
 func constructBroadcastHashMarkJoin(
-	node, left *plan.Node,
+	node, left, right *plan.Node,
 	leftTypes, rightTypes []types.Type,
 	proc *process.Process,
 ) *hashjoin.HashJoin {
 	arg := constructHashJoin(node, left, leftTypes, rightTypes, proc)
+	if canUseHashExistenceJoinWithInputs(node, left, right) {
+		arg.ExistenceOnly = true
+		arg.HashOnPK = false
+		arg.IsShuffle = false
+		return arg
+	}
 	if len(arg.EqConds[0]) <= 1 {
 		return arg
 	}
@@ -2119,14 +2127,480 @@ func constructAggregateConfigWithError(
 			return args, config, nil
 		}
 
+	case plan2.NameVectorMatmul:
+		if len(args) != 4 && len(args) != 5 {
+			return nil, nil, moerr.NewInvalidInputNoCtxf(
+				"vector_matmul requires 4 or 5 arguments, got %d", len(args))
+		}
+		for _, i := range plan2.VectorMatmulConfigArgs(len(args)) {
+			if args[i] == nil || !plan2.IsVectorMatmulConfigExpr(args[i]) {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+			}
+		}
+		topk, err := evaluateAggregateConfigInt64(proc, args[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		queries, queriesOid, isNull, err := evaluateAggregateConfigNullable(proc, args[3])
+		if err != nil {
+			return nil, nil, err
+		}
+		if isNull {
+			return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must not be NULL")
+		}
+		options := ""
+		if len(args) == 5 {
+			// an omitted options argument selects the defaults; a supplied one is a JSON object
+			if options, _, isNull, err = evaluateAggregateConfigNullable(proc, args[4]); err != nil {
+				return nil, nil, err
+			}
+			if isNull || options == "" {
+				return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
+			}
+		}
+		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		if queriesOid == types.T_blob {
+			// a BLOB holds the queries as little-endian float32 values
+			return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulBinaryConfig(topk, []byte(queries), options, gpu), nil
+		}
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options, gpu), nil
+
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
 			return nil, nil, err
 		}
 		return args, config, nil
+
+	case plan2.NameEwmMean, plan2.NameEwmVar, plan2.NameEwmStd,
+		plan2.NameEwmCov, plan2.NameEwmCorr:
+		return constructEwmConfig(f, proc)
 	}
 	return args, nil, nil
+}
+
+// constructEwmConfig is the ewm window statistics' per-execution
+// configuration boundary (§9): it evaluates the decay and policy
+// constants against the current compilation's proc (marker parameters
+// resolve here, which is why marker-parameterized ewm statements are
+// excluded from both prepare caches), validates the resolved values with
+// the §7 error families, and encodes the configuration ONCE into the
+// aggregate expression's extraConfig bytes. The value arguments remain
+// as the expression's arguments; everything after them is consumed
+// here.
+func constructEwmConfig(
+	f *plan.Function,
+	proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	name := strings.ToLower(f.Func.ObjName)
+	valueArgs := 1
+	if name == plan2.NameEwmCov || name == plan2.NameEwmCorr {
+		valueArgs = 2
+	}
+	if len(args) < valueArgs+1 {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	cfg := aggexec.EwmConfig{Adjust: true}
+	decay, err := ewmEvaluateConstantArg(proc, args[valueArgs])
+	if err != nil {
+		return nil, nil, err
+	}
+	next := valueArgs + 1
+	switch {
+	case decay.isString:
+		if decay.str != plan2.NameEwmHalfLifeTag {
+			// A prepared marker may resolve to the text form of a numeric
+			// value. A quoted string literal never reaches this branch: the
+			// binder rejects unknown decay tags at planning time (§7).
+			v, perr := strconv.ParseFloat(strings.TrimSpace(decay.str), 64)
+			if perr != nil || !isFiniteFloat(v) || v <= 0.0 || v > 1.0 {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+			}
+			cfg.Mode = aggexec.EwmModeRow
+			cfg.Alpha = v
+			break
+		}
+		if len(args) < valueArgs+2 {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+		hArg, err := ewmEvaluateConstantArg(proc, args[valueArgs+1])
+		if err != nil {
+			return nil, nil, err
+		}
+		// The §7 signature tables the half-life as a numeric constant: the
+		// bind-time literal rows reject a boolean there (the window
+		// binder's literal validator), and a decay that resolves to the
+		// tag per execution — a deferred conditional such as
+		// CASE WHEN ? > 0 THEN 'halflife' ELSE 'x' END — must not widen
+		// that rule with the shared evaluator's boolean-as-0/1 view, or a
+		// `TRUE` behind the tag would silently become HalfLife=1. The
+		// isBool bit keeps the resolved domain visible before the
+		// collapse; string-typed prepared markers keep the numeric-text
+		// parse below, and booleans behind a NON-tag decay remain the
+		// adjust/ignoreNA policies they always were.
+		if hArg.isBool {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+		if hArg.isString {
+			// h prepared markers resolve to text like decay markers do.
+			v, perr := strconv.ParseFloat(strings.TrimSpace(hArg.str), 64)
+			hArg.isString = false
+			if perr != nil {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+			hArg.num = v
+		}
+		if !isFiniteFloat(hArg.num) || hArg.num <= 0.0 {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+		cfg.Mode = aggexec.EwmModeTime
+		cfg.HalfLife = hArg.num
+		next = valueArgs + 2
+	case decay.isNull:
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	default:
+		if !isFiniteFloat(decay.num) || decay.num <= 0.0 || decay.num > 1.0 {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm statistics require alpha in (0,1]")
+		}
+		cfg.Mode = aggexec.EwmModeRow
+		cfg.Alpha = decay.num
+	}
+	if next < len(args) {
+		adj, err := ewmEvaluateConstantArg(proc, args[next])
+		if err != nil {
+			return nil, nil, err
+		}
+		adjust, perr := ewmBoolPolicy(adj)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		cfg.Adjust = adjust
+		next++
+	}
+	if next < len(args) {
+		ina, err := ewmEvaluateConstantArg(proc, args[next])
+		if err != nil {
+			return nil, nil, err
+		}
+		ignoreNA, perr := ewmBoolPolicy(ina)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		cfg.IgnoreNA = ignoreNA
+		next++
+	}
+	if next < len(args) {
+		// §4 declares minPeriods a constant integer >= 0 with NO upper
+		// limit: the threshold is read in its original numeric domain by
+		// ewmResolveMinPeriods — exact integer domains, integrality judged
+		// before any lossy float64 conversion — so a DECIMAL 0.99999999
+		// …99 whose float64 view IS 1.0 still rejects as the §7 fractional
+		// policy value, and every nonnegative integer threshold travels
+		// the configuration without the removed int32 cap.
+		mp, err := ewmResolveMinPeriods(proc, args[next])
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg.MinPeriods = mp
+		next++
+	}
+	if next < len(args) {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	return args[:valueArgs], aggexec.EncodeEwmConfig(cfg), nil
+}
+
+// ewmEvaluatedArg carries one evaluated decay/policy constant: the
+// string view (the 'halflife' tag), the numeric view (booleans arrive as
+// 0/1) and the NULL bit. isBool keeps the resolved value's own domain
+// visible before that boolean/numeric collapse, so slots with a
+// numeric-only contract can reject a genuine boolean.
+type ewmEvaluatedArg struct {
+	isString bool
+	str      string
+	num      float64
+	isNull   bool
+	isBool   bool
+}
+
+// ewmEvaluateConstantVector materializes one semantically constant decay
+// or policy argument through the same per-execution evaluation path as the
+// percentile configuration: fold, evaluate against the current proc, and
+// hand the scalar's vector back. The caller reads the value in its
+// ORIGINAL domain (keep the type's scale/width semantics intact).
+func ewmEvaluateConstantVector(
+	proc *process.Process, expr *plan.Expr,
+) (*vector.Vector, func(), error) {
+	if expr == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"ewm statistics require constant decay and policy arguments")
+	}
+	expr, err := normalizeAggregateConfigExpr(proc, expr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+}
+
+// ewmEvaluateConstantArg reads one evaluated decay/policy constant into
+// its float64 / string / NULL views for the decay, half-life and boolean
+// policy positions (those positions are defined over the comparable
+// float domain by §4/§7).
+func ewmEvaluateConstantArg(
+	proc *process.Process, expr *plan.Expr,
+) (ewmEvaluatedArg, error) {
+	var out ewmEvaluatedArg
+	vec, free, err := ewmEvaluateConstantVector(proc, expr)
+	if err != nil {
+		return out, err
+	}
+	defer free()
+	if vec == nil || vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		out.isNull = true
+		return out, nil
+	}
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		out.isBool = true
+		out.num = 0.0
+		if vector.MustFixedColWithTypeCheck[bool](vec)[0] {
+			out.num = 1.0
+		}
+	case types.T_int8:
+		out.num = float64(vector.MustFixedColWithTypeCheck[int8](vec)[0])
+	case types.T_int16:
+		out.num = float64(vector.MustFixedColWithTypeCheck[int16](vec)[0])
+	case types.T_int32:
+		out.num = float64(vector.MustFixedColWithTypeCheck[int32](vec)[0])
+	case types.T_int64:
+		out.num = float64(vector.MustFixedColWithTypeCheck[int64](vec)[0])
+	case types.T_uint8:
+		out.num = float64(vector.MustFixedColWithTypeCheck[uint8](vec)[0])
+	case types.T_uint16:
+		out.num = float64(vector.MustFixedColWithTypeCheck[uint16](vec)[0])
+	case types.T_uint32:
+		out.num = float64(vector.MustFixedColWithTypeCheck[uint32](vec)[0])
+	case types.T_uint64:
+		out.num = float64(vector.MustFixedColWithTypeCheck[uint64](vec)[0])
+	case types.T_float32:
+		out.num = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+	case types.T_float64:
+		out.num = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		out.num = float64(v)
+	case types.T_decimal64:
+		out.num = types.Decimal64ToFloat64(
+			vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0], vec.GetType().Scale)
+	case types.T_decimal128:
+		out.num = types.Decimal128ToFloat64(
+			vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0], vec.GetType().Scale)
+	case types.T_decimal256:
+		out.num = types.Decimal256ToFloat64(
+			vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0], vec.GetType().Scale)
+	case types.T_char, types.T_varchar, types.T_text:
+		out.isString = true
+		out.str = vec.GetStringAt(0)
+	default:
+		return out, moerr.NewInvalidInputNoCtx(
+			"ewm statistics require constant decay and policy arguments")
+	}
+	return out, nil
+}
+
+// isFiniteFloat keeps the resolved-value finiteness guards of §7
+// expressed once (NaN and +-Inf policy values never saturate silently).
+func isFiniteFloat(v float64) bool {
+	return v == v && !math.IsInf(v, 0)
+}
+
+// ewmBoolPolicy resolves one constant adjust/ignoreNA position: NULL,
+// string-typed and NON-FINITE numeric values (NaN and the infinities,
+// reachable through a constant expression like CAST('NaN' AS DOUBLE))
+// are rejected with the policy family — they never saturate or
+// silently convert to a policy value (§7's finiteness guards).
+func ewmBoolPolicy(v ewmEvaluatedArg) (bool, error) {
+	if v.isNull || v.isString || !isFiniteFloat(v.num) {
+		return false, moerr.NewInvalidInputNoCtx(
+			"invalid argument: ewm statistics require constant adjust and ignoreNA booleans")
+	}
+	return v.num != 0.0, nil
+}
+
+// ewmMinPeriodsFamily is the §7 family of the minPeriods position.
+const ewmMinPeriodsFamily = "invalid argument: ewm statistics require minPeriods to be a constant integer >= 0"
+
+// ewmResolveMinPeriods reads one minPeriods constant in its ORIGINAL
+// numeric domain (§4: a constant integer >= 0 with no upper limit).
+// Integrality is judged before any lossy float64 view: every integer
+// domain carries its exact threshold (an int64 value that is not
+// float64-exact still configures its own integer), while a DECIMAL
+// fraction whose float64 view rounds to an integral — 0.999999999999999999
+// at DECIMAL(18,18) converts to exactly 1.0 —still rejects with the §7
+// family instead of silently encoding the rounded integer. Thresholds
+// beyond the int64 axis saturate to math.MaxInt64, observationally exact
+// because the §5 C-gate counts one partition's rows and can never reach
+// it.
+func ewmResolveMinPeriods(
+	proc *process.Process, expr *plan.Expr,
+) (int64, error) {
+	vec, free, err := ewmEvaluateConstantVector(proc, expr)
+	if err != nil {
+		return 0, err
+	}
+	defer free()
+	if vec == nil || vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx(ewmMinPeriodsFamily)
+	}
+	family := func() error { return moerr.NewInvalidInputNoCtx(ewmMinPeriodsFamily) }
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		if vector.MustFixedColWithTypeCheck[bool](vec)[0] {
+			return 1, nil
+		}
+		return 0, nil
+	case types.T_int8:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[int8](vec)[0]), family)
+	case types.T_int16:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[int16](vec)[0]), family)
+	case types.T_int32:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[int32](vec)[0]), family)
+	case types.T_int64:
+		return ewmIntPeriodsThreshold(
+			vector.MustFixedColWithTypeCheck[int64](vec)[0], family)
+	case types.T_uint8:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[uint8](vec)[0]), family)
+	case types.T_uint16:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[uint16](vec)[0]), family)
+	case types.T_uint32:
+		return ewmIntPeriodsThreshold(
+			int64(vector.MustFixedColWithTypeCheck[uint32](vec)[0]), family)
+	case types.T_uint64:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+		if v > math.MaxInt64 {
+			// a threshold beyond the int64 axis saturates to the
+			// observationally unreachable maximum
+			return math.MaxInt64, nil
+		}
+		return int64(v), nil
+	case types.T_float32:
+		return ewmFloatPeriodsThreshold(
+			float64(vector.MustFixedColWithTypeCheck[float32](vec)[0]), family)
+	case types.T_float64:
+		return ewmFloatPeriodsThreshold(
+			vector.MustFixedColWithTypeCheck[float64](vec)[0], family)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		return ewmFloatPeriodsThreshold(float64(v), family)
+	case types.T_decimal64:
+		v := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
+		return ewmDecimalPeriodsThreshold(
+			big.NewInt(int64(v)), vec.GetType().Scale, family)
+	case types.T_decimal128:
+		v := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
+		return ewmDecimalPeriodsThreshold(
+			ewmDecimal128Significand(v), vec.GetType().Scale, family)
+	case types.T_decimal256:
+		v := vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0]
+		return ewmDecimalPeriodsThreshold(
+			ewmDecimal256Significand(v), vec.GetType().Scale, family)
+	case types.T_char, types.T_varchar, types.T_text:
+		return 0, family()
+	default:
+		return 0, moerr.NewInvalidInputNoCtx(
+			"ewm statistics require constant decay and policy arguments")
+	}
+}
+
+// ewmIntPeriodsThreshold keeps the exact integer of the integer domains.
+func ewmIntPeriodsThreshold(v int64, family func() error) (int64, error) {
+	if v < 0 {
+		return 0, family()
+	}
+	return v, nil
+}
+
+// ewmFloatPeriodsThreshold judges the float domains in their own width:
+// an integral, finite, nonnegative constant becomes its threshold.
+func ewmFloatPeriodsThreshold(num float64, family func() error) (int64, error) {
+	if !isFiniteFloat(num) || num != math.Trunc(num) || num < 0.0 {
+		return 0, family()
+	}
+	// float64(math.MaxInt64) == 2^63, just above the int64 axis, so >= is
+	// the saturation cut: every integral double below it converts exactly
+	if num >= float64(math.MaxInt64) {
+		return math.MaxInt64, nil
+	}
+	return int64(num), nil
+}
+
+// ewmDecimalPeriodsThreshold reduces one decimal significand (
+// value = sig / 10^scale) to its exact integer threshold: the fraction
+// part must be zero and the whole number nonnegative (§4), and a
+// threshold beyond the int64 axis saturates to the observationally
+// unreachable maximum.
+func ewmDecimalPeriodsThreshold(
+	sig *big.Int, scale int32, family func() error,
+) (int64, error) {
+	if sig.Sign() < 0 {
+		return 0, family()
+	}
+	if scale < 0 {
+		// a negative scale is integral by definition (sig * 10^-scale)
+		sig = new(big.Int).Mul(sig, pow10BigInt(-scale))
+	} else if scale > 0 {
+		pow := pow10BigInt(scale)
+		if new(big.Int).Mod(sig, pow).Sign() != 0 {
+			return 0, family()
+		}
+		sig = new(big.Int).Quo(sig, pow)
+	}
+	if sig.Cmp(big.NewInt(math.MaxInt64)) > 0 {
+		return math.MaxInt64, nil
+	}
+	return sig.Int64(), nil
+}
+
+func pow10BigInt(scale int32) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+}
+
+// ewmDecimal128Significand reads the 128-bit two's-complement significand.
+func ewmDecimal128Significand(v types.Decimal128) *big.Int {
+	hi := big.NewInt(int64(v.B64_127))
+	hi.Lsh(hi, 64)
+	lo := new(big.Int).SetUint64(uint64(v.B0_63))
+	return hi.Or(hi, lo)
+}
+
+// ewmDecimal256Significand reads the 256-bit two's-complement significand.
+func ewmDecimal256Significand(v types.Decimal256) *big.Int {
+	hi := big.NewInt(int64(v.B192_255))
+	hi.Lsh(hi, 192)
+	b := new(big.Int).SetUint64(uint64(v.B128_191))
+	b.Lsh(b, 128)
+	hi.Or(hi, b)
+	b = new(big.Int).SetUint64(uint64(v.B64_127))
+	b.Lsh(b, 64)
+	hi.Or(hi, b)
+	lo := new(big.Int).SetUint64(uint64(v.B0_63))
+	return hi.Or(hi, lo)
 }
 
 // validateAggregateConfigs checks only operator nodes whose aggregate
@@ -2158,9 +2632,60 @@ func validateAggregateConfigs(node *plan.Node, proc *process.Process) error {
 		if !ok || w.W == nil || w.W.WindowFunc == nil {
 			continue
 		}
-		if err := validate(w.W.WindowFunc); err != nil {
+		ef := w.W.WindowFunc.GetF()
+		if ef == nil || ef.Func == nil {
+			continue
+		}
+		_, config, err := constructAggregateConfigWithError(ef, proc)
+		if err != nil {
 			return err
 		}
+		switch strings.ToLower(ef.Func.ObjName) {
+		case plan2.NameEwmMean, plan2.NameEwmVar, plan2.NameEwmStd,
+			plan2.NameEwmCov, plan2.NameEwmCorr:
+		default:
+			continue
+		}
+		cfg, cerr := aggexec.DecodeEwmConfig(config)
+		// A config that is absent or stale-decoded belongs to another
+		// aggregate; only a decoded event-time ewm configuration reaches
+		// the ORDER BY shape check.
+		if cerr != nil || cfg.Mode != aggexec.EwmModeTime {
+			continue
+		}
+		if err := validateEwmEventTimeOrder(w.W); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateEwmEventTimeOrder enforces the event-time ORDER BY shape (§7)
+// at the per-execution configuration boundary: exactly one ascending
+// expression whose key type is numeric or temporal. Literal-tag calls
+// already passed these checks at binding; a prepared marker decay
+// defers the mode verdict to here, so both spellings reach this point
+// with the same catalog texts.
+func validateEwmEventTimeOrder(w *plan.WindowSpec) error {
+	if len(w.OrderBy) != 1 {
+		return moerr.NewInvalidInputNoCtx(
+			"invalid argument: event-time ewm statistics require exactly one ORDER BY expression")
+	}
+	flag := w.OrderBy[0].GetFlag()
+	if flag&plan.OrderBySpec_DESC != 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"invalid argument: event-time ewm statistics require ascending ORDER BY")
+	}
+	switch types.T(w.OrderBy[0].Expr.Typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_timestamp, types.T_datetime, types.T_date:
+	default:
+		return moerr.NewInvalidInputNoCtx(
+			"event-time ewm statistics require a numeric or temporal ORDER BY key")
 	}
 	return nil
 }
@@ -2291,15 +2816,42 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	s, _, _, err := evaluateAggregateConfigNullable(proc, expr)
+	return s, err
+}
+
+// evaluateAggregateConfigNullable evaluates a string configuration argument and returns its
+// value, its evaluated type and whether it is NULL.
+func evaluateAggregateConfigNullable(proc *process.Process, expr *plan.Expr) (string, types.T, bool, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		return "", err
+		return "", 0, false, err
+	}
+	defer free()
+	oid := vec.GetType().Oid
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", oid, true, nil
+	}
+	if oid == types.T_json {
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, false, nil
+	}
+	return vec.GetStringAt(0), oid, false, nil
+}
+
+// evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.
+func evaluateAggregateConfigInt64(proc *process.Process, expr *plan.Expr) (int64, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return 0, err
 	}
 	defer free()
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
-		return "", nil
+		return 0, moerr.NewInvalidInputNoCtx("aggregate integer configuration must not be NULL")
 	}
-	return vec.GetStringAt(0), nil
+	if vec.GetType().Oid != types.T_int64 {
+		return 0, moerr.NewInvalidInputNoCtxf("aggregate integer configuration has type %s", vec.GetType().Oid)
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](vec, 0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -2597,7 +3149,8 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.VectorOpType = node.ExtraOptions
+	opt, _ := tree.ParseCentroidxOption(node.ExtraOptions)
+	arg.VectorOpType = opt.OpType
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(node.OnList)
 	for i := range node.SendMsgList {
@@ -2710,7 +3263,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
-		ret.TrackNullKeys = arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark() && !arg.ExistenceOnly
 		if !arg.AsofBuildLeft && len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}

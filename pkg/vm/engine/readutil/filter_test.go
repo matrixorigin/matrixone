@@ -151,6 +151,68 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 		require.True(t, selected)
 	})
 
+	t.Run("prepared clock precision retains matching block", func(t *testing.T) {
+		proc.Base.UnixTime = time.Date(2026, 8, 10, 12, 0, 0, 123000000, zone).UnixNano()
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte("3"), false, proc.Mp()))
+		proc.SetPrepareParams(params)
+		defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+		fsp, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "cast", []*plan.Expr{param, target})
+		require.NoError(t, err)
+		now, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "now", []*plan.Expr{fsp})
+		require.NoError(t, err)
+		now.Typ.Scale = 6 // the bound prepared plan's static scale
+		rowExpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{column(), now})
+		require.NoError(t, err)
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+		defer input.Clean(proc.Mp())
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], parseDatetime("2026-08-10 12:00:00.123100"), false, proc.Mp()))
+		input.SetRowCount(1)
+		rowResult, free, err := colexec.GetReadonlyResultFromExpression(proc, rowExpr, []*batch.Batch{input})
+		require.NoError(t, err)
+		defer free()
+		require.True(t, vector.MustFixedColNoTypeCheck[bool](rowResult)[0])
+		blockFilter := compile(t, "=", []*plan.Expr{column(), now})
+		_, selected, err := blockFilter(0, makeDatetimeMeta(parseDatetime("2026-08-10 12:00:00.123100")), nil)
+		require.NoError(t, err)
+		require.True(t, selected, "the row comparator rounds the datetime to the runtime timestamp scale")
+	})
+	t.Run("invalid timestamp precision fails open", func(t *testing.T) {
+		value := int64(0)
+		for _, scale := range []int32{-1, 7} {
+			_, _, ok := index.MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&value), types.T_timestamp.ToType(), scale, zone, types.ComparisonEqual)
+			require.False(t, ok)
+		}
+	})
+	t.Run("rounded range crossing zero timestamp retains matching row", func(t *testing.T) {
+		edge := types.Datetime(8 * 3600 * types.MicroSecsPerSec)
+		values := []types.Datetime{edge - 2, edge - 1}
+		bound := plan2.MakePlan2TimestampConstExprWithType(0)
+		bound.Typ.Scale = 0
+		rowExpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{column(), bound})
+		require.NoError(t, err)
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+		defer input.Clean(proc.Mp())
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+		}
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Datetime(0), true, proc.Mp()))
+		input.SetRowCount(3)
+		rows, free, err := colexec.GetReadonlyResultFromExpression(proc, rowExpr, []*batch.Batch{input})
+		require.NoError(t, err)
+		defer free()
+		require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](rows)[:2])
+		require.True(t, rows.IsNull(2))
+		blockFilter := compile(t, "=", []*plan.Expr{column(), bound})
+		_, selected, err := blockFilter(0, makeDatetimeMeta(values...), nil)
+		require.NoError(t, err)
+		require.True(t, selected, "the compiled storage filter must retain the SQL-matching row")
+	})
+
 	t.Run("between preserves common value scale", func(t *testing.T) {
 		value := parseDatetime("2026-08-10 12:00:00.123456")
 		lower := makeTimestampExpr("2026-08-10 12:00:00.123456")
@@ -1173,7 +1235,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		for _, v := range vals {
 			vector.AppendFixed(vec, v, false, m)
 		}
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(m))
 		needFreeVecs = append(needFreeVecs, vec)
 		return MakeInExprForTest[int64](MakeColExprForTest(0, types.T_int64), vals, types.T_int64, m)
 	}
@@ -1651,7 +1713,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							for x := lb; x <= ub; x++ {
 								vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
 							}
-							vec.InplaceSort()
+							require.NoError(t, vec.InplaceSort(mp))
 						}
 
 						str1 := strconv.Itoa(int(lb))
@@ -1731,7 +1793,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 									vector.AppendFixed[types.Uuid](vec, u, false, mp)
 								}
 							}
-							vec.InplaceSort()
+							require.NoError(t, vec.InplaceSort(mp))
 						}
 
 						u := encodeIntToUUID(int32(lb))
@@ -1874,7 +1936,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							xx := strconv.Itoa(int(x))
 							vector.AppendBytes(inputVec, []byte(xx), false, mp)
 						}
-						inputVec.InplaceSort()
+						require.NoError(t, inputVec.InplaceSort(mp))
 
 					case types.T_date:
 						for x := lb - 1; x <= ub+1; x++ {
@@ -1907,7 +1969,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 
-						inputVec.InplaceSort()
+						require.NoError(t, inputVec.InplaceSort(mp))
 
 					case types.T_decimal256:
 						for x := lb - 1; x <= ub+1; x++ {
@@ -1920,7 +1982,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 
-						inputVec.InplaceSort()
+						require.NoError(t, inputVec.InplaceSort(mp))
 
 					case types.T_uuid:
 						for x := lb - 1; x <= ub+1; x++ {
@@ -1931,7 +1993,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 								vector.AppendFixed[types.Uuid](inputVec, xx, false, mp)
 							}
 						}
-						inputVec.InplaceSort()
+						require.NoError(t, inputVec.InplaceSort(mp))
 					}
 
 					if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
@@ -2061,7 +2123,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 			appendVal(sorted, ty, i, useBinary)
 		}
 		if ty.ToType().IsVarlen() || useBinary {
-			sorted.InplaceSort()
+			require.NoError(t, sorted.InplaceSort(mp))
 		}
 
 		unsorted = vector.NewVec(ty.ToType())
@@ -2083,7 +2145,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		for _, v := range vals {
 			appendVal(vec, ty, v, useBinary)
 		}
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(mp))
 		return vec
 	}
 
@@ -2787,6 +2849,69 @@ func TestMergeFiltersRejectsNaNOperands(t *testing.T) {
 	}
 
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestMergeFiltersPrefersExactPointsToPrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	points := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"a1", "a2"} {
+		require.NoError(t, vector.AppendBytes(points, []byte(value), false, mp))
+	}
+	points.SetSorted(true)
+	defer func() {
+		points.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	prefix := BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}
+	exact := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: points}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, exact
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, function.IN, merged.Op)
+		require.Same(t, points, merged.Vec)
+
+		block, err := ConstructBlockPKFilter(false, merged, nil)
+		require.NoError(t, err)
+		func() {
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(mp)
+			for _, value := range []string{"a1", "a2", "b1"} {
+				require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+			}
+			require.Equal(t, []int64{0, 1}, block.DecideSearchFunc(true)(containers.Vectors{*input}))
+		}()
+	}
+	// If the set extends beyond the prefix, its selectivity is unknown. Keep
+	// the existing fallback rather than always preferring either operand.
+	outside := vector.NewVec(types.T_varchar.ToType())
+	defer outside.Free(mp)
+	for _, value := range []string{"a1", "b1"} {
+		require.NoError(t, vector.AppendBytes(outside, []byte(value), false, mp))
+	}
+	outside.SetSorted(true)
+	partial := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: outside}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, partial
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, left.Op, merged.Op)
+	}
+	bad := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bad, int64(1), false, mp))
+	defer bad.Free(mp)
+	invalid := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: bad}
+	merged, err := mergeFilters(&prefix, &invalid, function.AND, mp)
+	require.NoError(t, err)
+	require.False(t, merged.Valid, "invalid point vectors must fail open")
 }
 
 func TestCombineOffsetFuncsDeduplicatesAndRejectsInvalidOffsets(t *testing.T) {
@@ -4014,6 +4139,63 @@ func TestMergedInFilterCleanupHandoff(t *testing.T) {
 	// multiple reset/error paths.
 	filter.Cleanup()
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestMergedInFilterSelectedOverPrefixRetainsCachedSearch(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	left := vector.NewVec(types.T_varchar.ToType())
+	right := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer func() {
+		left.Free(mp)
+		right.Free(mp)
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	for _, tc := range []struct {
+		vec    *vector.Vector
+		values []string
+	}{{left, []string{"a1", "a2", "a3"}}, {right, []string{"a2", "a3", "a4"}}, {input, []string{"a1", "a2", "a3", "b1"}}} {
+		for _, value := range tc.values {
+			require.NoError(t, vector.AppendBytes(tc.vec, []byte(value), false, mp))
+		}
+		tc.vec.SetSorted(true)
+	}
+	payload, err := input.MarshalBinary()
+	require.NoError(t, err)
+	data := append([]byte(nil), objectio.EncodeIOEntryHeader(&objectio.IOEntryHeader{Type: objectio.IOET_ColData, Version: objectio.IOET_ColumnData_V2})...)
+	data = append(data, payload...)
+	cached := fileservice.NewBytes(data)
+	defer cached.Release()
+	baseline := mp.CurrNB()
+	for _, reverse := range []bool{false, true} {
+		intersection, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: right}, false, mp)
+		require.NoError(t, err)
+		prefix := BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}
+		first, second := &prefix, &intersection
+		if reverse {
+			first, second = second, first
+		}
+		selected, err := mergeFilters(first, second, function.AND, mp)
+		require.NoError(t, err)
+		require.Same(t, intersection.Vec, selected.Vec)
+		filter, err := ConstructBlockPKFilter(false, selected, nil)
+		require.NoError(t, err)
+		require.NotNil(t, filter.CachedSearch)
+		hits, err := objectio.SearchCachedVector(fileservice.IOEntry{CachedData: cached}, filter.CachedSearch, true)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, hits)
+		require.NotNil(t, filter.Cleanup)
+		filter.Cleanup()
+		filter.Cleanup()
+		require.Equal(t, baseline, mp.CurrNB())
+		// The cached descriptor owns its search keys after the merge is freed.
+		hits, err = objectio.SearchCachedVector(fileservice.IOEntry{CachedData: cached}, filter.CachedSearch, true)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, hits)
+	}
 }
 
 func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {

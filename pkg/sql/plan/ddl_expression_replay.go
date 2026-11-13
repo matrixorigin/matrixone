@@ -225,8 +225,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 					// inferred results. Only compiler-owned character coercions
 					// follow their changed input; root assignment has its own owner.
 					cast := len(f.Args) == 2 && f.Args[1].GetT() != nil &&
-						(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_strict" ||
-							f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_ignore")
+						IsAssignmentCastFamilyName(f.Func.ObjName)
 					if cast && isPersistedCharacterCoercion(e) {
 						bound, err := refreshedPersistedCharacterCoercion(ctx, e)
 						if err != nil {
@@ -278,7 +277,18 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		unchanged := DeepCopyExpr(source)
 		remapGeneratedColExprPositions(unchanged, rawPositions)
 		if proto.Equal(raw, target) || proto.Equal(unchanged, target) {
-			return copyExpr(source, visiblePositions)
+			visible := copyExpr(source, visiblePositions)
+			// The CONVERT skeleton still carries the old expression. Retarget
+			// its binary assignment without rebinding the typed computation.
+			if (typ.Id == int32(types.T_binary) || typ.Id == int32(types.T_varbinary)) &&
+				!ctasSameDefaultType(source.Typ, typ) {
+				converted, err := convertedPersistedAssignment(ctx, visible, typ)
+				if err != nil {
+					replay.err = err
+				}
+				return converted
+			}
+			return visible
 		}
 		converted, err := convertedPersistedAssignment(ctx, raw, typ)
 		if err != nil || !proto.Equal(converted, target) {

@@ -77,6 +77,9 @@ func (v *Vector) AreaBackingKind() BackingKind {
 	if v == nil {
 		return OwnedMPoolUnique
 	}
+	if v.IsDictionary() {
+		return BorrowedLease
+	}
 	if v.areaLease != nil {
 		return BorrowedLease
 	}
@@ -94,7 +97,7 @@ func (v *Vector) BorrowedAccountedBytes() int64 {
 	if v == nil {
 		return 0
 	}
-	var bytes int64
+	bytes := int64(0)
 	if v.dataLease != nil {
 		bytes += v.dataLease.AccountedBytes()
 	}
@@ -121,7 +124,7 @@ func sameBufferLease(left, right BufferLease) bool {
 }
 
 func (v *Vector) CanDetach(part BackingPart) bool {
-	if v == nil {
+	if v == nil || v.IsDictionary() {
 		return false
 	}
 	switch part {
@@ -138,7 +141,7 @@ func (v *Vector) CanDetach(part BackingPart) bool {
 // Vector must not already own data capacity; callers must Free or materialize
 // the previous generation first.
 func (v *Vector) InstallBorrowedData(data []byte, lease BufferLease) error {
-	if v == nil || lease == nil || cap(v.data) != 0 || v.dataLease != nil {
+	if v == nil || v.IsDictionary() || lease == nil || cap(v.data) != 0 || v.dataLease != nil {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector data")
 	}
 	if !lease.Retain() {
@@ -153,7 +156,7 @@ func (v *Vector) InstallBorrowedData(data []byte, lease BufferLease) error {
 // InstallBorrowedArea is the independently-owned area counterpart of
 // InstallBorrowedData.
 func (v *Vector) InstallBorrowedArea(area []byte, lease BufferLease) error {
-	if v == nil || lease == nil || cap(v.area) != 0 || v.areaLease != nil {
+	if v == nil || v.IsDictionary() || lease == nil || cap(v.area) != 0 || v.areaLease != nil {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector area")
 	}
 	if !lease.Retain() {
@@ -239,6 +242,27 @@ func NewBorrowedFixedVectorWithAllocation(
 	return vec, nil
 }
 
+// PrepareDataForInplaceMutation makes the data backing writable without
+// changing values, row metadata, or the independently owned varlen area.
+// A failed allocation leaves the existing backing and lease unchanged.
+func (v *Vector) PrepareDataForInplaceMutation(mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		return v.EnsureFlat(mp)
+	}
+	if !v.cantFreeData || len(v.data) == 0 {
+		return nil
+	}
+	data, err := v.allocData(mp, len(v.data))
+	if err != nil {
+		return err
+	}
+	copy(data, v.data)
+	v.releaseBorrowedData()
+	v.data = data
+	v.cantFreeData = false
+	return nil
+}
+
 func (v *Vector) releaseBorrowedData() {
 	if v == nil || v.dataLease == nil {
 		return
@@ -265,6 +289,7 @@ func (v *Vector) releaseBorrowedBacking() {
 	if v == nil {
 		return
 	}
+	v.releaseDictionary()
 	v.releaseBorrowedArea()
 	v.releaseBorrowedData()
 }
@@ -318,6 +343,9 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
+	if v.IsDictionary() {
+		return v.EnsureFlat(mp)
+	}
 	if v == nil || !v.HasBorrowedBacking() {
 		return nil
 	}
@@ -328,6 +356,7 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 	if err != nil {
 		return err
 	}
+	v.CopyExpressionMetadataTo(owned)
 	old := *v
 	*v = *owned
 	old.Free(mp)

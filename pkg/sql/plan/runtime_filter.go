@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -187,9 +189,37 @@ func localProtocolEnablesSortedMembershipFilter(sid string) bool {
 	return ok && version >= defines.MORPCVersion10
 }
 
+// exactFilterEnv resolves planner dependencies only where the existing codec
+// contract needs them. A scan-local caller supplies its values directly.
+type exactFilterEnv struct {
+	builder     *QueryBuilder
+	ctx         context.Context
+	service     string
+	fromBuilder bool
+}
+
+func (env exactFilterEnv) context() context.Context {
+	if env.fromBuilder {
+		return env.builder.GetContext()
+	}
+	return env.ctx
+}
+
+func (env exactFilterEnv) serviceID() string {
+	if env.fromBuilder {
+		return env.builder.compCtx.GetProcess().GetService()
+	}
+	return env.service
+}
+
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
-	probeType, buildType types.Type,
-	matchPrefix bool,
+	probeType, buildType types.Type, matchPrefix bool,
+) (keycodec.ExactRuntimeFilterEncoding, bool) {
+	return exactRuntimeFilterPlanEncoding(exactFilterEnv{builder: builder, fromBuilder: true}, probeType, buildType, matchPrefix)
+}
+
+func exactRuntimeFilterPlanEncoding(
+	env exactFilterEnv, probeType, buildType types.Type, matchPrefix bool,
 ) (keycodec.ExactRuntimeFilterEncoding, bool) {
 	encoding := keycodec.ExactRuntimeFilterEncodingForPair(probeType, buildType)
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
@@ -198,7 +228,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 	if (encoding != keycodec.ExactRuntimeFilterRaw ||
 		!keycodec.LegacyExactRawProducerSafe(buildType.Oid)) &&
 		!localProtocolEnablesVersionedExactKeyContract(
-			builder.compCtx.GetProcess().GetService(),
+			env.serviceID(),
 		) {
 		// Only metadata-independent raw types can keep their exact filters below
 		// v8. Metadata-dependent contracts, new closures, and types without a
@@ -211,7 +241,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 		filterFunction = function.PrefixInFunctionName
 	}
 	if _, err := function.GetFunctionByName(
-		builder.GetContext(), filterFunction, []types.Type{probeType, probeType}); err != nil {
+		env.context(), filterFunction, []types.Type{probeType, probeType}); err != nil {
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	return encoding, true
@@ -222,11 +252,24 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 // unsupported contracts must leave no consumer dependency, placement
 // constraint, or optimistic selectivity behind.
 func (builder *QueryBuilder) makeExactRuntimeFilterPair(
-	tag int32,
-	matchPrefix bool,
-	upperLimit int32,
-	probeExpr, buildExpr *plan.Expr,
-	notOnPk bool,
+	tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
+) (*plan.RuntimeFilterSpec, *plan.RuntimeFilterSpec, bool) {
+	return makeExactRuntimeFilterPair(exactFilterEnv{builder: builder, fromBuilder: true}, tag, matchPrefix, upperLimit, probeExpr, buildExpr, notOnPk)
+}
+
+// MakeExactRuntimeFilterPair constructs the existing bounded exact-key contract
+// for a caller that owns a local producer and its consumer.
+func MakeExactRuntimeFilterPair(
+	ctx context.Context, service string, tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
+) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
+	return makeExactRuntimeFilterPair(exactFilterEnv{ctx: ctx, service: service}, tag, matchPrefix, upperLimit, probeExpr, buildExpr, notOnPk)
+}
+
+func makeExactRuntimeFilterPair(
+	env exactFilterEnv, tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
 ) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
 	if probeExpr == nil || probeExpr.GetCol() == nil ||
 		buildExpr == nil || buildExpr.GetCol() == nil ||
@@ -237,7 +280,7 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 		// scale, floating signed zero, and other non-raw equality domains.
 		return nil, nil, false
 	}
-	encoding, ok := builder.exactRuntimeFilterPlanEncoding(
+	encoding, ok := exactRuntimeFilterPlanEncoding(env,
 		makeTypeByPlan2Expr(probeExpr),
 		makeTypeByPlan2Expr(buildExpr),
 		matchPrefix,
@@ -262,7 +305,7 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 		if !keycodec.LegacyExactRawProducerSafe(
 			types.T(buildExpr.Typ.Id),
 		) || localProtocolEnablesVersionedExactKeyContract(
-			builder.compCtx.GetProcess().GetService(),
+			env.serviceID(),
 		) {
 			buildSpec.Expr = nil
 		}
@@ -334,40 +377,9 @@ func (builder *QueryBuilder) exactRuntimeFilterPairContractValid(
 	}
 }
 
-// makeSerializedExactRuntimeFilterPair constructs the component contract for
-// an index tuple key. finalProbeExpr is the encoded index-table column;
-// componentProbeExprs are the original indexed columns in encoder order; and
-// buildExpr must be serial/serial_full over the corresponding build slots.
-//
-// A tuple encoder is safe only when every component is raw-compatible. Float
-// signed-zero closure cannot be expressed by adding one final tuple value
-// without a combinatorial expansion, so float components remain unsupported.
-func runtimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
-	switch oid {
-	case types.T_int8:
-		return 8, true, true
-	case types.T_int16:
-		return 16, true, true
-	case types.T_int32:
-		return 32, true, true
-	case types.T_int64:
-		return 64, true, true
-	case types.T_uint8:
-		return 8, false, true
-	case types.T_uint16:
-		return 16, false, true
-	case types.T_uint32:
-		return 32, false, true
-	case types.T_uint64:
-		return 64, false, true
-	default:
-		return 0, false, false
-	}
-}
-
 func safeRuntimeFilterIntegerCast(source, target types.T, narrowing bool) bool {
-	sourceWidth, sourceSigned, sourceOK := runtimeFilterIntegerWidth(source)
-	targetWidth, targetSigned, targetOK := runtimeFilterIntegerWidth(target)
+	sourceWidth, sourceSigned, sourceOK := keycodec.RuntimeFilterIntegerWidth(source)
+	targetWidth, targetSigned, targetOK := keycodec.RuntimeFilterIntegerWidth(target)
 	if !sourceOK || !targetOK || sourceSigned != targetSigned {
 		return false
 	}
@@ -391,6 +403,14 @@ func serializedRuntimeFilterComponentCol(expr *plan.Expr) *plan.ColRef {
 	return fn.Args[0].GetCol()
 }
 
+// makeSerializedExactRuntimeFilterPair constructs the component contract for
+// an index tuple key. finalProbeExpr is the encoded index-table column;
+// componentProbeExprs are the original indexed columns in encoder order; and
+// buildExpr must be serial/serial_full over the corresponding build slots.
+//
+// A tuple encoder is safe only when every component is raw-compatible. Float
+// signed-zero closure cannot be expressed by adding one final tuple value
+// without a combinatorial expansion, so float components remain unsupported.
 func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 	tag int32,
 	matchPrefix bool,
@@ -478,15 +498,24 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 }
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
+	point := &pointRuntimeFilterContext{root: nodeID}
+	builder.generateRuntimeFiltersInTree(nodeID, newDeepRuntimeFilterTree(builder.qry, nodeID), point)
+}
+
+func (builder *QueryBuilder) generateRuntimeFiltersInTree(nodeID int32, deepTree *deepRuntimeFilterTree, point *pointRuntimeFilterContext) {
 	for _, childID := range builder.qry.Nodes[nodeID].Children {
-		builder.generateRuntimeFilters(childID)
+		builder.generateRuntimeFiltersInTree(childID, deepTree, point)
 	}
-	builder.generateNodeRuntimeFilter(nodeID, 0)
+	builder.generateNodeRuntimeFilterInTree(nodeID, 0, deepTree, point)
 }
 
 // keyBound is used only by the late, already-local DELETE maintenance pass.
 // It bounds distinct keys, never build rows or the mandatory join map.
 func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound float64) {
+	builder.generateNodeRuntimeFilterInTree(nodeID, keyBound, nil, nil)
+}
+
+func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBound float64, deepTree *deepRuntimeFilterTree, point *pointRuntimeFilterContext) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
 
@@ -532,8 +561,9 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
-	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil || leftChild.Offset != nil {
+	deep := leftChild.NodeType != plan.Node_TABLE_SCAN
+	if leftChild.Limit != nil || leftChild.Offset != nil ||
+		(deep && (deepTree == nil || node.JoinType != plan.Node_INNER || node.IsRightJoin)) {
 		return
 	}
 
@@ -558,6 +588,12 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 	var probeExprs, buildExprs []*plan.Expr
 
 	for _, expr := range node.OnList {
+		if deep {
+			// isEquiCond normalizes equality arguments in place. Deep admission
+			// may still fail below; neither success nor fallback should rewrite
+			// an existing join condition while merely extracting filter keys.
+			expr = DeepCopyExpr(expr)
+		}
 		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
 			if !ExprIsZonemappable(builder.GetContext(), args[0]) &&
@@ -573,6 +609,15 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 	// No equi condition found
 	if probeExprs == nil {
 		return
+	}
+	if deep {
+		if len(probeExprs) != 1 || probeExprs[0].GetCol() == nil || buildExprs[0].GetCol() == nil {
+			return
+		}
+		leftChild = builder.deepRuntimeFilterScan(deepTree, node.Children[0], probeExprs[0].GetCol())
+		if leftChild == nil {
+			return
+		}
 	}
 
 	for i := range probeExprs {
@@ -667,7 +712,7 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 		}
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
-		if node.JoinType != plan.Node_SINGLE {
+		if node.JoinType != plan.Node_SINGLE && !deep {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return
@@ -684,6 +729,7 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
 		componentFilter := false
+		pointAdmission := false
 		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
 		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
 		// prune ranges predictably.  A scattered non-key filter may still scan
@@ -701,11 +747,22 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 			if keyBound > 0 {
 				buildSize = keyBound
 			}
-			if buildSize/probeNdv >= 0.1 {
-				if keyBound == 0 {
-					builder.recordDeleteIndexCostRejection(node, leftChild)
+			// DEDUP probes complete stored keys, including REPLACE's serialized
+			// composite PK. Stale small-table NDV must not turn a bounded key
+			// lookup into a full scan as flushed objects accumulate. Keep the
+			// exact-IN budget; underestimated builds still publish PASS at runtime.
+			boundedDedupPK := node.JoinType == plan.Node_DEDUP && sortOrder == 0 &&
+				probeCol.Name == tableDef.Pkey.PkeyColName &&
+				buildSize <= float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt))
+			if buildSize/probeNdv >= 0.1 && !boundedDedupPK {
+				if keyBound != 0 || sortOrder != 0 || 1/probeNdv >= 0.1 ||
+					!builder.pointRuntimeFilterCandidate(point, nodeID, node, leftChild, probeExprs[0]) {
+					if keyBound == 0 {
+						builder.recordDeleteIndexCostRejection(node, leftChild)
+					}
+					return
 				}
-				return
+				pointAdmission = true
 			}
 			if sortOrder != 0 {
 				if buildSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
@@ -736,6 +793,12 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 		inLimit := GetInFilterCardLimit(sid)
 		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		if pointAdmission {
+			if inLimit < 1 {
+				return
+			}
+			inLimit = 1
 		}
 		if keyBound > 0 && keyBound > float64(inLimit) {
 			return
@@ -773,7 +836,7 @@ func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound fl
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do
 		// not feed the existing probe-side RF heuristic into SINGLE stats here;
 		// preserved-side cardinality and cost selection are a separate phase.
-		if node.JoinType != plan.Node_SINGLE && keyBound == 0 {
+		if node.JoinType != plan.Node_SINGLE && !deep && keyBound == 0 && !pointAdmission {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return

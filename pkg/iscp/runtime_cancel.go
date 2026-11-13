@@ -335,7 +335,7 @@ func (exec *ISCPTaskExecutor) RemoveTableJobFences(accountID uint32, tableID uin
 func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
 	key JobRuntimeKey,
 	jobID uint64,
-	iterID uint64,
+	_ uint64, // retained for callers that pass their iteration LSN
 	cancel context.CancelFunc,
 	cancelRetriever func(error),
 ) (*RunningJobConsumer, bool) {
@@ -352,7 +352,6 @@ func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
 	h := &RunningJobConsumer{
 		key:             key,
 		jobID:           jobID,
-		iterID:          iterID,
 		cancel:          cancel,
 		cancelRetriever: cancelRetriever,
 		done:            make(chan struct{}),

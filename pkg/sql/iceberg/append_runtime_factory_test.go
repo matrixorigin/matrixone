@@ -15,7 +15,9 @@
 package iceberg
 
 import (
+	"bytes"
 	"context"
+	"github.com/parquet-go/parquet-go"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +124,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 
 	rawMeta := []byte(`{
 		"format-version": 2,
+		"properties": {"write.parquet.compression-codec": "uncompressed"},
 		"table-uuid": "gold-kpi-uuid",
 		"location": "s3://warehouse/writer/gold_kpi",
 		"last-sequence-number": 44,
@@ -265,6 +268,14 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	require.Equal(t, int64(45), entries[0].SnapshotID)
 	require.Equal(t, int64(2), entries[0].DataFile.RecordCount)
 	require.True(t, strings.HasPrefix(entries[0].DataFile.FilePath, tableLocation+"/data/mo-append/"))
+	data := readAppendRuntimeMemoryFile(t, ctx, fs, entries[0].DataFile.FilePath)
+	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	for _, group := range file.Metadata().RowGroups {
+		for _, col := range group.Columns {
+			require.Equal(t, "UNCOMPRESSED", col.MetaData.Codec.String())
+		}
+	}
 }
 
 func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {

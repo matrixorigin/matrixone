@@ -19,9 +19,15 @@ MatrixOne SQLAlchemy dialect support.
 import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy.sql.elements import ClauseElement
-from sqlalchemy.dialects.mysql.base import MySQLTypeCompiler, MySQLDialect, ischema_names as mysql_ischema_names
+from sqlalchemy.dialects.mysql.base import (
+    MySQLDDLCompiler,
+    MySQLTypeCompiler,
+    MySQLDialect,
+    ischema_names as mysql_ischema_names,
+)
 
 from .vector_type import VectorType, VectorPrecision
+from .._local_infile import _physical_driver
 
 
 class _Vecf32Type(VectorType):
@@ -41,6 +47,16 @@ class _Vecf64Type(VectorType):
 class _Vecf16Type(VectorType):
     def __init__(self, dimension=None):
         super().__init__(dimension=dimension, precision='f16')
+
+
+class _Vecf8Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='f8')
+
+
+class _Vecf4Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='f4')
 
 
 class _Vecbf16Type(VectorType):
@@ -63,6 +79,8 @@ _mo_ischema_names = mysql_ischema_names.copy()
 _mo_ischema_names["vecf32"] = _Vecf32Type
 _mo_ischema_names["vecf64"] = _Vecf64Type
 _mo_ischema_names["vecf16"] = _Vecf16Type
+_mo_ischema_names["vecf8"] = _Vecf8Type
+_mo_ischema_names["vecf4"] = _Vecf4Type
 _mo_ischema_names["vecbf16"] = _Vecbf16Type
 _mo_ischema_names["vecint8"] = _Vecint8Type
 _mo_ischema_names["vecuint8"] = _Vecuint8Type
@@ -275,13 +293,52 @@ class MatrixOneTypeCompiler(MySQLTypeCompiler):
         return type_.get_col_spec() if hasattr(type_, 'get_col_spec') else 'VECTOR'
 
 
+class MatrixOneDDLCompiler(MySQLDDLCompiler):
+    """Render implicit AUTO_INCREMENT only for the type this dialect sees."""
+
+    def get_column_specification(self, column, **kw):
+        specification = super().get_column_specification(column, **kw)
+        resolved_type = column.type.dialect_impl(self.dialect)
+        auto_increment = ' AUTO_INCREMENT'
+        if (
+            column.autoincrement == 'auto'
+            and resolved_type._type_affinity is not sqlalchemy.Integer
+            and specification.endswith(auto_increment)
+        ):
+            specification = specification[: -len(auto_increment)]
+        return specification
+
+
 # Register the dialect
 MatrixOneDialect.statement_compiler = MatrixOneCompiler
 MatrixOneDialect.type_compiler = MatrixOneTypeCompiler
 MatrixOneDialect.type_compiler_cls = MatrixOneTypeCompiler
+MatrixOneDialect.ddl_compiler = MatrixOneDDLCompiler
 
 
 # MatrixOneVectorType removed - use VectorType from vector_type.py instead
+
+
+class _AsyncBinaryEscape:
+    """One instance-local adapter; all nonbinary values retain the driver owner."""
+
+    def __init__(self, original):
+        self.original = original
+
+    def __call__(self, value):
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            from .._sql_literals import sql_literal
+
+            return sql_literal(value)
+        return self.original(value)
+
+
+def _prepare_async_binary(dbapi_connection, connection_record, connection_proxy):
+    from aiomysql import Connection
+
+    driver = _physical_driver(dbapi_connection)
+    if isinstance(driver, Connection) and not isinstance(driver.escape, _AsyncBinaryEscape):
+        driver.escape = _AsyncBinaryEscape(driver.escape)
 
 
 def adapt_engine_dialect(engine):
@@ -291,6 +348,18 @@ def adapt_engine_dialect(engine):
     engine. Keep its DBAPI, ping, server state and driver-specific overrides.
     """
     _install_compiler_contract(engine)
+    if engine.dialect.driver == 'aiomysql':
+        # Older dialects infer PyMySQL's signature, but aiomysql requires False.
+        # Set it before pre-ping, which runs before checkout listeners.
+        engine.dialect._send_false_to_ping = True
+        # Separately constructed engines may share a pool with another dialect.
+        # Pre-ping belongs to that pool, not necessarily this engine proxy.
+        pool_dialect = getattr(engine.pool, '_dialect', None)
+        if pool_dialect is not engine.dialect and getattr(pool_dialect, 'driver', None) == 'aiomysql':
+            pool_dialect._send_false_to_ping = True
+        if _prepare_async_binary not in engine.pool.dispatch.checkout:
+            # Also covers pools warmed before explicit SDK adoption.
+            event.listen(engine.pool, 'checkout', _prepare_async_binary, insert=True)
     dialect = engine.dialect
     if isinstance(dialect, MatrixOneDialect):
         return
@@ -298,7 +367,11 @@ def adapt_engine_dialect(engine):
     dialect.__class__ = type(
         'MatrixOne_' + driver_type.__name__,
         (driver_type, MatrixOneDialect),
-        {'supports_statement_cache': True, 'statement_compiler': MatrixOneCompiler},
+        {
+            'supports_statement_cache': True,
+            'statement_compiler': MatrixOneCompiler,
+            'ddl_compiler': MatrixOneDDLCompiler,
+        },
     )
     dialect.ischema_names = dict(dialect.ischema_names, **_mo_ischema_names)
     compiler = MatrixOneTypeCompiler(dialect)

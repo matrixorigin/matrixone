@@ -19,21 +19,23 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
+	v.requirePhysical()
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
-		ToSliceNoTypeCheck(v, ret)
-		*ret = (*ret)[:v.length]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, v.length)
 	}
 }
 
 func ToFixedCol[T any](v *Vector, ret *[]T) {
+	v.requirePhysical()
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
@@ -42,8 +44,10 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
-		ToSlice(v, ret)
-		*ret = (*ret)[:v.length]
+		checkType[T](v)
+		// Preserve a backed empty physical view. The logical unchecked
+		// helper intentionally returns nil for every zero-row vector.
+		*ret = util.UnsafeSliceCastToLength[T](v.data, v.length)
 	}
 }
 
@@ -57,6 +61,7 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 // n does not exceed the allocated capacity. Used by aggregation executors for
 // bounds-check-eliminated array access via (*[N]T)(slice) conversion.
 func MustFixedColAsSlice[T any](v *Vector, n int) []T {
+	v.requirePhysical()
 	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
 }
 
@@ -75,6 +80,7 @@ func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 //		vs[i].GetByteSlice(area)
 //	}
 func InefficientMustBytesCol(v *Vector) [][]byte {
+	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -106,6 +112,7 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 // it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
 // and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
+	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -123,6 +130,7 @@ func InefficientMustStrCol(v *Vector) []string {
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
 func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
+	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -270,11 +278,21 @@ func extendWithBitmaps(
 }
 
 func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
+	if vec.IsDictionary() {
+		return ret, errDictionaryPhysicalAccess
+	}
 	nsp, err := vec.nsp.Show()
 	if err != nil {
 		return
 	}
 	sz := vec.typ.TypeSize()
+	physicalRows := vec.length
+	if vec.IsConst() {
+		physicalRows = min(physicalRows, 1)
+		if vec.IsConstNull() {
+			physicalRows = 0
+		}
+	}
 	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
@@ -283,7 +301,7 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
 		// Data:     vec.data,
-		Data: vec.data[:vec.length*sz],
+		Data: vec.data[:physicalRows*sz],
 	}, nil
 }
 
@@ -361,6 +379,14 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[float32](vec)
 	case types.T_float64:
 		return appendBytesToFixSized[float64](vec)
+	case types.T_bf16:
+		return appendBytesToFixSized[types.BF16](vec)
+	case types.T_float16:
+		return appendBytesToFixSized[types.Float16](vec)
+	case types.T_float8:
+		return appendBytesToFixSized[types.Float8](vec)
+	case types.T_float4:
+		return appendBytesToFixSized[types.Float4](vec)
 	case types.T_date:
 		return appendBytesToFixSized[types.Date](vec)
 	case types.T_datetime:

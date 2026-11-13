@@ -329,6 +329,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 
 func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string]deleteSource, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
+	var tableNode *tree.TableName
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
 		alias = string(aliasTbl.As.Alias)
@@ -348,6 +349,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
+		tableNode = baseTbl
 		tblName = string(baseTbl.ObjectName)
 		dbName = string(baseTbl.SchemaName)
 	}
@@ -366,7 +368,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := resolveIndexMaintenanceSource(ctx, tableNode, dbName, tblName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -709,7 +711,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
 		} else {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -822,7 +824,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
-						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -1039,7 +1041,7 @@ func useAssignmentStrictCast(targetType Type) bool {
 		return true
 	}
 	switch targetType.Id {
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_binary), int32(types.T_varbinary), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
 	case int32(types.T_blob), int32(types.T_text):
 		return true
@@ -1051,13 +1053,15 @@ func useAssignmentStrictCast(targetType Type) bool {
 func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text)
 }
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
-		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
+		types.T(targetType.Id).IsFloat() ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
@@ -1065,6 +1069,29 @@ func useSqlModeAssignmentCast(targetType Type) bool {
 
 func isMediumIntPlanType(targetType Type) bool {
 	return (targetType.Id == int32(types.T_int32) || targetType.Id == int32(types.T_uint32)) && targetType.Width == 24
+}
+
+// assignmentCastFamilyNames enumerates the planner-owned assignment-cast
+// wrapper names emitted by makePlan2AssignmentCastExpr /
+// forceAssignmentCastExprWithName (make.go) around catalog default
+// expressions and assignment targets: the plain "cast" plus the strict,
+// sql-mode and ignore variants chosen by assignmentCastFunctionName.
+var assignmentCastFamilyNames = [4]string{"cast", "cast_strict", "cast_assign", "cast_ignore"}
+
+// IsAssignmentCastFamilyName reports whether name is one of the planner's
+// assignment-cast wrapper names. Consumers that must see through a
+// planner-owned wrapper to the wrapped value (generated-column replay,
+// sequence-default classification in DATA BRANCH MERGE reconciliation)
+// share this boundary so a new variant is recognized everywhere at once.
+// Deliberate subsets (e.g. build_util.go's non-plain assignment set) keep
+// their own enumerations.
+func IsAssignmentCastFamilyName(name string) bool {
+	for _, family := range assignmentCastFamilyNames {
+		if name == family {
+			return true
+		}
+	}
+	return false
 }
 
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
@@ -1309,10 +1336,12 @@ func rePoliceUnsignedDecimalAssignmentBoundary(
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return isMediumIntPlanType(targetType) ||
 		isAttributedDecimalPlanType(targetType) ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
-		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
+		(types.T(targetType.Id).IsArray() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, columnName ...string) (*Expr, error) {
@@ -1426,6 +1455,14 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	// Binary assignment semantics are authored for the supported same-version
+	// cluster; do not extend the existing old-peer gate to these types.
+	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
+		if isIgnore {
+			return "cast_ignore"
+		}
+		return "cast_assign"
+	}
 	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
 		return "cast_ignore"
 	}
@@ -2080,18 +2117,33 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		planType := MakePlan2TypeValue(colType)
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
 		expr := MakePlan2StringConstExprWithType(string(num))
 		// The plan-time width check in SetInsertValueString no longer rejects
-		// over-length CHAR/VARCHAR (relaxed to defer to sql_mode). Enforce width
+		// over-length text or binary strings (defer to sql_mode). Enforce width
 		// at runtime via the assignment cast (cast_assign / lenient for IGNORE).
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
+	case types.T_blob, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
+		// A BIT literal is the one origin kind in this case whose payload can
+		// bypass array parsing: SetInsertValueString's P_bit arm returns
+		// DecodeBinaryString bytes directly, while every other arm (bool,
+		// numeric, char, hexnum) is routed through the array parser with its
+		// fixed/dynamic dimension checks and those carriers are genuinely
+		// pre-parsed vector payloads. An array destination must not receive the
+		// raw bits as a fast-path constant: downstream re-emit as an
+		// array-domain constant reaches the float decoder with an unaligned
+		// payload (panic, skipping assignment validation) or, when aligned,
+		// silently decodes unvalidated bits as element floats. Return no
+		// fast-path expression so the row falls to the generic binder and its
+		// assignment cast keeps the checked string-to-array conversion.
+		if colType.Oid.IsArray() && numVal.ValType == tree.P_bit {
+			return nil, nil
+		}
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2213,7 +2265,7 @@ func buildValueScan(
 		}
 		var defExpr *Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}
@@ -2285,7 +2337,7 @@ func buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
 					}
@@ -2366,7 +2418,7 @@ func buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

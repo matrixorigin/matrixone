@@ -77,7 +77,7 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 				", result "+resultType+" default ("+tc.expression+"))", 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			bound, err := BuildPlan(ctx, stmt, false)
+			bound, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			original := DeepCopyPlan(bound)
 			require.Equal(t, bound.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr,
@@ -126,7 +126,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		stmt, err := mysql.ParseOne(context.Background(), "create table t(a int, b int default (a+1))", 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		if version == defines.MORPCVersion60 {
 			require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 		}
 		stmt, err = mysql.ParseOne(context.Background(), "create table t(a int default (1+1))", 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err, "constant defaults remain compatible")
 	}
@@ -146,7 +146,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(context.Background(), "create table src(a bigint, b bigint default (a+a))", 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	p, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	table := p.GetDdl().GetCreateTable().TableDef
@@ -161,7 +161,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			p, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			cols := p.GetDdl().GetCreateTable().TableDef.Cols
 			ref := expressionDefaultFindLocalCol(cols[1].Default.Expr)
@@ -180,7 +180,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 		"create table dst(a int default (1+1), b int default (a+1)) as select 10 as a", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.ErrorContains(t, err, "defined after it", "reject non-replayable physical order before publication")
 }
 
@@ -197,7 +197,7 @@ func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
 		stmt, err := mysql.ParseOne(tb.Context(), sql, 1)
 		require.NoError(tb, err)
 		defer stmt.Free()
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(tb, err)
 		return p.GetDdl().GetCreateTable().TableDef
 	}
@@ -305,7 +305,7 @@ func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
 		stmt, err := mysql.ParseOne(t.Context(), "create table dst as select * from src", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		_, err = BuildPlan(ctx4, stmt, false)
+		_, err = BuildPlan(ctx4, stmt, false, nil)
 		require.ErrorContains(t, err, "protocol version 97")
 	})
 }
@@ -316,7 +316,7 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 		stmt, err := mysql.ParseOne(context.Background(),
 			"create table t(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1))", 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		table := p.GetDdl().GetCreateTable().TableDef
@@ -333,7 +333,7 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
@@ -417,7 +417,7 @@ func TestExpressionDefaultBindsAgainstCompleteRowSchema(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.Len(t, cols, 4)
@@ -434,7 +434,7 @@ func TestExpressionDefaultAllowsForwardReferenceToBaseColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 2)
@@ -487,7 +487,7 @@ func TestExpressionDefaultRejectsInvalidDependencyGraph(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -706,7 +706,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 	stmt, err := mysql.ParseOne(context.Background(),
 		"create table expression_default_dml (id int primary key, a double default (rand()), b double default (a))", 1)
 	require.NoError(t, err)
-	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	stmt.Free()
 	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()
@@ -1002,7 +1002,7 @@ func TestValidateDefaultColumnDependenciesCoversInvalidAndSharedGraphs(t *testin
 	require.NoError(t, validateDefaultColumnDependencies(ctx, nil))
 }
 
-func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
+func TestDefaultExprExpanderBoundaryCases(t *testing.T) {
 	ctx := context.Background()
 	literal := expressionDefaultInt(10)
 	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*planpb.Expr, bool) {
@@ -1064,21 +1064,6 @@ func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
 	require.False(t, exprHasLocalColumnRef(outer))
 	require.True(t, exprHasLocalColumnRef(list))
 	require.False(t, exprHasLocalColumnRef(literal))
-
-	projection := []*planpb.Expr{expressionDefaultCol(0, 0), nil}
-	require.NoError(t, expandDefaultExprsInProjection(
-		ctx, projection, []int32{-1, 2, 1, 0},
-		map[int32]*planpb.Expr{0: literal},
-	))
-	require.Equal(t, int64(10), projection[0].GetLit().GetI64Val())
-
-	err = expandDefaultExprsInProjection(
-		ctx,
-		[]*planpb.Expr{expressionDefaultCol(0, 0)},
-		[]int32{0},
-		map[int32]*planpb.Expr{0: expressionDefaultCol(0, 0)},
-	)
-	require.ErrorContains(t, err, "circular dependency")
 }
 
 func TestExpandDefaultExprsInValueScanRejectsMalformedInputs(t *testing.T) {
@@ -1150,17 +1135,17 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	ctx := context.Background()
 	intTyp := expressionDefaultIntType()
 
-	_, err := getDefaultExpr(ctx, nil)
+	_, err := getDefaultExpr(ctx, nil, "")
 	require.ErrorContains(t, err, "missing column definition")
 
 	nonNullable := &planpb.ColDef{Name: "required", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true,
 	}}
-	_, err = getDefaultExpr(ctx, nonNullable)
+	_, err = getDefaultExpr(ctx, nonNullable, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	nullable := &planpb.ColDef{Name: "nullable", Typ: intTyp}
-	expr, err := getDefaultExpr(ctx, nullable)
+	expr, err := getDefaultExpr(ctx, nullable, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1168,7 +1153,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	auto := &planpb.ColDef{Name: "id", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true, AutoIncr: true,
 	}}
-	expr, err = getDefaultExpr(ctx, auto)
+	expr, err = getDefaultExpr(ctx, auto, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1180,7 +1165,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	_, err = getDefaultExpr(ctx, invalidMetadata)
+	_, err = getDefaultExpr(ctx, invalidMetadata, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	autoInvalidMetadata := &planpb.ColDef{
@@ -1190,7 +1175,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	expr, err = getDefaultExpr(ctx, autoInvalidMetadata)
+	expr, err = getDefaultExpr(ctx, autoInvalidMetadata, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1198,7 +1183,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_null",
 		Typ:     intTyp,
 		Default: &planpb.Default{NullAbility: true},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1206,7 +1191,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_value",
 		Typ:     intTyp,
 		Default: &planpb.Default{Expr: expressionDefaultInt(7)},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.Equal(t, int64(7), expr.GetLit().GetI64Val())
 }

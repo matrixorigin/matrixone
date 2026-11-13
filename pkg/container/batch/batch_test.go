@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -651,9 +652,9 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
-	bat.Shrink([]int64{0}, true)
+	require.NoError(t, bat.Shrink([]int64{0}, true, nil))
 	require.Equal(t, 3, bat.rowCount)
-	bat.Shrink([]int64{0, 2}, false)
+	require.NoError(t, bat.Shrink([]int64{0, 2}, false, nil))
 	require.Equal(t, 2, bat.rowCount)
 }
 
@@ -1989,4 +1990,65 @@ func TestBatchUnmarshalWithAnyMp_SerializedAttrsLenLessThanVecsLen(t *testing.T)
 	// Clean up
 	reusedBat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
+	for _, mask := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mask=%t", mask), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			bat := NewWithSize(2)
+			t.Cleanup(func() { bat.Clean(mp) })
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
+			values := []int64{1, 2, 3}
+			data := types.EncodeSlice(values)
+			lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+			require.NoError(t, err)
+			t.Cleanup(lease.Release)
+			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+			require.NoError(t, err)
+			bat.SetRowCount(3)
+			if mask {
+				var sels bitmap.Bitmap
+				sels.InitWithSize(3)
+				sels.AddMany([]uint64{1, 2})
+				require.Error(t, bat.ShrinkByMask(&sels, false, 0, nil))
+			} else {
+				require.Error(t, bat.Shrink([]int64{1, 2}, false, nil))
+			}
+			require.Equal(t, 3, bat.RowCount())
+			require.Equal(t, []int64{20, 30}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+			require.Equal(t, values, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[1]))
+		})
+	}
+}
+
+func TestBatchShrinkByMaskRowCount(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		sels   []uint64
+		negate bool
+		want   []int64
+	}{
+		{"all rows", []uint64{0, 1, 2}, false, []int64{10, 20, 30}},
+		{"selection", []uint64{1, 2}, false, []int64{20, 30}},
+		{"negation", []uint64{1}, true, []int64{10, 30}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			bat := NewWithSize(1)
+			t.Cleanup(func() { bat.Clean(mp) })
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
+			bat.SetRowCount(3)
+			var sels bitmap.Bitmap
+			sels.InitWithSize(3)
+			sels.AddMany(tc.sels)
+			require.NoError(t, bat.ShrinkByMask(&sels, tc.negate, 0, mp))
+			require.Equal(t, len(tc.want), bat.RowCount())
+			require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+		})
+	}
 }
