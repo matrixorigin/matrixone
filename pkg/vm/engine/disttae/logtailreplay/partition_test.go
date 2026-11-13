@@ -50,6 +50,29 @@ func TestConsumeSnapCkpsWithPredecessorBeforeGlobal(t *testing.T) {
 	require.Equal(t, continuationEnd, end)
 }
 
+func TestSnapshotTableInfoCancellation(t *testing.T) {
+	partition := NewPartition("", nil, 0, 1, 42, nil)
+	require.NoError(t, partition.Lock(t.Context()))
+	partition.TableInfo = TableInfo{ID: 42, Name: "published", PrimarySeqnum: 3}
+	partition.TableInfoOK = true
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := partition.SnapshotTableInfo(ctx)
+		done <- err
+	}()
+	cancel()
+	// Cancellation terminates without waiting for the publishing owner.
+	err := <-done
+	partition.Unlock()
+	require.ErrorIs(t, err, context.Canceled)
+	header, known, err := partition.SnapshotTableInfo(t.Context())
+	require.NoError(t, err)
+	require.True(t, known)
+	require.Equal(t, TableInfo{ID: 42, Name: "published", PrimarySeqnum: 3}, header)
+}
+
 func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
 	partition := NewPartition("", nil, 0, 0, 42, nil)
 

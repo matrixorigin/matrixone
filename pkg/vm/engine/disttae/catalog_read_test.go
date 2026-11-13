@@ -27,6 +27,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -84,6 +85,94 @@ func TestAuthoritativeCatalogReadAdmission(t *testing.T) {
 	tbl.tableId = catalog.MO_TABLES_ID
 	eng.pClient.lazyCatalog.enabled.Store(false)
 	require.False(t, tbl.needsAuthoritativeCatalogRead(t.Context()))
+}
+
+func catalogReadTestCall(name string, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: name}, Args: args,
+	}}}
+}
+
+func TestCatalogReadReadyAccountFastPath(t *testing.T) {
+	tbl, op := newCatalogReadFixture(t)
+	eng := tbl.eng.(*Engine)
+	eng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	eng.pClient.eng = eng
+	eng.pClient.subscribed = subscribedTable{eng: eng, m: map[uint64]*subEntry{
+		tbl.tableId: {dbID: catalog.MO_CATALOG_ID, state: Subscribed},
+	}}
+	part := eng.GetOrCreateLatestPart(t.Context(), 0, catalog.MO_CATALOG_ID, tbl.tableId)
+	part.Snapshot().UpdateDuration(types.TS{}, types.MaxTs())
+	lc := eng.pClient.lazyCatalog
+	lc.setAccountReady(0, timestamp.Timestamp{})
+	lc.setAccountReady(10, timestamp.Timestamp{PhysicalTime: 50})
+	lc.setAccountReady(11, timestamp.Timestamp{PhysicalTime: 150})
+	col := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "account_id"}}}
+	value := func(id uint32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: id}}}}
+	}
+	eq := func(id uint32) *plan.Expr { return catalogReadTestCall("=", col, value(id)) }
+	unrelated := catalogReadTestCall("=", &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "other"}}}, value(0))
+	folded := func(id uint32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint32)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true, Data: types.EncodeUint32(&id),
+		}}}
+	}
+	scanCol := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 7, Name: "tbl.account_id"}}}
+	candidate := eq(0)
+	candidate.CandidateFilter = true
+	for _, tc := range []struct {
+		name    string
+		filters []*plan.Expr
+		want    bool
+	}{
+		{"sys only", []*plan.Expr{eq(0)}, true},
+		{"ready tenant", []*plan.Expr{eq(10)}, true},
+		{"cold tenant", []*plan.Expr{eq(20)}, false},
+		{"snapshot before admission", []*plan.Expr{eq(11)}, false},
+		{"conjunction list", []*plan.Expr{unrelated, eq(0)}, true},
+		{"conjunction", []*plan.Expr{catalogReadTestCall("and", unrelated, eq(0))}, true},
+		{"ready union", []*plan.Expr{catalogReadTestCall("or", eq(0), eq(10))}, true},
+		{"cold union", []*plan.Expr{catalogReadTestCall("or", eq(0), eq(20))}, false},
+		{"unbounded union", []*plan.Expr{catalogReadTestCall("or", eq(0), unrelated)}, false},
+		{"commuted equality", []*plan.Expr{catalogReadTestCall("=", value(0), col)}, true},
+		{"folded scan-local equality", []*plan.Expr{catalogReadTestCall("=", scanCol, folded(0))}, true},
+		{"folded cold account", []*plan.Expr{catalogReadTestCall("=", scanCol, folded(20))}, false},
+		{"unavailable folded value", []*plan.Expr{catalogReadTestCall("=", col, &plan.Expr{Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true}}})}, false},
+		{"wrong column", []*plan.Expr{unrelated}, false},
+		{"approximate candidate", []*plan.Expr{candidate}, false},
+		{"unknown parameter", []*plan.Expr{catalogReadTestCall("=", col, &plan.Expr{})}, false},
+		{"null literal", []*plan.Expr{catalogReadTestCall("=", col, &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}})}, false},
+		{"overflow", []*plan.Expr{catalogReadTestCall("=", col, &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1 << 32}}}})}, false},
+		{"global scan", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fallback := moerr.NewInternalErrorNoCtx("authoritative fallback")
+			if !tc.want {
+				op.EXPECT().Read(gomock.Any(), gomock.Any()).Return(nil, fallback)
+			}
+			got, err := tbl.getPartitionState(defines.AttachAccountId(t.Context(), 0), tc.filters...)
+			if tc.want {
+				require.NoError(t, err)
+				require.Same(t, part.Snapshot(), got)
+			} else {
+				require.ErrorIs(t, err, fallback)
+				require.Nil(t, got)
+			}
+		})
+	}
+
+	// A reset must not combine old readiness with a replacement partition.
+	lc.resetAllStates()
+	eng.Lock()
+	eng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	eng.Unlock()
+	replacement := eng.GetOrCreateLatestPart(t.Context(), 0, catalog.MO_CATALOG_ID, tbl.tableId)
+	replacement.Snapshot().UpdateDuration(types.TS{}, types.MaxTs())
+	require.Nil(t, tbl.readyCatalogSnapshot(t.Context(), []*plan.Expr{eq(0)}))
+	lc.setAccountReady(0, timestamp.Timestamp{})
+	require.Same(t, replacement.Snapshot(), tbl.readyCatalogSnapshot(t.Context(), []*plan.Expr{eq(0)}))
+	require.NotSame(t, part.Snapshot(), replacement.Snapshot())
 }
 
 func TestCatalogReadSnapshotRejectsInvalidResponses(t *testing.T) {

@@ -126,6 +126,19 @@ func (p *Partition) Snapshot() *PartitionState {
 	return p.state.Load()
 }
 
+// SnapshotTableInfo pairs header fields under the same owner lock used by
+// logtail publication. A diagnostic request may abandon a blocked partition.
+func (p *Partition) SnapshotTableInfo(ctx context.Context) (TableInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return TableInfo{}, false, err
+	}
+	if err := p.Lock(ctx); err != nil {
+		return TableInfo{}, false, err
+	}
+	defer p.Unlock()
+	return p.TableInfo, p.TableInfoOK, nil
+}
+
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
 }

@@ -275,12 +275,17 @@ func (s *Server) servePartitions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	partitions, err := instance.Engine.DebugPartitions(r.Context(), dbFilter, tableFilter, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+		return
+	}
 	resp := struct {
 		CNUUID     string                       `json:"cn_uuid"`
 		Partitions disttae.DebugPartitionsState `json:"partitions"`
 	}{
 		CNUUID:     cnUUID,
-		Partitions: instance.Engine.DebugPartitions(dbFilter, tableFilter, limit),
+		Partitions: partitions,
 	}
 	writeJSON(w, resp)
 }
