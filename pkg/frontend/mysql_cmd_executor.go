@@ -3175,6 +3175,11 @@ func createPrepareStmtInSession(
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
+		// Quoted SQL PREPARE starts with PrepareString in the outer request,
+		// while authorization must inspect the parsed PrepareStmt being bound.
+		previousStmt := execCtx.stmt
+		execCtx.stmt = stmt
+		defer func() { execCtx.stmt = previousStmt }()
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})

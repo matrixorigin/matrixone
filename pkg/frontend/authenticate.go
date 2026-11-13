@@ -3777,10 +3777,13 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
-		wasIndexAdmin := verifyAccountCanExecMoCtrl(account)
+		previousRoleID := account.GetDefaultRoleID()
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
-		if wasIndexAdmin != verifyAccountCanExecMoCtrl(account) {
+		// A prepared plan was bound under the previous active role. Rebuild it
+		// before reuse even when neither role has rewrite rules: object-level
+		// admission (including physical-index reads) depends on this role.
+		if previousRoleID != account.GetDefaultRoleID() {
 			ses.invalidateCachedPlans(true)
 		}
 		// then, reset secondary role to none

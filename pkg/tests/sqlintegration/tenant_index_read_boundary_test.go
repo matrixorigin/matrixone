@@ -58,6 +58,7 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 			"create user index_reader identified by '111' default role index_reader_role",
 			"grant connect on account * to index_reader_role",
 			"grant select on table index_boundary.t to index_reader_role",
+			"grant index_reader_role to admin",
 		} {
 			_, err = admin.ExecContext(ctx, q)
 			require.NoError(t, err, q)
@@ -74,6 +75,44 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		require.NoError(t, err)
 		defer prepared.Close()
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&after))
+		require.Equal(t, before, after)
+		// Both prepare protocols must bind the permitted read, then observe a
+		// role change on the same connection before reusing their handles.
+		active, err := admin.Conn(ctx)
+		require.NoError(t, err)
+		defer active.Close()
+		_, err = active.ExecContext(ctx, "set enable_remap_hint = 0")
+		require.NoError(t, err)
+		retained, err := active.PrepareContext(ctx, "select count(*) from "+target)
+		require.NoError(t, err)
+		defer retained.Close()
+		_, err = active.ExecContext(ctx, "prepare index_read_sql from 'select count(*) from "+target+"'")
+		require.NoError(t, err)
+		defer active.ExecContext(ctx, "deallocate prepare index_read_sql")
+		require.NoError(t, retained.QueryRowContext(ctx).Scan(&after))
+		require.Equal(t, before, after)
+		require.NoError(t, active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))
+		require.Equal(t, before, after)
+
+		_, err = active.ExecContext(ctx, "set role index_reader_role")
+		require.NoError(t, err)
+		require.NoError(t, active.QueryRowContext(ctx, "select count(*) from index_boundary.t").Scan(&after))
+		require.Equal(t, 2, after)
+		for _, read := range []func() error{
+			func() error { return active.QueryRowContext(ctx, "select count(*) from "+target).Scan(&after) },
+			func() error { return retained.QueryRowContext(ctx).Scan(&after) },
+			func() error { return active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after) },
+		} {
+			err = read()
+			var denied *mysql.MySQLError
+			require.True(t, errors.As(err, &denied))
+			require.EqualValues(t, 20101, denied.Number)
+		}
+		_, err = active.ExecContext(ctx, "set role accountadmin")
+		require.NoError(t, err)
+		require.NoError(t, retained.QueryRowContext(ctx).Scan(&after))
+		require.Equal(t, before, after)
+		require.NoError(t, active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))
 		require.Equal(t, before, after)
 		for _, q := range []string{
 			"delete from " + target,

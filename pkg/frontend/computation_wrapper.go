@@ -1029,6 +1029,11 @@ func rebuildPreparePlan(
 	}
 	var newPlan *plan2.Plan
 	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
+		// EXECUTE's outer statement is not the parsed SELECT being rebound.
+		// Admission checks must see the prepared statement on every rebuild.
+		previousStmt := execCtx.stmt
+		execCtx.stmt = originPrepareStmt
+		defer func() { execCtx.stmt = previousStmt }()
 		compilerCtx := executionSes.GetTxnCompileCtx()
 		currentDatabase := compilerCtx.GetDatabase()
 		currentContext := compilerCtx.GetContext()
