@@ -91,7 +91,28 @@ func (cm ColumnMeta) setLocation(location Extent) {
 }
 
 func (cm ColumnMeta) ZoneMap() ZoneMap {
+	return persistedZoneMapView(cm.rawZoneMap())
+}
+
+// rawZoneMap 用于序列化，避免将历史兼容读视图写回真实物理边界。
+func (cm ColumnMeta) rawZoneMap() ZoneMap {
 	return ZoneMap(cm[zoneMapOff : zoneMapOff+zoneMapLen])
+}
+
+// 旧 BOOL 汇总用 AND 计算最大值，false/false 也可能来自含 true 的块。
+// 仅放宽持久化元数据的私有读视图，不改变共享缓存或表达式临时摘要。
+func persistedZoneMapView(zm ZoneMap) ZoneMap {
+	if len(zm) < ZoneMapSize || zm.GetType() != types.T_bool || !zm[:ZoneMapSize].IsInited() {
+		return zm
+	}
+	maximum := zm.GetMaxBuf()
+	if len(maximum) != 1 || types.DecodeBool(maximum) {
+		return zm
+	}
+	view := make(ZoneMap, len(zm))
+	copy(view, zm)
+	view.GetMaxBuf()[0] = 1
+	return view
 }
 
 func (cm ColumnMeta) SetZoneMap(zm ZoneMap) {

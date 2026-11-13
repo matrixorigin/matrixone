@@ -70,6 +70,57 @@ func Test_ObjectStats(t *testing.T) {
 	require.True(t, bytes.Equal(stats.ObjectShortName()[:], s[:]))
 }
 
+// 旧 BOOL 汇总会将真假混合块写成 false/false；读取不能修改共享字节。
+func TestPersistedBoolZoneMapBounds(t *testing.T) {
+	malformed := index.BuildZM(types.T_bool, []byte{0})
+	malformed[61] = 0
+	for _, tc := range []struct {
+		name  string
+		zm    ZoneMap
+		widen bool
+	}{
+		{"ambiguous false", index.BuildZM(types.T_bool, []byte{0}), true},
+		{"true", index.BuildZM(types.T_bool, []byte{1}), false},
+		{"truncated maximum", malformed, false},
+		{"uninitialized", index.NewZM(types.T_bool, 0), false},
+		{"integer", index.BuildZM(types.T_int8, []byte{0}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := ColumnMeta(make([]byte, colMetaLen))
+			col.SetZoneMap(tc.zm)
+			stats := NewObjectStats()
+			require.NoError(t, SetObjectStatsSortKeyZoneMap(stats, tc.zm))
+			blockIndex := BuildBlockIndex(1)
+			blockIndex.SetBlockCount(1)
+			blockIndex.SetBlockMetaPos(0, uint32(blockIndex.Length()), ZoneMapSize)
+			area := ZoneMapArea(append(blockIndex, tc.zm...))
+			for _, entry := range []struct {
+				name string
+				read func() ZoneMap
+				raw  []byte
+			}{
+				{"column", col.ZoneMap, col},
+				{"object sort key", stats.SortKeyZoneMap, stats[:]},
+				{"zone map area", func() ZoneMap { return area.GetZoneMap(0, 0) }, area},
+			} {
+				t.Run(entry.name, func(t *testing.T) {
+					before := bytes.Clone(entry.raw)
+					view := entry.read()
+					if tc.widen {
+						require.False(t, types.DecodeBool(view.GetMinBuf()))
+						require.True(t, types.DecodeBool(view.GetMaxBuf()))
+						view[0] = 1
+					} else {
+						require.Equal(t, tc.zm, view)
+						require.Zero(t, testing.AllocsPerRun(10, func() { _ = entry.read() }))
+					}
+					require.Equal(t, before, entry.raw)
+				})
+			}
+		})
+	}
+}
+
 func TestObjectStats_Clone(t *testing.T) {
 	stats := NewObjectStats()
 	require.Nil(t, SetObjectStatsRowCnt(stats, 99))
