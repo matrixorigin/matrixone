@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -132,6 +133,7 @@ func TestConnectionPeerClosedDetectsDisconnect(t *testing.T) {
 	server, client := tcpConnectionPair(t)
 	t.Cleanup(func() { _ = server.Close() })
 
+	require.NoError(t, client.(*net.TCPConn).SetLinger(0))
 	require.NoError(t, client.Close())
 	require.Eventually(t, func() bool {
 		closed, err := rawConnectionPeerClosed(server)
@@ -145,6 +147,7 @@ func TestConnectionPeerClosedDetectsDisconnectBehindUnreadBytes(t *testing.T) {
 
 	_, err := client.Write([]byte{0x2a})
 	require.NoError(t, err)
+	require.NoError(t, client.(*net.TCPConn).SetLinger(0))
 	require.NoError(t, client.Close())
 	require.Eventually(t, func() bool {
 		closed, err := rawConnectionPeerClosed(server)
@@ -157,6 +160,7 @@ func TestConnectionPeerClosedUnwrapsTLS(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 	tlsServer := tls.Server(server, &tls.Config{})
 
+	require.NoError(t, client.(*net.TCPConn).SetLinger(0))
 	require.NoError(t, client.Close())
 	require.Eventually(t, func() bool {
 		closed, err := rawConnectionPeerClosed(tlsServer)
@@ -167,7 +171,15 @@ func TestConnectionPeerClosedUnwrapsTLS(t *testing.T) {
 func TestConnectionPeerClosedNilConnection(t *testing.T) {
 	closed, err := rawConnectionPeerClosed(nil)
 	require.NoError(t, err)
-	require.True(t, closed)
+	require.False(t, closed)
+	var tcp *net.TCPConn
+	closed, err = rawConnectionPeerClosed(tcp)
+	require.NoError(t, err)
+	require.False(t, closed)
+	var tlsConn *tls.Conn
+	closed, err = rawConnectionPeerClosed(tlsConn)
+	require.NoError(t, err)
+	require.False(t, closed)
 }
 
 func TestConnectionPeerClosedRefreshesProbeWhenConnChanges(t *testing.T) {
@@ -183,12 +195,42 @@ func TestConnectionPeerClosedRefreshesProbeWhenConnChanges(t *testing.T) {
 		conn:          firstServer,
 		livenessProbe: newSocketLivenessProbe(firstServer),
 	}
+	require.NoError(t, firstClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, firstClient.Close())
+	require.Eventually(t, func() bool {
+		closed, err := connectionPeerClosed(conn)
+		return err == nil && closed
+	}, time.Second, time.Millisecond)
 	conn.UseConn(secondServer)
+	closed, err := connectionPeerClosed(conn)
+	require.NoError(t, err)
+	require.False(t, closed, "the old socket's reset must not be attributed to the replacement")
+	require.NoError(t, secondClient.(*net.TCPConn).SetLinger(0))
 	require.NoError(t, secondClient.Close())
 	require.Eventually(t, func() bool {
 		closed, err := connectionPeerClosed(conn)
 		return err == nil && closed
 	}, time.Second, time.Millisecond)
+}
+
+// readAheadTestConn ensures the first read contains the complete MySQL
+// SSLRequest and at least one byte of the real ClientHello. TCP can otherwise
+// return a short read even when the peer submitted both in one write.
+type readAheadTestConn struct {
+	net.Conn
+	firstReadBytes int
+}
+
+func (c *readAheadTestConn) Read(p []byte) (int, error) {
+	if c.firstReadBytes == 0 {
+		return c.Conn.Read(p)
+	}
+	want := c.firstReadBytes
+	c.firstReadBytes = 0
+	if len(p) < want {
+		return 0, io.ErrShortBuffer
+	}
+	return io.ReadFull(c.Conn, p[:want])
 }
 
 func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
@@ -203,7 +245,7 @@ func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	allocator := NewLeakCheckAllocator()
 	conn, err := NewIOSessionWithOptions(
-		serverRaw,
+		&readAheadTestConn{Conn: serverRaw, firstReadBytes: len(makePacket(bytes.Repeat([]byte{0x01}, 32), 1)) + 1},
 		pu,
 		"",
 		WithIOSessionAllocator(allocator),
@@ -225,13 +267,25 @@ func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
 	serverRaw.SetDeadline(time.Now().Add(5 * time.Second))
 	clientRaw.SetDeadline(time.Now().Add(5 * time.Second))
 	clientHandshake := make(chan error, 1)
+	handshakeDone := make(chan struct{})
 	go func() {
+		defer close(handshakeDone)
 		clientHandshake <- clientTLS.Handshake()
 	}()
+	t.Cleanup(func() {
+		_ = serverRaw.Close()
+		_ = clientRaw.Close()
+		select {
+		case <-handshakeDone:
+		case <-time.After(5 * time.Second):
+			t.Error("TLS handshake did not stop during cleanup")
+		}
+	})
 
 	payload, err := conn.Read()
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte{0x01}, 32), payload)
+	conn.UseConn(serverRaw) // the read-ahead wrapper and raw socket share the same connection
 	tlsConn := tls.Server(conn.connForTLS(), &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS12,
@@ -243,7 +297,8 @@ func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
 
 	// Close the raw client socket instead of sending TLS close_notify. The
 	// liveness probe must still reach the TCP socket through both TLS and the
-	// buffered handshake wrapper and observe the peer FIN.
+	// buffered handshake wrapper and observe the peer reset.
+	require.NoError(t, clientRaw.(*net.TCPConn).SetLinger(0))
 	require.NoError(t, clientRaw.Close())
 	require.Eventually(t, func() bool {
 		closed, err := connectionPeerClosed(conn)

@@ -12,12 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux
-
 package frontend
 
 import "golang.org/x/sys/unix"
 
-func socketReadHangupPollEvent() int16 {
-	return unix.POLLRDHUP
+// terminalSocketFD observes a full Unix close or a confirmed TCP reset
+// without consuming input or SO_ERROR. TCP POLLERR alone can also mean a
+// healthy connection has an unrelated error queue.
+func terminalSocketFD(fd uintptr, pollFD *[1]unix.PollFd, unixSocket bool) (bool, error) {
+	pollFD[0] = unix.PollFd{Fd: int32(fd)}
+	if _, err := unix.Poll(pollFD[:], 0); err != nil {
+		return false, err
+	}
+	if pollFD[0].Revents&unix.POLLNVAL != 0 {
+		return false, nil
+	}
+	if unixSocket {
+		// Linux AF_UNIX reports HUP on a full peer close, but not SHUT_WR.
+		return pollFD[0].Revents&unix.POLLHUP != 0, nil
+	}
+	if pollFD[0].Revents&unix.POLLERR == 0 {
+		return false, nil
+	}
+	info, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+	const linuxTCPClosed = 7 // TCP_CLOSE in Linux include/net/tcp_states.h.
+	return err == nil && info.State == linuxTCPClosed, err
 }
