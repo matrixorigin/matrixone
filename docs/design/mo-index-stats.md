@@ -10,6 +10,12 @@ return a not-supported error;
 unknown indexes return an index-not-found error. The caller must have SELECT
 permission on the source table.
 
+The planner resolves the named index through `indexplugin.Get` and its optional
+`Plan()` diagnostic capability. The IVF and fulltext owners validate their private
+table roles and saved options and supply defaults; the SQL layer handles source
+resolution, access checks and the common output schema. Plugins without this
+capability return a not-supported error.
+
 ```sql
 SELECT * FROM mo_index_stats('app', 'documents', 'idx_embedding') AS s;
 

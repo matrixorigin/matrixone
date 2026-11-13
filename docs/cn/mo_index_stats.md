@@ -31,6 +31,8 @@ SHOW INDEX FROM key_stats_demo.records;
 
 未声明主键的表不支持查询 `PRIMARY`。MySQL 命令行可用 `\G` 替换分号，纵向展示。
 
+IVF 和全文通过 `indexplugin.Get` 获取已注册插件的可选 `Plan()` 诊断能力，由插件校验辅助表布局、解析配置并补充默认值。SQL 层负责源表解析、权限及公共输出结构；未实现该能力的插件返回不支持错误。
+
 ## 输出契约
 
 | 列 | SQL 类型 | 含义 |

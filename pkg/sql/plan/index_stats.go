@@ -16,12 +16,13 @@ package plan
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -50,126 +51,46 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 	if obj.PubInfo != nil || source.TableType != catalog.SystemOrdinaryRel {
 		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_index_stats currently supports local ordinary tables only")
 	}
-	cfg := indexstats.Config{Database: names[0], Table: names[1], Index: names[2], TableID: source.TblId, Lists: 1}
+	cfg := indexstats.Config{Database: names[0], Table: names[1], Index: names[2], TableID: source.TblId}
 	if strings.EqualFold(names[2], "PRIMARY") {
 		if source.Pkey == nil || source.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index 'PRIMARY' does not exist on '%s.%s'", names[0], names[1])
 		}
 		configurePrimaryIndexStats(&cfg, source)
 	}
-	for _, idx := range source.Indexes {
-		if cfg.KeyKind == "primary" {
-			break
+	if cfg.KeyKind != "primary" {
+		var defs []*plan.IndexDef
+		for _, idx := range source.Indexes {
+			if strings.EqualFold(idx.IndexName, names[2]) {
+				defs = append(defs, idx)
+			}
 		}
-		if !strings.EqualFold(idx.IndexName, names[2]) {
-			continue
+		if len(defs) == 0 {
+			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index '%s' does not exist on '%s.%s'", names[2], names[0], names[1])
 		}
-		cfg.Index = idx.IndexName
-		cfg.Algorithm = strings.ToLower(idx.IndexAlgo)
+		idx := defs[0]
+		cfg.Index, cfg.Algorithm = idx.IndexName, strings.ToLower(idx.IndexAlgo)
 		if catalog.IsNullIndexAlgo(idx.IndexAlgo) || cfg.Algorithm == catalog.MoIndexBTreeAlgo.ToString() {
 			if err := configureKeyIndexStats(builder.GetContext(), &cfg, source, idx); err != nil {
 				return 0, err
 			}
-			break
-		}
-		isFullText := cfg.Algorithm == catalog.MOIndexFullTextAlgo.ToString() || catalog.IsFullText2IndexAlgo(cfg.Algorithm)
-		if cfg.Algorithm != catalog.MoIndexIvfFlatAlgo.ToString() && !isFullText {
-			return 0, moerr.NewNotSupportedf(builder.GetContext(), "mo_index_stats: index type '%s' is not supported", idx.IndexAlgo)
-		}
-		if idx.IndexTableName != "" {
-			cfg.Tables = append(cfg.Tables, indexstats.IndexTable{Kind: idx.IndexAlgoTableType, Name: idx.IndexTableName})
-		}
-		if isFullText {
-			if idx.IndexAlgoTableType == catalog.IndexIgnored_TblType {
-				continue
+		} else {
+			p, ok := indexplugin.Get(cfg.Algorithm)
+			if !ok {
+				return 0, moerr.NewNotSupportedf(builder.GetContext(), "mo_index_stats: index type '%s' is not supported", idx.IndexAlgo)
 			}
-			rawParams := idx.IndexAlgoParams
-			if rawParams == "" {
-				rawParams = "{}"
+			hooks, ok := p.Plan().(planplugin.IndexStatsHooks)
+			if !ok {
+				return 0, moerr.NewNotSupportedf(builder.GetContext(), "mo_index_stats: index type '%s' is not supported", idx.IndexAlgo)
 			}
-			params, parseErr := catalog.IndexParamsStringToMap(rawParams)
-			if parseErr != nil {
-				return 0, parseErr
-			}
-			cfg.Options = params
-			cfg.Columns = append([]string(nil), idx.Parts...)
-			cfg.Parser = strings.ToLower(params["parser"])
-			if cfg.Parser == "" || cfg.Parser == "default" {
-				cfg.Parser = "ngram"
-			}
-			cfg.FullTextVersion = catalog.IndexAlgoParamVersionOf(idx.IndexAlgoParams)
-			cfg.Async, err = catalog.IndexParamAsync(idx.IndexAlgoParams)
-			if err != nil {
+			if err := hooks.ConfigureIndexStats(builder.GetContext(), source, defs, &cfg); err != nil {
 				return 0, err
 			}
-			switch idx.IndexAlgoTableType {
-			case catalog.FullText2Index_TblType_Metadata:
-				cfg.Metadata = idx.IndexTableName
-				cfg.FullTextVersion = 2
-			case catalog.FullText2Index_TblType_Storage:
-				cfg.Entries = idx.IndexTableName
-				cfg.FullTextVersion = 2
-			case "", catalog.FullTextIndex_TblType:
-				cfg.Entries = idx.IndexTableName
-			}
-			if catalog.IsFullText2IndexAlgo(cfg.Algorithm) || cfg.FullTextVersion == 2 {
-				cfg.FullTextVersion = 2
-				cfg.Async = true
-			}
-			continue
-		}
-		switch idx.IndexAlgoTableType {
-		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
-			cfg.Metadata = idx.IndexTableName
-			if len(idx.Parts) != 1 {
-				return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats: invalid IVF_FLAT index column")
-			}
-			cfg.Column = idx.Parts[0]
-			params, parseErr := catalog.IndexParamsStringToMap(idx.IndexAlgoParams)
-			if parseErr != nil {
-				return 0, parseErr
-			}
-			cfg.OpType = params[catalog.IndexAlgoParamOpType]
-			if cfg.OpType == "" {
-				cfg.OpType = "vector_l2_ops"
-			}
-			cfg.Quantization = params[catalog.Quantization]
-			if cfg.Quantization == "" {
-				cfg.Quantization = "none"
-			}
-			cfg.Options = params
-			if value, ok := params[catalog.IndexAlgoParamLists]; ok {
-				cfg.Lists, err = strconv.ParseInt(value, 10, 64)
-				if err != nil || cfg.Lists <= 0 {
-					return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats: invalid IVF_FLAT lists option")
-				}
-			}
-			cfg.Async, err = catalog.IndexParamAsync(idx.IndexAlgoParams)
-			if err != nil {
-				return 0, err
-			}
-		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			cfg.Centroids = idx.IndexTableName
-		case catalog.SystemSI_IVFFLAT_TblType_Entries:
-			cfg.Entries = idx.IndexTableName
 		}
 	}
-	if cfg.KeyKind == "" && cfg.Metadata == "" && cfg.Centroids == "" && cfg.Entries == "" {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "index '%s' does not exist on '%s.%s'", names[2], names[0], names[1])
+	if source.Pkey != nil {
+		cfg.PrimaryKey = source.Pkey.PkeyColName
 	}
-	isFullText := cfg.Algorithm == catalog.MOIndexFullTextAlgo.ToString() || catalog.IsFullText2IndexAlgo(cfg.Algorithm)
-	if cfg.KeyKind != "" {
-		if len(cfg.KeyColumns) == 0 || source.Pkey == nil || cfg.Entries == "" {
-			return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats: incomplete key index definition")
-		}
-	} else if isFullText {
-		if cfg.Entries == "" || len(cfg.Columns) == 0 || source.Pkey == nil || cfg.FullTextVersion == 2 && cfg.Metadata == "" {
-			return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats: incomplete fulltext index definition")
-		}
-	} else if cfg.Metadata == "" || cfg.Centroids == "" || cfg.Entries == "" || source.Pkey == nil {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats: incomplete IVF_FLAT index definition")
-	}
-	cfg.PrimaryKey = source.Pkey.PkeyColName
 	param, err := json.Marshal(cfg)
 	if err != nil {
 		return 0, err
