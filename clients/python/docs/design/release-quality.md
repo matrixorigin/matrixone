@@ -169,88 +169,121 @@ not qualified here; use SDK connect or adopt a configured MySQL driver engine.
 
 ## 2026-11-13 release and main validation
 
-The selected targets are official **v4.2.8**, revision **10d204b**, and main
-**1064837ae2648aa20e5e1abb7edd0564493e6b4d**, rechecked against the remote.
-The release image is pinned to
+The main source target is `14b1ddced58d411c4b13ffaaf6034b3468076009`.
+The patched 4.2 target is [the kernel companion PR #32723](https://github.com/matrixorigin/matrixone/pull/32723),
+based on 4.2-dev `1a3e7fb6960995e9a143e5cc3d5a50f2feb0980f`.
+Official **v4.2.8**, revision `10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`,
+remains the immutable reproduction and physical-upgrade source, pinned to
 `matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`.
-Main's version banner is v1.3.0; the git revision identifies the source build.
-Each disposable target has two CNs, shared server/client export paths and its
-own data. This does not certify other historical releases.
+Fixes in the companion need a new 4.2 release; this SDK does not rewrite an
+already published server binary.
 
-The full online/analytics sweeps use Python 3.12.16, SQLAlchemy 2.0.43,
-PyMySQL 1.2.4 and aiomysql 0.3.2. Final native pool/export/error checks also
-pass 34 cases on SQLAlchemy 1.4.54/release and 2.1.8/main. The offline matrix
-does not imply a full online cross-product of all dependency versions.
+Each source target has its own two-CN cluster, data, deployment identity and
+HAKeeper/raft/gossip/status ports. Restore-capable suites own an exclusive lease
+for the whole cluster, including readiness and teardown. Different databases
+alone cannot isolate `RESTORE CLUSTER`. The earlier missing S3 Stage was
+reproduced as overlapping cluster restore rewinding `mo_catalog.mo_stages`;
+serial restore/S3 controls passed with no SDK Stage workaround.
 
-| Evidence | Result |
+Source binaries are pinned by Git revision and SHA-256, independently of the
+version banner. Build the 4.2 candidate with `make build MO_VERSION=4.2-dev`:
+Make's default uses the local working branch, and the legacy native formatter
+turns `codex/pr32671-42-compat` into the invalid version `3267142`. The corrected
+build keeps the real branch and commit metadata and advertises the actual
+4.2 development series. A new full 1296-case online sweep passes with no skips.
+The SDK parser and version assertions are unchanged.
+Main's detached source build advertises v1.3.0; its revision identifies the code.
+
+Full online/analytics validation uses Python 3.12.16, SQLAlchemy 2.0.43,
+PyMySQL 1.2.4 and aiomysql 0.3.2. Additional real async upload controls exercise
+SQLAlchemy 1.4 on patched 4.2 and 2.1 on main. Offline profiles are a separate
+matrix; they do not imply an online cross-product of every dependency version.
+
+| Selection | Result |
 |---|---|
-| Full offline, Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | 3351 / 3347 / 3355 passed; no skips |
-| Full offline, Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | 3351 / 3347 passed; no skips |
-| Full offline, Python 3.11 / SQLAlchemy 2.1.8 | 3355 passed; no skips |
-| Full offline, Python 3.12 / SQLAlchemy 2.0.57 | 3347 passed; no skips |
-| Exact regression tuple, Python 3.12 / SQLAlchemy 2.0.43 / PyMySQL 1.2.3 / aiomysql 0.3.2 | 3347 passed; no skips |
-| Installed core without Arrow, Python 3.8 / SQLAlchemy 1.4 and Python 3.9 / SQLAlchemy 2.0 | Import and portable query compilation passed; 119 runtime checks passed per profile |
-| Complete main online sweep | 1273 passed, no skips |
-| Final changed-owner online selection, main and release | 227 passed on each; release functional checks explicitly use the plain CN |
-| Complete analytics, main | 319 passed, no skips |
-| Complete analytics, release plain CN | 235 passed, 84 Arrow-dependent positive cases unvalidated |
-| Complete release online sweep using a TLS-capable primary | 1254 passed, 7 failures, 8 setup errors, 4 unsupported vector skips; **not green** |
-| Distributions and static checks | Wheel/sdist build, `twine check`, fatal flake8 and diff checks passed |
+| Full offline, Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | 3363 / 3359 / 3367 passed; no errors, failures or skips |
+| Full offline, Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | 3363 / 3359 passed; no skips |
+| Full offline, Python 3.11 / SQLAlchemy 2.1.8 | 3367 passed; no skips |
+| Full offline, Python 3.12 / SQLAlchemy 2.0.57 | 3359 passed; no skips |
+| Exact PyMySQL 1.2.3 regression tuple, Python 3.12 / SQLAlchemy 2.0.43 / aiomysql 0.3.2 | 3359 passed; no skips |
+| Core without Arrow, Python 3.8 / SQLAlchemy 1.4 and Python 3.9 / SQLAlchemy 2.0 | 139 runtime checks passed per profile; installed wheel import/portable compilation passed |
+| Main complete online | 1296 passed at `2a42b3e99f`; semantic reuse for `14b1ddced58` described below |
+| Main complete analytics on current target | 338 passed, no errors/failures/skips, unchanged source |
+| Patched 4.2 complete online | 1296 passed in the new complete sweep; no failures, errors or skips, unchanged source |
+| Patched 4.2 complete analytics, including all former Arrow positives | 338 passed in the final complete sweep; no failures, errors or skips, unchanged source |
+| Real async driver facade controls | Six passed on SA1.4/patched4.2 and six on SA2.1/main; no failures, errors or skips |
+| Native 4.2 stateful BVT | Six Stage/snapshot/branch scripts passed twice: each run has 911 statements, 903 successes, 8 unchanged issue-marked ignores and no failures/abnormal results |
+| Native saved-SHOW BVT and missing-process guard | Three complete scripts pass twice: 510 statements, 509 successes, 1 existing ignore each; whole datalink + stageutil race/coverage, vet and lint pass |
+| Native 4.2 upgrade | Actual physical copy of official v4.2.8 data passed value, marker, restore, legacy receipt and rejection checks |
+| Native 4.2 concurrency | Whole frontend race suite, four affected roots 100 times each, deterministic embedded DDL/delete lifecycle under race passed |
+| CI selection parity | 1634 distinct online/analytics cases: 207 required + 1427 extended; no omissions or duplicates |
 
-The complete sweeps preceded the last error-logging, pagination and fixture
-corrections. The final 227-case selection rechecks their owners and public
-consumers; all eight offline profiles use the final Python source. Broad source
-manifests record edits during investigation rather than concealing drift.
-The final online selection's SDK, scripts and online inputs are unchanged;
-only unselected offline SQL-text assertions changed during its main run.
-The current collection has 1285 online and 319 analytics cases. Its case-by-case
-inventory is accounted for by the complete sweeps plus final owner validation:
-1285 main online cases have passing evidence; release has 1281 passing case
-oracles and four explicitly unvalidated vector cases. Native-error oracles
-below do not certify the unavailable positive feature.
+### Preserved behavior and evidence reuse
 
-### Coverage decisions
-
-| Earlier scenario | Retained or strengthened oracle |
+| Scenario | Retained or strengthened oracle |
 |---|---|
-| Abandoned, rolled-back and committed transactions | Independent observer reads, failed-reset disposal, explicit AUTOCOMMIT and next-checkout mode; sync/async real drivers and three SQLAlchemy series |
-| Export literals, comments and callable binds | Dollar/numeric token controls; default and NO_BACKSLASH modes; actual one-slot checkout identity; exact CSV/JSONL bytes; failure/cancel/timeout cleanup and one callable evaluation |
-| Multiple predicates, joins and CTEs | Grouping and atomic invalid calls; explicit raw binding; native RIGHT JOIN; executed CTEs and complete row/value oracles replace unused CTEs and permissive fallback assertions |
-| Metadata, labels and CLI indexes | Original unique label controls retained; exact decimals, result names/processors, FULLTEXT-only catalog selection and logical index counts |
-| CLONE, branch and historical sources | Missing-source non-mutation, existing-target no-op, populated branch deletion and source preservation, dropped-source snapshot clones |
-| Analytics lifecycle and cross-CN conflicts | Original Arrow positives remain on main; file variants retain released-server conflict, rollback and session restoration; the same 20000-row/127-row streaming boundary uses Parquet preparation |
-| OFFSET None/0/nonzero and LIMIT None/0/positive | All three fulltext facades plus sync/async ORM slices; unlimited SQL spelling changes without imposing a smaller row limit |
+| Abandoned, rolled-back and committed transactions | Independent observer rows; rollback before autocommit; failed-reset disposal; explicit AUTOCOMMIT and next-checkout state on real sync/async drivers |
+| Export literals, comments and callable binds | Dollar/numeric tokens, both escaping modes, actual one-slot checkout, exact CSV/JSONL bytes, failure/cancel/timeout cleanup and one callable evaluation |
+| Multiple predicates, joins and CTEs | Grouped typed conditions, atomic invalid calls, raw binding, native RIGHT JOIN, executed CTEs and complete row/value results |
+| Metadata and FULLTEXT | Exact decimal values and processors, standard MySQL BOOL/view reflection, native schema replay and FULLTEXT-only catalog/index counts |
+| CLONE and branch lifecycle | Missing-source non-mutation, existing-target no-op, populated and empty branch deletion, source preservation, historical clones, account privileges and DDL/restore conflict controls |
+| Arrow upload on 4.2 | Same public input, wire schema, values, create/append/rollback, staging bounds, cross-CN conflicts, cancellation and session/pool cleanup through checked Parquet staging |
+| Raw native Arrow rejection | Independent 20300 format-unsupported control remains; a successful Parquet upload does not advertise native Arrow support |
+| Async pending probe close | Timeout, primary error and cancellation retain the existing two-upload admission; the third operation cannot consume input, check out or create a table; drain and reuse are checked |
+| Relation cleanup retry | Real one-slot aiosqlite pool, both initial deadline/cancel paths, one retained DROP, one execution, unrelated row 42, absence and released pool are unchanged; in-memory SQLite removes irrelevant disk fsync |
+| OFFSET None/0/nonzero and LIMIT None/0/positive | Three fulltext facades plus sync/async ORM exact slices, preserving explicit zero and unlimited semantics |
 
-### Release limitations and unresolved observations
+Both current-main analytics attempts that found a file-backed SQLite deadline
+and two native SQL timeouts are retained. The later in-memory cleanup fixture
+keeps its original deadlines; the final full analytics run on a fresh NVMe
+instance passes all 338 cases with no SDK timeout increase. During the earlier
+run host IO pressure exceeded 50%, and a later native stack showed Raft and
+LocalETLFS fsync waits. This supports the resource explanation without claiming
+a pre-event causal profile. Original data and partial migration copies remain
+untouched; the physical-upgrade evidence is recorded separately.
 
-* **TLS remains blocked in official 4.2.8.** An independent coalesced SSLRequest/
-  ClientHello times out; main completes TLS 1.3. Ordinary TLS controls pass both.
-  Main includes [the buffered-handshake fix #29996](https://github.com/matrixorigin/matrixone/pull/29996);
-  the released binary still hands TLS the raw socket without unread buffer bytes.
-  The 4.2-dev backport is tracked in [#32723](https://github.com/matrixorigin/matrixone/pull/32723).
-  Plain functional results cannot certify TLS, and no SDK retry or TLS fallback
-  was added.
-* Native Arrow LOAD returns 20300. The 84 positive write cases are skipped only
-  for the verified exact release and a definite unsupported observation. A
-  separate native/public negative control verifies the error, no committed
-  table, no staging files and pool release. Unknown/current versions run the
-  positive cases. Native VECF8/VECF4 absence accounts for four online skips.
-* Empty database branch deletion, particular fulltext identifier generation,
-  standalone numeric/dollar aliases, standard MySQL view/BOOL reflection and
-  ENUM/SET SHOW CREATE replay have native incompatibilities. Named differential
-  cases record native error/metadata outcomes and preserve source data. Main
-  retains positive coverage; these are not SDK-provided server fixes.
-* The earlier missing S3 stage came from overlapping validation runs on one
-  disposable cluster. The online manager suite executed `RESTORE CLUSTER`
-  while analytics created a stage after the snapshot. Restore rewound
-  `mo_catalog.mo_stages`; an independent native control reproduced the same
-  20300 error. Suites sharing a cluster that can restore account or cluster
-  state must run exclusively, including preflight and teardown. Separate
-  databases do not isolate this global catalog state.
+The final offline matrix freezes all production, selected test and script inputs.
+The later in-memory fixture edit changes only two unselected analytics scenarios;
+all offline semantic inputs remain equal. The async probe-close fix has full
+three-series focused and core-without-Arrow evidence and renewed complete
+analytics evidence; online modules do not call its async upload owner.
 
-The online CI target is updated to 4.2.8/current-source with the same two jobs.
-Its required and extended selections are disjoint: 207 and 1397 cases cover the
-1604-case collection with no omissions or duplicates. The release-contract
-file previously ran in both phases. Configuration must identify the selected
-isolated server and shared paths; a skipped/unconfigured workflow is not online
-validation. No job wall-time reduction is inferred from checkout/build costs.
+The 1296-case main online sweep used exactly the final SDK production/online
+inputs before the probe-close fix. The only subsequent main kernel delta is
+`14b1ddced58`'s INTERVAL user-variable binding guard; those online queries do not
+use INTERVAL. Fourteen independent current-main public Session controls cover
+calendar operations, inherited numeric behavior, source values, the native
+strict-literal error and next-checkout reuse. The final 32-case wave2 selection and complete 338-case analytics suite pass
+on current main and exercise their current consumers. This records the scope of reused evidence;
+it does not claim one new exact-head full run or treat a pending test as a pass.
+
+Final distributions build and pass `twine check`. All 62 packaged Python modules
+byte-match the final source. Installed Python 3.8/3.9 core imports and portable
+compilation pass without Arrow. Scoped Black covers all 66 changed Python files;
+fatal flake8 and the 50 CI scope contracts pass.
+
+### Release capability boundaries
+
+- Native Arrow LOAD remains unavailable on 4.2. A bounded read-only probe permits
+  Parquet only for the exact native 20300 format rejection. Unknown errors do
+  not choose a fallback; an invalidated connection fails. The actual write
+  checkout is requalified before DDL, and input is consumed once into one
+  bounded file. All former Arrow-dependent positive tests execute; their skip
+  gate has been deleted. Native Arrow stays the main path.
+- 4.2 has no VECF8/VECF4 storage types. Four explicit native 1064 and no-catalog-
+  object checks are negative capability contracts, with no skips. They do not
+  certify positive storage/round-trip support. Main and unrecognized source
+  profiles keep the original positive cases. VECF16/VECF32 positives remain.
+- The companion fixes TLS buffering/reset monitoring, schema display/view
+  provenance, FULLTEXT identifiers, numeric tokenization, Stage grammar/catalog
+  writes, FLOAT32 infinities and branch identity/restore locking. Existing
+  persisted ENUM/SET views that lost provenance require recreation; an old
+  unmarked empty database cannot safely be inferred to be a branch. The upgrade
+  is shutdown-only, and the original released data is not opened by the new
+  binary. Do not run the old binary on the upgraded copy.
+
+The online CI matrix still has two jobs (4.2.8 and current-source); no runners or
+shards were added. Required/extended file sets are disjoint and complete.
+An unconfigured/skipped GitHub online workflow is not online validation, and
+local pass evidence is not a claim that every GitHub check is green. No job
+wall-time reduction is inferred from checkout/build time or case counts.
