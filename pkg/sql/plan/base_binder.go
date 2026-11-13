@@ -804,6 +804,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	var typ *plan.Type
 	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
+	// joinOnUnresolved holds the on-clause diagnostic this binder stored for
+	// an unresolved table qualifier, for the final delegated-lookup failure
+	// branch below.
+	var joinOnUnresolved error
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
@@ -866,6 +870,19 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column '%s' does not exist", name)
 			}
+		} else if tb, ok := b.impl.(*TableBinder); ok && tb.joinOn && depth == 0 {
+			// A reference this JOIN ON predicate binds directly (depth 0)
+			// resolves only against the FROM bindings the clause already
+			// owns; a table qualifier that stays unresolved there is out of
+			// clause scope, which MySQL reports as an unknown on-clause
+			// column rather than a Postgres-style missing FROM entry. The
+			// parent-correlation walk below still gets its chance before
+			// this error surfaces. A lookup delegated into this binder at
+			// depth > 0 originates in another clause — a nested WHERE or
+			// SELECT inside the ON subquery — and keeps that clause's own
+			// diagnostic.
+			err = moerr.NewBadFieldError(localErrCtx, name, "on clause")
+			joinOnUnresolved = err
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
@@ -1036,9 +1053,44 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if err == nil {
 		b.ctx.isCorrelated = true
+	} else if joinOnUnresolved != nil && moerr.IsMoErrCode(err, moerr.ErrInvalidInput) &&
+		!b.joinOnNamespaceResolved(db, table) {
+		// The delegated lookup walks outward with the same qualified
+		// reference, and an InvalidInput it returns is not proof by
+		// itself: a binding context that owns the namespace can also
+		// return InvalidInput for a column-level failure, such as an
+		// ambiguous duplicate-named column. Substitute the on-clause
+		// diagnostic only when no binding context the delegation consults
+		// holds the table namespace itself: then every scope failed the
+		// same missing namespace lookup, and the innermost occurrence,
+		// this ON clause, owns the unknown-column class. Any parent error
+		// from an owned namespace, and every non-InvalidInput parent
+		// error, keeps the parent's own diagnostic; successful outer
+		// correlation above is untouched.
+		err = joinOnUnresolved
 	}
 
 	return
+}
+
+// joinOnNamespaceResolved reports whether any binding context that a
+// delegated parent lookup walks holds a binding for the qualified table
+// namespace: the binder-bearing ancestor chain, skipping the binder-less
+// contexts the parent delegation never binds against, with the same
+// per-context lazy default-database fallback as the delegated lookup. A
+// namespace owned by an outer context means that context binds against it,
+// so a delegated InvalidInput born there is a column-level failure of the
+// owned namespace rather than a missing namespace.
+func (b *baseBinder) joinOnNamespaceResolved(db, table string) bool {
+	for c := b.ctx.parent; c != nil; c = c.parent {
+		if c.binder == nil {
+			continue
+		}
+		if b.resolveTableBinding(c, db, table) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
