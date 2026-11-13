@@ -80,7 +80,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			require.NotNil(t, tbl)
@@ -110,7 +110,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.NoError(t, tbl.Write(ctx, bat))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, tc.want, txn.writes[0].tableName)
-			summary, ok := txn.cnObjsSummary[*stats.ObjectName().ObjectId()]
+			summary, ok := txn.cnObjsSummary[tc.tableID][*stats.ObjectName().ObjectId()]
 			require.True(t, ok)
 			require.Equal(t, tbl.db.databaseId, summary.databaseId)
 			require.Equal(t, tc.tableID, summary.tableId)
@@ -1163,7 +1163,7 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			workspace := newTransactionWithActivePKTableForTest(t, "pk")
 			op := workspace.op.(*mock_frontend.MockTxnOperator)
 			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
-			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
 			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
