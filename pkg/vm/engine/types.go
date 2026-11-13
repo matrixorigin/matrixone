@@ -1534,8 +1534,8 @@ type LogtailReadBarrier interface {
 
 // TenantCatalogActivator is an optional interface for engines that support
 // lazy per-account catalog loading. If the engine implements this interface,
-// the frontend should call ActivateTenantCatalog during authentication before
-// the first tenant-context SQL.
+// tenant-context execution must activate the catalog before resolving names,
+// including remote pipelines that do not authenticate a local session.
 type TenantCatalogActivator interface {
 	ActivateTenantCatalog(ctx context.Context, accountID uint32) error
 }

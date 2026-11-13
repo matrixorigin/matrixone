@@ -1511,6 +1511,9 @@ func replayCatalogDatabaseCache(
 
 	logutil.Infof("catalog-load read mo_catalog.mo_databases %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
@@ -1538,6 +1541,9 @@ func replayCatalogTableCache(
 
 	logutil.Infof("catalog-load read mo_catalog.mo_tables %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
