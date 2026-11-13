@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
@@ -336,7 +338,14 @@ func TestHandleGetChangedList(t *testing.T) {
 	// This integration test must not change the logger inherited by later tests.
 	originalLogger := logutil.GetGlobalLogger()
 	t.Cleanup(func() {
-		require.True(t, originalLogger == logutil.GetGlobalLogger(), "test must not replace the process-global logger")
+		require.True(t, originalLogger == logutil.GetGlobalLogger(), "test must restore the process-global logger")
+	})
+	var restoreLogger func() bool
+	// Register before fixture cleanup, so those cleanups still run with DEBUG.
+	t.Cleanup(func() {
+		if restoreLogger != nil && !restoreLogger() {
+			t.Error("the process-global logger was reconfigured during the test scope")
+		}
 	})
 
 	defer leaktest.AfterTest(t)()
@@ -349,8 +358,8 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
 
-	// Table identity and checkpoint timestamps, not block size, determine the result.
-	rowsCnt := 2
+	// Preserve the CN dump threshold and the multi-block write path.
+	rowsCnt := 8192 * 2
 
 	dbBatch := catalog.MockBatch(schema, rowsCnt)
 	defer dbBatch.Close()
@@ -373,6 +382,32 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
+		// The original data size exercises CN-created multi-block objects.
+		// Check before compaction can replace those objects.
+		func() {
+			readTxn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, readTxn.Rollback(p.Ctx)) }()
+			readTxn.BindAccessInfo(0, 0, 0)
+			readDB, err := readTxn.GetDatabase(dbName)
+			require.NoError(t, err)
+			readRel, err := readDB.GetRelationByName(schema.Name)
+			require.NoError(t, err)
+			cnObjects := 0
+			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
+				if object.HasDropCommitted() {
+					continue
+				}
+				stats := object.GetObjectStats()
+				if stats.GetCNCreated() {
+					cnObjects++
+					require.EqualValues(t, rowsCnt, stats.Rows(), "table %s must retain the CN-created rows", schema.Name)
+					require.EqualValues(t, 2, stats.BlkCnt(), "table %s must retain the original two-block object", schema.Name)
+				}
+			}
+			require.Equal(t, 1, cnObjects, "table %s must retain one CN-created object", schema.Name)
+		}()
+
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		func() {
 			readTxn, err := p.T.StartTxn()
@@ -383,14 +418,14 @@ func TestHandleGetChangedList(t *testing.T) {
 			require.NoError(t, err)
 			readRel, err := readDB.GetRelationByName(schema.Name)
 			require.NoError(t, err)
-			flushed := false
+			persisted := false
 			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
 				if !object.IsAppendable() && !object.HasDropCommitted() {
-					flushed = true
+					persisted = true
 					break
 				}
 			}
-			require.True(t, flushed, "table %s must have a flushed object", schema.Name)
+			require.True(t, persisted, "table %s must have a visible non-appendable object", schema.Name)
 		}()
 		func() {
 			checkpointTxn, err := p.T.StartTxn()
@@ -434,8 +469,135 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
 
+	// Keep the small appendable-to-flush path added by the earlier repair.
+	if !t.Run("small_appendable_flush", func(t *testing.T) {
+		checkSmallChangedListFlush(t, p, dbName, tblIds)
+	}) {
+		t.FailNow()
+	}
+
+	restoreLogger = logutil.SetupMOLoggerForTest(&logutil.LogConfig{Level: "debug"})
+	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel))
+
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
 
 	require.Equal(t, tblIds[:len(tblIds)-1], resp.TableIds)
+}
+
+// checkSmallChangedListFlush retains the small appendable TN-object path while
+// sharing the expensive engine fixture with the original multi-block case.
+func checkSmallChangedListFlush(t *testing.T, p *testutil.EnginePack, dbName string, largeIDs []uint64) {
+	t.Helper()
+	schema := catalog.MockSchemaAll(3, 2)
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+	input := containers.ToCNBatch(bat)
+	names := []string{"small1", "small2", "small3"}
+	req := &cmd_util.GetChangedTableListReq{Type: cmd_util.CheckChanged}
+	var ids []uint64
+	for _, name := range names {
+		schema.Name = name
+		func() {
+			op, err := p.D.NewTxnOperator(p.Ctx, p.D.Now())
+			require.NoError(t, err)
+			committed := false
+			defer func() {
+				if !committed {
+					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(p.Ctx), 10*time.Second)
+					defer cancel()
+					if err := op.Rollback(cleanupCtx); err != nil {
+						t.Errorf("rollback small-table transaction: %v", err)
+					}
+				}
+			}()
+			require.NoError(t, p.D.Engine.New(p.Ctx, op))
+			database, err := p.D.Engine.Database(p.Ctx, dbName, op)
+			require.NoError(t, err)
+			defs, err := catalog.SchemaToDefs(schema)
+			require.NoError(t, err)
+			require.NoError(t, database.Create(p.Ctx, name, defs))
+			relation, err := database.Relation(p.Ctx, name, nil)
+			require.NoError(t, err)
+			require.NoError(t, relation.Write(p.Ctx, input))
+			id := relation.GetTableID(p.Ctx)
+			require.NotContains(t, largeIDs, id, "small and large cases must use distinct tables")
+			ids = append(ids, id)
+			req.AccIds = append(req.AccIds, 0)
+			req.DatabaseIds = append(req.DatabaseIds, relation.GetDBID(p.Ctx))
+			req.TableIds = append(req.TableIds, id)
+			ts := timestamp.Timestamp{}
+			req.TS = append(req.TS, &ts)
+			require.NoError(t, op.Commit(p.Ctx))
+			committed = true
+		}()
+
+		before := make(map[string]struct{})
+		func() {
+			txn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, txn.Rollback(p.Ctx)) }()
+			txn.BindAccessInfo(0, 0, 0)
+			database, err := txn.GetDatabase(dbName)
+			require.NoError(t, err)
+			relation, err := database.GetRelationByName(name)
+			require.NoError(t, err)
+			for _, object := range testutil2.GetAllBlockMetas(relation, false) {
+				if object.IsAppendable() && !object.HasDropCommitted() {
+					before[object.ID().String()] = struct{}{}
+				}
+			}
+		}()
+		require.NotEmpty(t, before, "small table %s must start with an appendable object", name)
+		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
+		func() {
+			txn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, txn.Rollback(p.Ctx)) }()
+			txn.BindAccessInfo(0, 0, 0)
+			database, err := txn.GetDatabase(dbName)
+			require.NoError(t, err)
+			relation, err := database.GetRelationByName(name)
+			require.NoError(t, err)
+			var flushedRows uint32
+			for _, object := range testutil2.GetAllBlockMetas(relation, false) {
+				if _, existed := before[object.ID().String()]; existed {
+					require.True(t, !object.IsAppendable() || object.HasDropCommitted(), "the old appendable object must no longer be active")
+				}
+				stats := object.GetObjectStats()
+				if !object.IsAppendable() && !object.HasDropCommitted() && !stats.GetCNCreated() {
+					require.NotContains(t, before, object.ID().String(), "flush must create a new persisted object")
+					flushedRows += stats.Rows()
+				}
+			}
+			require.EqualValues(t, 2, flushedRows, "small table %s must flush both rows", name)
+		}()
+		func() {
+			txn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			committed := false
+			defer func() {
+				if !committed {
+					if err := txn.Rollback(p.Ctx); err != nil {
+						t.Errorf("rollback small-table checkpoint transaction: %v", err)
+					}
+				}
+			}()
+			checkpointTS := txn.GetStartTS()
+			checkpointTS = checkpointTS.Next()
+			require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, checkpointTS))
+			require.NoError(t, txn.Commit(p.Ctx))
+			committed = true
+			checkpoint := p.T.GetDB().BGCheckpointRunner.MaxCheckpoint()
+			require.NotNil(t, checkpoint)
+			end := checkpoint.GetEnd()
+			require.True(t, end.GE(&checkpointTS), "checkpoint must cover the requested timestamp")
+		}()
+	}
+	ts := types.MaxTs().ToTimestamp()
+	req.TS[len(req.TS)-1] = &ts
+	resp := &cmd_util.GetChangedTableListResp{}
+	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
+	require.NoError(t, err)
+	require.Equal(t, ids[:len(ids)-1], resp.TableIds)
 }

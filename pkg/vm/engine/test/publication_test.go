@@ -284,6 +284,7 @@ func TestCheckIterationStatus(t *testing.T) {
 }
 
 func TestExecuteIteration1(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -826,6 +827,7 @@ func TestExecuteIteration1(t *testing.T) {
 }
 
 func TestExecuteIterationDatabaseLevel(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -1137,6 +1139,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 }
 
 func TestExecuteIterationWithIndex(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -1733,6 +1736,7 @@ func TestGetObjectChunk(t *testing.T) {
 }
 
 func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -2593,6 +2597,7 @@ func TestCCPRGC(t *testing.T) {
 }
 
 func TestCCPRCreateDelete(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -2987,6 +2992,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 }
 
 func TestCCPRAlterTable(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -3939,6 +3945,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 }
 
 func TestCCPRDDLAccountLevel(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -4717,6 +4724,7 @@ func (h *sqlFailUTHelper) OnSQLExecFailed(ctx context.Context, query string, err
 }
 
 func TestCCPRErrorHandling2(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -5078,6 +5086,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 // 3. Third iteration: no stale read, normal execution (data should be cleaned and re-synced)
 // 4. Verify data after iterations
 func TestExecuteIterationWithStaleRead(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
