@@ -140,8 +140,9 @@ func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
 		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
 		t.Cleanup(s.stopper.Stop)
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		require.Len(t, routes, 1)
-		require.Contains(t, routes[0], fmt.Sprintf("'%s', '%s', '4.0.7',", source.Version, v4_0_7.Handler.Metadata().Version))
+		require.Len(t, routes, 2)
+		require.Contains(t, routes[0], fmt.Sprintf("'%s', '%s', '4.0.8',", source.Version, v4_0_7.Handler.Metadata().Version))
+		require.Contains(t, routes[1], "'4.0.7', '4.0.8', '4.0.8',")
 	})
 }
 

@@ -41,6 +41,13 @@ var (
 	}
 )
 
+// SQLTaskOwnershipUpgradeEntries returns the idempotent cluster migrations
+// introduced after the 4.0.7 offset-41 catalog was produced. Callers must
+// execute the entries under the catalog upgrade transaction.
+func SQLTaskOwnershipUpgradeEntries() []versions.UpgradeEntry {
+	return []versions.UpgradeEntry{addSQLTaskRunClaim, addSQLTaskScheduleGeneration, addSQLTaskRunningIndex}
+}
+
 func sqlTaskOwnershipColumn(table, name, columnType, defaultValue string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MOTaskDB,

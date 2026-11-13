@@ -66,6 +66,13 @@ type terminalUpgradeError struct{ error }
 
 func (e *terminalUpgradeError) Unwrap() error { return e.error }
 
+// Only the ready, published 4.0.7 offset 41 predecessor has a dedicated
+// semantic-version migration. Unknown identities must remain rejected.
+func canUpgradeFrozenV407Offset(source, final versions.Version, binaryOffset uint32) bool {
+	return source.IsReady() && source.Version == "4.0.7" && source.VersionOffset == 41 &&
+		binaryOffset == 44 && versions.Compare(final.Version, "4.0.8") >= 0
+}
+
 // crossingPending reports whether the frozen-4.0.7 crossing has not durably
 // committed for the persisted latest version row v. Intermediate route
 // progress is persisted only as mo_upgrade step rows, so a latest row beyond
@@ -319,7 +326,7 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			// version. Reject that route before any catalog mutation instead of
 			// repeatedly advancing the tenant counter or hanging recovery. Once
 			// released, further catalog migrations must use a newer version.
-			if v.IsReady() && versions.Compare(final.Version, "4.0.7") >= 0 && v.Version == "4.0.7" && v.VersionOffset != v4_0_7.Handler.Metadata().VersionOffset {
+			if v.IsReady() && versions.Compare(final.Version, "4.0.7") >= 0 && v.Version == "4.0.7" && v.VersionOffset != v4_0_7.Handler.Metadata().VersionOffset && !canUpgradeFrozenV407Offset(v, final, v4_0_7.Handler.Metadata().VersionOffset) {
 				return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf(
 					"catalog 4.0.7 offset %d differs from binary offset %d; 4.0.7 is frozen and further migrations require a new catalog version",
 					v.VersionOffset, v4_0_7.Handler.Metadata().VersionOffset)}
