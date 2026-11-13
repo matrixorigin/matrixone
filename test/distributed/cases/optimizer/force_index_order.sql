@@ -282,4 +282,27 @@ where a=1 and b in ('alpha','beta') order by payload;
 select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
 where a=1 and b in ('alpha','beta') order by payload;
 
+-- Reader IN lookup preparation must preserve transaction-local index/base
+-- changes across several workspace entries and a later execution after rollback.
+create table issue32665_other (id int primary key);
+begin;
+insert into issue32665_other values (1);
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+insert into issue32665 values (5,5,1,'alpha',5);
+insert into issue32665 values (6,6,1,'beta',6);
+update issue32665 set b='beta',payload=1 where pk1=2 and pk2=2;
+delete from issue32665 where pk1=1 and pk2=1;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+rollback;
+select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
+where a=1 and b in ('alpha','beta') order by payload;
+
 drop database force_index_order;
