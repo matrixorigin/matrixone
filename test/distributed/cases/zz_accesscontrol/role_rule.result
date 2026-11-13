@@ -188,6 +188,47 @@ select * from db1.ctas_project_nested;
 drop table db1.ctas_project;
 drop table db1.ctas_project_paren;
 drop table db1.ctas_project_nested;
+create role test_rule_ctas_wide;
+grant connect on account * to test_rule_ctas_wide;
+grant select on table *.* to test_rule_ctas_wide;
+grant create table, drop table on database db1 to test_rule_ctas_wide;
+grant test_rule_ctas_wide to test_rule_user;
+set enable_remap_hint = 1;
+prepare ctas_policy_stmt from 'create table db1.ctas_prepared as (select * from db1.ctas_policy_source)';
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+execute ctas_policy_stmt;
+table ctas_prepared already exists
+drop table db1.ctas_prepared;
+set role test_rule_ctas_wide;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared order by k;
+➤ k[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  90
+drop table db1.ctas_prepared;
+set role test_rule_role;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+drop table db1.ctas_prepared;
+deallocate prepare ctas_policy_stmt;
+set @ctas_policy_sql = 'create table db1.ctas_prepared_var as select * from db1.ctas_policy_source';
+prepare ctas_policy_var from @ctas_policy_sql;
+execute ctas_policy_var;
+deallocate prepare ctas_policy_var;
+select * from db1.ctas_prepared_var;
+➤ amount[4,32,0]  𝄀
+10
+drop table db1.ctas_prepared_var;
+revoke test_rule_ctas_wide from test_rule_user;
+drop role test_rule_ctas_wide;
 drop table db1.ctas_policy_source;
 create database db2;
 create table db2.t2(a int, age int);

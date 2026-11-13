@@ -1274,6 +1274,10 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
 	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
 	originSql := strings.TrimLeft(sql[idx:], " ")
+	if ctas, ok := st.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil && ses.GetCmd() == COM_STMT_PREPARE {
+		// 不能把 sqlOfStmt 的诊断原文或旧角色自动注入的 hint 用作后续执行输入。
+		originSql = execCtx.input.prepareSQL
+	}
 	// fmt.Print(originSql)
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
@@ -1317,8 +1321,15 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, moerr.NewInvalidInput(execCtx.reqCtx, "cannot prepare multi statements")
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
 	if err != nil {
+		stmts[0].Free()
 		return nil, err
 	}
 
@@ -1338,6 +1349,17 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
+	if ctas, ok := saveStmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		// prepared owner 持有独立原文，不能借用协议请求可能复用的缓冲区。
+		originSQL = strings.Clone(originSQL)
+		if err := applyPreparedCTASRewrite(execCtx.reqCtx, ses, ctas, originSQL); err != nil {
+			return nil, err
+		}
+		if s, ok := stmt.(*tree.PrepareString); ok {
+			// 使用同一棵带策略的内层 AST 推导列，不能让 buildPrepare 再解析丢失规则。
+			stmt = &tree.PrepareStmt{Name: s.Name, Stmt: saveStmt}
+		}
+	}
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
@@ -2387,6 +2409,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		// AST 属于 prepared handle；编译/鉴权提前失败也不能由 wrapper 释放。
+		tcw.ifIsExeccute = true
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
 		cws = append(cws, tcw)
@@ -3666,6 +3690,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		prepareSQL := sql
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
 			var rewriteErr error
@@ -3683,7 +3708,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, prepareSQL: prepareSQL})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		}

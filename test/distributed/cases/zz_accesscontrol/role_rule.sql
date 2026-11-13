@@ -162,6 +162,42 @@ select * from db1.ctas_project_nested;
 drop table db1.ctas_project;
 drop table db1.ctas_project_paren;
 drop table db1.ctas_project_nested;
+
+-- PREPARE 的内层 CTAS 与 EXECUTE 当前角色共用行策略和列推导。
+create role test_rule_ctas_wide;
+grant connect on account * to test_rule_ctas_wide;
+grant select on table *.* to test_rule_ctas_wide;
+grant create table, drop table on database db1 to test_rule_ctas_wide;
+grant test_rule_ctas_wide to test_rule_user;
+-- @session:id=92&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+prepare ctas_policy_stmt from 'create table db1.ctas_prepared as (select * from db1.ctas_policy_source)';
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+execute ctas_policy_stmt;
+drop table db1.ctas_prepared;
+set role test_rule_ctas_wide;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared order by k;
+drop table db1.ctas_prepared;
+set role test_rule_role;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+-- @session
+select * from db1.ctas_prepared;
+drop table db1.ctas_prepared;
+-- @session:id=92&user=sys:test_rule_user:test_rule_role&password=123456
+deallocate prepare ctas_policy_stmt;
+-- 变量入口同样解析内层语句，不能绕过准备时的投影规则。
+set @ctas_policy_sql = 'create table db1.ctas_prepared_var as select * from db1.ctas_policy_source';
+prepare ctas_policy_var from @ctas_policy_sql;
+execute ctas_policy_var;
+deallocate prepare ctas_policy_var;
+-- @session
+select * from db1.ctas_prepared_var;
+drop table db1.ctas_prepared_var;
+revoke test_rule_ctas_wide from test_rule_user;
+drop role test_rule_ctas_wide;
 drop table db1.ctas_policy_source;
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles

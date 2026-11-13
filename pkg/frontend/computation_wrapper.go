@@ -433,6 +433,9 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	if err != nil {
 		return nil, nil, nil, "", err
 	}
+	if err = refreshPreparedCTAS(reqCtx, ses, prepareStmt); err != nil {
+		return nil, nil, nil, "", err
+	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
