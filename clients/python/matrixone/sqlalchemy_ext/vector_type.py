@@ -131,6 +131,16 @@ class VectorType(UserDefinedType):
         """Return a conversion function for processing bind values."""
         return _vector_literal
 
+    def literal_processor(self, dialect):
+        """Render validated vector text using the dialect's string escaping."""
+        render_text = Text().literal_processor(dialect)
+
+        def process(value):
+            wire = _vector_literal(value)
+            return "NULL" if wire is None else render_text(wire)
+
+        return process
+
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
         return _vector_literal(value)
