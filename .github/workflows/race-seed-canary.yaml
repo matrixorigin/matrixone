@@ -58,7 +58,7 @@ jobs:
     concurrency:
       group: cs-three-group-dedicated-s3-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@1174cded894ba6eb22d131e177cb9b35f0bb1684
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@bd00e87a8545845a771634dfb7caa2a39591b919
     with:
       stack: mnl2
       cache_seed: false
@@ -67,6 +67,7 @@ jobs:
       CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
       CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
       CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   cs-s3-two-group:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'two-group' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
