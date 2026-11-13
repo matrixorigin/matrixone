@@ -29,6 +29,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPrivateCacheDataAllocatorCopiesAndReleasesFreshBacking(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(func() int64 { return 1 << 20 }, nil, nil, t.Name())
+	defer cache.Close(ctx)
+	for _, tc := range []struct {
+		name      string
+		allocator CacheDataAllocator
+	}{
+		{name: "normal", allocator: cache},
+		{name: "no-evict", allocator: &cache.nonEvictingDecoder},
+		{name: "transient", allocator: &cache.transientDecoder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte("private JSON cache source")
+			data := NewPrivateCacheDataAllocator(tc.allocator).CopyToCacheData(ctx, raw)
+			buffer, ok := data.(*Bytes)
+			require.True(t, ok)
+			require.True(t, buffer.doNotReuse)
+			raw[0] = 'X'
+			require.Equal(t, "private JSON cache source", string(data.Bytes()))
+			data.Release()
+			require.Zero(t, cache.reservedBytes.Load())
+			require.Zero(t, cache.backingBytes.Load())
+		})
+	}
+}
+
 func TestLocalFSNoEvictScanRetainsFittingPrefix(t *testing.T) {
 	ctx := context.Background()
 	backing := DefaultCacheDataAllocator().BackingSize(3)

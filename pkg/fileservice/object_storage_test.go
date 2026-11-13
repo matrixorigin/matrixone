@@ -136,7 +136,15 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 	sdkName string,
 	parentCtx context.Context,
 	newStorage func(*testing.T, context.Context) T,
+	basePrefixes ...string,
 ) {
+	prefixForTest := func() string {
+		prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+		if len(basePrefixes) > 0 && basePrefixes[0] != "" {
+			return path.Join(basePrefixes[0], prefix)
+		}
+		return prefix
+	}
 	t.Run(sdkName, func(t *testing.T) {
 		testCtx, cancel := context.WithTimeout(parentCtx, 3*time.Minute)
 		defer cancel()
@@ -145,7 +153,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
 
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 			name := path.Join(prefix, "foo")
 
 			// write
@@ -267,7 +275,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 		t.Run("invalid write length", func(t *testing.T) {
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 
 			name := path.Join(prefix, "foo")
 
@@ -291,7 +299,7 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 		t.Run("write empty", func(t *testing.T) {
 			storage := newStorage(t, testCtx)
 			ctx := testCtx
-			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+			prefix := prefixForTest()
 
 			name := path.Join(prefix, "foo")
 
@@ -337,6 +345,18 @@ func TestObjectStorages(t *testing.T) {
 					}
 					return storage
 				})
+
+			case args.IsMinio:
+				if args.Name == "cs-s3" {
+					prepareCITestStorage(t, args)
+				}
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				}, args.KeyPrefix)
 
 			case strings.Contains(args.Endpoint, "aliyun"):
 				// aliyun
@@ -423,7 +443,7 @@ func TestObjectStorages(t *testing.T) {
 				})
 
 			default:
-				t.Fatalf("not handle spec: %+v", args)
+				t.Fatal("unsupported object storage test endpoint")
 
 			}
 
