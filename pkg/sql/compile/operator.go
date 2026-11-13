@@ -189,6 +189,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.OptionalRuntimeFilterMaxKeyBytes = t.OptionalRuntimeFilterMaxKeyBytes
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast

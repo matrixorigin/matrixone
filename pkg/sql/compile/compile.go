@@ -1573,6 +1573,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
 
+	c.installMarkScanGuard(qry, steps)
 	return steps, err
 }
 
