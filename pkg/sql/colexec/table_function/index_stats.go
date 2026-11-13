@@ -322,6 +322,7 @@ func indexStatsVectorInto(vec *vector.Vector, row int, values []float64) ([]floa
 	}
 	raw := vec.GetBytesAt(row)
 	width := 0
+	var cell types.BlockScaledCell
 	switch vec.GetType().Oid {
 	case types.T_array_float64:
 		width = 8
@@ -331,14 +332,29 @@ func indexStatsVectorInto(vec *vector.Vector, row int, values []float64) ([]floa
 		width = 2
 	case types.T_array_int8, types.T_array_uint8:
 		width = 1
+	case types.T_array_float8, types.T_array_float4:
+		var err error
+		cell, err = types.ParseBlockScaledCell(raw)
+		if err != nil {
+			return nil, err
+		}
+		format, _ := vec.GetType().Oid.BlockScaledFormat()
+		if cell.Format != format || vec.GetType().Width > 0 &&
+			vec.GetType().Width != types.MaxArrayDimension && int(vec.GetType().Width) != cell.Dim {
+			return nil, moerr.NewInvalidInputNoCtxf("mo_index_stats: block-scaled vector cell does not match %s", vec.GetType())
+		}
 	}
-	if width == 0 || len(raw) == 0 || len(raw)%width != 0 {
-		return nil, moerr.NewInvalidInputNoCtxf("mo_index_stats: invalid vector encoding for %s", vec.GetType())
+	dim := cell.Dim
+	if dim == 0 {
+		if width == 0 || len(raw) == 0 || len(raw)%width != 0 {
+			return nil, moerr.NewInvalidInputNoCtxf("mo_index_stats: invalid vector encoding for %s", vec.GetType())
+		}
+		dim = len(raw) / width
 	}
-	if cap(values) < len(raw)/width {
-		values = make([]float64, len(raw)/width)
+	if cap(values) < dim {
+		values = make([]float64, dim)
 	} else {
-		values = values[:len(raw)/width]
+		values = values[:dim]
 	}
 	switch vec.GetType().Oid {
 	case types.T_array_float64:
@@ -362,6 +378,10 @@ func indexStatsVectorInto(vec *vector.Vector, row int, values []float64) ([]floa
 	case types.T_array_uint8:
 		for i, v := range types.BytesToArray[uint8](raw) {
 			values[i] = float64(v)
+		}
+	case types.T_array_float8, types.T_array_float4:
+		for i := range values {
+			values[i] = float64(cell.At(i))
 		}
 	}
 	for _, v := range values {
