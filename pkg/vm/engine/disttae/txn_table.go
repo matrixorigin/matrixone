@@ -935,9 +935,9 @@ func (tbl *txnTable) collectTombstones(
 			tombstone.AppendInMemory(row)
 		}
 		if blocks == nil {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDs(appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDs(tbl.tableId, appendDeletedRow)
 		} else {
-			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(blocks, appendDeletedRow)
+			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(tbl.tableId, blocks, appendDeletedRow)
 		}
 
 		//collect uncommitted persisted tombstones.

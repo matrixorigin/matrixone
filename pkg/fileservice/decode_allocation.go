@@ -23,6 +23,40 @@ import (
 
 type cacheAllocationMode uint8
 
+// privateCacheDataAllocator allocates fresh, non-recycled buffers for a
+// producer that keeps every writable view private until publication. Unknown
+// allocator implementations cannot supply such a buffer: they may retain an
+// alias, so use the FileService-owned default instead. This adapter never
+// upgrades existing data or certifies a caller's completed allocation.
+type privateCacheDataAllocator struct{ allocator CacheDataAllocator }
+
+func NewPrivateCacheDataAllocator(allocator CacheDataAllocator) CacheDataAllocator {
+	switch allocator.(type) {
+	case *bytesAllocator, *MemCache, *LocalFS, *S3FS, *transientDecodeAllocator, *nonEvictingDecodeAllocator:
+	default:
+		allocator = DefaultCacheDataAllocator()
+	}
+	return privateCacheDataAllocator{allocator: allocator}
+}
+
+func (a privateCacheDataAllocator) BackingSize(size int) int {
+	return a.allocator.BackingSize(size)
+}
+
+func (a privateCacheDataAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
+	return a.AllocateCacheDataWithHint(ctx, size, malloc.NoHints)
+}
+
+func (a privateCacheDataAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	return a.allocator.AllocateCacheDataWithHint(ctx, size, hints|malloc.DoNotReuse)
+}
+
+func (a privateCacheDataAllocator) CopyToCacheData(ctx context.Context, raw []byte) fscache.Data {
+	data := a.AllocateCacheDataWithHint(ctx, len(raw), malloc.NoClear)
+	copy(data.Bytes(), raw)
+	return data
+}
+
 const (
 	cacheAllocationNormal cacheAllocationMode = iota
 	cacheAllocationNoEvict

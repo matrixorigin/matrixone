@@ -35,17 +35,18 @@ type objectDownload struct {
 	started  time.Time
 	measured bool // the download's rate counts toward downloadRates
 
-	mu       sync.Mutex
-	parts    []downloadPart // the ranges of the object written at once, in order
-	ended    bool           // no more bytes will be written
-	complete bool           // every byte of the object was written
-	waiters  byteWaiters
-	file     *os.File // closed once the download is retired and no reader holds it
-	readers  int
-	retired  bool
-	served   int64         // bytes readers took from the download before credited
-	credited bool          // the cached file counts the bytes readers take
-	credit   func(n int64) // counts n bytes read toward the published file
+	mu          sync.Mutex
+	parts       []downloadPart // the ranges of the object written at once, in order
+	ended       bool           // no more bytes will be written
+	complete    bool           // every byte of the object was written
+	waiters     byteWaiters
+	file        *os.File // closed once the download is retired and no reader holds it
+	readers     int
+	onReadsDone []func() // eviction accounting deferred until active readers finish
+	retired     bool
+	served      int64         // bytes readers took from the download before credited
+	credited    bool          // the cached file counts the bytes readers take
+	credit      func(n int64) // counts n bytes read toward the published file
 }
 
 // downloadPart is a range of the object a download writes from its start.
@@ -107,7 +108,7 @@ func newObjectDownload(tempPath string, measured bool, bounds []int64) *objectDo
 func (o *objectDownload) acquire() (*os.File, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.file == nil {
+	if o.file == nil || o.retired {
 		return nil, false
 	}
 	o.readers++
@@ -115,10 +116,33 @@ func (o *objectDownload) acquire() (*os.File, bool) {
 }
 
 func (o *objectDownload) release() {
+	var onReadsDone []func()
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	o.readers--
+	if o.readers == 0 {
+		onReadsDone = o.onReadsDone
+		o.onReadsDone = nil
+	}
 	o.closeIfUnusedLocked()
+	o.mu.Unlock()
+	for _, fn := range onReadsDone {
+		fn()
+	}
+}
+
+// afterReads seals the download against new readers and runs fn after the
+// readers currently holding it release it. It runs fn immediately when idle.
+func (o *objectDownload) afterReads(fn func()) {
+	o.mu.Lock()
+	o.retired = true
+	if o.readers > 0 {
+		o.onReadsDone = append(o.onReadsDone, fn)
+		o.mu.Unlock()
+		return
+	}
+	o.closeIfUnusedLocked()
+	o.mu.Unlock()
+	fn()
 }
 
 // retire closes the file once no reader holds it; no new reader finds the download.
@@ -537,7 +561,7 @@ func (s *diskCacheDownloads) load(diskPath string) *objectDownload {
 
 func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool, bounds []int64) *objectDownload {
 	o := newObjectDownload(tempPath, measured, bounds)
-	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
+	o.credit = func(n int64) { d.preloads.readDownload(diskPath, o, n) }
 	d.downloads.store(diskPath, o)
 	return o
 }
@@ -622,12 +646,12 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	defer o.release()
-	// The bytes count before they are read, so a file published and evicted while the
-	// read runs still has them.
-	o.serve(entry.Size)
 	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}
+	// Only bytes delivered successfully count toward read share. Eviction accounting
+	// waits for active readers, so publication and eviction cannot lose this read.
+	o.serve(entry.Size)
 	return true, true, nil
 }
 

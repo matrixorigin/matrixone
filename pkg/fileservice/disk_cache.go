@@ -225,10 +225,11 @@ func newDiskCache(
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
-		ret.preloads.cached(path)
-		if o := ret.download(path); o != nil {
+		o := ret.download(path)
+		ret.preloads.cachedDownload(path, o)
+		if o != nil {
 			if n := o.takeServed(); n > 0 {
-				ret.preloads.read(path, n)
+				ret.preloads.readDownload(path, o, n)
 			}
 		}
 		ret.ranges.add(ret.path, path)
