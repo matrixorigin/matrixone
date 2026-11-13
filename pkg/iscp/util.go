@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"go.uber.org/zap"
 
@@ -188,6 +189,13 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 			scale := vec.GetType().Scale
 			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
 		}
+	case types.T_decimal256:
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, rowIndex).Format(scale)
+		}
 	case types.T_uuid:
 		if repr == ReprNative {
 			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
@@ -262,7 +270,23 @@ func convertColIntoSql(
 	var temp string
 	switch typ.Oid { //get col
 	case types.T_json:
-		temp = data.(bytejson.ByteJson).String()
+		var value bytejson.ByteJson
+		switch v := data.(type) {
+		case bytejson.ByteJson:
+			value = v
+		case []byte:
+			// Historical rowid reads return the stored binary JSON bytes,
+			// while live change batches return a decoded ByteJson.
+			if len(v) == 0 {
+				return nil, moerr.NewInternalError(ctx, "empty binary JSON value in ISCP row")
+			}
+			if err := value.Unmarshal(v); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected JSON value type %T", data)
+		}
+		temp = value.String()
 		sqlBuff = appendSQLString(sqlBuff, temp)
 	case types.T_bool:
 		b := data.(bool)
@@ -304,7 +328,21 @@ func convertColIntoSql(
 		value := data.(uint64)
 		sqlBuff = appendUint64(sqlBuff, value)
 	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		value := data.(float32)
+		var value float32
+		switch v := data.(type) {
+		case float32:
+			value = v
+		case types.BF16:
+			value = v.ToFloat32()
+		case types.Float16:
+			value = v.ToFloat32()
+		case types.Float8:
+			value = v.ToFloat32()
+		case types.Float4:
+			value = v.ToFloat32()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected float value type %T for %s", data, typ.Oid)
+		}
 		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
 	case types.T_float64:
 		value := data.(float64)
@@ -328,24 +366,36 @@ func convertColIntoSql(
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		value := data.([]float32)
+		value, err := arraySQLText[float32](ctx, data)
+		if err != nil {
+			return nil, err
+		}
 		typstr := typ.DescString()
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typstr))
 	case types.T_array_float64:
-		value := data.([]float64)
+		value, err := arraySQLText[float64](ctx, data)
+		if err != nil {
+			return nil, err
+		}
 		typstr := typ.DescString()
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typstr))
 	case types.T_array_float16:
 		// Narrow base columns (vecf16/bf16/int8/uint8). ArrayToString renders the
 		// half/bf16 bit pattern back to its decimal value and the int8/uint8 codes
 		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
 		// the ivfflat entry projection expects (matches the synchronous build,
 		// which reads the base column directly in SQL).
-		value := data.([]types.Float16)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+		value, err := arraySQLText[types.Float16](ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_array_bf16:
-		value := data.([]types.BF16)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+		value, err := arraySQLText[types.BF16](ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_array_float8, types.T_array_float4:
 		// the exact text: replaying it stores the same cell, where the decoded values would
 		// be quantized again (a vecf4 global scale follows the decoded maximum)
@@ -355,45 +405,112 @@ func convertColIntoSql(
 		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", text, typ.DescString()))
 	case types.T_array_int8:
-		value := data.([]int8)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+		value, err := arraySQLText[int8](ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_array_uint8:
-		value := data.([]uint8)
-		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+		value, err := arraySQLText[uint8](ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", value, typ.DescString()))
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Datetime:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected datetime value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Time:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected time value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
-		value := data.(string)
-		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
-		if err != nil {
-			return nil, err
+		var ts types.Timestamp
+		switch v := data.(type) {
+		case string:
+			parsed, err := types.ParseTimestamp(time.UTC, v, typ.Scale)
+			if err != nil {
+				return nil, err
+			}
+			ts = parsed
+		case types.Timestamp:
+			ts = v
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected timestamp value type %T", data)
 		}
 		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal64:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal64 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal128:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal128 value type %T", data)
+		}
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, value)
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_decimal256:
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal256:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal256 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Uuid:
+			value = v.String()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected uuid value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -424,6 +541,21 @@ func convertColIntoSql(
 	}
 
 	return sqlBuff, nil
+}
+
+func arraySQLText[T types.ArrayElement](ctx context.Context, data any) (string, error) {
+	switch value := data.(type) {
+	case []T:
+		return types.ArrayToString(value), nil
+	case []byte:
+		var element T
+		if len(value)%int(unsafe.Sizeof(element)) != 0 {
+			return "", moerr.NewInternalErrorf(ctx, "invalid binary array length %d", len(value))
+		}
+		return types.ArrayToString(types.BytesToArray[T](value)), nil
+	default:
+		return "", moerr.NewInternalErrorf(ctx, "unexpected array value type %T", data)
+	}
 }
 
 func appendHex(dst []byte, src []byte) []byte {

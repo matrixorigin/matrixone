@@ -49,12 +49,7 @@ func newPartialRestoreSource(tables []*tableInfo) *partialRestoreSource {
 
 func preparePartialRestoreSource(ctx context.Context, ses *Session, bh BackgroundExec, label string, snapshot *plan.Snapshot, tables []*tableInfo, source, target uint32) (*partialRestoreSource, map[restoreObjectName]struct{}, error) {
 	resolved := newPartialRestoreSource(tables)
-	views := make(map[string]*tableInfo)
-	for _, info := range tables {
-		if info.typ == view {
-			views[genKey(info.dbName, info.tblName)] = info
-		}
-	}
+	views := partialRestoreViews(tables)
 	if len(views) != 0 {
 		var err error
 		resolved.sortedViews, err = sortedViewInfos(ctx, ses, bh, label, snapshot, views, source, target)
@@ -69,6 +64,16 @@ func preparePartialRestoreSource(ctx context.Context, ses *Session, bh Backgroun
 		}
 	}
 	return resolved, selected, nil
+}
+
+func partialRestoreViews(tables []*tableInfo) map[string]*tableInfo {
+	views := make(map[string]*tableInfo)
+	for _, info := range tables {
+		if isViewLike(info) && !isMaterializedViewState(info) {
+			views[genKey(info.dbName, info.tblName)] = info
+		}
+	}
+	return views
 }
 
 // Install historical DDL identities before recreating objects. Full account
