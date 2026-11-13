@@ -1172,11 +1172,11 @@ SELECT decimal13.a,decimal14.a FROM decimal13,decimal14 WHERE decimal13.a = deci
 ➤ a[3,10,2]  ¦  a[3,11,9]  𝄀
 1.00  ¦  1.000000000
 SELECT decimal13.a,decimal14.a FROM decimal13 join decimal11 ON decimal13.a = decimal14.a;
-invalid input: missing FROM-clause entry for table 'decimal14'
+Unknown column 'decimal14.a' in 'on clause'
 SELECT decimal13.a,decimal14.a FROM decimal13 left join decimal11 ON decimal13.a = decimal14.a;
-invalid input: missing FROM-clause entry for table 'decimal14'
+Unknown column 'decimal14.a' in 'on clause'
 SELECT decimal13.a,decimal14.b,decimal13.c FROM decimal14 right join decimal13 ON decimal14.a < decimal11.a;
-invalid input: missing FROM-clause entry for table 'decimal11'
+Unknown column 'decimal11.a' in 'on clause'
 DROP TABLE decimal13;
 DROP TABLE decimal14;
 DROP TABLE IF EXISTS decimal15;
