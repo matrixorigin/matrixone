@@ -37,7 +37,12 @@ func preflightRestoreSnapshotEntry(ctx context.Context, ses *Session, bh Backgro
 			accountID := uint32(account.accountId)
 			return preflightLogicalRestoreAccountFromTS(ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID)
 		}
-		return preflightLogicalRestoreAccountFromSnapshot(ctx, ses.GetService(), bh, snapshot.snapshotName, uint32(snapshot.objId))
+		// Authorization has resolved this snapshot in the caller's namespace.
+		// Its source account may differ from that owner (sys -> tenant restore).
+		// Use the authorized timestamp when reading under the source account;
+		// re-resolving the name there would look for a different snapshot owner.
+		accountID := uint32(snapshot.objId)
+		return preflightLogicalRestoreAccountFromTS(ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID)
 	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
 		return preflightLogicalRestoreDatabases(ctx, []string{string(stmt.DatabaseName)}, func(dbName string) (logicalRestoreDatabaseDefinition, error) {
 			return getCreateDatabaseSql(ctx, ses.GetService(), bh, snapshot.snapshotName, dbName, ses.GetTenantInfo().GetTenantID())
@@ -45,17 +50,6 @@ func preflightRestoreSnapshotEntry(ctx context.Context, ses *Session, bh Backgro
 	default:
 		return nil
 	}
-}
-
-func preflightLogicalRestoreAccountFromSnapshot(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, sourceAccount uint32) error {
-	sourceCtx := defines.AttachAccountId(ctx, sourceAccount)
-	names, err := showDatabases(sourceCtx, sid, bh, snapshotName)
-	if err != nil {
-		return err
-	}
-	return preflightLogicalRestoreDatabases(sourceCtx, names, func(name string) (logicalRestoreDatabaseDefinition, error) {
-		return getCreateDatabaseSql(sourceCtx, sid, bh, snapshotName, name, sourceAccount)
-	})
 }
 
 func preflightLogicalRestoreAccountFromTS(ctx context.Context, sid string, bh BackgroundExec, ts int64, sourceAccount, targetAccount uint32) error {

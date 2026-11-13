@@ -258,7 +258,7 @@ PRIMARY KEY (R_REGIONKEY)
 load data infile 'stage://sub_local_stage/stage_table5.csv' into table stage_infile_table fields terminated by ',' IGNORE 1 LINES;
 internal error: only the sys account moadmin role can access SQL file paths
 select * from stage_infile_table;
-➤ r_regionkey[4,32,0]  ¦  r_name[1,25,0]  ¦  r_comment[12,152,0]
+➤ r_regionkey[4,32,0]  ¦  r_name[1,25,0]  ¦  r_comment[12,-1,0]
 CREATE EXTERNAL TABLE stage_ext_table(
 R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,
