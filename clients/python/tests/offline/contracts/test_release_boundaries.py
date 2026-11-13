@@ -525,6 +525,35 @@ def test_public_query_error_chain_and_reuse(engine, entry):
     assert raised.value.__cause__ is raised.value.orig
 
 
+@pytest.mark.parametrize('entry', ['client', 'client_session', 'exported_session'])
+def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, entry):
+    from matrixone._session_execution import _LiteralSQL, deferred_literal_options
+
+    source = sa.exc.OperationalError('SELECT mode', (), RuntimeError('mode lookup failed'))
+
+    class FailedPreparation(_LiteralSQL):
+        inherit_cache = False
+
+        def _render_on_connection(self, connection, **kwargs):
+            raise source
+
+    statement = FailedPreparation('SELECT 1', client=object())
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = engine
+    if entry == 'client':
+        with pytest.raises(QueryError) as raised:
+            client.execute(statement)
+    else:
+        context = client.session() if entry == 'client_session' else Session(bind=engine, client=client)
+        with context as session:
+            with pytest.raises(QueryError) as raised:
+                session.execute(statement, **deferred_literal_options(statement))
+    assert raised.value.orig is source
+    assert raised.value.__cause__ is source
+    assert 'mode lookup failed' in str(raised.value)
+    assert client.execute('SELECT 42').scalar() == 42
+
+
 @pytest.mark.parametrize('async_mode', [False, True])
 @pytest.mark.asyncio
 async def test_clone_acknowledgement_requires_target_readback(async_mode):
@@ -668,15 +697,77 @@ async def test_clone_noop_or_plain_write_uses_same_executor(async_mode, existing
     result = manager._clone(object_type, target, 'missing_source', None, True)
     if async_mode:
         await result
-    assert len(calls) == (1 if existing else 3)
+    assert len(calls) == (1 if existing else 4 if object_type == 'DATABASE' else 3)
     assert calls[0].startswith('SELECT 1 FROM information_schema.')
     assert "@@lower_case_table_names=0 THEN 'Mixed-" in calls[0]
     if object_type == 'TABLE':
         assert "@@lower_case_table_names=0 THEN 'Db' ELSE LOWER('Db')" in calls[0]
     if not existing:
-        assert calls[1].startswith('CREATE ' + object_type + ' ')
-        assert calls[2].startswith('SHOW CREATE ' + object_type + ' ')
+        if object_type == 'DATABASE':
+            assert calls[1] == 'SHOW CREATE DATABASE missing_source'
+        assert calls[-2].startswith('CREATE ' + object_type + ' ')
+        assert calls[-1].startswith('SHOW CREATE ' + object_type + ' ')
     assert not any('IF NOT EXISTS' in sql for sql in calls)
+
+
+@pytest.mark.parametrize('async_mode', [False, True])
+@pytest.mark.parametrize('source_outcome', ['absent', 'error', 'cancelled'])
+@pytest.mark.asyncio
+async def test_clone_missing_live_database_never_creates_empty_target(async_mode, source_outcome):
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = object()
+    client.set_backend_version('4.2.8')
+    calls = []
+
+    def execute(sql):
+        calls.append(sql)
+        assert sql == 'SHOW CREATE DATABASE source'
+        if source_outcome == 'error':
+            raise QueryError('unknown source database')
+        if source_outcome == 'cancelled':
+            raise asyncio.CancelledError()
+        return SimpleNamespace(rows=[])
+
+    async def execute_async(sql):
+        return execute(sql)
+
+    manager = (AsyncCloneManager if async_mode else CloneManager)(
+        client, executor=SimpleNamespace(execute=execute_async if async_mode else execute)
+    )
+    expected = asyncio.CancelledError if source_outcome == 'cancelled' else CloneError
+    with pytest.raises(expected):
+        value = manager.clone_database('target', 'source')
+        if async_mode:
+            await value
+    assert calls == ['SHOW CREATE DATABASE source']
+
+
+@pytest.mark.parametrize('async_mode', [False, True])
+@pytest.mark.asyncio
+async def test_clone_historical_database_does_not_require_live_source(async_mode):
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = object()
+    client.set_backend_version('4.2.8')
+    calls = []
+
+    def execute(sql):
+        calls.append(sql)
+        assert sql != 'SHOW CREATE DATABASE deleted_source'
+        return SimpleNamespace(rows=[(1,)])
+
+    async def execute_async(sql):
+        return execute(sql)
+
+    manager = (AsyncCloneManager if async_mode else CloneManager)(
+        client, executor=SimpleNamespace(execute=execute_async if async_mode else execute)
+    )
+    value = manager.clone_database('target', 'deleted_source', snapshot_name='historical')
+    if async_mode:
+        await value
+    assert calls == [
+        "CREATE DATABASE target CLONE deleted_source {snapshot = 'historical'}",
+        'SHOW CREATE DATABASE target',
+    ]
 
 
 @pytest.mark.parametrize('phase', ['observation', 'write'])
@@ -769,7 +860,9 @@ def test_compiler_memo_preserves_generative_parent_sql():
 async def test_clone_snapshot_convenience_stays_on_executor(async_mode, object_type):
     client = Client(logger=Mock(), sql_log_mode='off')
     client._engine = object()
-    client._snapshots = SimpleNamespace(exists=Mock(side_effect=AssertionError('must not acquire another pool connection')))
+    client._snapshots = SimpleNamespace(
+        exists=Mock(side_effect=AssertionError('must not acquire another pool connection'))
+    )
     calls = []
 
     def execute(sql):

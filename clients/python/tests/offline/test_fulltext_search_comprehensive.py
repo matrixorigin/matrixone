@@ -172,12 +172,16 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         )
         sql = expr.compile()
 
-        expected = "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        expected = (
+            "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        )
         self.assertEqual(sql, expected)
 
     def test_group_with_weights(self):
         """Test group with weight operators."""
-        expr = boolean_match("title", "content").must("main").must(group().high("important").medium("normal").low("minor"))
+        expr = (
+            boolean_match("title", "content").must("main").must(group().high("important").medium("normal").low("minor"))
+        )
         sql = expr.compile()
 
         # Should contain weight operators within groups
@@ -443,7 +447,9 @@ class TestFulltextLabel(unittest.TestCase):
         """Query quoting and labels compile independently."""
         phrase = boolean_match("title", "content").must('"machine learning"').label("phrase_score")
         wildcard = boolean_match("title", "content").must("python*").label("wildcard_score")
-        self.assertIn('AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score', self.compile_projection(phrase))
+        self.assertIn(
+            'AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score', self.compile_projection(phrase)
+        )
         self.assertIn("AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score", self.compile_projection(wildcard))
 
     def test_independent_labels(self):
@@ -462,9 +468,20 @@ class TestFulltextLabel(unittest.TestCase):
 
     def test_identifier_quoting_and_float_type(self):
         """Dialect quoting and numeric result typing are preserved."""
-        expr = boolean_match("title", "content").must("python").label("python score")
-        self.assertTrue(self.compile_projection(expr).endswith(" AS `python score`"))
-        self.assertIsInstance(expr.type, Float)
+        labels = [
+            ('python score', '`python score`'),
+            ('score_123', 'score_123'),
+            ('python_relevance_score', 'python_relevance_score'),
+            (
+                'very_long_label_name_for_fulltext_search_relevance_scoring',
+                'very_long_label_name_for_fulltext_search_relevance_scoring',
+            ),
+        ]
+        for name, rendered in labels:
+            with self.subTest(label=name):
+                expr = boolean_match("title", "content").must("python").label(name)
+                self.assertTrue(self.compile_projection(expr).endswith(' AS ' + rendered))
+                self.assertIsInstance(expr.type, Float)
 
     def test_standalone_compile_follows_native_sqlalchemy_contract(self):
         """The legacy pseudo-label string is replaced by SQLAlchemy Compiled."""
@@ -484,7 +501,8 @@ class TestFulltextLabel(unittest.TestCase):
             id = Column(Integer, primary_key=True)
 
         score = boolean_match("title", "content").must("python").label("score")
-        statement = Session().query(Document).add_columns(score).statement
+        with Session() as session:
+            statement = session.query(Document).add_columns(score).statement
         compiled = str(statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
         self.assertIn("MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score", compiled)
         self.assertIs(statement._raw_columns[1].type, score.type)
@@ -510,7 +528,9 @@ class TestFulltextParserSupport(unittest.TestCase):
         index = FulltextIndex("ftidx_ngram", ["title", "content"], parser=FulltextParserType.NGRAM)
         sql = index._create_index_sql("chinese_articles")
 
-        expected_sql = "CREATE FULLTEXT INDEX `ftidx_ngram` ON `chinese_articles` (`title`, `content`) WITH PARSER ngram"
+        expected_sql = (
+            "CREATE FULLTEXT INDEX `ftidx_ngram` ON `chinese_articles` (`title`, `content`) WITH PARSER ngram"
+        )
         self.assertEqual(sql, expected_sql)
 
     def test_fulltext_index_multiple_columns_with_parser(self):
@@ -590,7 +610,9 @@ class TestComplexBooleanModeQueries(unittest.TestCase):
         from matrixone.sqlalchemy_ext.fulltext_search import FulltextSearchBuilder as SearchBuilder
 
         builder = SearchBuilder(Mock()).table('articles').columns(['content'])
-        self.assertIn("AGAINST('machine learning' IN natural language mode)", builder.query('machine learning')._build_sql())
+        self.assertIn(
+            "AGAINST('machine learning' IN natural language mode)", builder.query('machine learning')._build_sql()
+        )
         self.assertIn("AGAINST($sdk$C:\\path$sdk$ IN natural language mode)", builder.query(r'C:\path')._build_sql())
         self.assertIn("AGAINST('O''Reilly' IN natural language mode)", builder.query("O'Reilly")._build_sql())
         builder.with_mode(FulltextSearchMode.BOOLEAN).query('+machine -java').add_term('python', required=True)

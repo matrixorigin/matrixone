@@ -11,6 +11,7 @@ from sqlalchemy import Column, Integer, MetaData, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from matrixone.branch_builder import create_table_branch
 from matrixone.clone_builder import clone_table, clone_database
+from matrixone.exceptions import CloneError
 from .test_config import online_config
 
 
@@ -44,9 +45,11 @@ class TestCloneTableOnline:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY)")
             test_client.execute(f"INSERT INTO {src} VALUES (1)")
 
-            stmt = clone_table(tgt).if_not_exists().from_table(src)
-            assert "IF NOT EXISTS" in str(stmt)
-            test_client.execute(str(stmt))
+            with pytest.raises(ValueError, match='use client.clone'):
+                clone_table(tgt).if_not_exists()
+            test_client.clone.clone_table(tgt, src, if_not_exists=True)
+            test_client.execute(f"INSERT INTO {src} VALUES (2)")
+            test_client.clone.clone_table(tgt, src, if_not_exists=True)
 
             count = test_client.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()[0]
             assert count == 1
@@ -178,10 +181,11 @@ class TestCloneDatabaseOnline:
             test_client.execute(f"CREATE DATABASE {src_db}")
             test_client.execute(f"CREATE TABLE {src_db}.t1 (id INT PRIMARY KEY)")
 
-            stmt = clone_database(tgt_db).if_not_exists().from_database(src_db)
-            # Verify IF NOT EXISTS appears in SQL
-            assert "IF NOT EXISTS" in str(stmt)
-            test_client.execute(str(stmt))
+            with pytest.raises(ValueError, match='use client.clone'):
+                clone_database(tgt_db).if_not_exists()
+            test_client.clone.clone_database(tgt_db, src_db, if_not_exists=True)
+            test_client.execute(f"INSERT INTO {src_db}.t1 VALUES (1)")
+            test_client.clone.clone_database(tgt_db, src_db, if_not_exists=True)
 
             # Verify clone succeeded
             count = test_client.execute(f"SELECT COUNT(*) FROM {tgt_db}.t1").fetchone()[0]
@@ -194,9 +198,16 @@ class TestCloneDatabaseOnline:
         """Cloning from a non-existent database should raise an error."""
         tgt_db = f"cb_err_db_{_uid()}"
         try:
-            stmt = clone_database(tgt_db).from_database('no_such_db_xyz')
-            with pytest.raises(Exception):
-                test_client.execute(str(stmt))
+            # Some released servers acknowledge raw CLONE of an absent source
+            # by creating an empty database; use the manager's verified contract.
+            with pytest.raises(CloneError):
+                test_client.clone.clone_database(tgt_db, 'no_such_db_xyz')
+            assert (
+                test_client.execute(
+                    'SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?', (tgt_db,)
+                ).scalar()
+                == 0
+            )
         finally:
             test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
 

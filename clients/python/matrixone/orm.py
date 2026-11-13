@@ -1123,11 +1123,21 @@ class BaseMatrixOneQuery:
             return f"({sql})"
 
     def filter(self, condition, *params):
-        """Append one validated predicate without consuming another clause's values."""
+        """Conjoin typed predicates, or bind positional values to one SQL fragment."""
         if not hasattr(condition, 'compile_for_query'):
             condition = normalize_expression(condition)
         if hasattr(condition, 'compile'):
-            self._append_clause('_where_conditions', lambda: self._compile(condition, params, predicate=True))
+            conditions = [condition]
+            for other in params:
+                if not hasattr(other, 'compile_for_query'):
+                    other = normalize_expression(other)
+                if not hasattr(other, 'compile'):
+                    raise ValueError('SQLAlchemy expressions carry their own parameters')
+                conditions.append(other)
+            # Validate the whole call before publishing any additional clause.
+            # Rendering stays deferred until aliases and joins are known.
+            for item in conditions:
+                self._append_clause('_where_conditions', lambda c=item: self._compile(c, predicate=True))
         else:
             self._where_conditions.append(compile_predicate(condition, params))
         return self
@@ -1542,7 +1552,16 @@ class BaseMatrixOneQuery:
             raise ValueError('Query result column metadata does not match row width')
         if not self._select_columns and self._is_sqlalchemy_model and not by_name.keys() <= set(names):
             raise ValueError('Mapped query result is missing declared columns')
-        expressions = self._select_columns or [by_name.get(name) for name in names]
+        projection = self._select_columns
+        wildcard = False
+        if len(projection) == 1:
+            column = projection[0]
+            if isinstance(column, str) or getattr(column, 'is_literal', False):
+                token = str(column).strip()
+                wildcard = token == '*' or token.endswith('.*')
+        # One wildcard expands to the server's complete column metadata. Its
+        # spelling is not a result name, and mapped fields still need processors.
+        expressions = [by_name.get(name) for name in names] if wildcard or not projection else projection
         # These buffered builders execute raw SQL, so SQLAlchemy has no typed
         # result metadata. Apply each declared processor exactly once here.
         processors = []
@@ -1564,7 +1583,9 @@ class BaseMatrixOneQuery:
             )
             for row in rows
         ]
-        if self._select_columns:
+        if wildcard:
+            columns = list(names)
+        elif self._select_columns:
             columns = self._extract_select_columns(names)
         elif isinstance(self.model_class, str):
             columns = getattr(result, 'columns', None)

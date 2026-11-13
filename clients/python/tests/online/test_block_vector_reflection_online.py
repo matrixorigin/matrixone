@@ -15,30 +15,39 @@ from matrixone.sqlalchemy_ext.vector_type import VectorType
 
 
 def _skip_unsupported_block_vector(client, kind):
-    # The released 4.2.5 grammar predates VECF8/VECF4.  Do not infer that
+    # These verified releases predate VECF8/VECF4. Do not infer that
     # other or unknown versions lack support from a failed statement: that
     # could turn an actual server or reflection regression into a skip.
-    if kind in ('vecf8', 'vecf4') and os.environ.get('MO_SDK_TARGET') == '4.2.5':
+    target = os.environ.get('MO_SDK_TARGET')
+    if kind in ('vecf8', 'vecf4') and target in ('4.2.5', '4.2.8'):
         rows = client.execute('SELECT version()').rows
         banner = rows[0][0] if rows else None
         match = re.search(r'(?:^|-)MatrixOne-v([0-9]+\.[0-9]+\.[0-9]+)(?:$|[-+])', banner or '')
-        if match and match.group(1) == '4.2.5':
-            pytest.skip('MatrixOne 4.2.5 does not support VECF8/VECF4')
+        if match and match.group(1) == target:
+            pytest.skip(f'MatrixOne {target} does not support VECF8/VECF4')
 
 
 @pytest.mark.parametrize(
     'target,version,kind,skipped',
-    [('4.2.5', '8.0.30-MatrixOne-v4.2.5', 'vecf8', True),
-     ('4.2.5', '8.0.30-MatrixOne-v4.2.5+build.1', 'vecf4', True),
-     ('4.2.5', '8.0.30-MatrixOne-v4.2.5-foo', 'vecf8', True),
-     ('4.2.5', '8.0.30-MatrixOne-v4.2.5', 'vecf16', False),
-     ('4.2.5', '8.0.30-MatrixOne-v4.2.50', 'vecf8', False),
-     ('4.2.5', '8.0.30-MatrixOne-v4.2.5dev', 'vecf8', False),
-     ('4.2.5', None, 'vecf4', False),
-     ('current-source', '8.0.30-MatrixOne-v4.2.5-current-source', 'vecf8', False),
-     ('current-source', '8.0.30-MatrixOne-v4.2.5+build.1', 'vecf4', False),
-     (None, '8.0.30-MatrixOne-v4.2.5', 'vecf8', False),
-     ('unknown', '8.0.30-MatrixOne-v4.2.5', 'vecf4', False)],
+    [
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.5', 'vecf8', True),
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.5+build.1', 'vecf4', True),
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.5-foo', 'vecf8', True),
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.5', 'vecf16', False),
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.50', 'vecf8', False),
+        ('4.2.5', '8.0.30-MatrixOne-v4.2.5dev', 'vecf8', False),
+        ('4.2.5', None, 'vecf4', False),
+        ('4.2.8', '8.0.30-MatrixOne-v4.2.8', 'vecf8', True),
+        ('4.2.8', '8.0.30-MatrixOne-v4.2.8', 'vecf4', True),
+        ('4.2.8', '8.0.30-MatrixOne-v4.2.8', 'vecf16', False),
+        ('4.2.8', '8.0.30-MatrixOne-v4.2.80', 'vecf8', False),
+        ('4.2.8', '8.0.30-MatrixOne-v4.2.5', 'vecf8', False),
+        ('current-source', '8.0.30-MatrixOne-v4.2.8', 'vecf4', False),
+        ('current-source', '8.0.30-MatrixOne-v4.2.5-current-source', 'vecf8', False),
+        ('current-source', '8.0.30-MatrixOne-v4.2.5+build.1', 'vecf4', False),
+        (None, '8.0.30-MatrixOne-v4.2.5', 'vecf8', False),
+        ('unknown', '8.0.30-MatrixOne-v4.2.5', 'vecf4', False),
+    ],
 )
 def test_block_vector_version_gate(monkeypatch, target, version, kind, skipped):
     from types import SimpleNamespace
@@ -71,11 +80,14 @@ def test_reflect_vector_table_and_views(test_client, kind):
         table = sa.Table(table_name, sa.MetaData(), autoload_with=engine)
         # Bind through the reflected type; server, not SDK, quantizes values.
         with engine.begin() as conn:
-            conn.execute(table.insert(), [
-                {'id': 1, 'v': [1, -3, 0, 6]},
-                {'id': 2, 'v': [1, -2.5, 0, 4]},
-                {'id': 3, 'v': None},
-            ])
+            conn.execute(
+                table.insert(),
+                [
+                    {'id': 1, 'v': [1, -3, 0, 6]},
+                    {'id': 2, 'v': [1, -2.5, 0, 4]},
+                    {'id': 3, 'v': None},
+                ],
+            )
         with engine.connect() as conn:
             raw = conn.execute(sa.text(f'SELECT id, v FROM {table_name} ORDER BY id')).fetchall()
             # Independent SQL literals bypass the reflected type's bind processor.

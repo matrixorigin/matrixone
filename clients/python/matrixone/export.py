@@ -21,13 +21,14 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 
 import warnings
 from ._query_compilation import compile_expression
-from ._sql_literals import sql_string_token, substitute_parameters
+from ._sql_literals import _DOLLAR_TAG, _NUMBER, _WORD, sql_string_token, substitute_parameters
 from ._utils import stage_file_uri
+from ._session_execution import _LiteralSQL, deferred_literal_options
 
 from typing import Any, Optional, Union
 
 
-def _strip_statement_terminators(sql: str) -> str:
+def _strip_statement_terminators(sql: str, *, sql_mode=None) -> str:
     """Remove trailing terminators without cutting quoted text or comments.
 
     A terminator may precede trailing SQL comments. Removing it keeps the
@@ -35,16 +36,30 @@ def _strip_statement_terminators(sql: str) -> str:
     a new line so a trailing line comment cannot consume it.
     """
     sql = sql.strip()
+    modes = {part.strip() for part in (sql_mode or '').upper().split(',')}
     while True:
         last_code = None
         i = 0
         while i < len(sql):
             char = sql[i]
+            if char == '$':
+                opener = _DOLLAR_TAG.match(sql, i)
+                if opener:
+                    delimiter = opener.group()
+                    end = sql.find('$', opener.end())
+                    # The native lexer ends at the first dollar and validates
+                    # its tag; malformed input must keep its server error.
+                    if end < 0 or not sql.startswith(delimiter, end):
+                        return sql.rstrip()
+                    i = end + len(delimiter)
+                    last_code = i - 1
+                    continue
             if char in ("'", '"', '`'):
                 quote = char
+                identifier = quote == '`' or (quote == '"' and 'ANSI_QUOTES' in modes)
                 i += 1
                 while i < len(sql):
-                    if sql[i] == '\\' and quote != '`' and i + 1 < len(sql):
+                    if sql[i] == '\\' and not identifier and 'NO_BACKSLASH_ESCAPES' not in modes and i + 1 < len(sql):
                         i += 2
                     elif sql[i] == quote:
                         i += 1
@@ -68,6 +83,18 @@ def _strip_statement_terminators(sql: str) -> str:
                 end = sql.find('*/', i + 2)
                 i = len(sql) if end < 0 else end + 2
                 continue
+            # Numeric tokens can end immediately before a dollar-string alias.
+            number = _NUMBER.match(sql, i)
+            if number:
+                i = number.end()
+                last_code = i - 1
+                continue
+            # An unquoted identifier such as column$tag$ is one native token.
+            word = _WORD.match(sql, i)
+            if word:
+                i = word.end()
+                last_code = i - 1
+                continue
             if not char.isspace():
                 last_code = i
             i += 1
@@ -76,7 +103,11 @@ def _strip_statement_terminators(sql: str) -> str:
         sql = sql[:last_code].rstrip() + sql[last_code + 1 :]
 
 
-def _query_to_sql(query: Union[str, Any]) -> str:
+def _query_to_sql(query: Union[str, Any], *, sql_mode=None) -> str:
+    return _strip_statement_terminators(_render_query(query), sql_mode=sql_mode)
+
+
+def _render_query(query: Union[str, Any]) -> str:
     """
     Convert various query types to SQL string.
 
@@ -105,19 +136,19 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     """
     # If it's already a string, return it
     if isinstance(query, str):
-        return _strip_statement_terminators(query)
+        return query
 
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
         sql = substitute_parameters(sql, params)
-        return _strip_statement_terminators(sql)
+        return sql
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
             compiled = compile_expression(query)
-            return _strip_statement_terminators(str(compiled))
+            return str(compiled)
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
 
@@ -125,6 +156,35 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     raise TypeError(
         f"Unsupported query type: {type(query)}. " "Expected str, SQLAlchemy select(), or MatrixOneQuery object."
     )
+
+
+class _ModeAwareExport(_LiteralSQL):
+    """Render quote boundaries on the checkout selected by the execution owner."""
+
+    inherit_cache = False
+
+    def __init__(self, owner, query, export_sql):
+        super().__init__(export_sql, client=owner)
+        self._export_query = query
+        self._export_suffix = export_sql[len(_query_to_sql(query)) :]
+
+    def _render_on_connection(self, connection, *, sql_mode=None):
+        from ._sql_literals import connection_sql_mode
+
+        mode = connection_sql_mode(connection) if sql_mode is None else sql_mode
+        return _LiteralSQL(_query_to_sql(self._export_query, sql_mode=mode) + self._export_suffix)
+
+
+def _execute_export(owner, query, export_sql):
+    if '\\' not in query:
+        return owner.execute(export_sql)
+    statement = _ModeAwareExport(owner, query, export_sql)
+    from .client import Client
+    from .async_client import AsyncClient
+
+    if isinstance(owner, (Client, AsyncClient)):
+        return owner.execute(statement)
+    return owner.execute(statement, **deferred_literal_options(statement))
 
 
 def _validate_csv_params(sep: str, quotechar: Optional[str], lineterminator: str) -> None:
@@ -203,7 +263,8 @@ def _build_csv_export_sql(
     # Note: HEADER option not yet supported in MatrixOne
     if header:
         warnings.warn(
-            "header=True is not yet supported by MatrixOne's INTO OUTFILE. " "Headers will not be included in the output.",
+            "header=True is not yet supported by MatrixOne's INTO OUTFILE. "
+            "Headers will not be included in the output.",
             UserWarning,
         )
 
@@ -334,6 +395,8 @@ class ExportManager:
             - header=True is not yet supported by MatrixOne
         """
         # Build SQL
+        _validate_csv_params(sep, quotechar, lineterminator)
+        query = _render_query(query)
         export_sql = _build_csv_export_sql(
             query=query,
             output_path=path,
@@ -344,7 +407,7 @@ class ExportManager:
         )
 
         # Execute export
-        return self.client.execute(export_sql)
+        return _execute_export(self.client, query, export_sql)
 
     def to_jsonl(self, path: str, query: Union[str, Any], **kwargs) -> Any:
         """
@@ -390,13 +453,14 @@ class ExportManager:
             - Suitable for streaming and big data processing
         """
         # Build SQL
+        query = _render_query(query)
         export_sql = _build_jsonl_export_sql(
             query=query,
             output_path=path,
         )
 
         # Execute export
-        return self.client.execute(export_sql)
+        return _execute_export(self.client, query, export_sql)
 
     def to_csv_stage(
         self,
@@ -565,6 +629,8 @@ class AsyncExportManager:
                 await session.export.to_csv('/tmp/active.csv', query)
         """
         # Build SQL
+        _validate_csv_params(sep, quotechar, lineterminator)
+        query = _render_query(query)
         export_sql = _build_csv_export_sql(
             query=query,
             output_path=path,
@@ -575,7 +641,7 @@ class AsyncExportManager:
         )
 
         # Execute export asynchronously
-        return await self.client.execute(export_sql)
+        return await _execute_export(self.client, query, export_sql)
 
     async def to_jsonl(self, path: str, query: Union[str, Any], **kwargs) -> Any:
         """
@@ -592,13 +658,14 @@ class AsyncExportManager:
             await client.export.to_jsonl('stage://s3/backup.jsonl', query)
         """
         # Build SQL
+        query = _render_query(query)
         export_sql = _build_jsonl_export_sql(
             query=query,
             output_path=path,
         )
 
         # Execute export asynchronously
-        return await self.client.execute(export_sql)
+        return await _execute_export(self.client, query, export_sql)
 
     async def to_csv_stage(
         self,

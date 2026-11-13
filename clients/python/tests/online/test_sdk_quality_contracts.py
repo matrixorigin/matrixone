@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import uuid
+import inspect
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -21,6 +22,62 @@ from matrixone.exceptions import QueryError
 from scripts.run_contracts import validate_server_identity
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize('format', ['csv', 'jsonl'])
+async def test_export_preserves_dollar_literal_before_outfile(client, async_client, kind, format):
+    filename = 'dollar_export_' + uuid.uuid4().hex + '.' + format
+    server_path = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename
+    local_path = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
+    value = 'semi; // -- # /* data */'
+    query = f'SELECT $sdk${value}$sdk$ AS value; // trailing'
+    exporter = client.export if kind == 'sync' else async_client.export
+    try:
+        result = getattr(exporter, 'to_' + format)(server_path, query)
+        if inspect.isawaitable(result):
+            await result
+        if format == 'csv':
+            with local_path.open(newline='') as output:
+                assert list(csv.reader(output)) == [['value'], [value]]
+        else:
+            assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{'value': value}]
+    finally:
+        local_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_export_numeric_dollar_alias_native_outcome(client, async_client, kind, record_property):
+    filename = 'numeric_dollar_' + uuid.uuid4().hex + '.jsonl'
+    server_path = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename
+    local_path = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
+    alias = 'alias // comment'
+    native = f'SELECT 1.0$tag${alias}$tag$'
+    exporter = client.export if kind == 'sync' else async_client.export
+    try:
+        if os.environ.get('MO_SDK_TARGET') == '4.2.8':
+            with pytest.raises(QueryError) as error:
+                client.execute(native)
+            assert error.value.errno == 20301
+            with pytest.raises(QueryError) as error:
+                result = exporter.to_jsonl(server_path, native + ';')
+                if inspect.isawaitable(result):
+                    await result
+            assert error.value.errno == 20301
+            assert not local_path.exists()
+            record_property('matrixone.feature.numeric_dollar_alias_export', 'native-rejected:20301')
+        else:
+            result = exporter.to_jsonl(server_path, native + ';')
+            if inspect.isawaitable(result):
+                await result
+            # Native JSONLINE preserves DECIMAL values as lossless strings.
+            assert client.execute(native).rows == [(Decimal('1.0'),)]
+            assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{alias: '1.0'}]
+            record_property('matrixone.feature.numeric_dollar_alias_export', 'supported')
+    finally:
+        local_path.unlink(missing_ok=True)
 
 
 def test_legacy_filter_by_preserves_mutation_scope(client, tables):
@@ -269,12 +326,27 @@ def test_export_content(client, tables, suffix):
         local_path.unlink(missing_ok=True)
 
 
-def test_capabilities_are_observations(client):
+def test_capabilities_are_observations(client, record_property):
     before = client.execute("SHOW VARIABLES LIKE 'experimental_hnsw_index'").rows
     caps = client.get_capabilities(refresh=True)
     assert caps['right_join'].state == 'supported'
     assert caps['snapshot'].state == 'unknown'
-    assert caps['arrow_load'].state == 'unknown'
+    # A successful EXPLAIN cannot certify Arrow execution. A definite native
+    # rejection, such as release 4.2.8's unsupported Arrow format, is observable.
+    path = '/__sdk_native_arrow_probe_' + uuid.uuid4().hex + '.arrow'
+    native = "EXPLAIN LOAD DATA INFILE {'filepath'='" + path + "','format'='arrow'} INTO TABLE mo_catalog.mo_database"
+    try:
+        client.execute(native)
+    except QueryError as error:
+        message = str(error).lower().replace("'", '').replace('"', '')
+        if error.errno == 20300 and 'format arrow is not supported' in message:
+            expected = 'unsupported'
+        else:
+            expected = 'unknown'
+    else:
+        expected = 'unknown'
+    assert caps['arrow_load'].state == expected
+    record_property('matrixone.feature.arrow_load_observation', expected)
     assert client.execute("SHOW VARIABLES LIKE 'experimental_hnsw_index'").rows == before
     assert caps['hnsw_index'].state == ('supported' if str(before[0][1]).lower() in ('on', '1') else 'disabled')
 

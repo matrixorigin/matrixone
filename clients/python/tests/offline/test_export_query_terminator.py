@@ -45,6 +45,40 @@ def test_normalization_preserves_semicolons_inside_strings(suffix):
     assert _query_to_sql("  SELECT 'value;'" + suffix) == "SELECT 'value;'"
 
 
+@pytest.mark.parametrize('number', ['1.0', '.1', '1e+2', '1.2e3'])
+def test_numeric_dollar_alias_does_not_hide_statement_terminator(number):
+    query = f'SELECT {number}$tag$alias // comment$tag$'
+    assert _query_to_sql(query + ';') == query
+
+
+@pytest.mark.parametrize(
+    'mode,query',
+    [
+        ('NO_BACKSLASH_ESCAPES', "SELECT LENGTH('\\') AS value"),
+        ('', "SELECT LENGTH('quote\\' ; // data') AS value"),
+        ('ANSI_QUOTES', 'SELECT 1 AS "column\\"'),
+    ],
+)
+def test_normalization_uses_the_executing_connection_sql_mode(mode, query):
+    assert _query_to_sql(query + '; -- trailing', sql_mode=mode) == query + ' -- trailing'
+
+
+@pytest.mark.parametrize('literal', ['$$a // b$$', '$tag$a -- b$tag$', '$tag$a # b$tag$', '$tag$a /* b */$tag$'])
+@pytest.mark.parametrize('source', ['string', 'sqlalchemy', 'builder'])
+def test_normalization_preserves_dollar_string_boundaries(literal, source):
+    statement = f'SELECT {literal} AS value'
+    query = statement + ';'
+    if source == 'sqlalchemy':
+        query = text(query)
+    elif source == 'builder':
+        query = SimpleNamespace(_build_sql=lambda: (statement + ';', []))
+    assert _query_to_sql(query) == statement
+
+
+def test_normalization_does_not_treat_identifier_dollars_as_string_openers():
+    assert _query_to_sql('SELECT column$tag$ AS value; -- trailing') == 'SELECT column$tag$ AS value -- trailing'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('comment', ['-- trailing', '# trailing', '// trailing'])
@@ -57,6 +91,7 @@ async def test_export_places_outfile_after_trailing_line_comments(asynchronous, 
     if asynchronous:
         output = await output
     expected = (
-        f"SELECT 'data; -- # //' AS value {comment}\n" "INTO OUTFILE '/tmp/output' FORMAT 'csv' fields terminated by ','"
+        f"SELECT 'data; -- # //' AS value {comment}\n"
+        "INTO OUTFILE '/tmp/output' FORMAT 'csv' fields terminated by ','"
     )
     execute.assert_called_once_with(expected)

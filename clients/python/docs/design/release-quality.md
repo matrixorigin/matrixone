@@ -49,12 +49,51 @@ rows, empty SELECTs and DML affected counts. QueryError retains the original
 exception and native errno; existing QueryError instances are not rewrapped.
 Cancellation remains cancellation rather than a query failure.
 
+Typed `filter(a, b)` and `where(a, b)` conjoin predicates. A raw SQL fragment
+continues to own its positional values (`filter('id = ?', 1)`). Combine raw
+fragments with typed predicates through separate chained calls or explicit
+SQLAlchemy text expressions; a bound value cannot become SQL by accident.
+Single wildcard projections use server column names, including CTE results,
+and retain mapped result processors instead of exposing a field named `*`.
+
+## Autocommit and pool ownership
+
+SDK-created autocommit engines suspend the physical driver's autocommit for
+ordinary SQLAlchemy transactions. An explicit SQLAlchemy `AUTOCOMMIT` execution
+option retains its semantics. Before a raw checkout returns to the pool,
+abandoned work is rolled back before autocommit is enabled; cleanup failures
+invalidate the connection. Checkout restores the requested baseline after
+SQLAlchemy's isolation finalizers, before another borrower receives the lease.
+Explicit commits remain committed, while rollback and abandonment remain
+uncommitted. No write is retried during cleanup.
+
+Driver-parameter migration warnings describe the list form of executemany
+without rendering any bound values, including collection-valued parameters.
+
+## Export quote boundaries
+
+OUTFILE follows trailing comments on a new line. Terminator normalization shares
+the native dollar-tag, identifier and numeric token rules with parameter
+rendering. Raw backslash-bearing SQL also depends on the executing connection's
+`NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES` settings.
+
+Exports render structured queries once, preserving callable bind identity. For
+backslash-bearing rendered SQL, the existing deferred literal executor reads
+the actual selected checkout's SQL mode before normalizing the query. The same
+checkout executes OUTFILE, including when a Session routing hook wraps the
+statement. This introduces one read-only mode query, no additional pool lease,
+no SQL mode mutation and no write retry. Existing Client buffering, Session
+ownership, async timeout and cancellation cleanup remain authoritative.
+
 ## CLONE completion and no-op semantics
 
 Ordinary clone managers execute plain CLONE followed by SHOW CREATE on the same
 executor. A missing target after acknowledgement is an explicit CloneError with
 its original source. The SDK does not claim row identity from this existence
 check, issue compensating DROP, or take transaction ownership from Session.
+Live database clones first verify their source with SHOW CREATE on the same
+executor: some releases otherwise acknowledge a missing source by creating an
+empty target. Snapshot clones do not require that source to remain live.
 
 Native CLONE IF NOT EXISTS can append data to an existing target in supported
 releases. Safe manager if_not_exists therefore observes the target using bounded,
@@ -62,8 +101,9 @@ read-only information_schema queries on the same executor. Existing targets
 return immediately. Missing targets use plain CLONE and verification. Names
 are decoded and compared as binary catalog values, preserving exact spelling
 when `lower_case_table_names=0` and using server LOWER for the other modes.
-The operation introduces one query for an existing target, or three for a missing
-target. Ordinary CLONE uses two queries.
+The operation introduces one query for an existing target. A missing target
+uses three queries for table/snapshot clones, or four for live database clones.
+Ordinary clones use two queries, or three for live databases.
 
 In tested 4.1 and 4.2 releases, the server's internal CLONE executor can still
 lowercase a new target in mode 0. A conflicting lowercase sibling can therefore

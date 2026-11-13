@@ -7,7 +7,7 @@ import warnings
 
 _EXECUTEMANY_MIGRATION = (
     'A tuple of parameter collections is now executed as a single positional '
-    'collection. Pass a list to keep executemany semantics: %r -> %r'
+    'collection. Pass a list of parameter collections to keep executemany semantics.'
 )
 
 
@@ -36,7 +36,7 @@ def driver_parameters(params):
     if isinstance(params, tuple):
         if _looks_like_many(params):
             warnings.warn(
-                _EXECUTEMANY_MIGRATION % (params, list(params)),
+                _EXECUTEMANY_MIGRATION,
                 RuntimeWarning,
                 stacklevel=2,
             )

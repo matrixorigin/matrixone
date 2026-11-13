@@ -408,12 +408,12 @@ class Session(SQLAlchemySession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
@@ -421,7 +421,6 @@ class Session(SQLAlchemySession):
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -442,7 +441,7 @@ class Session(SQLAlchemySession):
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                original_sql,
                 execution_time,
                 success=False,
                 log_mode=log_mode,
@@ -771,20 +770,21 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = await execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
+                result = await execute_session_sql(
+                    super().execute, sql_or_stmt, client=self.client, params=params, **kwargs
+                )
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -805,7 +805,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                original_sql,
                 execution_time,
                 success=False,
                 log_mode=log_mode,

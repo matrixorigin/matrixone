@@ -874,7 +874,9 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None):
+    async def _execute_with_logging(
+        self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None
+    ):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1235,7 +1237,11 @@ class AsyncClient(BaseMatrixOneClient):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 async with self.session() as session:
                     # Suppress session-level logging; AsyncClient logs below
-                    result = await session.execute(sql_or_stmt, params, log_mode='off')
+                    from ._session_execution import deferred_literal_options
+
+                    result = await session.execute(
+                        sql_or_stmt, params, log_mode='off', **deferred_literal_options(sql_or_stmt)
+                    )
 
                     # Convert SQLAlchemy result to AsyncResultSet
                     if result_returns_rows(result):
@@ -1363,7 +1369,9 @@ class AsyncClient(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Async query execution")
             except Exception as log_err:
@@ -1385,7 +1393,9 @@ class AsyncClient(BaseMatrixOneClient):
 
         return substitute_parameters(sql, params, sql_mode=sql_mode)
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -2006,7 +2016,9 @@ class AsyncClient(BaseMatrixOneClient):
         await self.execute(sql)
         return self
 
-    async def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "AsyncClient":
+    async def create_table_with_index(
+        self, table_name: str, columns: dict, indexes: list = None, **kwargs
+    ) -> "AsyncClient":
         """
             Create a table with indexes asynchronously
 

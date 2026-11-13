@@ -291,7 +291,11 @@ class TestUnifiedTransaction(unittest.TestCase):
         # Verify that the transaction's execute was called
         self.assertEqual(
             mock_tx.execute.call_args_list,
-            [call('CREATE DATABASE target_db CLONE source_db'), call('SHOW CREATE DATABASE target_db')],
+            [
+                call('SHOW CREATE DATABASE source_db'),
+                call('CREATE DATABASE target_db CLONE source_db'),
+                call('SHOW CREATE DATABASE target_db'),
+            ],
         )
 
     def test_mixed_operations_pattern(self):

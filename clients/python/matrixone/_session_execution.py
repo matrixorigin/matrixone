@@ -52,6 +52,13 @@ class _LiteralSQL(TextClause):
             raise
 
 
+def deferred_literal_options(statement):
+    """Keep connection-dependent rendering enabled across Session routing hooks."""
+    if isinstance(statement, _LiteralSQL) and statement._literal_client is not None:
+        return {'execution_options': {'_matrixone_deferred_literals': True}}
+    return {}
+
+
 @compiles(_LiteralSQL)
 def _compile_literal_sql(statement, compiler, **kwargs):
     if statement._literal_client is not None:

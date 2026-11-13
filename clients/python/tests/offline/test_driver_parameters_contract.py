@@ -73,6 +73,16 @@ def test_former_executemany_shapes_warn_about_the_list_form(params) -> None:
         driver_parameters(params)
 
 
+def test_migration_warning_does_not_disclose_bound_values() -> None:
+    private = 'binding-must-stay-private'
+    params = ((private,), {'private_key': private})
+    with pytest.warns(RuntimeWarning, match='executemany') as captured:
+        assert driver_parameters(params)[0] is params
+    message = str(captured[0].message)
+    assert private not in message
+    assert 'private_key' not in message
+
+
 @pytest.mark.parametrize(
     "params",
     [

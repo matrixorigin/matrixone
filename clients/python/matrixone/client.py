@@ -911,7 +911,9 @@ class Client(BaseMatrixOneClient):
 
         return sql_string_token(value, context='Administrative SQL')
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1364,7 +1366,11 @@ class Client(BaseMatrixOneClient):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 with self.session() as session:
                     # Suppress Session-level logging; Client logs below
-                    result = session.execute(sql_or_stmt, params, log_mode='off')
+                    from ._session_execution import deferred_literal_options
+
+                    result = session.execute(
+                        sql_or_stmt, params, log_mode='off', **deferred_literal_options(sql_or_stmt)
+                    )
 
                     # Convert SQLAlchemy result to ResultSet
                     if result_returns_rows(result):
@@ -1494,7 +1500,9 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -2966,12 +2974,12 @@ class Session(SQLAlchemySession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
@@ -2979,7 +2987,6 @@ class Session(SQLAlchemySession):
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -3000,7 +3007,7 @@ class Session(SQLAlchemySession):
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                original_sql,
                 execution_time,
                 success=False,
                 log_mode=log_mode,

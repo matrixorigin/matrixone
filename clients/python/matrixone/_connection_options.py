@@ -40,6 +40,8 @@ def _suspend_autocommit(connection):
     ``Client.execute`` already expects, and keeps ``commit``/``rollback``
     effective. The requested mode is restored when the connection is reused.
     """
+    if connection.get_execution_options().get('isolation_level') == 'AUTOCOMMIT':
+        return
     driver = _driver_connection(connection)
     setter = getattr(driver, 'autocommit', None)
     if callable(setter):
@@ -49,14 +51,27 @@ def _suspend_autocommit(connection):
 
 
 def _restore_autocommit(dbapi_connection, *args):
+    # SQLAlchemy 2.x supplies a reset state; 1.4 only supplies the pool record.
+    reset_state = args[1] if len(args) > 1 else None
+    if getattr(reset_state, 'terminate_only', False):
+        return
     setter = getattr(dbapi_connection, 'autocommit', None)
     if not callable(setter):
         return
-    try:
+    # Reset listeners precede the pool's rollback. Enabling autocommit first
+    # would commit a transaction abandoned through raw_connection(). Failures
+    # must reach the pool so it discards the unusable physical connection.
+    if not getattr(reset_state, 'transaction_was_reset', False):
+        dbapi_connection.rollback()
+    setter(True)
+
+
+def _checkout_autocommit(dbapi_connection, connection_record, connection_proxy):
+    # SQLAlchemy's isolation finalizer runs after reset and can disable
+    # autocommit again. Restore the requested baseline before publishing a lease.
+    setter = getattr(dbapi_connection, 'autocommit', None)
+    if callable(setter):
         setter(True)
-    except Exception:
-        # A closed or invalidated connection owns no reusable session state.
-        return
 
 
 def preserve_transactions_with_autocommit(engine):
@@ -65,6 +80,7 @@ def preserve_transactions_with_autocommit(engine):
 
     event.listen(engine, 'begin', _suspend_autocommit)
     event.listen(engine, 'reset', _restore_autocommit)
+    event.listen(engine, 'checkout', _checkout_autocommit)
 
 
 def redact_error(error, password):

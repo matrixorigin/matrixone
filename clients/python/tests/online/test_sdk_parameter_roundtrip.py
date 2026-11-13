@@ -13,6 +13,7 @@ import pytest
 
 from matrixone import Client
 from matrixone.async_client import AsyncClient
+from matrixone.exceptions import QueryError
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='isolated server required')
 
@@ -201,7 +202,11 @@ def test_native_snapshot_mode_is_owned_by_connection(client):
     with client._engine.begin() as connection:
         connection.exec_driver_sql("SET sql_mode='NO_BACKSLASH_ESCAPES'")
     try:
-        assert SnapshotClient(client, 'unused_without_from').execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
+        # Snapshot rewriting deliberately rejects mode-dependent raw literals
+        # before dispatch. Ordinary execution still resolves the checkout's mode.
+        with pytest.raises(ValueError, match='mode-ambiguous'):
+            SnapshotClient(client, 'unused_without_from').execute("SELECT '\\', ?", (7,))
+        assert client.execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
     finally:
         with client._engine.begin() as connection:
             connection.exec_driver_sql("SET sql_mode=''")
@@ -255,22 +260,55 @@ _NATIVE_TOKEN_CASES = [
 ]
 
 
+_RELEASE_NUMERIC_DOLLAR_ALIASES = {
+    'SELECT 1.0$$?$$, ?': 'SELECT 1.0$$?$$, 7',
+    'SELECT .1$tag$? :ignored$tag$, :v': 'SELECT .1$tag$? :ignored$tag$, 7',
+    'SELECT 1e+2$$?$$, ?': 'SELECT 1e+2$$?$$, 7',
+    'SELECT 1.2e3$$?$$, ?': 'SELECT 1.2e3$$?$$, 7',
+}
+
+
+def _native_numeric_alias_rejection(client, sql, record_property):
+    native = _RELEASE_NUMERIC_DOLLAR_ALIASES.get(sql)
+    if os.environ.get('MO_SDK_TARGET') != '4.2.8' or native is None:
+        return False
+    from scripts.run_contracts import validate_server_identity
+
+    version, revision = client.execute('SELECT version(),git_version()').rows[0]
+    validate_server_identity(version, revision, '4.2.8')
+    # Independent literal SQL bypasses SDK parameter scanning. This release's
+    # grammar rejects numeric tokens immediately followed by dollar aliases.
+    with pytest.raises(QueryError) as error:
+        client.execute(native)
+    assert error.value.errno == 1064
+    record_property('matrixone.feature.numeric_dollar_alias', 'native-rejected:1064')
+    return True
+
+
 @pytest.mark.parametrize('sql,params,expected', _NATIVE_TOKEN_CASES)
 @pytest.mark.parametrize('surface', ['client', 'embedded_session', 'exported_session'])
-def test_native_public_token_boundaries(client, surface, sql, params, expected):
+def test_native_public_token_boundaries(client, surface, sql, params, expected, record_property):
     from matrixone.client import Session as ClientSession
     from matrixone.session import Session as ExportedSession
 
-    if surface == 'client':
-        assert client.execute(sql, params).rows == [expected]
-    else:
+    def execute():
+        if surface == 'client':
+            return client.execute(sql, params).rows[0]
         cls = ClientSession if surface == 'embedded_session' else ExportedSession
         with cls(bind=client._engine, client=client) as session:
-            assert tuple(session.execute(sql, params).one()) == expected
+            return tuple(session.execute(sql, params).one())
+
+    if _native_numeric_alias_rejection(client, sql, record_property):
+        with pytest.raises(QueryError) as error:
+            execute()
+        assert error.value.errno == 1064
+        assert client.execute('SELECT 42').scalar() == 42
+    else:
+        assert execute() == expected
 
 
 @pytest.mark.asyncio
-async def test_async_native_public_token_boundaries(client):
+async def test_async_native_public_token_boundaries(client, record_property):
     c = AsyncClient(logger=Mock())
     await c.connect(
         host=os.environ.get('MO_HOST', '127.0.0.1'),
@@ -282,6 +320,16 @@ async def test_async_native_public_token_boundaries(client):
     )
     try:
         for sql, params, expected in _NATIVE_TOKEN_CASES:
+            if _native_numeric_alias_rejection(client, sql, record_property):
+                with pytest.raises(QueryError) as error:
+                    await c.execute(sql, params)
+                assert error.value.errno == 1064
+                with pytest.raises(QueryError) as error:
+                    async with c.session() as session:
+                        await session.execute(sql, params)
+                assert error.value.errno == 1064
+                assert (await c.execute('SELECT 42')).scalar() == 42
+                continue
             assert (await c.execute(sql, params)).rows == [expected]
             async with c.session() as session:
                 assert tuple((await session.execute(sql, params)).one()) == expected

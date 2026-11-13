@@ -167,12 +167,16 @@ class TestBranchOnline:
 
         test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")
         test_client.execute(f"CREATE DATABASE {src_db}")
+        test_client.execute(f"CREATE TABLE {src_db}.t (id INT PRIMARY KEY)")
+        test_client.execute(f"INSERT INTO {src_db}.t VALUES (7)")
         test_client.branch.create_database_branch(dst_db, src_db)
 
+        assert test_client.execute(f"SELECT id FROM {dst_db}.t").rows == [(7,)]
         test_client.branch.delete_database_branch(dst_db)
 
         result = test_client.execute(f"SHOW DATABASES LIKE '{dst_db}'")
         assert len(result.rows) == 0
+        assert test_client.execute(f"SELECT id FROM {src_db}.t").rows == [(7,)]
 
         test_client.execute(f"DROP DATABASE {src_db}")
 

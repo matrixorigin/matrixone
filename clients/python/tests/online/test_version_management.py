@@ -127,11 +127,11 @@ class TestVersionManagement:
 
         # Test decorator with valid version (lower than any reasonable backend version)
         @requires_version("1.0.0")
-        def test_function_low_version():
+        def test_function_low_version(owner):
             return "success"
 
         # This should work with any backend version >= 1.0.0
-        result = test_function_low_version()
+        result = test_function_low_version(test_client)
         assert result == "success"
 
         # Test decorator with high version requirement (higher than current backend)
@@ -139,7 +139,7 @@ class TestVersionManagement:
         high_version = f"{backend_version.major + 100}.0.0"
 
         @requires_version(high_version)
-        def test_function_high_version():
+        def test_function_high_version(owner):
             return "success"
 
         # This should fail because backend version < high_version
@@ -147,7 +147,7 @@ class TestVersionManagement:
         from matrixone.version import VersionError as VersionErr
 
         with pytest.raises(VersionErr) as exc_info:
-            test_function_high_version()
+            test_function_high_version(test_client)
 
         # Verify error message contains version information
         error_msg = str(exc_info.value)
@@ -167,7 +167,9 @@ class TestVersionManagement:
         assert isinstance(is_available, bool)
 
         # Test feature requirement with description
-        feature_with_desc = FeatureRequirement("feature_with_description", "1.0.0", description="This is a test feature")
+        feature_with_desc = FeatureRequirement(
+            "feature_with_description", "1.0.0", description="This is a test feature"
+        )
 
         assert feature_with_desc.description == "This is a test feature"
 

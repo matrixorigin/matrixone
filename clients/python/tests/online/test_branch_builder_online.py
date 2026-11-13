@@ -142,12 +142,17 @@ class TestDeleteBranchOnline:
             test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")
             test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
             test_client.execute(f"CREATE DATABASE {src_db}")
+            test_client.execute(f"CREATE TABLE {src_db}.t (id INT PRIMARY KEY)")
+            test_client.execute(f"INSERT INTO {src_db}.t VALUES (7)")
             test_client.execute(str(create_database_branch(tgt_db).from_database(src_db)))
+
+            assert test_client.execute(f"SELECT id FROM {tgt_db}.t").rows == [(7,)]
 
             test_client.execute(str(delete_database_branch(tgt_db)))
 
             result = test_client.execute(f"SHOW DATABASES LIKE '{tgt_db}'")
             assert len(result.rows) == 0
+            assert test_client.execute(f"SELECT id FROM {src_db}.t").rows == [(7,)]
         finally:
             test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
             test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")

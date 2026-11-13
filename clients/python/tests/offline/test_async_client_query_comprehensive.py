@@ -785,6 +785,8 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
         kind = 'DATABASE' if expected.startswith('CREATE DATABASE') else 'TABLE'
         target = 'target_db' if kind == 'DATABASE' else 'target_table'
         calls = [call(expected.replace('IF NOT EXISTS ', '')), call('SHOW CREATE ' + kind + ' ' + target)]
+        if kind == 'DATABASE' and '{snapshot' not in expected:
+            calls.insert(0, call('SHOW CREATE DATABASE source_db'))
         if 'IF NOT EXISTS ' in expected:
             calls.insert(0, call(self.clone_manager._existence_sql(kind, target)))
         self.assertEqual(self.mock_client.execute.await_args_list, calls)

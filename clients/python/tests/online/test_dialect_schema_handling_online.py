@@ -351,7 +351,10 @@ class TestMatrixOneDialectSchemaHandlingOnline:
         assert hasattr(type_compiler, 'visit_date')
         assert hasattr(type_compiler, 'visit_datetime')
         assert hasattr(type_compiler, 'visit_time')
-        assert hasattr(type_compiler, 'visit_timestamp')
+        # SQLAlchemy dispatches TIMESTAMP through its uppercase visit name.
+        from sqlalchemy import TIMESTAMP
+
+        assert type_compiler.process(TIMESTAMP()) == 'TIMESTAMP'
 
     def test_dialect_statement_compiler_registration_online(self, engine):
         """Test that statement compiler is properly registered with the dialect."""
