@@ -64,28 +64,12 @@ jobs:
       runner_label: amd64-mo-guangzhou-2xlarge16
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
-  cs-s3-coverage:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'jed' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
-    concurrency:
-      group: cs-${{ inputs.coverage_comparison }}-dedicated-s3-coverage-canary
-      cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@dc685dca32188c2b9e854f9a127b302173ea8f41
-    with:
-      canary_cs_s3: true
-      canary_cs_s3_environment: ${{ inputs.coverage_comparison }}
-      runner_label: ${{ format('cs-{0}-large-7c14g', inputs.coverage_comparison) }}
-    secrets:
-      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
-      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
-      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
-      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
-      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   cs-s3-repair:
-    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && contains(fromJSON('["mty","mnl2","ruh"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && contains(fromJSON('["mty","mnl2","jed","ruh"]'), inputs.coverage_comparison) && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
       group: cs-${{ inputs.coverage_comparison }}-dedicated-s3-coverage-canary
       cancel-in-progress: false
-    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@6323d49e7aab5b5068c1bac42f2a422168a850da
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@f14ad785cfb94a38ba1fd8720a02af57ebaed5e8
     with:
       stack: ${{ inputs.coverage_comparison }}
     secrets:
