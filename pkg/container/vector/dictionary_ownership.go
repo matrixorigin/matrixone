@@ -168,6 +168,11 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 	if !mp.CanRetainAllocations(ownedData, ownedArea) {
 		copyPayload = true
 	}
+	// Transient admission cannot split a pin reservation after publishing a
+	// partial window. Copy into the destination policy instead of pinning.
+	if account != nil && account.transient != nil || source.allocationAccount != nil && source.allocationAccount.transient != nil {
+		copyPayload = true
+	}
 	if account != nil && source.allocationAccount != nil && source.allocationAccount.account != account.account {
 		copyPayload = true
 	}

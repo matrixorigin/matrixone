@@ -1086,7 +1086,7 @@ func blockDataReadWithFilter(
 			return tombstoneErr
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1142,6 +1142,9 @@ func blockDataReadWithFilter(
 					return err
 				}
 			}
+			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deleted, mp); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1193,7 +1196,11 @@ func blockDataReadWithFilter(
 			return err
 		}
 	}
-
+	if !filterResult.All {
+		if err := objectio.JSONReadSetFromContext(ctx).SelectRows(filterResult.Sels, mp); err != nil {
+			return err
+		}
+	}
 	for _, pos := range earlyColumns {
 		if selectedOutput && applyFilter.ColumnUse(pos, len(outputBat.Vecs)) == engine.ReaderColumnUnused && outputBat.Vecs[pos].Length() == 0 {
 			continue
@@ -1639,6 +1646,9 @@ func BlockDataReadInner(
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
 					return err
 				}
+			}
+			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deletedRows, mp); err != nil {
+				return err
 			}
 		}
 		return nil

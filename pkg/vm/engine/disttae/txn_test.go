@@ -152,7 +152,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	t.Run("statement rollback removes create and tuple together", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
 		txn.isCCPRTxn = true
-		txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+		txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 		txn.tableCache = new(sync.Map)
 		txn.tableOps = newTableOps()
 		txn.batchSelectList = make(map[*batch.Batch][]int64)
@@ -991,7 +991,7 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
 	txn := &Transaction{
 		proc:            proc,
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txn.appendWorkspaceEntryLocked(Entry{
@@ -1028,7 +1028,7 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		isCCPRTxn:       true,
 	}
 
@@ -1064,7 +1064,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 		proc:            proc,
 		tablesInVain:    map[uint64]int{42: 1},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
@@ -1083,7 +1083,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) 
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 3}},
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
@@ -1103,7 +1103,7 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
@@ -1140,8 +1140,8 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	txn.tnStores = []DNStore{{}}
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
+	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
