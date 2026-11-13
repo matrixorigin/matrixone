@@ -161,6 +161,20 @@ using a bounded child of its original context. It does not poll away leftover
 rows or relax account/table/live-ISCP cleanup. Release and executor/cluster
 cleanup remain owned on assertion and wait failure.
 
+### Statement errors belong to the executing child
+
+`TestCharsetConversionPreservesExpressionSemantics` retains all nine scenarios,
+SQL, input rows, arithmetic and collation expectations, metadata checks and
+future-write assertions. Its statement helper now receives the executing
+`testing.T`; a child SQL error must fail that child rather than invoke
+`FailNow` on its parent from the child goroutine. The sequential parent checks
+the statement-error flag after `t.Run` joins and stops before another scenario
+can execute after an uncertain statement outcome. Assertion-only failures keep
+their existing continuation behavior. The original context, synchronous catalog
+cleanup, connection closure and failed-generation quarantine keep their owners.
+This repairs test failure ownership; it does not repair or relax an independent
+cleanup deadline or establish that CI storage contention has been resolved.
+
 ## BVT selection and timing
 
 The actual selector was executed against the real source tree at base and head,
