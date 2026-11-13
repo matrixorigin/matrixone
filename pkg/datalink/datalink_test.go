@@ -15,9 +15,15 @@
 package datalink
 
 import (
+	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/hayageek/threadsafe"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestParseDatalink(t *testing.T) {
@@ -111,9 +117,10 @@ func TestParseDatalinkFailed(t *testing.T) {
 			data: "file:///a/b/c/1.txt?size=c",
 		},
 		{
-			name: "Test5 - Empty Stage",
+			name: "Stage without process",
 			data: "stage:///a/b/c/1.txt?size=c",
 		},
+		{name: "empty Stage", data: "stage:///?size=c"},
 		{
 			name: "Test6 - Without scheme",
 			data: "/a/b/c/1.txt",
@@ -142,5 +149,65 @@ func TestParseDatalinkFailed(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestParseDatalinkStageURL(t *testing.T) {
+	cache := threadsafe.NewMap[string, stage.StageDef]()
+	cache.Set("a", stage.StageDef{Name: "a", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: "/stage-fixture"}})
+	proc := &process.Process{Base: &process.BaseProcess{StageCache: cache}}
+
+	for _, tc := range []struct {
+		name string
+		uri  string
+	}{
+		{name: "host form", uri: "stage://a/b/c/1.txt?offset=1&size=2"},
+		{name: "path form", uri: "stage:///a/b/c/1.txt?offset=1&size=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath, gotRange, err := ParseDatalink(tc.uri, proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotPath != "/stage-fixture/b/c/1.txt" || !reflect.DeepEqual(gotRange, []int64{1, 2}) {
+				t.Fatalf("got path %q and range %v", gotPath, gotRange)
+			}
+		})
+	}
+
+	gotPath, gotRange, err := ParseDatalink("stage:///a/b/c/1.txt?size=c", proc)
+	if gotPath != "" || gotRange != nil {
+		t.Fatalf("failure returned path=%q range=%v", gotPath, gotRange)
+	}
+	if numErr, ok := err.(*strconv.NumError); !ok || numErr.Num != "c" {
+		t.Fatalf("want numeric parse error for size c, got %v", err)
+	}
+}
+
+func TestStageDatalinkRequiresProcess(t *testing.T) {
+	callers := []struct {
+		name string
+		call func(string) error
+	}{
+		{name: "parse", call: func(uri string) error { _, _, err := ParseDatalink(uri, nil); return err }},
+		{name: "constructor", call: func(uri string) error { _, err := NewDatalink(uri, nil); return err }},
+		{name: "async constructor", call: func(uri string) error { _, err := NewAsyncDatalink(uri, nil); return err }},
+		{name: "async validation", call: func(uri string) error { return ValidateAsyncDatalinkSource(uri, nil) }},
+	}
+	for _, tc := range []struct {
+		name string
+		uri  string
+	}{
+		{name: "host form", uri: "stage://a/b/c"},
+		{name: "path form", uri: "stage:///a/b/c"},
+	} {
+		for _, caller := range callers {
+			t.Run(tc.name+"/"+caller.name, func(t *testing.T) {
+				err := caller.call(tc.uri)
+				if err == nil || !strings.Contains(err.Error(), "stage catalog lookup requires an initialized process") {
+					t.Fatalf("want missing process error, got %v", err)
+				}
+			})
+		}
 	}
 }
