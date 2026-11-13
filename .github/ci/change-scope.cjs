@@ -19,11 +19,12 @@ function validPath(path) {
   return typeof path === 'string' && !path.split('/').some(p => !p || p === '.' || p === '..');
 }
 
-const sdkControlPaths = ['.github/workflows/python-sdk.yml',
+const sdkControlPaths = ['.github/workflows/python-sdk.yml', '.github/workflows/python-sdk-router.yml',
   '.github/ci/change-scope.cjs', '.github/workflows/entrypoint.yaml'];
 function category(path) {
   if (!validPath(path)) return 'full';
-  if (path.startsWith('clients/python/') || path === '.github/workflows/python-sdk.yml') return 'sdk';
+  if (path.startsWith('clients/python/') ||
+      path === '.github/workflows/python-sdk.yml' || path === '.github/workflows/python-sdk-router.yml') return 'sdk';
   if (/(^|\/)(testdata|fixtures)\//i.test(path)) return 'full';
   const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
   if (extension === '.md' || extension === '.rst' ||

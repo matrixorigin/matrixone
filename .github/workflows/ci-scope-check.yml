@@ -9,6 +9,7 @@ on:
       - 'go.mod'
       - '.github/workflows/entrypoint.yaml'
       - '.github/workflows/python-sdk.yml'
+      - '.github/workflows/python-sdk-router.yml'
       - '.github/workflows/iceberg-connector.yml'
       - '.github/workflows/ci-scope-check.yml'
       - '.github/workflows/ci-cancellation.yml'

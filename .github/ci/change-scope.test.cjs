@@ -530,7 +530,7 @@ test('SDK routing rejects invalid preflight, cancellations and legacy branches',
       needs: { preflight }, github: { base_ref: base }, cancelled: () => cancelled,
     }), expected);
   }
-  assert.match(block, /^    uses: \.\/\.github\/workflows\/python-sdk.yml$/m);
+  assert.match(block, /^    uses: \.\/\.github\/workflows\/python-sdk-router.yml$/m);
   assert.match(block, /^    permissions:\n      contents: read$/m);
   assert.doesNotMatch(block, /secrets:|environment:/);
 });
@@ -602,8 +602,40 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/python-sdk.yml'/);
 });
 
+test('SDK router runs the target branch contract and isolates its checkout', () => {
+  const router = readFileSync(join(__dirname, '../workflows/python-sdk-router.yml'), 'utf8');
+  const jobs = Object.fromEntries([...router.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
+    .map(match => [match[1], match[2]]));
+  const enabled = (name, base) => {
+    const expression = jobs[name].match(/^    if: \$\{\{ (.*) \}\}$/m)[1];
+    return runInNewContext(expression, { github: { base_ref: base } });
+  };
+  for (const base of ['main', '4.1-dev', '']) {
+    assert.equal(enabled('legacy-42', base), false, base);
+    assert.equal(enabled('current', base), true, base);
+  }
+  assert.equal(enabled('legacy-42', '4.2-dev'), true);
+  assert.equal(enabled('current', '4.2-dev'), false);
+  assert.match(router, /^  workflow_call:$/m);
+  assert.doesNotMatch(router, /^  (workflow_dispatch|pull_request(?:_target)?):/m);
+  assert.match(jobs.current, /^    uses: \.\/\.github\/workflows\/python-sdk.yml$/m);
+  const legacy = jobs['legacy-42'];
+  const checkout = checkoutSpec(legacy);
+  assert.equal(checkout.repository, '${{ github.event.pull_request.head.repo.full_name || github.repository }}');
+  assert.equal(checkout.ref, '${{ github.event.pull_request.head.sha || github.sha }}');
+  assert.equal(checkout['persist-credentials'], 'false');
+  assert.equal(checkout['allow-unsafe-pr-checkout'], "${{ github.event_name == 'pull_request_target' }}");
+  assert.doesNotMatch(legacy, /secrets\.|environment:|actions\/cache|continue-on-error:/);
+  assert.match(legacy, /python: '3\.8'\n            sqlalchemy: '==1\.4\.54'/);
+  assert.match(legacy, /python: '3\.10'\n            sqlalchemy: '==2\.0\.43'/);
+  assert.match(legacy, /python: '3\.12'\n            sqlalchemy: '>=2\.1,<3'/);
+  assert.match(legacy, /python -m pytest tests\/offline -o addopts='' -q --tb=short/);
+  assert.match(legacy, /find_spec\('pyarrow'\) is None/);
+  assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/python-sdk-router.yml'/);
+});
+
 test('SDK workflow-only changes select SDK while trust and mixed kernel edits retain full scope', () => {
-  for (const path of ['.github/workflows/python-sdk.yml', 'clients/python/matrixone/client.py']) {
+  for (const path of ['.github/workflows/python-sdk.yml', '.github/workflows/python-sdk-router.yml', 'clients/python/matrixone/client.py']) {
     assert.deepEqual(classify([modified(path)], 1), { scope: 'sdk', sdk_required: true });
   }
   assert.deepEqual(classify([modified('clients/python/a.py'), modified('.github/workflows/python-sdk.yml')], 2), { scope: 'sdk', sdk_required: true });

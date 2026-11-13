@@ -183,7 +183,7 @@ jobs:
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.sdk_required == 'true' && github.base_ref != '3.0-dev' }}
     permissions:
       contents: read
-    uses: ./.github/workflows/python-sdk.yml
+    uses: ./.github/workflows/python-sdk-router.yml
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
