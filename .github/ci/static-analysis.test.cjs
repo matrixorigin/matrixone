@@ -40,6 +40,24 @@ test('complete package selection follows production and test imports, not test r
   assert.deepEqual(selectPackages([file('pkg/a/a.go', 'D')], records, root), ['./pkg/a', './pkg/b', './pkg/c']);
 });
 
+test('test dependencies preserve variant identity through the reverse closure', () => {
+  const packages = records.slice(0, 8).map(p => ({ ...p, imports: [] }));
+  const [a, b, c, d] = packages;
+  c.imports = [b.id];
+  d.imports = [c.id];
+  const bTest = { id: `${b.id}_test [${b.id}.test]`, dir: b.dir, imports: [a.id] };
+  const graph = [...packages, bTest];
+  assert.deepEqual(selectPackages([file('pkg/a/a.go')], graph, root), ['./pkg/a', './pkg/b']);
+  assert.deepEqual(selectPackages([file('pkg/b/b.go')], graph, root), ['./pkg/b', './pkg/c', './pkg/d']);
+  assert.deepEqual(selectPackages([file('pkg/a/a_test.go')], graph, root), ['./pkg/a']);
+
+  // A production file also belongs to variants compiled for another owner's tests.
+  const bVariant = { id: `${b.id} [${a.id}.test]`, dir: b.dir, imports: [] };
+  const aTest = { id: `${a.id}_test [${a.id}.test]`, dir: a.dir, imports: [bVariant.id] };
+  const variantGraph = packages.map(p => ({ ...p, imports: [] }));
+  assert.deepEqual(selectPackages([file('pkg/b/b.go')], [...variantGraph, bVariant, aTest], root), ['./pkg/a', './pkg/b']);
+});
+
 test('uncertain inputs and broad changes retain full analysis', () => {
   for (const files of [null, [], [file('README.md')], [file('go.mod')], [file('cgo/x.c')],
     [file('.golangci.yml')], [file('pkg/a/testdata/input.go')], [file('pkg/gone/x.go', 'D')],
@@ -53,7 +71,7 @@ test('uncertain inputs and broad changes retain full analysis', () => {
 
 test('Go JSON inventory is framed without interpreting braces inside strings', () => {
   const p = { ImportPath: 'example.org/pkg/a', Dir: '/repo/pkg/a', Module: { Main: true },
-    Imports: ['external/{quoted}"'], TestImports: ['testing'] };
+    Imports: ['external/{quoted}"'] };
   const parsed = inventory(`${JSON.stringify({ ImportPath: 'fmt' })}\n${JSON.stringify(p)}\n`);
   assert.equal(parsed.length, 1);
   assert.deepEqual(parsed[0].imports, p.Imports);
@@ -107,8 +125,12 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   fs.writeFileSync(path.join(repo, 'go.mod'), 'module example.org/project\n\ngo 1.23.0\n');
   for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
     const p = path.join(repo, 'pkg', name); fs.mkdirSync(p, { recursive: true });
-    fs.writeFileSync(path.join(p, `${name}.go`), `package ${name}\n${name === 'b' ? 'import _ "example.org/project/pkg/a"\n' : ''}func Value() int { return 1 }\n`);
-    if (name === 'c') fs.writeFileSync(path.join(p, 'c_test.go'), 'package c_test\nimport _ "example.org/project/pkg/a"\n');
+    const dependency = { b: 'a', d: 'c', e: 'd' }[name];
+    fs.writeFileSync(path.join(p, `${name}.go`), `package ${name}\n${dependency ? `import _ "example.org/project/pkg/${dependency}"\n` : ''}func Value() int { return 1 }\n`);
+    if (name === 'c') {
+      fs.writeFileSync(path.join(p, 'c_test.go'), 'package c_test\nimport _ "example.org/project/pkg/a"\n');
+      fs.writeFileSync(path.join(p, 'c_internal_test.go'), 'package c\nimport _ "example.org/project/pkg/a"\n');
+    }
   }
   const source = path.resolve(__dirname, '../..');
   fs.mkdirSync(path.join(repo, '.github/ci'), { recursive: true });
