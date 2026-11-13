@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	pipelinepb "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -741,6 +742,49 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJoinMapCancellationScopeCause exercises the error across the message and
+// scope owners, including both result arrival orders and query cancellation.
+func TestJoinMapCancellationScopeCause(t *testing.T) {
+	fk := moerr.NewErrFKNoReferencedRow2(context.Background())
+	query := context.Background()
+	pipeCtx, cancel := context.WithCancelCause(query)
+	cancel(fk)
+	board := message.NewMessageBoard()
+	require.True(t, message.FinalizeJoinMapBuildError(board, 32560, false, 0, context.Canceled))
+	_, buildErr := message.ReceiveJoinMap(32560, false, 0, board, context.Background())
+	require.Error(t, buildErr)
+
+	wire := &pipelinepb.Message{}
+	wire.SetMoError(query, buildErr)
+	wireErr, ok := wire.TryToGetMoErr()
+	require.True(t, ok)
+	for _, candidate := range []error{buildErr, wireErr} {
+		for _, cancellationFirst := range []bool{true, false} {
+			first := scopeRunResult{err: candidate, ctx: pipeCtx, queryCtx: query}
+			second := scopeRunResult{err: fk, ctx: pipeCtx, queryCtx: query}
+			if !cancellationFirst {
+				first, second = second, first
+			}
+			got := preferPrimaryScopeResult(first, second)
+			require.True(t, moerr.IsMoErrCode(got.err, fk.ErrorCode()), got.err)
+		}
+	}
+
+	queryCanceled, stopQuery := context.WithCancel(context.Background())
+	stopQuery()
+	got := preferPrimaryScopeResult(scopeRunResult{err: buildErr, ctx: queryCanceled, queryCtx: queryCanceled}, scopeRunResult{err: fk})
+	require.ErrorIs(t, got.err, context.Canceled)
+
+	deadlineWire := &pipelinepb.Message{}
+	deadlineWire.SetMoError(query, message.NewJoinMapBuildError(context.DeadlineExceeded).AsError())
+	deadlineErr, ok := deadlineWire.TryToGetMoErr()
+	require.True(t, ok)
+	independentPipeline, stopPipeline := context.WithCancel(query)
+	stopPipeline()
+	gotErr, _ := normalizeScopeRunError(deadlineErr, independentPipeline, query)
+	require.True(t, moerr.IsMoErrCode(gotErr, moerr.ErrRPCTimeout), gotErr)
 }
 
 type scopeRunCancelErrorOperator struct {
@@ -1647,4 +1691,91 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 		require.Equal(t, 7, c.TxnOffset)
 	})
+}
+
+func TestCompileShuffleGroupSkipsNormalShuffleWithSingleOwner(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	input := scope.RootOp
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.Same(t, input, groupOp.GetOperatorBase().GetChildren(0),
+		"one physical owner must not pay for a one-bucket shuffle and dispatch")
+}
+
+func TestCompileShuffleGroupSkipsSingleOwnerWithoutDroppingInputs(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	inputs := []*Scope{
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+	}
+
+	result := c.compileShuffleGroup(aggNode, inputs, nodes)
+
+	require.Len(t, result, 1)
+	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, len(inputs))
+	for _, input := range result[0].PreScopes {
+		require.IsType(t, &group.Group{},
+			input.RootOp.GetOperatorBase().GetChildren(0))
+	}
+}
+
+func TestCompileShuffleGroupKeepsOrderedSingleOwnerSingleStage(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 1)
+	require.Same(t, scope, result[0].PreScopes[0])
+}
+
+func TestCompileShuffleGroupKeepsNormalShuffleAcrossCNsAtDopOne(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.addr = "cn-1:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-1", Addr: "cn-1:6001", Mcpu: 1},
+		{Id: "cn-2", Addr: "cn-2:6001", Mcpu: 1},
+	}
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	scope.NodeInfo = c.cnList[0]
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 2,
+		"DOP one on each CN still exposes two physical aggregate owners")
+	for _, resultScope := range result {
+		require.IsType(t, &group.Group{}, resultScope.RootOp)
+	}
+	require.Len(t, result[0].PreScopes, 1)
+	require.IsType(t, &shuffle.Shuffle{},
+		result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 }

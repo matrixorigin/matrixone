@@ -8959,15 +8959,30 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	// The authorization chain needs the logical account and the snapshot
+	// actually used by Resolve, which may differ from the written hint.
+	viewPrivilegeKey := viewDependencyKey
+	if resolver, ok := builder.compCtx.(interface {
+		ResolveViewPrivilegeSnapshot(*Snapshot) (uint32, *Snapshot, error)
+	}); ok {
+		account, effectiveSnapshot, resolveErr := resolver.ResolveViewPrivilegeSnapshot(snapshot)
+		if resolveErr != nil {
+			return 0, resolveErr
+		}
+		viewPrivilegeKey, err = FormatViewPrivilegeKey(schema, table, effectiveSnapshot, account)
+		if err != nil {
+			return 0, err
+		}
+	}
 	if ctx != nil && ctx.directView != "" {
 		viewCtx.directView = ctx.directView
 	} else {
 		viewCtx.directView = viewKeyWithSnapshot
 	}
 	if ctx != nil && len(ctx.viewChain) > 0 {
-		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
+		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewPrivilegeKey)
 	} else {
-		viewCtx.viewChain = []string{viewKey}
+		viewCtx.viewChain = []string{viewPrivilegeKey}
 	}
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {

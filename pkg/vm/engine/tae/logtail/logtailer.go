@@ -86,6 +86,13 @@ func (l *LogtailerImpl) ReadBarrier(ctx context.Context) (timestamp.Timestamp, e
 	return l.mgr.ReadBarrier(ctx)
 }
 
+func (l *LogtailerImpl) TableReadTarget(table api.TableID) (timestamp.Timestamp, bool) {
+	if l.mgr.tableReadTarget == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return l.mgr.tableReadTarget(table)
+}
+
 // TableLogtail returns logtail for the specified table.
 // It boils down to calling `HandleSyncLogTailReq`
 func (l *LogtailerImpl) TableLogtail(

@@ -1308,29 +1308,17 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
-		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		orderedGroupConcat := hasOrderedGroupConcat(node)
 		if c.canCompileShuffleGroup(node) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
-			return ss, nil
-		}
-		if orderedGroupConcat {
-			ss = c.compileOrderedGroupConcat(node, ss, nodes)
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-			return ss, nil
-		}
-		if c.IsSingleScope(ss) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
-			return ss, nil
+			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
-			return ss, nil
+			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
 		}
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_SAMPLE:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -5353,6 +5341,16 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
+func (c *Compile) compileGroupWithoutShuffle(node *plan.Node, ss []*Scope, ns []*plan.Node, singleStage bool) []*Scope {
+	if hasOrderedGroupConcat(node) {
+		return c.compileOrderedGroupConcat(node, ss, ns)
+	}
+	if c.IsSingleScope(ss) {
+		return c.compileTPGroup(node, ss, ns)
+	}
+	return c.compileMergeGroup(node, ss, ns, singleStage)
+}
+
 func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
 	// for less memory usage while merge group,
 	// we do not run the group-operator in parallel once this has a distinct aggregation.
@@ -5454,6 +5452,7 @@ func supportsRemoteOrderedAggregates(service string) bool {
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
+		!plan2.RequiresSingleStageDistinctAgg(node) &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates())
 }
@@ -5484,6 +5483,10 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+	// Reused shuffles retain their ownership. A new shuffle needs multiple owners.
+	if node.Stats.Dop <= 1 && len(stageNodes) <= 1 {
+		return c.compileGroupWithoutShuffle(node, inputSS, nodes, plan2.RequiresSingleStageDistinctAgg(node))
 	}
 	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)

@@ -1342,6 +1342,19 @@ type PeerLogtailReadBarrier interface {
 	AcquirePeerLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, supported bool, err error)
 }
 
+// LogtailAppliedSnapshot waits for the current replay generation to apply an
+// inclusive timestamp and returns a snapshot beyond that applied watermark.
+type LogtailAppliedSnapshot interface {
+	WaitLogtailAppliedSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+}
+
+// PeerTableReadSnapshot acquires a current-stream snapshot at or after an
+// identified table's content and catalog target. False means the peer does not
+// support this operation and the caller must use another visibility barrier.
+type PeerTableReadSnapshot interface {
+	AcquirePeerTableReadSnapshot(context.Context, api.TableID, timestamp.Timestamp) (timestamp.Timestamp, uint64, bool, error)
+}
+
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector

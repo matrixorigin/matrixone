@@ -5996,14 +5996,14 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1}
-			makeSql := func(entry privilegeEntry) {
+			makeSql := func(entry privilegeEntry, grantRole1 bool) {
 				pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
 					for _, roleId := range roles {
 						sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
 						convey.So(err, convey.ShouldBeNil)
-						if roleId == 1 {
+						if roleId == 1 && grantRole1 {
 							rows = [][]interface{}{
 								{1, true},
 							}
@@ -6017,7 +6017,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
-					makeSql(entry)
+					makeSql(entry, true)
 				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
@@ -6025,7 +6025,11 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.tableName = mi.tableName
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
-						makeSql(tempEntry)
+						makeSql(tempEntry, true)
+						for _, cover := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = cover
+							makeSql(tempEntry, false)
+						}
 					}
 				}
 			}
@@ -6112,6 +6116,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, cover := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = cover
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}

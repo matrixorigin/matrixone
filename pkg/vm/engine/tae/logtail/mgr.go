@@ -83,11 +83,12 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 // - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
-	table      *TxnTable
-	rt         *dbutils.Runtime
-	truncateMu sync.RWMutex
-	truncated  types.TS
-	nowClock   func() types.TS // nowClock is from TxnManager
+	table           *TxnTable
+	rt              *dbutils.Runtime
+	truncateMu      sync.RWMutex
+	truncated       types.TS
+	nowClock        func() types.TS // nowClock is from TxnManager
+	tableReadTarget func(api.TableID) (timestamp.Timestamp, bool)
 
 	maxCommittedLSN atomic.Uint64
 
@@ -103,6 +104,12 @@ type Manager struct {
 	nextCompactTS       types.TS
 
 	collectPool *ants.Pool
+}
+
+// SetTableReadTarget installs the storage owner's lookup before the manager is
+// exposed to clients. Unsupported identities fall back to the FIFO barrier.
+func (mgr *Manager) SetTableReadTarget(lookup func(api.TableID) (timestamp.Timestamp, bool)) {
+	mgr.tableReadTarget = lookup
 }
 
 func NewManager(
