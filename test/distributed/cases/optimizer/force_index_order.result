@@ -1,0 +1,358 @@
+drop database if exists force_index_order;
+create database force_index_order;
+use force_index_order;
+create table t (id int primary key, a int, b int, payload int, key ix_ab(a,b));
+insert into t values (1,1,1,30),(2,1,1,10),(3,1,2,20),(4,2,2,40);
+explain select id,payload from t force index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("prefix_in", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.payload INTERNAL, t.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                    Filter Cond: (t.a = 1), t.b in ([1 2])  𝄀
+                    Block Filter Cond: (t.a = 1)  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_in(__mo_index_idx_col)
+select id,payload from t force index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+select id,payload from t ignore index(ix_ab)
+where a=1 and b in (1,2) order by payload,id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+explain select id,a,b from t force index(ix_ab) order by a,b,id limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Index Reader Param", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 0, INT)) INTERNAL, serial_extract(__mo_index_idx_col, 1, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Index Table Scan on t.ix_ab  𝄀
+              Sort Key: __mo_index_idx_col INTERNAL  𝄀
+              Index Reader Param:  Sort Key: __mo_index_idx_col INTERNAL  Limit: 2
+select id,a,b from t force index(ix_ab) order by a,b,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+select id,a,b from t ignore index(ix_ab) order by a,b,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+explain select id,a,b from t force index(ix_ab) order by a desc,b asc,id limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 0, INT)) DESC, serial_extract(__mo_index_idx_col, 1, INT)) ASC, __mo_index_pri_col INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Index Table Scan on t.ix_ab
+select id,a,b from t force index(ix_ab) order by a desc,b asc,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+4  ¦  2  ¦  2  𝄀
+1  ¦  1  ¦  1
+select id,a,b from t ignore index(ix_ab) order by a desc,b asc,id limit 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+4  ¦  2  ¦  2  𝄀
+1  ¦  1  ¦  1
+explain select id,payload from t force index(primary,ix_ab) ignore index(primary)
+where a=1 and b in (1,2) order by payload,id;
+-- @regex("Index Table Scan.*ix_ab", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.payload INTERNAL, t.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                    Filter Cond: (t.a = 1), t.b in ([1 2])  𝄀
+                    Block Filter Cond: (t.a = 1)  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_in(__mo_index_idx_col)
+explain select id,payload from t force index for order by(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.b DESC, t.id DESC  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                    Filter Cond: (t.a = 1)  𝄀
+                    Block Filter Cond: (t.a = 1)  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
+                    Sort Key: __mo_index_idx_col DESC
+select id,payload from t force index for order by(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20  𝄀
+2  ¦  10
+select id,payload from t ignore index(ix_ab)
+where a=1 order by b desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  20  𝄀
+2  ¦  10
+create table u (id int primary key, v int);
+insert into u values (1,10),(3,30),(4,40);
+select t.id,t.a,t.b from t force index(ix_ab) join u on t.id=u.id
+where t.a=1 and t.b in (1,2) order by t.b,t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  2
+select t.id,t.a,t.b from t ignore index(ix_ab) join u on t.id=u.id
+where t.a=1 and t.b in (1,2) order by t.b,t.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  2
+create table scope_t (id int primary key, a int, b int, key ix_ab(a,b), key ix_ba(b,a));
+insert into scope_t values (1,1,1),(2,1,2),(3,2,3);
+select s.id,s.a,s.b from scope_t s force index for join(ix_ab) force index for order by(ix_ab)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from scope_t s force index for join(ix_ba) force index for order by(ix_ab)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from u join scope_t s force index for join(ix_ba) force index for order by(ix_ab)
+on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+select s.id,s.a,s.b from scope_t s ignore index(ix_ab,ix_ba)
+join u on s.id=u.id where s.a=1 order by s.b,s.id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1
+create table limit_j (id int primary key, a int, key ix_limit_a(a));
+create table limit_u (id int primary key);
+insert into limit_j values (1,1),(2,2),(3,3),(4,4);
+insert into limit_u values (3),(4);
+select mo_ctl('dn','flush','force_index_order.limit_j');
+➤ mo_ctl(dn, flush, force_index_order.limit_j)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_limit_a');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select j.id,j.a from limit_j j force index for order by(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+-- @regex("Index Table Scan.*ix_limit_a", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 0, INT)) INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER   hashOnPK  𝄀
+              Join Cond: (u.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.limit_u  𝄀
+                    Runtime Filter Probe: u.id  𝄀
+              ->  Index Table Scan on limit_j.ix_limit_a  𝄀
+                    Sort Key: __mo_index_idx_col INTERNAL
+select j.id,j.a from limit_j j force index for order by(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  3
+select j.id,j.a from limit_j j ignore index(ix_limit_a)
+join limit_u u on j.id=u.id order by j.a limit 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  3
+create table uq (id int primary key, a int, b int, unique key ux_ab(a,b));
+insert into uq values (1,1,null),(2,1,2),(3,null,2),(4,2,2);
+explain select id from uq force index for order by(ux_ab) where a=1 order by a;
+-- @regex("Index Table Scan.*ux_ab", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: uq.a INTERNAL  𝄀
+        ->  Table Scan on force_index_order.uq  𝄀
+              Filter Cond: (uq.a = 1)  𝄀
+              Block Filter Cond: (uq.a = 1)
+select id from uq force index for order by(ux_ab) where a=1 order by a,id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from uq ignore index(ux_ab) where a=1 order by a,id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select a,b,count(*) from uq force index for group by(ux_ab) group by a,b order by a,b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  2  ¦  1  𝄀
+1  ¦  null  ¦  1  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  2  ¦  1
+explain select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order by uq.id;
+-- @regex("Index Table Scan.*ux_ab", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: uq.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER   hashOnPK  𝄀
+              Join Cond: (uq.a = u.id)  𝄀
+              ->  Table Scan on force_index_order.uq  𝄀
+              ->  Table Scan on force_index_order.u
+select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order by uq.id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select uq.id,uq.b from u join uq ignore index(ux_ab) on uq.a=u.id order by uq.id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+create table prefix_j (id int primary key, a varchar(20), b int, payload int, key ix_join_pref(a(4),b));
+create table prefix_u (a varchar(20) primary key);
+insert into prefix_j values (1,'abcdef',1,10),(2,'abcdxy',2,20),(3,'wxyz12',3,30);
+insert into prefix_u values ('abcdef'),('abcdxy');
+insert into prefix_j select result+100,concat('z',lpad(cast(result as varchar(20)),10,'0')),result,result from generate_series(1,10000) g;
+select mo_ctl('dn','flush','force_index_order.prefix_j');
+➤ mo_ctl(dn, flush, force_index_order.prefix_j)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_join_pref');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select j.id,j.a,j.payload from prefix_j j force index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+-- @regex("Index Table Scan.*ix_join_pref", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: j.payload INTERNAL, j.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER   hashOnPK  𝄀
+              Join Cond: (j.a = u.a)  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (j.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on force_index_order.prefix_j [ForceOneCN]  𝄀
+                          Runtime Filter Probe: j.id  𝄀
+                    ->  Index Table Scan on prefix_j.ix_join_pref [ForceOneCN]  𝄀
+              ->  Table Scan on force_index_order.prefix_u
+select j.id,j.a,j.payload from prefix_j j force index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  abcdef  ¦  10  𝄀
+2  ¦  abcdxy  ¦  20
+select j.id,j.a,j.payload from prefix_j j ignore index(ix_join_pref)
+join prefix_u u on j.a=u.a order by j.payload,j.id;
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  abcdef  ¦  10  𝄀
+2  ¦  abcdxy  ¦  20
+create table suffix_j (id int primary key, a int, b varchar(20), payload int, key ix_suffix(a,b(4)));
+create table suffix_u (a int, b varchar(20));
+insert into suffix_j values (1,7,'abcdef',10),(2,7,'abcdxy',20),(3,8,'abcdef',30);
+insert into suffix_u values (7,'abcdef');
+explain select j.id,j.b from suffix_j j force index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+-- @regex("Index Table Scan.*ix_suffix", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: j.payload INTERNAL, j.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (j.a = u.a), (j.b = u.b)  𝄀
+              Runtime Filter Build: serial_full(#[-1,0])  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (j.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on force_index_order.suffix_j [ForceOneCN]  𝄀
+                          Runtime Filter Probe: j.id  𝄀
+                    ->  Index Table Scan on suffix_j.ix_suffix [ForceOneCN]  𝄀
+                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+              ->  Table Scan on force_index_order.suffix_u
+select j.id,j.b from suffix_j j force index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+➤ id[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  abcdef
+select j.id,j.b from suffix_j j ignore index(ix_suffix)
+join suffix_u u on j.a=u.a and j.b=u.b order by j.payload,j.id;
+➤ id[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  abcdef
+prepare force_order_param from 'select id,payload from t force index(ix_ab) where a=? and b in (1,2) order by payload,id';
+set @v=1;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+set @v=2;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+4  ¦  40
+set @v=null;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]
+set @v=1;
+execute force_order_param using @v;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  20  𝄀
+1  ¦  30
+deallocate prepare force_order_param;
+drop database force_index_order;

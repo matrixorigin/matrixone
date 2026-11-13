@@ -750,6 +750,90 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 	return true
 }
 
+// indexOrderColumnsMatch permits ORDER BY to start after a contiguous prefix
+// fixed by equalities. A truncated or floating-point key cannot establish a
+// single serialized prefix for this purpose.
+func indexOrderColumnsMatch(idxDef *plan.IndexDef, scanNode *plan.Node, colPositions []int32) bool {
+	if idxDef == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(colPositions) == 0 {
+		return false
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return false
+	}
+	fixed := 0
+	for fixed < len(idxDef.Parts) {
+		name := catalog.ResolveAlias(idxDef.Parts[fixed])
+		pos, ok := scanNode.TableDef.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(scanNode.TableDef.Cols) || prefixLengths[name] > 0 {
+			break
+		}
+		typ := types.T(scanNode.TableDef.Cols[pos].Typ.Id)
+		if typ == types.T_float32 || typ == types.T_float64 || !filterListHasConstEqualityOnCol(scanNode.FilterList, scanNode.BindingTags[0], pos) {
+			break
+		}
+		fixed++
+	}
+	next := fixed
+	for _, pos := range colPositions {
+		if pos < 0 || int(pos) >= len(scanNode.TableDef.Cols) {
+			return false
+		}
+		name := scanNode.TableDef.Cols[pos].Name
+		isFixed := false
+		for i := 0; i < fixed; i++ {
+			if catalog.ResolveAlias(idxDef.Parts[i]) == name {
+				isFixed = true
+				break
+			}
+		}
+		if isFixed {
+			continue
+		}
+		if next >= len(idxDef.Parts) || catalog.ResolveAlias(idxDef.Parts[next]) != name || prefixLengths[name] > 0 {
+			return false
+		}
+		next++
+	}
+	return true
+}
+
+// A unique secondary index omits entries with any NULL key part. A full
+// index scan is therefore complete only when all qualifying keys are non-NULL.
+func hintedIndexScanComplete(idxDef *plan.IndexDef, node *plan.Node) bool {
+	if idxDef == nil || node == nil || node.TableDef == nil {
+		return false
+	}
+	if !idxDef.Unique {
+		return true
+	}
+	if len(node.BindingTags) == 0 || len(idxDef.Parts) == 0 {
+		return false
+	}
+	for _, part := range idxDef.Parts {
+		pos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || pos < 0 || int(pos) >= len(node.TableDef.Cols) || node.TableDef.Cols[pos] == nil {
+			return false
+		}
+		if !node.TableDef.Cols[pos].Typ.NotNullable &&
+			!filterListHasConstEqualityOnCol(node.FilterList, node.BindingTags[0], pos) &&
+			!filterListHasIsNotNullOnCol(node.FilterList, node.BindingTags[0], pos) {
+			return false
+		}
+	}
+	return true
+}
+
+// IGNORE has precedence over FORCE for PRIMARY as for secondary indexes.
+func hintForcesPrimary(scope indexHintScopeSet) bool {
+	name := strings.ToLower(PrimaryKeyName)
+	if _, ignored := scope.ignore[name]; ignored {
+		return false
+	}
+	_, forced := scope.force[name]
+	return forced
+}
+
 type forceIndexScope int
 
 const (
@@ -767,12 +851,18 @@ type forceIndexRequirement struct {
 }
 
 func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	for _, hints := range builder.indexHintsByScan {
+		if hints != nil {
+			hints.orderNeedsJoinAccess = false
+		}
+	}
 	return builder.applyForceIndexHintsWithMemo(nodeID, requirements, colRefCnt, idxColMap, make(map[forceIndexMemoKey]int32))
 }
 
 type forceIndexMemoKey struct {
 	nodeID      int32
 	requirement string
+	scanWide    bool
 }
 
 func forceIndexRequirementKey(requirements []forceIndexRequirement) string {
@@ -794,6 +884,22 @@ func forceIndexRequirementKey(requirements []forceIndexRequirement) string {
 	return key.String()
 }
 
+// A reader LIMIT is safe only while the requirement crosses row-preserving
+// projections; joins, filters, aggregations and nested sorts may change which
+// rows survive to the original LIMIT.
+func clearForceIndexReaderLimits(requirements []forceIndexRequirement) []forceIndexRequirement {
+	for _, requirement := range requirements {
+		if requirement.canPushLim {
+			out := slices.Clone(requirements)
+			for i := range out {
+				out[i].canPushLim = false
+			}
+			return out
+		}
+	}
+	return requirements
+}
+
 func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, memo map[forceIndexMemoKey]int32) (int32, error) {
 	node := builder.qry.Nodes[nodeID]
 	if node == nil {
@@ -802,6 +908,10 @@ func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirem
 	nodeBlock := builder.ctxByNode[nodeID]
 
 	localRequirements := requirements
+	if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_TABLE_SCAN ||
+		(node.NodeType == plan.Node_PROJECT && (node.Limit != nil || node.Offset != nil || len(node.FilterList) > 0)) {
+		localRequirements = clearForceIndexReaderLimits(localRequirements)
+	}
 	switch node.NodeType {
 	case plan.Node_SORT:
 		if len(node.OrderBy) > 0 {
@@ -812,12 +922,15 @@ func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirem
 				columns[i] = DeepCopyExpr(orderBy.Expr)
 				sameDirection = sameDirection && orderBy.Flag == flag
 			}
-			if sameDirection {
-				localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
-					scope: forceIndexForOrder, columns: columns, orderFlag: flag,
-					limit: node.Limit, canPushLim: node.Offset == nil && node.RankOption == nil, block: nodeBlock,
-				})
+			if !sameDirection {
+				// The hint may still constrain access, but this index cannot supply
+				// a mixed-direction order through one ordered scan.
+				columns = nil
 			}
+			localRequirements = append(slices.Clone(localRequirements), forceIndexRequirement{
+				scope: forceIndexForOrder, columns: columns, orderFlag: flag,
+				limit: node.Limit, canPushLim: sameDirection && node.Offset == nil && node.RankOption == nil, block: nodeBlock,
+			})
 		}
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
@@ -825,23 +938,39 @@ func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirem
 			for i, groupBy := range node.GroupBy {
 				columns[i] = DeepCopyExpr(groupBy)
 			}
-			localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
+			localRequirements = append(slices.Clone(localRequirements), forceIndexRequirement{
 				scope: forceIndexForGroup, columns: columns, block: nodeBlock,
 			})
 		}
 	}
 
 	key := forceIndexMemoKey{nodeID: nodeID, requirement: forceIndexRequirementKey(localRequirements)}
-	if rewritten, ok := memo[key]; ok {
-		return rewritten, nil
-	}
-
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		rewritten, err := builder.applyForceIndexHintToScan(node, localRequirements, colRefCnt, idxColMap)
+		scanKey := forceIndexMemoKey{nodeID: nodeID, scanWide: true}
+		if rewritten, ok := memo[scanKey]; ok {
+			if rewritten == nodeID && !builder.isScanProtected(nodeID) {
+				// An earlier consumer already kept the original scan. Do not
+				// publish a covering map that would invalidate that consumer.
+				builder.protectedScans[nodeID]++
+			}
+			return rewritten, nil
+		}
+		if rewritten, ok := memo[key]; ok {
+			return rewritten, nil
+		}
+		rewritten, err := builder.applyForceIndexHintToScan(node, localRequirements, colRefCnt, idxColMap, memo)
 		if err == nil {
 			memo[key] = rewritten
+			if rewritten == nodeID && !builder.isScanProtected(nodeID) && builder.scanHintsForceIndexes(node) {
+				// Remember the unchanged scan only to detect a later consumer.
+				// A single consumer still reaches the ordinary filter owner.
+				memo[scanKey] = nodeID
+			}
 		}
 		return rewritten, err
+	}
+	if rewritten, ok := memo[key]; ok {
+		return rewritten, nil
 	}
 
 	childRequirements := localRequirements
@@ -849,6 +978,21 @@ func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirem
 		childRequirements = translateForceIndexRequirementsThroughProject(node, localRequirements)
 	}
 	for i, childID := range node.Children {
+		// A consumable JOIN owns forced access on its direct scan. Do not
+		// publish covering-column replacements before that owner chooses the
+		// join access path, even if ORDER BY has its own scoped hint.
+		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
+			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
+			if hints := builder.indexHintsByScan[childID]; hints != nil && hints.scan.forceSpecified {
+				for _, requirement := range childRequirements {
+					if requirement.scope == forceIndexForOrder {
+						hints.orderNeedsJoinAccess = true
+						break
+					}
+				}
+			}
+			continue
+		}
 		if node.NodeType == plan.Node_PROJECT && len(childRequirements) > 0 && childRequirements[0].block != nil &&
 			builder.ctxByNode[childID] != childRequirements[0].block {
 			newChildID, err := builder.applyForceIndexHintsWithMemo(childID, nil, colRefCnt, idxColMap, memo)
@@ -898,7 +1042,7 @@ func translateForceIndexRequirementsThroughProject(projectNode *plan.Node, requi
 	return translated
 }
 
-func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, memo map[forceIndexMemoKey]int32) (int32, error) {
 	if scanNode == nil {
 		return -1, nil
 	}
@@ -909,7 +1053,26 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 	if hintSet == nil {
 		return scanNode.NodeId, nil
 	}
+	// With filters, preserve bounded point/range/key-set access first. With
+	// no filters, let the existing ordered-index path retain its reader LIMIT;
+	// fall back to an unordered forced access only if that path cannot apply.
+	plainOrderForce := false
+	if hintSet.scan.forceSpecified && !hintForcesPrimary(hintSet.scan) &&
+		!builder.isScanProtected(scanNode.NodeId) && !builder.scanHasMatchedFullTextFilter(scanNode) {
+		for _, requirement := range requirements {
+			if requirement.scope == forceIndexForOrder {
+				plainOrderForce = true
+				break
+			}
+		}
+	}
+	if plainOrderForce && len(scanNode.FilterList) > 0 {
+		return builder.applyPlainForcedOrderAccess(scanNode, colRefCnt, idxColMap, memo)
+	}
 	for _, requirement := range requirements {
+		if len(requirement.columns) == 0 {
+			continue
+		}
 		scope := hintSet.order
 		if requirement.scope == forceIndexForGroup {
 			scope = hintSet.group
@@ -932,13 +1095,20 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 
 		// FORCE PRIMARY keeps the base-table access and blocks ordinary secondary-index rewrites.
-		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary {
+		if hintForcesPrimary(scope) && (!hintSet.scan.forceSpecified || hintForcesPrimary(hintSet.scan)) {
 			builder.protectedScans[scanNode.NodeId]++
 			return scanNode.NodeId, nil
 		}
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
+		if hintSet.scan.forceSpecified {
+			indexes = filterIndexesByHintScope(indexes, hintSet.scan)
+		}
 		for _, idxDef := range indexes {
-			if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+			matches := indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions)
+			if requirement.scope == forceIndexForOrder {
+				matches = indexOrderColumnsMatch(idxDef, scanNode, colPositions)
+			}
+			if !usableRegularHintIndex(idxDef) || !matches {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -961,15 +1131,46 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
+		if plainOrderForce && requirement.scope == forceIndexForOrder {
+			return builder.applyPlainForcedOrderAccess(scanNode, colRefCnt, idxColMap, memo)
+		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
 		builder.protectedScans[scanNode.NodeId]++
 		return scanNode.NodeId, nil
 	}
+	if plainOrderForce {
+		return builder.applyPlainForcedOrderAccess(scanNode, colRefCnt, idxColMap, memo)
+	}
 	return scanNode.NodeId, nil
 }
 
+func (builder *QueryBuilder) applyPlainForcedOrderAccess(scanNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, memo map[forceIndexMemoKey]int32) (int32, error) {
+	remember := func(access int32) (int32, error) {
+		builder.protectedScans[scanNode.NodeId]++
+		memo[forceIndexMemoKey{nodeID: scanNode.NodeId, scanWide: true}] = access
+		return access, nil
+	}
+	access := builder.applyIndicesForFilters(scanNode.NodeId, scanNode, colRefCnt, idxColMap)
+	if access != scanNode.NodeId {
+		return remember(access)
+	}
+	for _, idxDef := range builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes) {
+		access, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
+		if access != -1 {
+			return remember(access)
+		}
+	}
+	return remember(scanNode.NodeId)
+}
+
 func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
+	if !hintedIndexScanComplete(idxDef, node) {
+		return -1, -1, false, nil
+	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, -1, false, err
@@ -1024,6 +1225,8 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		},
 		BindingTags:  []int32{idxTag},
 		ScanSnapshot: node.ScanSnapshot,
+		OriginViews:  append([]string(nil), node.OriginViews...),
+		DirectView:   node.DirectView,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
@@ -1109,6 +1312,8 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		FilterList:   newFilters,
 		BindingTags:  []int32{idxTag},
 		ScanSnapshot: node.ScanSnapshot,
+		OriginViews:  append([]string(nil), node.OriginViews...),
+		DirectView:   node.DirectView,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
@@ -1573,6 +1778,13 @@ func hasPrimaryKeyEquality(node *plan.Node) bool {
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	return builder.applyIndicesForFiltersRegularIndexCandidates(nodeID, node, colRefCnt, idxColMap, nil, true)
+}
+
+// candidates restricts an existing scan selection to the indexes allowed by
+// its JOIN owner. JOIN fallback cannot publish covering-column replacements
+// after the parent has already consumed idxColMap.
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, candidates map[string]struct{}, allowCovering bool) int32 {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
@@ -1618,6 +1830,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 	indexes = builder.filterRegularIndexesByScanHints(node, indexes)
 	spatialIndexes = builder.filterIndexesByScanHints(node, spatialIndexes)
+	if candidates != nil {
+		indexes = slices.DeleteFunc(indexes, func(idx *plan.IndexDef) bool {
+			_, ok := candidates[strings.ToLower(idx.IndexName)]
+			return !ok
+		})
+		spatialIndexes = nil
+	}
 	if len(indexes) == 0 && len(spatialIndexes) == 0 {
 		return nodeID
 	}
@@ -1628,7 +1847,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	// Preserve the sorted-scan preference for covering and range access.
-	if sortedSelectivity == 1 {
+	if allowCovering && sortedSelectivity == 1 {
 		// Apply unique/secondary indices if only indexed column is referenced
 		for i := range indexes {
 			ret := builder.tryIndexOnlyScan(indexes[i], node, colRefCnt, idxColMap, scanSnapshot)
@@ -3121,14 +3340,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	leftForcesJoin := builder.scanForcesJoinIndex(node.Children[0])
 	rightForcesJoin := builder.scanForcesJoinIndex(node.Children[1])
 	if leftForcesJoin && builder.qry.Nodes[node.Children[0]].NodeType != plan.Node_TABLE_SCAN {
-		leftAccess, err := builder.applyForcedJoinAccess(node.Children[0])
+		leftAccess, err := builder.applyForcedJoinAccess(node.Children[0], colRefCnt, idxColMap)
 		if err != nil {
 			return -1, err
 		}
 		node.Children[0] = leftAccess
 	}
-	if node.JoinType == plan.Node_INNER && rightForcesJoin {
-		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1])
+	if rightForcesJoin && (node.JoinType == plan.Node_INNER || builder.scanNeedsForcedOrderJoinAccess(node.Children[1])) {
+		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1], colRefCnt, idxColMap)
 		if err != nil {
 			return -1, err
 		}
@@ -3214,7 +3433,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	if joinOnPK {
-		return nodeID, nil
+		return builder.applyPlainForcedJoinFallback(nodeID, node, colRefCnt, idxColMap)
 	}
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
@@ -3228,6 +3447,10 @@ selectIndex:
 				continue
 			}
 
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				continue
+			}
 			numParts := len(idxDef.Parts)
 			numKeyParts := numParts
 			if !idxDef.Unique {
@@ -3240,7 +3463,15 @@ selectIndex:
 			condIdx = condIdx[:0]
 			for i := 0; i < numKeyParts; i++ {
 				tmpName := catalog.ResolveAlias(idxDef.Parts[i])
-				colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
+				// A full JOIN value cannot probe a truncated stored key. Any
+				// earlier complete parts remain a safe contiguous prefix.
+				if prefixLengths[tmpName] > 0 {
+					break
+				}
+				colIdx, ok := leftChild.TableDef.Name2ColIndex[tmpName]
+				if !ok {
+					break
+				}
 				idx, ok := col2Cond[colIdx]
 				if !ok {
 					break
@@ -3427,7 +3658,32 @@ selectIndex:
 		}
 	}
 
+	return builder.applyPlainForcedJoinFallback(nodeID, node, colRefCnt, idxColMap)
+}
+
+// A plain FORCE under ORDER BY needs an access fallback after targeted JOIN
+// lookup declines. JOIN-only and no-ORDER behavior retain their existing scope.
+func (builder *QueryBuilder) applyPlainForcedJoinFallback(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	child := builder.qry.Nodes[node.Children[0]]
+	if child.NodeType != plan.Node_TABLE_SCAN || child.IndexScanInfo.IsIndexScan || !builder.scanNeedsForcedOrderJoinAccess(child.NodeId) ||
+		builder.isScanProtected(child.NodeId) || builder.scanHasMatchedFullTextFilter(child) {
+		return nodeID, nil
+	}
+	access, err := builder.applyForcedJoinAccess(child.NodeId, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
+	node.Children[0] = access
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) scanNeedsForcedOrderJoinAccess(nodeID int32) bool {
+	scan := builder.baseScanForIndexAccess(nodeID)
+	if scan == nil {
+		return false
+	}
+	hints := builder.indexHintsByScan[scan.NodeId]
+	return hints != nil && hints.scan.forceSpecified && hints.orderNeedsJoinAccess
 }
 
 func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {
@@ -3484,13 +3740,44 @@ func (builder *QueryBuilder) indexHintOwnerScan(nodeID int32) *plan.Node {
 	}
 }
 
-func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error) {
+func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	scan := builder.baseScanForIndexAccess(accessID)
 	if scan == nil || scan.TableDef == nil {
 		return accessID, nil
 	}
-	for _, idxDef := range builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes) {
-		if !usableRegularHintIndex(idxDef) {
+	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
+	if builder.scanHintsForceIndexes(scan) {
+		indexes = builder.filterRegularIndexesByScanHints(scan, indexes)
+	}
+	// Keep an already published eligible access, including a covering scan
+	// whose column mapping may already be used by the parent.
+	access := builder.qry.Nodes[accessID]
+	indexScan := access
+	if access.NodeType == plan.Node_JOIN && access.JoinType == plan.Node_INDEX && len(access.Children) > 1 {
+		indexScan = builder.qry.Nodes[access.Children[1]]
+	}
+	if indexScan.IndexScanInfo.IsIndexScan {
+		for _, idxDef := range indexes {
+			if strings.EqualFold(indexScan.IndexScanInfo.IndexName, idxDef.IndexName) {
+				return accessID, nil
+			}
+		}
+	}
+	if builder.scanHintsForceIndexes(scan) {
+		if accessID == scan.NodeId && len(scan.FilterList) > 0 && !builder.isScanProtected(scan.NodeId) && !builder.scanHasMatchedFullTextFilter(scan) {
+			candidates := make(map[string]struct{}, len(indexes))
+			for _, idxDef := range indexes {
+				candidates[strings.ToLower(idxDef.IndexName)] = struct{}{}
+			}
+			filtered := builder.applyIndicesForFiltersRegularIndexCandidates(scan.NodeId, scan, colRefCnt, idxColMap, candidates, false)
+			if filtered != scan.NodeId {
+				builder.protectedScans[scan.NodeId]++
+				return filtered, nil
+			}
+		}
+	}
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) || !hintedIndexScanComplete(idxDef, scan) {
 			continue
 		}
 		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
