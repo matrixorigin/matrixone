@@ -137,6 +137,17 @@ func (e *PipelineEdge) ResetTerminalStateForReuse() {
 	e.SetNilBatchCntForReuse(e.NilBatchCnt)
 }
 
+// DrainForCleanup releases buffered data after every producer and receiver
+// has stopped, without resetting 4.2's authoritative terminal state.
+func (e *PipelineEdge) DrainForCleanup() {
+	if e == nil {
+		return
+	}
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+	e.drainChannelLocked()
+}
+
 func (e *PipelineEdge) drainChannelLocked() {
 	for {
 		select {
@@ -156,6 +167,7 @@ func (signal *PipelineSignal) release() {
 		return
 	}
 	if signal.typ == GetFromIndex && signal.source != nil {
+		_, _ = signal.source.ReceiveBatch(signal.index)
 		signal.source.ReleaseCurrent(signal.index)
 	} else if signal.typ == GetDirectly && signal.directly != nil {
 		signal.directly.Clean(signal.mp)

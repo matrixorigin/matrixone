@@ -42,6 +42,12 @@ const (
 	defaultRequestDeadline = 2 * time.Minute
 )
 
+const (
+	readBarrierCapabilityUnknown uint32 = iota
+	readBarrierCapabilityUnadvertised
+	readBarrierCapabilitySupported
+)
+
 type ClientOption func(*LogtailClient)
 
 func WithClientRequestPerSecond(rps int) ClientOption {
@@ -65,9 +71,12 @@ type LogtailClient struct {
 	broken    chan struct{} // mark morpc stream as broken when necessary
 	once      sync.Once
 
-	nextBarrierID    atomic.Uint64
-	readBarrierSlots chan struct{}
-	barriers         struct {
+	nextBarrierID       atomic.Uint64
+	peerReadBarrier     atomic.Uint32
+	peerTableReadTarget atomic.Uint32
+	capabilityReady     chan struct{}
+	readBarrierSlots    chan struct{}
+	barriers            struct {
 		sync.Mutex
 		pending map[uint64]chan readBarrierResult
 	}
@@ -88,12 +97,13 @@ type readBarrierResult struct {
 func NewLogtailClient(ctx context.Context, stream morpc.Stream, opts ...ClientOption) (*LogtailClient, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	client := &LogtailClient{
-		ctx:       ctx,
-		cancel:    cancel,
-		requestC:  make(chan *LogtailRequest, defaultRequestChanSize),
-		stream:    stream,
-		broken:    make(chan struct{}),
-		breakChan: make(chan struct{}, 10),
+		ctx:             ctx,
+		cancel:          cancel,
+		requestC:        make(chan *LogtailRequest, defaultRequestChanSize),
+		stream:          stream,
+		broken:          make(chan struct{}),
+		breakChan:       make(chan struct{}, 10),
+		capabilityReady: make(chan struct{}),
 		readBarrierSlots: make(
 			chan struct{}, defaultMaxConcurrentReadBarriers,
 		),
@@ -132,6 +142,64 @@ func (c *LogtailClient) Close() error {
 		c.cancel()
 	}
 	return err
+}
+
+// PeerSupportsReadBarrier waits for a subscription response from this stream.
+// False means that the peer did not advertise the capability.
+func (c *LogtailClient) PeerSupportsReadBarrier(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, context.Cause(ctx)
+	}
+	if c.peerReadBarrier.Load() == readBarrierCapabilityUnknown {
+		select {
+		case <-c.capabilityReady:
+		case <-ctx.Done():
+			return false, context.Cause(ctx)
+		case <-c.ctx.Done():
+			return false, moerr.NewStreamClosedNoCtx()
+		case <-c.broken:
+			return false, moerr.NewStreamClosedNoCtx()
+		}
+	}
+	// More than one case may have become ready. Do not select a fallback after
+	// the caller or the captured stream has already stopped.
+	if err := ctx.Err(); err != nil {
+		return false, context.Cause(ctx)
+	}
+	select {
+	case <-c.ctx.Done():
+		return false, moerr.NewStreamClosedNoCtx()
+	case <-c.broken:
+		return false, moerr.NewStreamClosedNoCtx()
+	default:
+	}
+	switch c.peerReadBarrier.Load() {
+	case readBarrierCapabilityUnadvertised:
+		return false, nil
+	case readBarrierCapabilitySupported:
+		return true, nil
+	default:
+		return false, moerr.NewInternalErrorNoCtx("logtail peer capability is not established")
+	}
+}
+
+// Done and Broken belong to this client and are never reused by a reconnect.
+func (c *LogtailClient) Done() <-chan struct{}   { return c.ctx.Done() }
+func (c *LogtailClient) Broken() <-chan struct{} { return c.broken }
+
+func (c *LogtailClient) recordReadBarrierCapability(supported bool) error {
+	value := readBarrierCapabilityUnadvertised
+	if supported {
+		value = readBarrierCapabilitySupported
+	}
+	if c.peerReadBarrier.CompareAndSwap(readBarrierCapabilityUnknown, value) {
+		close(c.capabilityReady)
+		return nil
+	}
+	if c.peerReadBarrier.Load() == value {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtx("inconsistent logtail peer read-barrier capability")
 }
 
 // Subscribe subscribes table.
@@ -180,6 +248,16 @@ func (c *LogtailClient) Unsubscribe(
 func (c *LogtailClient) ReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
+	return c.readBarrier(ctx, nil)
+}
+
+// ReadTableTarget returns a conservative target; it does not imply that the
+// target's logtail has been sent or applied.
+func (c *LogtailClient) ReadTableTarget(ctx context.Context, table api.TableID) (timestamp.Timestamp, error) {
+	return c.readBarrier(ctx, &table)
+}
+
+func (c *LogtailClient) readBarrier(ctx context.Context, table *api.TableID) (timestamp.Timestamp, error) {
 	if err := ctx.Err(); err != nil {
 		return timestamp.Timestamp{}, context.Cause(ctx)
 	}
@@ -206,7 +284,7 @@ func (c *LogtailClient) ReadBarrier(
 
 	request := &LogtailRequest{}
 	request.Request = &logtail.LogtailRequest_ReadBarrier{
-		ReadBarrier: &logtail.ReadBarrierRequest{BarrierId: barrierID},
+		ReadBarrier: &logtail.ReadBarrierRequest{BarrierId: barrierID, TableReadTarget: table},
 	}
 	if err := c.sendRequest(ctx, request); err != nil {
 		return timestamp.Timestamp{}, err
@@ -222,6 +300,35 @@ func (c *LogtailClient) ReadBarrier(
 	case <-c.broken:
 		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
 	}
+}
+
+func (c *LogtailClient) PeerSupportsTableReadTarget(ctx context.Context) (bool, error) {
+	_, err := c.PeerSupportsReadBarrier(ctx)
+	if err != nil {
+		return false, err
+	}
+	// The table capability is recorded before capabilityReady is closed.
+	select {
+	case <-c.capabilityReady:
+	case <-ctx.Done():
+		return false, context.Cause(ctx)
+	case <-c.Done():
+		return false, moerr.NewStreamClosedNoCtx()
+	case <-c.Broken():
+		return false, moerr.NewStreamClosedNoCtx()
+	}
+	return c.peerTableReadTarget.Load() == readBarrierCapabilitySupported, nil
+}
+
+func (c *LogtailClient) recordTableReadTargetCapability(supported bool) error {
+	value := readBarrierCapabilityUnadvertised
+	if supported {
+		value = readBarrierCapabilitySupported
+	}
+	if c.peerTableReadTarget.CompareAndSwap(readBarrierCapabilityUnknown, value) || c.peerTableReadTarget.Load() == value {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtx("inconsistent table read target capability on logtail stream")
 }
 
 func (c *LogtailClient) removeReadBarrier(
@@ -317,6 +424,16 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 		if barrier := resp.GetReadBarrierResponse(); barrier != nil {
 			c.completeReadBarrier(barrier)
 			continue
+		}
+		if sub := resp.GetSubscribeResponse(); sub != nil {
+			if err := c.recordTableReadTargetCapability(sub.GetSupportsTableReadTarget()); err != nil {
+				c.markStreamBroken()
+				return nil, err
+			}
+			if err := c.recordReadBarrierCapability(sub.GetSupportsReadBarrier()); err != nil {
+				c.markStreamBroken()
+				return nil, err
+			}
 		}
 		return resp, nil
 	}

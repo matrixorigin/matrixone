@@ -127,7 +127,9 @@ func (m magicType) String() string {
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
-	isConst bool
+	// markGuard exists only on a locally compiled, non-serialized scan.
+	markGuard *markScanGuard
+	isConst   bool
 
 	PushdownId      uint64
 	PushdownAddr    string
@@ -301,7 +303,12 @@ type Compile struct {
 	e engine.Engine
 
 	// proc stores the execution context.
-	proc *process.Process
+	proc              *process.Process
+	importMemory      *process.ImportMemory
+	importMemoryBases map[*process.BaseProcess]*process.ImportMemory
+	// Retry attempts have normal pool ownership while preserving the prepared
+	// statement's memory eligibility across the entire execution.
+	importMemoryPrepared bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement

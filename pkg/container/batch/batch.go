@@ -271,6 +271,10 @@ type batchPrimitiveWriter interface {
 }
 
 func writeBatchMarshalUint32(w io.Writer, value uint32) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint32(buffer.AvailableBuffer(), uint32(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteUint32(value)
 	}
@@ -280,6 +284,10 @@ func writeBatchMarshalUint32(w io.Writer, value uint32) error {
 }
 
 func writeBatchMarshalInt32(w io.Writer, value int32) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint32(buffer.AvailableBuffer(), uint32(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteInt32(value)
 	}
@@ -289,6 +297,10 @@ func writeBatchMarshalInt32(w io.Writer, value int32) error {
 }
 
 func writeBatchMarshalInt64(w io.Writer, value int64) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, _ = buffer.Write(binary.NativeEndian.AppendUint64(buffer.AvailableBuffer(), uint64(value)))
+		return nil
+	}
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteInt64(value)
 	}

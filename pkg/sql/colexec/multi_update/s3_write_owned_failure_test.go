@@ -17,9 +17,11 @@ package multi_update
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,9 +38,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type ownershipFailFS struct{ fileservice.FileService }
+type ownershipFailFS struct {
+	fileservice.FileService
+	allow  int
+	writes []string
+}
 
-func (f *ownershipFailFS) Write(context.Context, fileservice.IOVector) error {
+func (f *ownershipFailFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	if len(f.writes) < f.allow {
+		if err := f.FileService.Write(ctx, v); err != nil {
+			return err
+		}
+		f.writes = append(f.writes, v.FilePath)
+		return nil
+	}
 	return errors.New("injected object write failure")
 }
 
@@ -53,42 +66,57 @@ func (b *ownershipTrackingBuffer) Close(mp *mpool.MPool) {
 }
 
 func TestSortAndSyncDropsTransferredBatchOnWriteError(t *testing.T) {
-	ctx := context.Background()
-	enabledHere := fault.Enable()
-	t.Cleanup(func() {
-		_, _ = fault.RemoveFaultPoint(ctx, objectio.FJ_CNFlushSmallObjs)
-		if enabledHere {
-			fault.Disable()
-		}
-	})
-	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CNFlushSmallObjs, ":::", "ECHO", 0, "ownership_db", false))
-	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { fs.Close(ctx) })
-	proc := testutil.NewProcess(t, testutil.WithFileService(&ownershipFailFS{fs}))
-	columnType := types.New(types.T_varchar, 256, 0)
-	input := batch.NewOffHeap([]string{"v"})
-	input.Vecs[0] = vector.NewOffHeapVecWithType(columnType)
-	// Descriptor plus payload is exactly the injected 512 KiB threshold, so
-	// WriteOwned transfers the full batch and its spill fails synchronously.
-	for range objectio.BlockMaxRows {
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 40)), false, proc.Mp()))
+	for _, prior := range []int{0, 1} {
+		t.Run(fmt.Sprint(prior), func(t *testing.T) {
+			ctx := context.Background()
+			enabledHere := fault.Enable()
+			t.Cleanup(func() {
+				_, _ = fault.RemoveFaultPoint(ctx, objectio.FJ_CNFlushSmallObjs)
+				if enabledHere {
+					fault.Disable()
+				}
+			})
+			require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CNFlushSmallObjs, ":::", "ECHO", 0, "ownership_db", false))
+			fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(ctx) })
+			failing := &ownershipFailFS{FileService: fs, allow: prior}
+			proc := testutil.NewProcess(t, testutil.WithFileService(failing))
+			columnType := types.New(types.T_varchar, 256, 0)
+			input := batch.NewOffHeap([]string{"v"})
+			input.Vecs[0] = vector.NewOffHeapVecWithType(columnType)
+			// Descriptor plus payload is exactly the injected 512 KiB threshold, so
+			// WriteOwned transfers the full batch and its spill fails synchronously.
+			for range objectio.BlockMaxRows {
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 40)), false, proc.Mp()))
+			}
+			input.SetRowCount(int(objectio.BlockMaxRows))
+			bats := []*batch.Batch{input}
+			if prior > 0 {
+				copied, err := input.Dup(proc.Mp())
+				require.NoError(t, err)
+				bats = append(bats, copied)
+			}
+			seenClose, retained := false, false
+			buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, nil, true)}
+			buf.onClose = func() { seenClose = true; retained = bats[0] != nil }
+			table := &planpb.TableDef{
+				DbName: "ownership_db", Name: "ownership_table",
+				Pkey: &planpb.PrimaryKeyDef{PkeyColName: "absent"},
+				Cols: []*planpb.ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}},
+			}
+			writer := &s3WriterDelegate{cleanupUnpublished: prior > 0}
+			err = writer.sortAndSyncOneTable(proc, table, process.NewTempAnalyzer(), 0, false, bats, true, ioutil.WithBuffer(buf, true))
+			require.ErrorContains(t, err, "injected object write failure")
+			require.True(t, seenClose, "the sinker must have closed after the failed write")
+			require.False(t, retained, "the caller must drop a batch as soon as the sinker takes ownership")
+			require.Len(t, failing.writes, prior)
+			for _, path := range failing.writes {
+				_, err := fs.StatFile(ctx, path)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "a failed later upload must not orphan its successful prefix")
+			}
+		})
 	}
-	input.SetRowCount(int(objectio.BlockMaxRows))
-	bats := []*batch.Batch{input}
-	seenClose, retained := false, false
-	buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, nil, true)}
-	buf.onClose = func() { seenClose = true; retained = bats[0] != nil }
-	table := &planpb.TableDef{
-		DbName: "ownership_db", Name: "ownership_table",
-		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "absent"},
-		Cols: []*planpb.ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}},
-	}
-	writer := &s3WriterDelegate{}
-	err = writer.sortAndSyncOneTable(proc, table, process.NewTempAnalyzer(), 0, false, bats, true, ioutil.WithBuffer(buf, true))
-	require.ErrorContains(t, err, "injected object write failure")
-	require.True(t, seenClose, "the sinker must have closed after the failed write")
-	require.False(t, retained, "the caller must drop a batch as soon as the sinker takes ownership")
 }
 
 func TestSortAndSyncRetainsUntransferredBatchOnWriteError(t *testing.T) {
@@ -104,7 +132,7 @@ func TestSortAndSyncRetainsUntransferredBatchOnWriteError(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
-	proc := testutil.NewProcess(t, testutil.WithFileService(&ownershipFailFS{fs}))
+	proc := testutil.NewProcess(t, testutil.WithFileService(&ownershipFailFS{FileService: fs}))
 	input := batch.NewOffHeap([]string{"v"})
 	input.Vecs[0] = vector.NewOffHeapVecWithType(types.New(types.T_varchar, 256, 0))
 	// A partial block uses the copying path; its spill still reaches the

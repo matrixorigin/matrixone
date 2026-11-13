@@ -61,7 +61,8 @@ type PartitionState struct {
 	tid uint64
 
 	// data
-	rows *btree.BTreeG[*RowEntry] // use value type to avoid locking on elements
+	// Published entries are immutable; clone an existing entry before modifying it.
+	rows *btree.BTreeG[*RowEntry]
 
 	checkpoints []string
 	//current partitionState can serve snapshot read only if start <= ts <= end
@@ -713,6 +714,10 @@ func (p *PartitionState) HandleRowsDelete(
 			Time:    timeVector[i],
 		}
 		entry, ok := p.rows.Get(pivot)
+		if ok {
+			copy := *entry
+			entry = &copy
+		}
 		if !ok {
 			entry = pivot
 			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
@@ -794,6 +799,10 @@ func (p *PartitionState) HandleRowsInsert(
 			Time:    timeVector[i],
 		}
 		entry, ok := p.rows.Get(pivot)
+		if ok {
+			copy := *entry
+			entry = &copy
+		}
 		if !ok {
 			entry = pivot
 			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)

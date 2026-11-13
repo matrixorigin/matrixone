@@ -1356,9 +1356,9 @@ func TestUpdateStatsInfo_Decimal_DifferentScales(t *testing.T) {
 // TestCalcNodeDOP_DistinctAggregation tests that distinct aggregation nodes
 // are correctly set to Dop=1 and ForceOneCN=true
 func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...)
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
+	// Create a plan with an AGG node containing SUM(DISTINCT ...)
+	// Use a variable to avoid constant overflow when combining SUM with Distinct flag
+	countVal := uint64(function.EncodeOverloadID(function.SUM, 0))
 	distinctVal := uint64(function.Distinct)
 	countWithDistinct := int64(countVal | distinctVal)
 	p := &planpb.Plan{
@@ -1371,7 +1371,7 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 						NodeType: planpb.Node_TABLE_SCAN,
 						Stats:    DefaultStats(),
 					},
-					// AGG node with COUNT(DISTINCT ...)
+					// AGG node with SUM(DISTINCT ...)
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
@@ -1382,7 +1382,7 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 								Expr: &planpb.Expr_F{
 									F: &planpb.Function{
 										Func: &planpb.ObjectRef{
-											// COUNT with Distinct flag: use uint64 to avoid overflow, then convert to int64
+											// SUM with Distinct flag: use uint64 to avoid overflow, then convert to int64
 											// Similar to having_binder.go:144, we need to convert to uint64 first
 											Obj:     countWithDistinct,
 											ObjName: "count",
@@ -1488,9 +1488,9 @@ func TestCalcNodeDOP_NonDistinctAggregation(t *testing.T) {
 // TestCalcNodeDOP_DistinctAggregationWithNilStats tests that distinct aggregation
 // nodes with nil Stats are handled correctly
 func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...) but no Stats
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
+	// Create a plan with an AGG node containing SUM(DISTINCT ...) but no Stats
+	// Use a variable to avoid constant overflow when combining SUM with Distinct flag
+	countVal := uint64(function.EncodeOverloadID(function.SUM, 0))
 	distinctVal := uint64(function.Distinct)
 	countWithDistinct := int64(countVal | distinctVal)
 	p := &planpb.Plan{
@@ -1503,7 +1503,7 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 						NodeType: planpb.Node_TABLE_SCAN,
 						Stats:    DefaultStats(),
 					},
-					// AGG node with COUNT(DISTINCT ...) but nil Stats
+					// AGG node with SUM(DISTINCT ...) but nil Stats
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
@@ -1514,7 +1514,7 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 								Expr: &planpb.Expr_F{
 									F: &planpb.Function{
 										Func: &planpb.ObjectRef{
-											// COUNT with Distinct flag: use uint64 to avoid overflow, then convert to int64
+											// SUM with Distinct flag: use uint64 to avoid overflow, then convert to int64
 											// Similar to having_binder.go:144, we need to convert to uint64 first
 											Obj:     countWithDistinct,
 											ObjName: "count",
@@ -1872,5 +1872,33 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCalcNodeDOPMergeableCountDistinct(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprint("non-count=", mixed), func(t *testing.T) {
+			distinct := func(id int32) *planpb.Expr {
+				return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: int64(uint64(function.EncodeOverloadID(id, 0)) | function.Distinct)}}}}
+			}
+			scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, Stats: DefaultStats()}
+			agg := &planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{0}, Stats: DefaultStats(), AggList: []*planpb.Expr{distinct(function.COUNT)}}
+			agg.Stats.HashmapStats = &planpb.HashMapStats{Shuffle: true}
+			if mixed {
+				agg.AggList = append(agg.AggList, distinct(function.SUM))
+			}
+			p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{scan, agg}, Steps: []int32{1}}}}
+			CalcNodeDOP(p, 1, 4, 2)
+			if mixed {
+				require.True(t, agg.Stats.ForceOneCN)
+				require.Equal(t, int32(1), agg.Stats.Dop)
+			} else {
+				require.False(t, agg.Stats.ForceOneCN)
+				require.Greater(t, agg.Stats.Dop, int32(1))
+			}
+			agg.Stats = nil
+			CalcNodeDOP(p, 1, 4, 2)
+			require.NotNil(t, agg.Stats)
+		})
 	}
 }

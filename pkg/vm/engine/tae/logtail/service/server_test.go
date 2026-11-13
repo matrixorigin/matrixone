@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -86,6 +87,7 @@ func TestService(t *testing.T) {
 		resp, err := logtailClient.Receive(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, resp.GetSubscribeResponse())
+		require.True(t, resp.GetSubscribeResponse().GetSupportsReadBarrier())
 		require.Equal(t, tableA.String(), resp.GetSubscribeResponse().Logtail.Table.String())
 	}
 
@@ -164,6 +166,38 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 	require.Equal(t, frontier, *barrier.Timestamp)
 	require.Empty(t, server.readBarrierSlots,
 		"the end-to-end admission slot must be released after response hand-off")
+}
+
+func TestTableReadTargetReturnsBoundWithoutPublishingProgress(t *testing.T) {
+	target := timestamp.Timestamp{PhysicalTime: 31, LogicalTime: 4}
+	requested := mockTable(1, 2, 3)
+	barrierCalled := false
+	logtailer := &controlledLogtailer{
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			barrierCalled = true
+			return timestamp.Timestamp{}, errors.New("table target unexpectedly fell back")
+		},
+		targetFn: func(table api.TableID) (timestamp.Timestamp, bool) {
+			require.Equal(t, requested, table)
+			return target, true
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	req := &logtail.ReadBarrierRequest{BarrierId: 9, TableReadTarget: &requested}
+	require.NoError(t, server.onReadBarrier(t.Context(), stream, req))
+	response := receiveCapturedLogtailResponse(t, transport).GetReadBarrierResponse()
+	require.NotNil(t, response)
+	require.Equal(t, uint64(9), response.BarrierId)
+	require.Equal(t, target, *response.Timestamp)
+	require.False(t, barrierCalled)
+	require.Empty(t, server.readBarrierSlots)
+	select {
+	case extra := <-transport.writes:
+		t.Fatalf("table target published a progress event: %T", extra)
+	default:
+	}
 }
 
 func TestReadBarrierServerAdmissionHonorsCancellation(t *testing.T) {

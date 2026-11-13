@@ -140,6 +140,31 @@ func TestTryUpdateMaxCommittedTSNeverMovesBackward(t *testing.T) {
 	require.Equal(t, newer, *mgr.MaxCommittedTS.Load())
 }
 
+func TestCatalogReadTargetIsUnavailableUntilRecoveryFloorIsPublished(t *testing.T) {
+	mgr := &TxnManager{}
+	mgr.initMaxCommittedTS()
+	commit := types.BuildTS(3, 0)
+	mgr.TryUpdateMaxCommittedTS(commit)
+	if _, ok := mgr.CatalogReadTarget(); ok {
+		t.Fatal("catalog read target was available before recovery completed")
+	}
+	mgr.InitializeTableReadTargets()
+	got, ok := mgr.CatalogReadTarget()
+	require.True(t, ok)
+	require.Equal(t, commit, got)
+
+	mgr.updateCatalogReadTarget(types.BuildTS(2, 0))
+	got, ok = mgr.CatalogReadTarget()
+	require.True(t, ok)
+	require.Equal(t, commit, got, "the target must never move backward")
+
+	newer := types.BuildTS(4, 0)
+	mgr.updateCatalogReadTarget(newer)
+	got, ok = mgr.CatalogReadTarget()
+	require.True(t, ok)
+	require.Equal(t, newer, got)
+}
+
 func TestTryUpdateMaxCommittedTSConcurrent(t *testing.T) {
 	mgr := &TxnManager{}
 	mgr.initMaxCommittedTS()

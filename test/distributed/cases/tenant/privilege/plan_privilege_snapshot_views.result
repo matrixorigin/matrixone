@@ -1,0 +1,326 @@
+drop snapshot if exists plan_view_sys_snap;
+drop snapshot if exists plan_view_src_snap;
+drop account if exists plan_view_src;
+drop account if exists plan_view_dst;
+drop database if exists plan_view_origin;
+create account plan_view_src admin_name 'admin' identified by '111';
+create account plan_view_dst admin_name 'admin' identified by '111';
+create database plan_view_origin;
+create table plan_view_origin.t(a int);
+insert into plan_view_origin.t values (1),(2);
+create view plan_view_origin.v as select * from plan_view_origin.t;
+create view plan_view_origin.const_v as select 3 as a;
+create view plan_view_origin.nested_v as select * from plan_view_origin.v;
+create snapshot plan_view_sys_snap for account;
+create database plan_view_clone clone plan_view_origin {snapshot='plan_view_sys_snap'} to account plan_view_dst;
+set enable_privilege_cache = on;
+select * from plan_view_clone.v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+select * from plan_view_clone.const_v;
+➤ a[-5,64,0]  𝄀
+3
+select * from plan_view_clone.nested_v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+set enable_privilege_cache = off;
+select * from plan_view_clone.v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+select * from plan_view_clone.const_v;
+➤ a[-5,64,0]  𝄀
+3
+select * from plan_view_clone.nested_v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+create role plan_view_reader;
+grant connect on account * to plan_view_reader;
+grant select on view plan_view_clone.v to plan_view_reader;
+grant select on view plan_view_clone.const_v to plan_view_reader;
+create user plan_view_user identified by '111' default role plan_view_reader;
+select * from plan_view_clone.t;
+internal error: do not have privilege to execute the statement
+select * from plan_view_clone.v;
+internal error: do not have privilege to execute the statement
+select * from plan_view_clone.const_v;
+internal error: do not have privilege to execute the statement
+drop database plan_view_origin;
+select * from plan_view_clone.v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+select * from plan_view_clone.const_v;
+➤ a[-5,64,0]  𝄀
+3
+select * from plan_view_clone.nested_v order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+create database plan_view_pubdata;
+create table plan_view_pubdata.t(a int);
+insert into plan_view_pubdata.t values (30),(40);
+create publication plan_view_pub database plan_view_pubdata account all;
+create database plan_view_sub from sys publication plan_view_pub;
+create database plan_view_subwrap;
+create view plan_view_subwrap.definer_v as select * from plan_view_sub.t;
+set view_security_type = 'INVOKER';
+create view plan_view_subwrap.invoker_v as select * from plan_view_sub.t;
+set view_security_type = 'DEFINER';
+create role plan_sub_view_only;
+grant connect on account * to plan_sub_view_only;
+grant select on view plan_view_subwrap.definer_v to plan_sub_view_only;
+grant select on view plan_view_subwrap.invoker_v to plan_sub_view_only;
+create user plan_sub_view_user identified by '111' default role plan_sub_view_only;
+create role plan_sub_table_reader;
+grant connect on account * to plan_sub_table_reader;
+grant select on view plan_view_subwrap.definer_v to plan_sub_table_reader;
+grant select on view plan_view_subwrap.invoker_v to plan_sub_table_reader;
+grant select on table plan_view_sub.* to plan_sub_table_reader;
+create user plan_sub_table_user identified by '111' default role plan_sub_table_reader;
+set enable_privilege_cache = on;
+select * from plan_view_subwrap.definer_v order by a;
+➤ a[4,32,0]  𝄀
+30  𝄀
+40
+select * from plan_view_subwrap.invoker_v order by a;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
+select * from plan_view_subwrap.definer_v order by a;
+➤ a[4,32,0]  𝄀
+30  𝄀
+40
+select * from plan_view_subwrap.invoker_v order by a;
+internal error: do not have privilege to execute the statement
+select * from plan_view_subwrap.definer_v order by a;
+➤ a[4,32,0]  𝄀
+30  𝄀
+40
+select * from plan_view_subwrap.invoker_v order by a;
+➤ a[4,32,0]  𝄀
+30  𝄀
+40
+create database plan_view_data;
+create table plan_view_data.t(a int);
+insert into plan_view_data.t values (10),(20);
+create role plan_view_definer;
+grant connect on account * to plan_view_definer;
+grant create view on database plan_view_data to plan_view_definer;
+grant select on table plan_view_data.t to plan_view_definer;
+create user plan_view_owner identified by '111' default role plan_view_definer;
+create view plan_view_data.v as select * from plan_view_data.t;
+create view plan_view_data.const_v as select 12345 as a;
+create view plan_view_data.nested_v as select * from plan_view_data.v;
+create role plan_view_src_reader;
+grant connect on account * to plan_view_src_reader;
+grant select on view plan_view_data.v to plan_view_src_reader;
+create user plan_view_src_user identified by '111' default role plan_view_src_reader;
+create snapshot plan_view_src_snap for account plan_view_src;
+set enable_privilege_cache = on;
+select * from plan_view_data.v{snapshot='plan_view_src_snap'} order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+select * from plan_view_data.v{snapshot='plan_view_src_snap'} order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+select * from plan_view_data.nested_v{snapshot='plan_view_src_snap'} order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+select * from plan_view_data.const_v{snapshot='plan_view_src_snap'};
+➤ a[-5,64,0]  𝄀
+12345
+prepare plan_view_foreign_stmt from "select * from plan_view_data.v{snapshot='plan_view_src_snap'} order by a";
+execute plan_view_foreign_stmt;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+execute plan_view_foreign_stmt;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+create database plan_view_wrapper;
+create table plan_view_wrapper.public_t(a int);
+insert into plan_view_wrapper.public_t values (7);
+create table plan_view_wrapper.sink(a int);
+create view plan_view_wrapper.const_local1 as select 101 as a;
+create view plan_view_wrapper.const_local2 as select 102 as a;
+create view plan_view_wrapper.const_nested as select * from plan_view_wrapper.const_local1;
+set view_security_type = 'INVOKER';
+create view plan_view_wrapper.const_nested_invoker as select * from plan_view_wrapper.const_local2;
+set view_security_type = 'DEFINER';
+create view plan_view_wrapper.const_foreign_granted as select * from plan_view_data.const_v{snapshot='plan_view_src_snap'};
+create view plan_view_wrapper.const_foreign_ungranted as select * from plan_view_data.const_v{snapshot='plan_view_src_snap'};
+create view plan_view_wrapper.definer_v as select * from plan_view_data.v{snapshot='plan_view_src_snap'};
+set view_security_type = 'INVOKER';
+create view plan_view_wrapper.invoker_v as select * from plan_view_data.v{snapshot='plan_view_src_snap'};
+set view_security_type = 'DEFINER';
+create view plan_view_wrapper.ungranted_v as select * from plan_view_data.v{snapshot='plan_view_src_snap'};
+create role plan_view_sys_reader;
+grant connect on account * to plan_view_sys_reader;
+grant select on view plan_view_wrapper.definer_v to plan_view_sys_reader;
+grant select on view plan_view_wrapper.invoker_v to plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_local1 to plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_nested to plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_nested_invoker to plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_foreign_granted to plan_view_sys_reader;
+grant select on table plan_view_wrapper.public_t to plan_view_sys_reader;
+grant insert on table plan_view_wrapper.sink to plan_view_sys_reader;
+grant create table on database plan_view_wrapper to plan_view_sys_reader;
+create user plan_view_sys_user identified by '111' default role plan_view_sys_reader;
+select * from plan_view_wrapper.definer_v order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+select * from plan_view_data.v{snapshot='plan_view_src_snap'};
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.definer_v;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.invoker_v;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.ungranted_v;
+internal error: do not have privilege to execute the statement
+prepare plan_view_reader_stmt from 'select * from plan_view_wrapper.definer_v';
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+select * from plan_view_wrapper.const_local1;
+➤ a[-5,64,0]  𝄀
+101
+select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_nested;
+➤ a[-5,64,0]  𝄀
+101
+select * from plan_view_wrapper.const_nested_invoker;
+internal error: do not have privilege to execute the statement
+select * from plan_view_data.const_v{snapshot='plan_view_src_snap'};
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_foreign_granted;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_foreign_ungranted;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.public_t join plan_view_wrapper.const_local2 on true;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_local1 union all select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_local2 union all select * from plan_view_wrapper.const_local1;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
+select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = on;
+prepare plan_const_stmt from 'select * from plan_view_wrapper.const_local1';
+execute plan_const_stmt;
+➤ a[-5,64,0]  𝄀
+101
+insert into plan_view_wrapper.sink select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+create table plan_view_wrapper.ctas_denied as select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+select count(*) from plan_view_wrapper.sink;
+➤ count(*)[-5,64,0]  𝄀
+0
+revoke select on view plan_view_wrapper.const_local1 from plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_local2 to plan_view_sys_reader;
+execute plan_const_stmt;
+internal error: do not have privilege to execute the statement
+select * from plan_view_wrapper.const_nested_invoker;
+➤ a[-5,64,0]  𝄀
+102
+insert into plan_view_wrapper.sink select * from plan_view_wrapper.const_local2;
+create table plan_view_wrapper.ctas_ok as select * from plan_view_wrapper.const_local2;
+select count(*) from plan_view_wrapper.sink;
+➤ count(*)[-5,64,0]  𝄀
+1
+select * from plan_view_wrapper.ctas_ok;
+➤ a[-5,64,0]  𝄀
+102
+revoke insert on table plan_view_wrapper.sink from plan_view_sys_reader;
+grant select on view plan_view_wrapper.const_local1 to plan_view_sys_reader;
+execute plan_const_stmt;
+➤ a[-5,64,0]  𝄀
+101
+deallocate prepare plan_const_stmt;
+insert into plan_view_wrapper.sink select * from plan_view_wrapper.const_local2;
+internal error: do not have privilege to execute the statement
+select count(*) from plan_view_wrapper.sink;
+➤ count(*)[-5,64,0]  𝄀
+1
+revoke select on table plan_view_data.t from plan_view_definer;
+select * from plan_view_data.v order by a;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
+select * from plan_view_data.v order by a;
+internal error: do not have privilege to execute the statement
+select * from plan_view_data.v{snapshot='plan_view_src_snap'} order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+execute plan_view_foreign_stmt;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+grant select on table plan_view_data.t to plan_view_definer;
+set enable_privilege_cache = on;
+select * from plan_view_data.v order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+restore account plan_view_src{snapshot='plan_view_src_snap'};
+select * from plan_view_data.v{snapshot='plan_view_src_snap'} order by a;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+execute plan_view_foreign_stmt;
+➤ a[4,32,0]  𝄀
+10  𝄀
+20
+deallocate prepare plan_view_foreign_stmt;
+create database plan_view_local;
+create table plan_view_local.t(a int);
+insert into plan_view_local.t values (7);
+create role plan_view_local_definer;
+grant connect on account * to plan_view_local_definer;
+grant create view on database plan_view_local to plan_view_local_definer;
+grant select on table plan_view_local.t to plan_view_local_definer;
+create user plan_view_local_owner identified by '111' default role plan_view_local_definer;
+create view plan_view_local.v as select * from plan_view_local.t;
+create view plan_view_local.const_v as select 8 as a;
+revoke select on table plan_view_local.t from plan_view_local_definer;
+select * from plan_view_local.t;
+➤ a[4,32,0]  𝄀
+7
+select * from plan_view_local.v;
+internal error: do not have privilege to execute the statement
+create view plan_view_local.admin_v as select * from plan_view_local.t;
+grant select on table plan_view_local.t to plan_view_sys_reader;
+grant select on view plan_view_local.const_v to plan_view_sys_reader;
+select * from plan_view_local.t;
+➤ a[4,32,0]  𝄀
+7
+select * from plan_view_local.admin_v;
+internal error: do not have privilege to execute the statement
+select * from plan_view_local.const_v;
+➤ a[-5,64,0]  𝄀
+8
+drop user plan_view_local_owner;
+drop role plan_view_local_definer;
+select * from plan_view_local.const_v;
+internal error: do not have privilege to execute the statement
+drop database plan_view_local;
+drop user plan_view_sys_user;
+drop role plan_view_sys_reader;
+drop database plan_view_wrapper;
+drop snapshot plan_view_sys_snap;
+drop snapshot plan_view_src_snap;
+drop account plan_view_src;
+drop account plan_view_dst;
+drop publication plan_view_pub;
+drop database plan_view_pubdata;

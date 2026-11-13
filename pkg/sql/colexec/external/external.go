@@ -68,6 +68,76 @@ func (external *External) OpType() vm.OpType {
 	return vm.External
 }
 
+// UsesMemoryInput is shared with compiler admission. The physical CSV reader
+// has a source allocation table. JSONLINE also parses and constructs fields
+// through transJson*, whose conversion scratch/expansion has no complete input
+// contract here; it retains legacy execution alongside Parquet/result scans.
+func (external *External) UsesMemoryInput() bool {
+	_, ok := external.memoryInputParam()
+	return ok
+}
+
+func (external *External) memoryInputParam() (*tree.ExternParam, bool) {
+	if external == nil || external.Es == nil {
+		return nil, false
+	}
+	if external.Es.ForeignScan != nil || external.Es.DatastreamScan != nil || external.Es.KafkaScan != nil || external.Es.ErrorMode.Tolerate || external.Es.ErrorMode.WantLine {
+		return nil, false
+	}
+	param := external.Es.Extern
+	if param == nil {
+		param = &tree.ExternParam{}
+		if json.Unmarshal([]byte(external.Es.CreateSql), param) != nil {
+			return nil, false
+		}
+		if plan2.InitS3Param(param) != nil {
+			return nil, false
+		}
+	}
+	if param.ExternType == int32(plan.ExternType_RESULT_SCAN) || param.Format != tree.CSV || len(external.Es.Attrs) > len(external.Es.Cols) {
+		return nil, false
+	}
+	for i, attr := range external.Es.Attrs {
+
+		// getFieldFromLine substitutes a filename for this synthetic column.
+		// Its length is unrelated to the bounded raw record, so that source
+		// cannot claim the CSV allocation table without a separate path bound.
+		if catalog.ContainExternalHidenCol(attr.ColName) || external.Es.Cols[i] == nil ||
+			attr.ColIndex < 0 || int(attr.ColIndex) >= len(external.Es.Attrs) || attr.ColFieldIndex < 0 {
+			return nil, false
+		}
+		col := external.Es.Cols[attr.ColIndex]
+		if col == nil || isExternalErrorAttr(attr, external.Es.Cols) ||
+			attr.ColName == catalog.ExternalFileLine && col.ColId == catalog.ExternalFileLineColId {
+			return nil, false
+		}
+		// Geometry normalization builds parsed coordinate trees and WKB. Its
+		// expansion is outside the CSV allocation contract.
+		oid := types.T(external.Es.Cols[i].Typ.Id)
+		if oid == types.T_geometry || oid == types.T_geometry32 {
+			return nil, false
+		}
+
+	}
+	return param, true
+}
+
+// MemoryInputSchema describes the physical vectors allocated by Prepare before
+// any fused projection. ParallelLoad reads raw VARCHAR except for the vector
+// types that 4.2 decodes directly. Keep the same makeType owner as Prepare.
+func (external *External) MemoryInputSchema() ([]types.Type, bool) {
+	param, ok := external.memoryInputParam()
+	if !ok {
+		return nil, false
+	}
+	parallelLoad := external.Es.ParallelLoad && param.Format != tree.PARQUET
+	schema := make([]types.Type, len(external.Es.Attrs))
+	for i := range schema {
+		schema[i] = makeType(&external.Es.Cols[i].Typ, parallelLoad)
+	}
+	return schema, true
+}
+
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
@@ -115,6 +185,21 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+	prepared := false
+	acquired := false
+	defer func() {
+		if !prepared && acquired {
+			external.Free(proc, true, nil)
+		}
+	}()
+	if external.inputLease == nil && proc.Base.ImportMemory != nil && external.UsesMemoryInput() {
+		lease, err := proc.Base.ImportMemory.AcquireInput(proc.Ctx)
+		if err != nil {
+			return err
+		}
+		external.inputLease = lease
+		acquired = lease != nil
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -216,6 +301,7 @@ func (external *External) Prepare(proc *process.Process) error {
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
+	prepared = true
 	return nil
 }
 
@@ -1299,6 +1385,12 @@ func getFieldFromLine(line []csvparser.Field, colName string, colId uint64, para
 		if f, ok := kafkaMetaField(colName, param); ok {
 			return f
 		}
+	}
+	// Capacity forecasting also reads fields before getOneRowData applies the
+	// strict-row policy. A missing field contributes no payload; validation and
+	// permissive NULL filling remain with that owner.
+	if fieldIdx < 0 || int64(fieldIdx) >= int64(len(line)) {
+		return csvparser.Field{IsNull: true}
 	}
 	return line[fieldIdx]
 }

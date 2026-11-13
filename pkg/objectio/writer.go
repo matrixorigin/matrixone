@@ -91,8 +91,10 @@ func (a *WriteArena) Reset() {
 	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit &&
 		a.serialPeak <= (a.serialBuf.Cap()-1)/2)
 	limit := a.sizeLimit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = arenaMaxSize
+	} else if limit < 0 {
+		limit = 0
 	}
 	if needed := a.totalRequested; needed > len(a.data) && needed <= limit {
 		newCap := arenaNextPow2(needed)
@@ -160,6 +162,11 @@ func arenaCompressBufSize(minSize int) int {
 		return minSize
 	}
 	return size
+}
+
+// Allocated counts the complete retained capacity, including Go serialization.
+func (a *WriteArena) Allocated() int {
+	return cap(a.data) + cap(a.compressBuf) + a.serialBuf.Cap()
 }
 
 // FreeBuffers releases the off-heap allocations and serialization scratch.

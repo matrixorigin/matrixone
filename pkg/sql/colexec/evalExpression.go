@@ -1377,9 +1377,15 @@ func generateConstExpressionExecutor(
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		if err == nil {
-			vec.SetIsBin(con.IsBin)
+		if err != nil {
+			// A failed constructor may already own its header allocation.
+			// Retire any partial result before the executor is published.
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+			return nil, err
 		}
+		vec.SetIsBin(con.IsBin)
 	}
 	return vec, err
 }

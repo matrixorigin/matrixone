@@ -102,6 +102,9 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 	if td[len(td)-1].(*engine.PropertiesDef).Properties[0].Value != catalog.SystemSequenceRel {
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
+	if err := proc.GetSessionInfo().SqlHelper.CheckDatabaseWrite(proc.Ctx, db); err != nil {
+		return "", err
+	}
 
 	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
@@ -322,6 +325,9 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 	}
 	rel, err := dbHandler.Relation(proc.Ctx, tblname, nil)
 	if err != nil {
+		return "", err
+	}
+	if err := proc.GetSessionInfo().SqlHelper.CheckDatabaseWrite(proc.Ctx, db); err != nil {
 		return "", err
 	}
 

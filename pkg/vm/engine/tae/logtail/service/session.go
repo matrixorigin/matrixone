@@ -1065,7 +1065,9 @@ func newSubscritpionResponse(
 ) *logtail.LogtailResponse_SubscribeResponse {
 	return &logtail.LogtailResponse_SubscribeResponse{
 		SubscribeResponse: &logtail.SubscribeResponse{
-			Logtail: tail,
+			Logtail:                 tail,
+			SupportsReadBarrier:     true,
+			SupportsTableReadTarget: true,
 		},
 	}
 }
