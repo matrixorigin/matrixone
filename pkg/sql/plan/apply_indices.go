@@ -3219,202 +3219,212 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
-	for _, idxDef := range indexes {
-		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
-			continue
-		}
-
-		numParts := len(idxDef.Parts)
-		numKeyParts := numParts
-		if !idxDef.Unique {
-			numKeyParts--
-		}
-		if numKeyParts == 0 || numKeyParts > len(col2Cond) {
-			continue
-		}
-
-		condIdx = condIdx[:0]
-		for i := 0; i < numKeyParts; i++ {
-			tmpName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
-			idx, ok := col2Cond[colIdx]
-			if !ok {
-				break
+	// Preserve the existing priority of complete-key candidates. Partial
+	// prefixes are fallbacks and must not displace them by catalog order.
+selectIndex:
+	for _, completeKey := range []bool{true, false} {
+		for _, idxDef := range indexes {
+			if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
+				continue
 			}
 
-			condIdx = append(condIdx, idx)
-		}
-
-		if len(condIdx) < numKeyParts {
-			continue
-		}
-
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
-		if err != nil {
-			return -1, err
-		}
-		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
-			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
-		}
-		pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
-		if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
-		}
-
-		idxTag := builder.genNewBindTag()
-		builder.addNameByColRef(idxTag, idxTableDef)
-
-		rfTag := builder.genNewMsgTag()
-
-		var rfBuildExpr *plan.Expr
-		var componentProbeExprs []*plan.Expr
-		if numParts == 1 {
-			condition := node.OnList[condIdx[0].exprIdx].GetF()
-			rfBuildExpr = &plan.Expr{
-				Typ: condition.Args[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(condIdx[0].hashSlot),
-					},
-				},
+			numParts := len(idxDef.Parts)
+			numKeyParts := numParts
+			if !idxDef.Unique {
+				numKeyParts--
 			}
-		} else {
-			serialArgs := make([]*plan.Expr, len(condIdx))
-			componentProbeExprs = make([]*plan.Expr, len(condIdx))
-			for i := range condIdx {
-				componentProbeExprs[i] =
-					node.OnList[condIdx[i].exprIdx].GetF().Args[0]
-				serialArgs[i] = &plan.Expr{
-					Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+			if numKeyParts == 0 {
+				continue
+			}
+
+			condIdx = condIdx[:0]
+			for i := 0; i < numKeyParts; i++ {
+				tmpName := catalog.ResolveAlias(idxDef.Parts[i])
+				colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
+				idx, ok := col2Cond[colIdx]
+				if !ok {
+					break
+				}
+
+				condIdx = append(condIdx, idx)
+			}
+
+			// Only a contiguous leading prefix can prune the serialized index key.
+			if len(condIdx) == 0 {
+				continue
+			}
+			if (len(condIdx) == numKeyParts) != completeKey {
+				continue
+			}
+
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+			if err != nil {
+				return -1, err
+			}
+			if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
+				leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
+			}
+			pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
+			if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
+			}
+
+			idxTag := builder.genNewBindTag()
+			builder.addNameByColRef(idxTag, idxTableDef)
+
+			rfTag := builder.genNewMsgTag()
+
+			var rfBuildExpr *plan.Expr
+			var componentProbeExprs []*plan.Expr
+			if numParts == 1 {
+				condition := node.OnList[condIdx[0].exprIdx].GetF()
+				rfBuildExpr = &plan.Expr{
+					Typ: condition.Args[1].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
-							ColPos: int32(condIdx[i].hashSlot),
+							ColPos: int32(condIdx[0].hashSlot),
 						},
 					},
 				}
+			} else {
+				serialArgs := make([]*plan.Expr, len(condIdx))
+				componentProbeExprs = make([]*plan.Expr, len(condIdx))
+				for i := range condIdx {
+					componentProbeExprs[i] =
+						node.OnList[condIdx[i].exprIdx].GetF().Args[0]
+					serialArgs[i] = &plan.Expr{
+						Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: -1,
+								ColPos: int32(condIdx[i].hashSlot),
+							},
+						},
+					}
+				}
+				rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
 			}
-			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
-		}
 
-		probeExpr := &plan.Expr{
-			Typ: idxTableDef.Cols[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 0,
-				},
-			},
-		}
-		var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
-		var hasRuntimeFilter bool
-		if len(componentProbeExprs) == 0 {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					false,
-				)
-		} else {
-			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
-				builder.makeSerializedExactRuntimeFilterPair(
-					rfTag,
-					len(condIdx) < numParts,
-					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
-					probeExpr,
-					rfBuildExpr,
-					componentProbeExprs,
-					false,
-				)
-		}
-		if !hasRuntimeFilter && !forceJoinIndex {
-			// The index lookup cost model assumes targeted runtime-filter
-			// pruning.  Without a materializable exact pair this rewrite would
-			// scan the index table under a no-op PASS dependency.
-			continue
-		}
-		// FORCE INDEX remains an explicit request to use the index even when
-		// its serialized lookup key has no proven exact-filter contract. Honor
-		// the hint without publishing a no-op dependency or optimistic stats.
-
-		// recod index table scan info
-		idxScanInfo := plan.IndexScanInfo{
-			IsIndexScan:    true,
-			IndexName:      idxDef.IndexName,
-			BelongToTable:  leftChild.ObjRef.ObjName,
-			Parts:          slices.Clone(idxDef.Parts),
-			IsUnique:       idxDef.Unique,
-			IndexTableName: idxDef.IndexTableName,
-		}
-
-		idxTableNode := &plan.Node{
-			NodeType:      plan.Node_TABLE_SCAN,
-			TableDef:      idxTableDef,
-			ObjRef:        idxObjRef,
-			IndexScanInfo: idxScanInfo,
-			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:   []int32{idxTag},
-			ScanSnapshot:  leftChild.ScanSnapshot,
-			OriginViews:   append([]string(nil), leftChild.OriginViews...),
-			DirectView:    leftChild.DirectView,
-		}
-		if hasRuntimeFilter {
-			idxTableNode.RuntimeFilterProbeList =
-				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
-		}
-		// The index is another access path for the left scan. A JOIN context
-		// can be absent or belong to an enclosing view, so authorization must
-		// follow the original scan's complete view chain and direct view.
-		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
-		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
-
-		if hasRuntimeFilter {
-			node.RuntimeFilterBuildList = append(
-				node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
-			recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
-		}
-
-		pkExpr := &plan.Expr{
-			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: leftChild.BindingTags[0],
-					ColPos: pkIdx,
-				},
-			},
-		}
-		pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			pkExpr,
-			{
-				Typ: pkExpr.Typ,
+			probeExpr := &plan.Expr{
+				Typ: idxTableDef.Cols[0].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag,
-						ColPos: 1,
+						ColPos: 0,
 					},
 				},
-			},
-		})
+			}
+			var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
+			var hasRuntimeFilter bool
+			if len(componentProbeExprs) == 0 {
+				nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+					builder.makeExactRuntimeFilterPair(
+						rfTag,
+						len(condIdx) < numParts,
+						GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+						probeExpr,
+						rfBuildExpr,
+						false,
+					)
+			} else {
+				nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+					builder.makeSerializedExactRuntimeFilterPair(
+						rfTag,
+						len(condIdx) < numParts,
+						GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+						probeExpr,
+						rfBuildExpr,
+						componentProbeExprs,
+						false,
+					)
+			}
+			if !hasRuntimeFilter && (!forceJoinIndex || len(condIdx) < numKeyParts) {
+				// The index lookup cost model assumes targeted runtime-filter
+				// pruning. Without a materializable exact pair this rewrite would
+				// scan the index table under a no-op PASS dependency. A partial key
+				// has no bounded access without its exact prefix filter.
+				continue
+			}
+			// Full-key FORCE INDEX remains an explicit request to use the index even
+			// when its serialized lookup key has no proven exact-filter contract. Honor
+			// the hint without publishing a no-op dependency or optimistic stats.
 
-		idxJoinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{node.Children[0], idxTableNodeID},
-			JoinType: plan.Node_INDEX,
-			Limit:    leftChild.Limit,
-			Offset:   leftChild.Offset,
-			OnList:   []*plan.Expr{pkJoinCond},
-		}, builder.ctxByNode[leftChild.NodeId])
+			// recod index table scan info
+			idxScanInfo := plan.IndexScanInfo{
+				IsIndexScan:    true,
+				IndexName:      idxDef.IndexName,
+				BelongToTable:  leftChild.ObjRef.ObjName,
+				Parts:          slices.Clone(idxDef.Parts),
+				IsUnique:       idxDef.Unique,
+				IndexTableName: idxDef.IndexTableName,
+			}
 
-		leftChild.Limit, leftChild.Offset = nil, nil
+			idxTableNode := &plan.Node{
+				NodeType:      plan.Node_TABLE_SCAN,
+				TableDef:      idxTableDef,
+				ObjRef:        idxObjRef,
+				IndexScanInfo: idxScanInfo,
+				ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
+				BindingTags:   []int32{idxTag},
+				ScanSnapshot:  leftChild.ScanSnapshot,
+				OriginViews:   append([]string(nil), leftChild.OriginViews...),
+				DirectView:    leftChild.DirectView,
+			}
+			if hasRuntimeFilter {
+				idxTableNode.RuntimeFilterProbeList =
+					[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
+			}
+			// The index is another access path for the left scan. A JOIN context
+			// can be absent or belong to an enclosing view, so authorization must
+			// follow the original scan's complete view chain and direct view.
+			idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
+			builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
-		node.Children[0] = idxJoinNodeID
+			if hasRuntimeFilter {
+				node.RuntimeFilterBuildList = append(
+					node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
+				recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+			}
 
-		break
+			pkExpr := &plan.Expr{
+				Typ: leftChild.TableDef.Cols[pkIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: leftChild.BindingTags[0],
+						ColPos: pkIdx,
+					},
+				},
+			}
+			pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				pkExpr,
+				{
+					Typ: pkExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTag,
+							ColPos: 1,
+						},
+					},
+				},
+			})
+
+			idxJoinNodeID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{node.Children[0], idxTableNodeID},
+				JoinType: plan.Node_INDEX,
+				Limit:    leftChild.Limit,
+				Offset:   leftChild.Offset,
+				OnList:   []*plan.Expr{pkJoinCond},
+			}, builder.ctxByNode[leftChild.NodeId])
+
+			leftChild.Limit, leftChild.Offset = nil, nil
+
+			node.Children[0] = idxJoinNodeID
+
+			break selectIndex
+		}
 	}
 
 	return nodeID, nil
