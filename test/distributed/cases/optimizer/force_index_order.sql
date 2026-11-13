@@ -252,11 +252,10 @@ set @lo=1, @hi=2;
 execute force_index_range using @a,@lo,@hi;
 deallocate prepare force_index_range;
 
--- A lossless probe widening may use the index via a narrowed, checked runtime
--- filter. Out-of-range build values fail open and cannot hide matching rows.
+-- A coerced JOIN key retains plain FORCE with ORDER through the existing
+-- broad index fallback. Out-of-range and NULL values keep SQL JOIN semantics.
 -- @separator:table
--- @regex("Runtime Filter Build: serial_full.*cast",true)
--- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix",true)
+-- @regex("Index Table Scan.*ix_ab",true)
 explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
 join t force index(ix_ab) on t.a=k.a order by t.id;
 select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)

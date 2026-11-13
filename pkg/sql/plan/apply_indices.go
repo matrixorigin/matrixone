@@ -3424,15 +3424,9 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		probe := expr.GetF().Args[0]
-		col := serializedRuntimeFilterComponentCol(probe)
+		col := expr.GetF().Args[0].GetCol()
 		if col == nil || len(leftChild.BindingTags) == 0 || col.RelPos != leftChild.BindingTags[0] ||
 			col.ColPos < 0 || int(col.ColPos) >= len(leftChild.TableDef.Cols) || leftChild.TableDef.Cols[col.ColPos] == nil {
-			hashSlot++
-			continue
-		}
-		if fn := probe.GetF(); fn != nil && !safeRuntimeFilterIntegerCast(
-			types.T(fn.Args[0].Typ.Id), types.T(probe.Typ.Id), false) {
 			hashSlot++
 			continue
 		}
@@ -3509,11 +3503,6 @@ selectIndex:
 			if (len(condIdx) == numKeyParts) != completeKey {
 				continue
 			}
-			// The scalar exact-filter contract accepts only a raw build column;
-			// widening-cast normalization below requires the tuple contract.
-			if numParts == 1 && node.OnList[condIdx[0].exprIdx].GetF().Args[0].GetF() != nil {
-				continue
-			}
 
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 			if err != nil {
@@ -3549,35 +3538,18 @@ selectIndex:
 			} else {
 				serialArgs := make([]*plan.Expr, len(condIdx))
 				componentProbeExprs = make([]*plan.Expr, len(condIdx))
-				validComponents := true
 				for i := range condIdx {
-					condition := node.OnList[condIdx[i].exprIdx].GetF()
-					probe := condition.Args[0]
-					narrowed := probe.GetF() != nil
-					if narrowed {
-						probe = probe.GetF().Args[0]
+					componentProbeExprs[i] =
+						node.OnList[condIdx[i].exprIdx].GetF().Args[0]
+					serialArgs[i] = &plan.Expr{
+						Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: -1,
+								ColPos: int32(condIdx[i].hashSlot),
+							},
+						},
 					}
-					componentProbeExprs[i] = probe
-					serialArg := &plan.Expr{
-						Typ: condition.Args[1].Typ,
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: -1, ColPos: int32(condIdx[i].hashSlot),
-						}},
-					}
-					if narrowed && makeTypeByPlan2Expr(serialArg) != makeTypeByPlan2Expr(probe) {
-						serialArg, err = appendCastBeforeExpr(builder.GetContext(), serialArg, probe.Typ)
-						if err != nil {
-							if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-								return -1, err
-							}
-							validComponents = false
-							break
-						}
-					}
-					serialArgs[i] = serialArg
-				}
-				if !validComponents {
-					continue
 				}
 				rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
 			}
