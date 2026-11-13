@@ -6931,6 +6931,17 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	// 持久化 BOOL 上界可能为历史兼容而保守放宽，不能作为精确 MAX。
+	// 在任何提前返回或聚合改写前检查完整列表；原始摘要也可能已损坏。
+	for _, expr := range node.AggList {
+		agg := expr.Expr.(*plan.Expr_F).F
+		if agg.Func.ObjName == "max" && node.TableDef != nil {
+			if col, ok := agg.Args[0].Expr.(*plan.Expr_Col); ok &&
+				node.TableDef.Cols[int(col.Col.ColPos)].Typ.Id == int32(types.T_bool) {
+				return nil, nil, nil
+			}
+		}
+	}
 	partialResults := make([]any, len(node.AggList))
 	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)
