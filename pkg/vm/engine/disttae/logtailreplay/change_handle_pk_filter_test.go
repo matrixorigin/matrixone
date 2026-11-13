@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -161,6 +162,123 @@ func TestHistoricalChangesObjectPKPruning(t *testing.T) {
 			obj := objectio.ObjectEntry{}
 			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&obj.ObjectStats, tc.zm))
 			require.Equal(t, tc.wantRead, objectMayMatchPK(obj, tc.filter, tc.tombstone))
+		})
+	}
+}
+
+// Exercise the range-recovery constructor and actual object reads together:
+// payload pruning must not erase the metadata needed to follow a replacement.
+func TestHistoricalChangesPKFilterReplacementChain(t *testing.T) {
+	for _, tc := range []struct {
+		name                                           string
+		cnPredecessor, coarsePredecessor               bool
+		missingMetadata, missingFile, missingFollowing bool
+	}{
+		{name: "unknown appendable predecessor"},
+		{name: "coarse appendable predecessor", coarsePredecessor: true},
+		{name: "unknown CN predecessor", cnPredecessor: true},
+		{name: "coarse CN predecessor", cnPredecessor: true, coarsePredecessor: true},
+		{name: "missing successor metadata", missingMetadata: true},
+		{name: "missing matching successor file", missingFile: true},
+		{name: "disjoint intermediate still requires successor", missingFollowing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer fs.Close(ctx)
+			write := func(key int32, create, commit int64) *objectio.ObjectEntry {
+				t.Helper()
+				writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, 0, true, false, fs)
+				b := batch.NewWithSize(2)
+				b.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				b.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+				require.NoError(t, vector.AppendFixed(b.Vecs[0], key, false, mp))
+				require.NoError(t, vector.AppendFixed(b.Vecs[1], types.BuildTS(commit, 0), false, mp))
+				b.SetRowCount(1)
+				_, err := writer.WriteBatch(b)
+				b.Clean(mp)
+				require.NoError(t, err)
+				_, _, err = writer.Sync(ctx)
+				require.NoError(t, err)
+				return &objectio.ObjectEntry{ObjectStats: writer.Stats(), CreateTime: types.BuildTS(create, 0)}
+			}
+			wanted := write(11, 2, 2)
+			replacementKey := int32(99)
+			if tc.missingFile {
+				replacementKey = 11
+			}
+			replacement := write(replacementKey, 7, 3)
+			predecessor := makeTestObjectEntry(t, 1, !tc.cnPredecessor, tc.cnPredecessor, types.BuildTS(3, 0))
+			predecessor.DeleteTime = types.BuildTS(7, 0)
+			if tc.coarsePredecessor {
+				zm := index.NewZM(types.T_int32, 0)
+				for _, key := range []int32{11, 99} {
+					index.UpdateZM(zm, types.EncodeInt32(&key))
+				}
+				require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&predecessor.ObjectStats, zm))
+			}
+			if tc.missingFollowing {
+				predecessor.DeleteTime = types.BuildTS(5, 0)
+				replacement.CreateTime = types.BuildTS(5, 0)
+				replacement.DeleteTime = types.BuildTS(7, 0)
+			}
+			if tc.missingFile {
+				require.NoError(t, fs.Delete(ctx, replacement.ObjectName().String()))
+			}
+			state := NewPartitionState("", false, 1, false)
+			state.start = types.BuildTS(8, 0)
+			state.dataObjectsNameIndex.Set(*predecessor)
+			state.dataObjectsNameIndex.Set(*wanted)
+			if !tc.missingMetadata {
+				state.dataObjectsNameIndex.Set(*replacement)
+			}
+			zm := index.NewZM(types.T_int32, 0)
+			key := int32(11)
+			index.UpdateZM(zm, types.EncodeInt32(&key))
+			filter := &engine.PKFilter{Segments: [][]byte{zm}, PrimarySeqnum: 0, ObjectZMIsPK: true}
+			for _, filtered := range []bool{false, true} {
+				readCtx := ctx
+				if filtered {
+					readCtx = engine.WithPKFilter(ctx, filter)
+				}
+				h, err := NewChangesHandlerWithPartitionStateRange(readCtx, state,
+					types.BuildTS(1, 0), types.BuildTS(10, 0), false, CoarseMaxRow, 0, mp, fs)
+				if tc.missingMetadata || tc.missingFile || tc.missingFollowing {
+					require.Error(t, err, "filtering must not hide an unresolvable replacement")
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+					require.Nil(t, h)
+					continue
+				}
+				require.NoError(t, err, "filtered=%t", filtered)
+				type version struct {
+					key int32
+					ts  types.TS
+				}
+				var got []version
+				for {
+					data, tombstone, _, err := h.Next(readCtx, mp)
+					require.NoError(t, err)
+					require.Nil(t, tombstone)
+					if data == nil {
+						break
+					}
+					keys := vector.MustFixedColWithTypeCheck[int32](data.Vecs[0])
+					commit := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
+					for i, key := range keys {
+						got = append(got, version{key, commit[i]})
+					}
+					data.Clean(mp)
+				}
+				require.NoError(t, h.Close())
+				want := []version{{11, types.BuildTS(2, 0)}}
+				if !filtered {
+					want = append(want, version{99, types.BuildTS(3, 0)})
+				}
+				require.ElementsMatch(t, want, got, "filtered=%t", filtered)
+			}
 		})
 	}
 }
