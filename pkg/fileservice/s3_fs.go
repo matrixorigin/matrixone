@@ -564,10 +564,11 @@ func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) {
 		return
 	}
 	// A column read also joins the download of its whole object.
-	started, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return columns || len(req.Ranges) == 0 })
+	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return columns || len(req.Ranges) == 0 })
 	if !ok {
 		return
 	}
+	defer leave()
 	select {
 	case <-started:
 	case <-ctx.Done():
