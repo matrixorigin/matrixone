@@ -647,13 +647,9 @@ func (db *txnDatabase) loadTableFromStorage(
 			return
 		}
 		if row := res.Batches[0].RowCount(); row != 1 {
-			// Zero or multiple rows may happen for dropped accounts whose
-			// catalog was compacted by a checkpoint or hasn't been fully
-			// activated yet.  Return nil instead of panicking so the caller
-			// can handle the missing table gracefully.
-			logutil.Warn("catalog-load loadTableFromStorage unexpected row count",
-				zap.Int("rows", row),
-				zap.String("sql", tblSql))
+			if row != 0 {
+				err = moerr.NewInternalErrorf(ctx, "catalog table lookup returned %d rows: %s", row, tblSql)
+			}
 			return
 		}
 		bat := res.Batches[0]
@@ -688,22 +684,12 @@ func (db *txnDatabase) loadTableFromStorage(
 				return
 			}
 		}
-		logutil.Info("catalog-load loadTableFromStorage columns",
-			zap.String("table", name),
-			zap.Uint32("accountID", accountID),
-			zap.Int("batches", len(res.Batches)),
-			zap.Int("totalRows", bat.RowCount()),
-			zap.Uint64("tableID", tblid),
-		)
 		if err := fillTsVecForSysTableQueryBatch(bat, ts, res.Mp); err != nil {
 			return nil, err
 		}
 		cache.ParseColumnsBatchAnd(bat, func(m map[cache.TableItemKey]cache.Columns) {
 			if len(m) != 1 {
-				logutil.Warn("catalog-load loadTableFromStorage columns touch unexpected tables",
-					zap.Int("count", len(m)),
-					zap.String("table", name))
-				// Clear tableitem so the caller sees nil.
+				err = moerr.NewInternalErrorf(ctx, "catalog column lookup returned %d table definitions for %s", len(m), name)
 				tableitem = nil
 				return
 			}
@@ -712,7 +698,7 @@ func (db *txnDatabase) loadTableFromStorage(
 			}
 		})
 	}
-	return tableitem, nil
+	return tableitem, err
 }
 
 func (db *txnDatabase) getTableItem(
@@ -762,7 +748,8 @@ func (db *txnDatabase) getTableItem(
 		}
 	}
 	var tableitem *cache.TableItem
-	if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
+	if item.Id != 0 && item.Defs == nil ||
+		!c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
 		!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
 		logutil.Info("catalog-load loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
 		if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {

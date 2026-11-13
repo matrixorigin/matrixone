@@ -1311,9 +1311,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
 	blocks := objectio.PreAllocBlockInfoSlice(rangesParam.PreAllocBlocks)
-	hasInmem := rangesParam.Policy&engine.Policy_CollectCommittedInmemData != 0 ||
-		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0
-	if hasInmem {
+	if rangesParam.Policy&engine.Policy_CollectCommittedInmemData != 0 ||
+		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0 {
 		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
 

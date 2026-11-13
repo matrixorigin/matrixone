@@ -3303,28 +3303,6 @@ func getFkDeps(
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
-		// getFkDeps is called exclusively from the restore flow
-		// (deleteCurFkTables and fkTablesTopoSort).  The source or
-		// target account's catalog data may not be fully available:
-		//
-		// - ErrNoSuchTable / ErrBadDB: dropped-account data compacted.
-		// - ErrInvalidInput ("column X does not exist"): a transient
-		//   catalog-cache race.  Push logtail delivers mo_tables and
-		//   mo_columns as separate entries; during DCA flush or between
-		//   the two push entries, InsertTable creates a cache item with
-		//   nil/partial column definitions.  A concurrent reader can
-		//   then observe a table whose columns are incomplete.
-		//
-		// Returning empty FK deps is safe: restore drops all tables
-		// (DROP TABLE IF EXISTS) so ordering is best-effort, and tables
-		// are recreated from the snapshot with correct FK constraints.
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-			moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
-			moerr.IsMoErrCode(err, moerr.ErrInvalidInput) ||
-			moerr.IsMoErrCode(err, moerr.ErrParseError) {
-			getLogger("").Warn(fmt.Sprintf("FK dep query failed (source catalog unavailable), proceeding without FK ordering: %v", err))
-			return make(map[string][]string), nil
-		}
 		return
 	}
 

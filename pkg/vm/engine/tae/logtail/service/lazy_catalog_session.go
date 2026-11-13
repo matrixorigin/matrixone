@@ -55,8 +55,7 @@ type lazyCatalogFilterState struct {
 	// activeAccountsSnapshot is rebuilt only when the active set changes so the
 	// publish fast path can read a stable view without cloning on every push.
 	activeAccountsSnapshot atomic.Pointer[lazyCatalogAllowedAccounts]
-	// activatingSeqByAccount belongs to the later tn-activation-sender step.
-	// The tn-filter refactor keeps the state slot here, but does not manipulate it yet.
+	// activatingSeqByAccount rejects superseded activation attempts.
 	activatingSeqByAccount map[uint32]uint64
 }
 
@@ -186,16 +185,16 @@ func (ss *Session) abortLazyCatalogActivation(accountID uint32, seq uint64) bool
 func (ss *Session) prepareLazyCatalogPublishWrapsFromIndex(
 	wraps []wrapLogtail,
 	firstLazyIndex int,
-) ([]wrapLogtail, error) {
+) ([]wrapLogtail, func(), error) {
 	// Hot path fast path: non-catalog events should return before taking locks or
 	// cloning account state.
 	if firstLazyIndex < 0 {
-		return wraps, nil
+		return wraps, nil, nil
 	}
 
 	allowedAccounts, ok := ss.snapshotLazyCatalogActiveAccountsForFilter()
 	if !ok {
-		return wraps, nil
+		return wraps, nil, nil
 	}
 	return rewriteLazyCatalogPublishWraps(wraps, firstLazyIndex, allowedAccounts)
 }
@@ -207,8 +206,9 @@ func rewriteLazyCatalogPublishWraps(
 	wraps []wrapLogtail,
 	firstLazyIndex int,
 	allowedAccounts *lazyCatalogAllowedAccounts,
-) ([]wrapLogtail, error) {
+) ([]wrapLogtail, func(), error) {
 	var filtered []wrapLogtail
+	var closeCBs []func()
 	for idx := firstLazyIndex; idx < len(wraps); idx++ {
 		wrap := wraps[idx]
 		if !isLazyCatalogTableID(wrap.tail.Table) {
@@ -218,9 +218,14 @@ func rewriteLazyCatalogPublishWraps(
 			continue
 		}
 
-		filteredTail, changed, err := filterLazyCatalogPublishRowsInTail(wrap.tail, allowedAccounts)
+		filteredTail, changed, closeCB, err := filterLazyCatalogPublishRowsInTail(wrap.tail, allowedAccounts)
 		if err != nil {
-			return nil, err
+			closeCallbacks(closeCB)
+			closeCallbacks(closeCBs...)
+			return nil, nil, err
+		}
+		if closeCB != nil {
+			closeCBs = append(closeCBs, closeCB)
 		}
 		if filtered == nil {
 			if !changed {
@@ -235,9 +240,9 @@ func rewriteLazyCatalogPublishWraps(
 		filtered = append(filtered, wrapLogtail{id: wrap.id, tail: filteredTail})
 	}
 	if filtered == nil {
-		return wraps, nil
+		return wraps, nil, nil
 	}
-	return filtered, nil
+	return filtered, composeCloseCallback(closeCBs...), nil
 }
 
 // --- lazy catalog scope helpers ---

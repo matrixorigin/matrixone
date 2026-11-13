@@ -112,42 +112,73 @@ func TestLazyCatalogCNState_DelayAccountCacheApply(t *testing.T) {
 	delayed := s.delayAccountCacheApply(10, f)
 	assert.False(t, delayed)
 
-	s.beginCatchingUp(10)
+	seq := s.beginCatchingUp(10)
 
 	delayed = s.delayAccountCacheApply(10, f)
 	assert.True(t, delayed)
 	assert.False(t, called)
 
-	for _, fn := range s.beginAccountReadyTransition(10) {
+	fns, current := s.beginAccountReadyTransition(10, seq)
+	require.True(t, current)
+	for _, fn := range fns {
 		fn()
 	}
-	s.finishAccountReady(10, timestamp.Timestamp{PhysicalTime: 100})
+	require.True(t, s.finishAccountReady(10, seq, timestamp.Timestamp{PhysicalTime: 100}))
 	assert.True(t, called)
 }
 
 func TestLazyCatalogCNState_ReadyTransitionDrainsAccountDCA(t *testing.T) {
 	s := newLazyCatalogCNState()
 	s.enable()
-	s.beginCatchingUp(10)
+	seq := s.beginCatchingUp(10)
 
 	count := 0
 	for i := 0; i < 5; i++ {
 		s.delayAccountCacheApply(10, func() { count++ })
 	}
 
-	fns := s.beginAccountReadyTransition(10)
+	fns, current := s.beginAccountReadyTransition(10, seq)
+	require.True(t, current)
 	assert.False(t, s.delayAccountCacheApply(10, func() { count = 999 }))
 	_, ok := s.getAccountReadyTS(10)
 	assert.False(t, ok)
 	for _, fn := range fns {
 		fn()
 	}
-	s.finishAccountReady(10, timestamp.Timestamp{PhysicalTime: 200})
+	require.True(t, s.finishAccountReady(10, seq, timestamp.Timestamp{PhysicalTime: 200}))
 	assert.Equal(t, 5, count)
 
 	readyTS, ok := s.getAccountReadyTS(10)
 	assert.True(t, ok)
 	assert.Equal(t, int64(200), readyTS.PhysicalTime)
+}
+
+func TestLazyCatalogCNState_RejectsCompletionAfterReconnect(t *testing.T) {
+	for _, phase := range []string{"before drain", "during drain"} {
+		t.Run(phase, func(t *testing.T) {
+			s := newLazyCatalogCNState()
+			s.enable()
+			seq := s.beginCatchingUp(10)
+			if phase == "during drain" {
+				_, current := s.beginAccountReadyTransition(10, seq)
+				require.True(t, current)
+			}
+			s.resetAllStates()
+			newSeq := s.beginCatchingUp(10)
+			if phase == "before drain" {
+				_, current := s.beginAccountReadyTransition(10, seq)
+				require.False(t, current)
+			}
+			require.False(t, s.finishAccountReady(10, seq, timestamp.Timestamp{PhysicalTime: 100}))
+			require.False(t, s.isAccountReady(10))
+			require.True(t, s.hasCatchingUp())
+			require.Equal(t, newSeq, s.pendingSeq[10])
+			_, current := s.beginAccountReadyTransition(10, newSeq)
+			require.True(t, current)
+			require.True(t, s.finishAccountReady(10, newSeq, timestamp.Timestamp{PhysicalTime: 200}))
+			require.False(t, s.hasCatchingUp())
+		})
+	}
 }
 
 func TestLazyCatalogCNState_WantedAccounts(t *testing.T) {
@@ -157,7 +188,6 @@ func TestLazyCatalogCNState_WantedAccounts(t *testing.T) {
 	s.setAccountReady(5, timestamp.Timestamp{PhysicalTime: 20})
 	s.setAccountReady(10, timestamp.Timestamp{PhysicalTime: 30})
 
-	s.collectWantedAccounts()
 	wanted := s.snapshotWantedAccounts()
 
 	assert.Len(t, wanted, 3)
@@ -178,11 +208,11 @@ func TestLazyCatalogCNState_ResetAllStates(t *testing.T) {
 	s.setAccountReady(20, timestamp.Timestamp{PhysicalTime: 100})
 	s.inflightActivations.Store(uint32(30), &inflightActivation{done: make(chan struct{})})
 
-	s.collectWantedAccounts()
 	s.resetAllStates()
 
 	assert.False(t, s.isAccountReady(20))
 	assert.False(t, s.hasCatchingUp())
+	s.resetAllStates() // A failed reconnect must not forget previously ready accounts.
 
 	wanted := s.snapshotWantedAccounts()
 	wantedSet := make(map[uint32]struct{})
@@ -288,7 +318,6 @@ func TestIsLazyCatalogTableID(t *testing.T) {
 func TestReconnectInitialActiveAccounts(t *testing.T) {
 	c := &PushClient{lazyCatalog: newLazyCatalogCNState()}
 	c.lazyCatalog.setAccountReady(5, timestamp.Timestamp{PhysicalTime: 10})
-	c.lazyCatalog.collectWantedAccounts()
 
 	require.ElementsMatch(t, []uint32{0, 5}, c.reconnectInitialActiveAccounts())
 }

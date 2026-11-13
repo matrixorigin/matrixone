@@ -17,7 +17,6 @@ package cache
 import (
 	"bytes"
 	"cmp"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -819,36 +818,6 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
 	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
-	// Detection-only: log duplicate column names WITHOUT removing them so the
-	// downstream "ambiguous column" error is still exposed for root-cause tracing.
-	if len(cols) > 1 {
-		seen := make(map[string]int, len(cols))
-		var duplicates []string
-		for _, col := range cols {
-			seen[col.Name]++
-			if seen[col.Name] == 2 {
-				duplicates = append(duplicates, col.Name)
-			}
-		}
-		if len(duplicates) > 0 {
-			colDetails := make([]string, 0, len(cols))
-			for _, col := range cols {
-				colDetails = append(colDetails, fmt.Sprintf(
-					"%s(seqnum=%d,num=%d)", col.Name, col.Seqnum, col.Num))
-			}
-			logutil.Error("catalog-cache: DUPLICATE COLUMNS DETECTED in table definition",
-				zap.Uint32("account-id", item.AccountId),
-				zap.Uint64("database-id", item.DatabaseId),
-				zap.Uint64("table-id", item.Id),
-				zap.String("table-name", item.Name),
-				zap.String("ts", item.Ts.String()),
-				zap.Int("total-columns", len(cols)),
-				zap.Strings("duplicate-names", duplicates),
-				zap.Strings("all-columns", colDetails),
-				zap.Stack("stack"),
-			)
-		}
-	}
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -869,16 +838,6 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	ParseColumnsBatchAnd(bat, func(mp map[TableItemKey]Columns) {
 		queryKey := new(TableItem)
 		for k, cols := range mp {
-			// Diagnostic: log column insertion details per table for duplication tracing.
-			ts := k.Ts.toTs()
-			logutil.Info("catalog-cache.InsertColumns",
-				zap.Uint32("account-id", k.AccountId),
-				zap.Uint64("database-id", k.DatabaseId),
-				zap.Uint64("table-id", k.Id),
-				zap.String("table-name", k.Name),
-				zap.String("ts", ts.String()),
-				zap.Int("column-count", len(cols)),
-			)
 			queryKey.Name = k.Name
 			queryKey.AccountId = k.AccountId
 			queryKey.DatabaseId = k.DatabaseId

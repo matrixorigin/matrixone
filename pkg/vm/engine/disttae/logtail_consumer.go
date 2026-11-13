@@ -951,7 +951,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 			return err
 		}
 	} else if actResp := resp.response.GetActivateAccountForCatalogResponse(); actResp != nil {
-		c.handleActivationResponse(ctx, e, actResp, receiveAt)
+		return c.handleActivationResponse(ctx, e, actResp, receiveAt)
 	} else if errRsp := resp.response.GetError(); errRsp != nil {
 		status := errRsp.GetStatus()
 		if uint16(status.GetCode()) == moerr.OkExpectedEOB {
@@ -969,9 +969,18 @@ func (c *PushClient) handleActivationResponse(
 	ctx context.Context, e *Engine,
 	resp *logtail.ActivateAccountForCatalogResponse,
 	receiveAt time.Time,
-) {
+) error {
+	if c.lazyCatalog == nil || !c.lazyCatalog.hasPendingActivationResponse(resp.AccountId, resp.Seq) {
+		return nil
+	}
+	if resp.TargetTs == nil {
+		return moerr.NewInternalError(ctx, "catalog activation response missing target timestamp")
+	}
 	for i := range resp.Tails {
 		tail := resp.Tails[i]
+		if tail.Table == nil || !catalog.IsLazyCatalogTableID(tail.Table.TbId) {
+			return moerr.NewInternalError(ctx, "catalog activation response contains a non-catalog tail")
+		}
 		// Diagnostic: log per-tail entry/row details to detect if TN sends duplicate data
 		totalRows := 0
 		for j := range tail.Commands {
@@ -998,6 +1007,7 @@ func (c *PushClient) handleActivationResponse(
 				zap.Uint64("seq", resp.Seq),
 				zap.Error(err),
 			)
+			return err
 		}
 
 	}
@@ -1010,6 +1020,7 @@ func (c *PushClient) handleActivationResponse(
 			)
 		}
 	}
+	return nil
 }
 
 func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
@@ -1469,8 +1480,12 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 	}
 
 	delayedApplyCount := 0
+	completed := false
 	c.applyCatalogCacheChange(func() {
-		fns := c.lazyCatalog.beginAccountReadyTransition(accountID)
+		fns, current := c.lazyCatalog.beginAccountReadyTransition(accountID, seq)
+		if !current {
+			return
+		}
 		delayedApplyCount = len(fns)
 		logutil.Info("logtail.consumer.activation.dca.flush",
 			zap.Uint32("account-id", accountID),
@@ -1480,8 +1495,11 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 		for _, f := range fns {
 			f()
 		}
-		c.lazyCatalog.finishAccountReady(accountID, replayTS)
+		completed = c.lazyCatalog.finishAccountReady(accountID, seq, replayTS)
 	})
+	if !completed {
+		return fail("publish_ready", errActivationInterruptedByReconnect, targetTSCopy)
+	}
 
 	replayTSCopy := replayTS
 	record("complete", "ok", nil, targetTSCopy, &replayTSCopy, delayedApplyCount)
@@ -1646,7 +1664,6 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 	e.setPushClientStatus(false)
 
 	if c.lazyCatalog != nil {
-		c.lazyCatalog.collectWantedAccounts()
 		c.lazyCatalog.resetAllStates()
 	}
 

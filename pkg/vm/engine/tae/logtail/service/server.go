@@ -798,16 +798,35 @@ func (s *LogtailServer) activationPullWorker(ctx context.Context) {
 // pullActivationPhase1 concurrently pulls historical row-level delta for all
 // three catalog tables and sends the combined result to activationTailChan.
 func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogActivation) {
+	collectCtx, cancelCollect := context.WithCancelCause(act.session.sessionCtx)
+	stopCaller := context.AfterFunc(ctx, func() { cancelCollect(ctx.Err()) })
+	defer stopCaller()
+	defer cancelCollect(nil)
+	pullCtx, cancel := context.WithTimeoutCause(collectCtx, act.timeout, moerr.CauseGetSubLogtailPhase)
+	defer cancel()
+
+	var result catalogActivationPhase1
+	result.activation = act
+	var activationErr error
+	enqueued := false
+	defer func() {
+		if !enqueued {
+			result.closeAll()
+			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+			s.NotifySessionError(act.session, activationErr)
+		}
+	}()
+
 	select {
 	case s.pullWorkerPool <- struct{}{}:
-	case <-ctx.Done():
-		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
-		return
-	case <-act.session.sessionCtx.Done():
-		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+	case <-pullCtx.Done():
+		activationErr = pullCtx.Err()
 		return
 	}
 	defer func() { <-s.pullWorkerPool }()
+	if activationErr = pullCtx.Err(); activationErr != nil {
+		return
+	}
 
 	s.logger.Info("activation phase1 start",
 		zap.Uint32("account-id", act.accountID),
@@ -816,17 +835,6 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 
 	waterline := s.waterline.Waterline()
 	allowedAccounts := newLazyCatalogAllowedAccounts(act.accountID)
-
-	var result catalogActivationPhase1
-	result.activation = act
-
-	enqueued := false
-	defer func() {
-		if !enqueued {
-			result.closeAll()
-			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
-		}
-	}()
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -837,7 +845,7 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 		go func(idx int, tbl api.TableID) {
 			defer wg.Done()
 			tail, closeCB, err := s.pullTableLogtail(
-				ctx,
+				pullCtx,
 				tbl,
 				timestamp.Timestamp{},
 				waterline,
@@ -851,6 +859,7 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 				closeCallbacks(closeCB)
 				if firstErr == nil {
 					firstErr = err
+					cancelCollect(err)
 				}
 				return
 			}
@@ -861,6 +870,7 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 	wg.Wait()
 
 	if firstErr != nil {
+		activationErr = firstErr
 		s.logger.Error("activation phase1 failed",
 			zap.Uint32("account-id", act.accountID),
 			zap.Uint64("seq", act.seq),
@@ -871,14 +881,15 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 
 	for {
 		s.lifecycleMu.RLock()
-		if s.rootCtx.Err() != nil || ctx.Err() != nil || act.session.sessionCtx.Err() != nil {
+		if s.rootCtx.Err() != nil || pullCtx.Err() != nil {
+			activationErr = pullCtx.Err()
 			s.lifecycleMu.RUnlock()
 			return
 		}
 		select {
-		case <-ctx.Done():
+		case <-pullCtx.Done():
+			activationErr = pullCtx.Err()
 			s.lifecycleMu.RUnlock()
-			s.logger.Error("context done during activation phase1 enqueue", zap.Error(ctx.Err()))
 			return
 		case s.activationTailChan <- &result:
 			enqueued = true
@@ -887,7 +898,14 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 		default:
 			s.lifecycleMu.RUnlock()
 			s.logger.Warn("activation tail chan full, retrying")
-			time.Sleep(time.Second)
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-pullCtx.Done():
+				timer.Stop()
+				activationErr = pullCtx.Err()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -1033,7 +1051,11 @@ func (s *LogtailServer) sendReadBarrier(ctx context.Context, barrier readBarrier
 // and only then adds the account to activeAccounts.
 func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivationPhase1) {
 	act := p1.activation
-	sendCtx, cancel := context.WithTimeoutCause(ctx, act.timeout, moerr.CauseSendSubscription)
+	collectCtx, cancelCollect := context.WithCancelCause(act.session.sessionCtx)
+	stopCaller := context.AfterFunc(ctx, func() { cancelCollect(ctx.Err()) })
+	defer stopCaller()
+	defer cancelCollect(nil)
+	sendCtx, cancel := context.WithTimeoutCause(collectCtx, act.timeout, moerr.CauseSendSubscription)
 	defer cancel()
 
 	targetTS := s.waterline.Waterline()
@@ -1042,12 +1064,14 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 	var responseTails []logtail.TableLogtail
 	allCloseCBs := make([]func(), 0, len(lazyCatalogTableIDs))
 	sent := false
+	var activationErr error
 
 	defer func() {
 		if !sent {
 			p1.closeAll()
 			closeCallbacks(allCloseCBs...)
 			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+			s.NotifySessionError(act.session, activationErr)
 		}
 	}()
 
@@ -1059,6 +1083,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 
 		phase2Tail, closeCB, err := s.pullTableLogtail(sendCtx, table, phase1Ts, targetTS, allowedAccounts, false)
 		if err != nil {
+			activationErr = err
 			closeCallbacks(closeCB)
 			s.logger.Error("activation phase2 failed",
 				zap.Uint32("account-id", act.accountID),
@@ -1089,6 +1114,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 		Tails:     responseTails,
 	}
 	if err := act.session.SendActivateAccountForCatalogResponse(sendCtx, resp, responseCB); err != nil {
+		activationErr = err
 		// SendResponse.Release already called responseCB for cleanup.
 		s.logger.Error("fail to send activation response",
 			zap.Uint32("account-id", act.accountID),
@@ -1236,11 +1262,13 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 		refcount.Add(int32(len(sessions)))
 		for _, session := range sessions {
 			publishWraps := wraps
+			sessionCloseCB := closeCB
 			if firstLazyCatalogIndex >= 0 {
 				// Event-level fast path: if this batch does not contain the three lazy
 				// catalog tables, no session should even enter the lazy publish helper.
 				var err error
-				publishWraps, err = session.prepareLazyCatalogPublishWrapsFromIndex(wraps, firstLazyCatalogIndex)
+				var filterCloseCB func()
+				publishWraps, filterCloseCB, err = session.prepareLazyCatalogPublishWrapsFromIndex(wraps, firstLazyCatalogIndex)
 				if err != nil {
 					err = moerr.AttachCause(ctx, err)
 					closeCB()
@@ -1250,8 +1278,9 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 					)
 					continue
 				}
+				sessionCloseCB = composeCloseCallback(closeCB, filterCloseCB)
 			}
-			if err := session.Publish(ctx, from, to, closeCB, publishWraps...); err != nil {
+			if err := session.Publish(ctx, from, to, sessionCloseCB, publishWraps...); err != nil {
 				s.logger.Error("fail to publish incremental logtail", zap.Error(err),
 					zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 				)

@@ -843,7 +843,7 @@ func (ss *Session) SendActivateAccountForCatalogResponse(
 	resp := ss.responses.Acquire()
 	resp.closeCB = closeCB
 	resp.Response = newActivateAccountForCatalogResponse(activate)
-	return ss.SendResponse(sendCtx, resp)
+	return ss.sendResponse(sendCtx, resp, false)
 }
 
 // SendUpdateResponse sends publishment response.
