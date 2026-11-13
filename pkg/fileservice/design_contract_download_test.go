@@ -147,6 +147,11 @@ func TestDesignDownloadFetchedOnce(t *testing.T) {
 // fetches its range instead of waiting, and gets the right bytes.
 func TestDesignDownloadFarBehindReadsRange(t *testing.T) {
 	fs, storage, data := newDownloadContractFS(t, 0)
+	// The download stops before it measures its own rate, and the recent rate puts the
+	// read's bytes seconds after a range read.
+	storage.gateAt = downloadRateMinBytes / 2
+	downloadsRate(t, 1<<20)
+	rangeCosts(t, 0.001, 1<<30)
 
 	_, done := readAsync(fs, 1024, 4)
 	requireReturns(t, done)

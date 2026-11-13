@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // prefetchObject is a download of the bytes [start, end) of an object, which reads of
@@ -45,7 +47,7 @@ type prefetchObject interface {
 }
 
 // errPrefetchMissed is returned by use of a prefetch object that ended without the bytes.
-var errPrefetchMissed = errors.New("prefetch object ended without the bytes")
+var errPrefetchMissed = moerr.NewInternalErrorNoCtx("fileservice: prefetch object ended without the bytes")
 
 var (
 	_ prefetchObject = (*memoryPrefetchObject)(nil)
