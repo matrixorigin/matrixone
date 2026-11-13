@@ -228,8 +228,8 @@ func (node *persistedNode) Scan(
 }
 
 // ScanDataInRange is the pnode counterpart of memoryNode.getDataWindowOnWriteSchema
-// for appendable data objects that have been flushed to disk but whose rows still
-// fall inside a logtail request range [start, end].
+// for appendable data and tombstone objects flushed after the requested
+// logtail range [start, end]. Both inserts and deletes must survive the flush.
 //
 // This is used by the lazy-catalog-tail path: when visitObjMeta decides to emit
 // an aobj whose DeleteNode is out of the request range but whose CreateNode is
@@ -243,7 +243,7 @@ func (node *persistedNode) ScanDataInRange(
 	mp *mpool.MPool,
 ) (err error) {
 	meta := node.object.meta.Load()
-	if !meta.IsAppendable() || meta.IsTombstone {
+	if !meta.IsAppendable() {
 		return nil
 	}
 	createAt := meta.GetCreatedAt()
@@ -255,7 +255,7 @@ func (node *persistedNode) ScanDataInRange(
 		return nil
 	}
 
-	readSchema := meta.GetTable().GetLastestSchema(false)
+	readSchema := meta.GetTable().GetLastestSchema(meta.IsTombstone)
 	colIdxes := make([]int, 0, len(readSchema.ColDefs))
 	for i := range readSchema.ColDefs {
 		colIdxes = append(colIdxes, i)

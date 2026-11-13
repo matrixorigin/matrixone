@@ -654,7 +654,7 @@ func (obj *baseObject) ScanInMemory(
 		// mnode data is gone but its row data lives on the persisted block.
 		// Non-appendable persisted objects are carried by object-meta only and
 		// do not need row-level collection here.
-		if obj.meta.Load().IsAppendable() && !obj.meta.Load().IsTombstone {
+		if obj.meta.Load().IsAppendable() {
 			return node.MustPNode().ScanDataInRange(ctx, batches, start, end, mp)
 		}
 		return nil
