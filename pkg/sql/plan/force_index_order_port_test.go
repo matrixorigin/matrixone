@@ -334,7 +334,7 @@ func TestForceJoinFallbackRequiresOrder(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			addIndexHintChoiceTableForTest(mock)
 			p, err := runOneStmt(mock, t, `select t.id,t.a,t.b from (values row(7),row(8)) k(a)
-				join index_hint_t t force index(idx_ab) on t.a=k.a where t.b in (1,2,3)`+tc.order)
+				join index_hint_t t force index(idx_ab) on abs(t.a)=k.a where t.b in (1,2,3)`+tc.order)
 			require.NoError(t, err)
 			indexes := reachableIndexScanNames(p.GetQuery())
 			if tc.wantIndex {
@@ -344,6 +344,23 @@ func TestForceJoinFallbackRequiresOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestForceJoinWidenedIntegerLookupWithoutOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	p, err := runOneStmt(mock, t, `select t.id,t.a,t.b from (values row(7),row(8)) k(a)
+        join index_hint_t t force index(idx_ab) on t.a=k.a where t.b in (1,2,3)`)
+	require.NoError(t, err)
+	require.Contains(t, reachableIndexScanNames(p.GetQuery()), "idx_ab")
+	var targeted bool
+	for _, node := range reachableIndexOrderNodes(p) {
+		if node.IndexScanInfo.IsIndexScan && node.IndexScanInfo.IndexName == "idx_ab" &&
+			len(node.RuntimeFilterProbeList) != 0 && node.RuntimeFilterProbeList[0].MatchPrefix {
+			targeted = true
+		}
+	}
+	require.True(t, targeted, "widened JOIN keys should use the existing exact prefix filter")
 }
 
 func TestForceJoinOrderRequirementResetsPerPass(t *testing.T) {

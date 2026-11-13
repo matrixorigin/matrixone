@@ -2302,6 +2302,21 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 		idxTableNode.FilterList = append(idxTableNode.FilterList, replaceColumnsForExpr(DeepCopyExpr(filter), colMap))
 	}
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		return
+	}
+	bounds := builder.secondaryIndexPrefixRanges(idxDef, node, idxTableNode, filterIdx)
+	if len(bounds) == 0 || !ExprIsZonemappable(builder.GetContext(), bounds[0]) {
+		return
+	}
+	// Every bound includes the original equality prefix. Use the first
+	// one as the lookup, while retaining SQL residuals on both scans.
+	idxTableNode.FilterList[0] = bounds[0]
+	for _, bound := range bounds {
+		if ExprIsZonemappable(builder.GetContext(), bound) {
+			appendUniqueBlockFilter(idxTableNode, bound, true)
+		}
+	}
 }
 
 func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []int32 {
@@ -3566,8 +3581,15 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		col := expr.GetF().Args[0].GetCol()
-		if col == nil {
+		probe := expr.GetF().Args[0]
+		col := serializedRuntimeFilterComponentCol(probe)
+		if col == nil || len(leftChild.BindingTags) == 0 || col.RelPos != leftChild.BindingTags[0] ||
+			col.ColPos < 0 || int(col.ColPos) >= len(leftChild.TableDef.Cols) || leftChild.TableDef.Cols[col.ColPos] == nil {
+			hashSlot++
+			continue
+		}
+		if fn := probe.GetF(); fn != nil && !safeRuntimeFilterIntegerCast(
+			types.T(fn.Args[0].Typ.Id), types.T(probe.Typ.Id), false) {
 			hashSlot++
 			continue
 		}
@@ -3647,6 +3669,11 @@ selectIndex:
 				continue
 			}
 			if (len(condIdx) == numKeyParts) != completeKey {
+				continue
+			}
+			// The scalar exact-filter contract accepts only a raw build column;
+			// widening-cast normalization below requires the tuple contract.
+			if numParts == 1 && node.OnList[condIdx[0].exprIdx].GetF().Args[0].GetF() != nil {
 				continue
 			}
 
