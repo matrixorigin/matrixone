@@ -140,6 +140,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 }
 
 func Test_BasicS3InsertDelete(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -1769,6 +1770,7 @@ func Test_RollbackDeleteAndDrop(t *testing.T) {
 // txn2 commit
 // read -> 10 rows
 func Test_MultiTxnRollbackStatement(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
