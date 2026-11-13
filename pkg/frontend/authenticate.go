@@ -7904,7 +7904,8 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return isTableChangesScan(node)
+	return isTableChangesScan(node) || (node.GetNodeType() == plan.Node_FUNCTION_SCAN &&
+		node.GetTableDef().GetTblFunc().GetName() == "mo_index_stats")
 }
 
 func isTableChangesScan(node *plan.Node) bool {
