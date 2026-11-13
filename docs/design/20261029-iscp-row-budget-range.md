@@ -6,13 +6,13 @@
 
 ## Contract
 
-Index-sync jobs select from their own watermarks with a default source-change
-target of 100,000 rows. This includes existing catalog jobs whose
-`TriggerSpec.TargetRows` is zero. New index jobs persist that target explicitly
-and use the existing `AlwaysUpdate` trigger. A non-index job can opt in by
-setting a positive target with `AlwaysUpdate`. No new trigger code or catalog
-format is required; older binaries ignore the optional JSON field. MatrixOne
-upgrades by full-cluster shutdown, so no mixed-version owner protocol is needed.
+Index-sync jobs select from their own watermarks. Range probing is opt-in:
+`TriggerSpec.TargetRows` must be positive. Existing and newly created index
+jobs keep zero and do not probe until a representative cost comparison covers
+source reads and sink persistence. A non-index job can opt in by setting a
+positive target with `AlwaysUpdate`. No new trigger code or catalog format is
+required; older binaries ignore the optional JSON field. MatrixOne upgrades
+by full-cluster shutdown, so no mixed-version owner protocol is needed.
 
 Index jobs with the same source table, watermark, range, and row target share
 one source probe/read and fan out to their own sinks. A lagging index reads its
@@ -64,8 +64,9 @@ error, cancellation, or incomplete group fails without publishing progress.
 
 ## Commit and retry
 
-ISCP sets `iterCtx.toTS` to the selected bound before creating Running status,
-consumers, or data retrievers. The selected bound is the value used by
+After a successful probe, ISCP sets `iterCtx.toTS` to the selected bound before creating Running status,
+consumers, or data retrievers. A failed probe leaves the scheduled range intact
+for retry. The selected bound is the value used by
 `DataRetriever.GetToTS`, the sink transaction, durable watermark update, and
 in-memory state. No partial probe result is ever persisted. After a failed
 iteration, the next attempt starts at `watermark.Next()` and may choose a
@@ -73,8 +74,9 @@ different safe range.
 
 ## Validation
 
-The focused tests cover a full range, later-commit deferral, an oversized first
-commit, a leading gap, raw streaming probe options and cleanup on error. The
+The focused tests cover a full range, later-commit deferral across physical
+timestamp rollover, a retry after a failed probe, an oversized first commit,
+a leading gap, raw streaming probe options and cleanup on error. The
 existing ISCP package and neighboring change-handle tests must pass. Further
 review should examine end-to-end index equivalence, the cost of repeated
 probing, and rolling-upgrade behavior before this mode is enabled in a release.

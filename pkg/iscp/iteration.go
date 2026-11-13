@@ -257,9 +257,9 @@ func ExecuteIterationWithRuntime(
 		}
 		if targetRows > 0 {
 			var observedRows int
-			iterCtx.toTS, observedRows, err = selectRowBudgetTo(
+			observedRows, err = selectRowBudgetForIteration(
 				collectChangesCtxForJobs(ctx, jobSpecs, prevStatus, committedWatermark),
-				iterCtx.fromTS, iterCtx.toTS, targetRows,
+				iterCtx, targetRows,
 				func(probeCtx context.Context, from, to types.TS, target int) (int, error) {
 					return probeChangeRows(
 						probeCtx, from, to, target, mp,
