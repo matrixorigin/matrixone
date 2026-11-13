@@ -4579,12 +4579,20 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		rootID = builder.pushDownGroupedSums(rootID)
 		// Preserve INNER-join reordering before introducing an existence boundary.
 		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
 		builder.reduceSetMembershipJoins(rootID, i)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		// Compare unique filtering joins against ANTI on their original fact-key
+		// domain after the legacy existence-pushdown pass has finished.
+		if !builder.outerAntiPlanningDisabled() &&
+			(builder.optimizerHints == nil || builder.optimizerHints.joinOrdering == 0) {
+			rootID, _ = builder.applyAntiJoinPreservedSideRule(rootID)
+		}
+		builder.pruneGroupedOuterDomains(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -4743,6 +4751,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.pushdownGroupingExpressions()
+	if len(builder.userWindowNodes) > 1 {
+		for _, rootID := range builder.qry.Steps {
+			builder.fuseWindowNodes(rootID, make(map[int32]bool))
+		}
+	}
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {

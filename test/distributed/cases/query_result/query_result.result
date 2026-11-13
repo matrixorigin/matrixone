@@ -211,6 +211,7 @@ field    type    null    key    default    extra    comment
 a    int    YES        null        
 /* save_result */show grants;
 Grants for admin@localhost
+GRANT connect ON account  `admin`@`localhost`
 GRANT create user ON account  `admin`@`localhost`
 GRANT drop user ON account  `admin`@`localhost`
 GRANT alter user ON account  `admin`@`localhost`
@@ -224,10 +225,10 @@ GRANT manage grants ON account  `admin`@`localhost`
 GRANT account all ON account  `admin`@`localhost`
 GRANT show tables ON database * `admin`@`localhost`
 GRANT create table ON database * `admin`@`localhost`
-GRANT drop table ON database * `admin`@`localhost`
-GRANT alter table ON database * `admin`@`localhost`
 GRANT create view ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
 GRANT drop view ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
 GRANT alter view ON database * `admin`@`localhost`
 GRANT database all ON database * `admin`@`localhost`
 GRANT database ownership ON database * `admin`@`localhost`
@@ -241,9 +242,9 @@ GRANT index ON table *.* `admin`@`localhost`
 GRANT table all ON table *.* `admin`@`localhost`
 GRANT table ownership ON table *.* `admin`@`localhost`
 GRANT values ON table *.* `admin`@`localhost`
-GRANT connect ON account  `admin`@`localhost`
 select * from result_scan(last_query_id()) as u;
 grants for admin@localhost
+GRANT connect ON account  `admin`@`localhost`
 GRANT create user ON account  `admin`@`localhost`
 GRANT drop user ON account  `admin`@`localhost`
 GRANT alter user ON account  `admin`@`localhost`
@@ -257,10 +258,10 @@ GRANT manage grants ON account  `admin`@`localhost`
 GRANT account all ON account  `admin`@`localhost`
 GRANT show tables ON database * `admin`@`localhost`
 GRANT create table ON database * `admin`@`localhost`
-GRANT drop table ON database * `admin`@`localhost`
-GRANT alter table ON database * `admin`@`localhost`
 GRANT create view ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
 GRANT drop view ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
 GRANT alter view ON database * `admin`@`localhost`
 GRANT database all ON database * `admin`@`localhost`
 GRANT database ownership ON database * `admin`@`localhost`
@@ -274,7 +275,6 @@ GRANT index ON table *.* `admin`@`localhost`
 GRANT table all ON table *.* `admin`@`localhost`
 GRANT table ownership ON table *.* `admin`@`localhost`
 GRANT values ON table *.* `admin`@`localhost`
-GRANT connect ON account  `admin`@`localhost`
 /* save_result */show create table tt;
 Table    Create Table
 tt    CREATE TABLE `tt` (\n  `a` int DEFAULT NULL\n)
@@ -468,6 +468,7 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show grants;
 Grants for admin@localhost
+GRANT connect ON account  `admin`@`localhost`
 GRANT create user ON account  `admin`@`localhost`
 GRANT drop user ON account  `admin`@`localhost`
 GRANT alter user ON account  `admin`@`localhost`
@@ -481,10 +482,10 @@ GRANT manage grants ON account  `admin`@`localhost`
 GRANT account all ON account  `admin`@`localhost`
 GRANT show tables ON database * `admin`@`localhost`
 GRANT create table ON database * `admin`@`localhost`
-GRANT drop table ON database * `admin`@`localhost`
-GRANT alter table ON database * `admin`@`localhost`
 GRANT create view ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
 GRANT drop view ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
 GRANT alter view ON database * `admin`@`localhost`
 GRANT database all ON database * `admin`@`localhost`
 GRANT database ownership ON database * `admin`@`localhost`
@@ -498,7 +499,6 @@ GRANT index ON table *.* `admin`@`localhost`
 GRANT table all ON table *.* `admin`@`localhost`
 GRANT table ownership ON table *.* `admin`@`localhost`
 GRANT values ON table *.* `admin`@`localhost`
-GRANT connect ON account  `admin`@`localhost`
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show create table tt;

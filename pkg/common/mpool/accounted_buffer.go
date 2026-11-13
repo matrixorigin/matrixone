@@ -26,9 +26,18 @@ type AccountedBuffer struct {
 	mp   *MPool
 
 	account       *AllocationAccount
+	admission     PhysicalMemoryAdmission
 	owner         AllocationOwner
 	site          AllocationSite
 	capacityClass AllocationCapacityClass
+}
+
+// NewAdmittedBuffer creates a buffer whose physical blocks use admission.
+func NewAdmittedBuffer(mp *MPool, admission PhysicalMemoryAdmission) (*AccountedBuffer, error) {
+	if mp == nil || admission == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	return &AccountedBuffer{mp: mp, admission: admission}, nil
 }
 
 func NewAccountedBuffer(
@@ -99,7 +108,7 @@ func (b *AccountedBuffer) Cap() int {
 
 // EnsureCapacity admits and allocates an absolute retained capacity.
 func (b *AccountedBuffer) EnsureCapacity(required int) error {
-	if b == nil || b.mp == nil || b.account == nil || required < 0 {
+	if b == nil || b.mp == nil || (b.account == nil && b.admission == nil) || required < 0 {
 		return ErrAllocationAccountInvalid
 	}
 	if required <= cap(b.data) {
@@ -115,13 +124,13 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 		if !ok || capacity > int64(math.MaxInt) {
 			return ErrAllocationAllocatorLimit
 		}
-		data, err := b.mp.AllocAccountedWithCapacityClass(
-			int(capacity),
-			b.account,
-			b.owner,
-			b.site,
-			b.capacityClass,
-		)
+		var data []byte
+		var err error
+		if b.admission != nil {
+			data, err = b.mp.AllocAdmitted(int(capacity), b.admission)
+		} else {
+			data, err = b.mp.AllocAccountedWithCapacityClass(int(capacity), b.account, b.owner, b.site, b.capacityClass)
+		}
 		if err != nil {
 			return err
 		}
@@ -256,13 +265,14 @@ func (b *AccountedBuffer) Reset() {
 // account/owner/site provenance, so no counter or capacity ownership changes
 // at handoff.
 func (b *AccountedBuffer) Detach() ([]byte, *MPool, error) {
-	if b == nil || b.mp == nil || b.account == nil {
+	if b == nil || b.mp == nil || (b.account == nil && b.admission == nil) {
 		return nil, nil, ErrAllocationAccountInvalid
 	}
 	data, mp := b.data, b.mp
 	b.data = nil
 	b.mp = nil
 	b.account = nil
+	b.admission = nil
 	b.owner = 0
 	b.site = 0
 	b.capacityClass = AllocationCapacityClassDefault
@@ -279,6 +289,7 @@ func (b *AccountedBuffer) Free() {
 	b.data = nil
 	b.mp = nil
 	b.account = nil
+	b.admission = nil
 	b.owner = 0
 	b.site = 0
 	b.capacityClass = AllocationCapacityClassDefault
