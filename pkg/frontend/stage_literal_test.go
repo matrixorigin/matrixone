@@ -77,6 +77,47 @@ func TestStageCredentialFormatBoundary(t *testing.T) {
 	}
 }
 
+func TestCreateStagePersistsExplicitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status tree.StageStatus
+		want   string
+	}{
+		{name: "default", want: "in_use"},
+		{name: "enabled", status: tree.StageStatus{Exist: true, Option: tree.StageStatusEnabled}, want: "enabled"},
+		{name: "disabled", status: tree.StageStatus{Exist: true, Option: tree.StageStatusDisabled}, want: "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSes(gomock.NewController(t))
+			defer ses.Close()
+			bh := &backgroundExecTest{}
+			bh.init()
+			check, err := getSqlForCheckStage(context.Background(), "stage_status")
+			require.NoError(t, err)
+			bh.sql2result[check] = &MysqlResultSet{}
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			stmt := &tree.CreateStage{Name: "stage_status", Url: "file:///tmp/", Status: tc.status}
+			require.NoError(t, doCreateStage(ses.GetTxnHandler().GetTxnCtx(), ses, stmt))
+			inserts := 0
+			for _, sql := range bh.executedSQLs {
+				if !strings.HasPrefix(sql, "insert into mo_catalog.mo_stages") {
+					continue
+				}
+				parsed, err := mysql.ParseOne(context.Background(), sql, 1)
+				require.NoError(t, err)
+				insert := parsed.(*tree.Insert)
+				rows := insert.Rows.Select.(*tree.ValuesClause)
+				require.Equal(t, tc.want, rows.Rows[0][3].(*tree.NumVal).String())
+				parsed.Free()
+				inserts++
+			}
+			require.Equal(t, 1, inserts)
+			require.Equal(t, "commit;", bh.executedSQLs[len(bh.executedSQLs)-1])
+		})
+	}
+}
+
 func TestAlterStageLaterUpdateFailureRollsBack(t *testing.T) {
 	for _, badInput := range []bool{false, true} {
 		t.Run(fmt.Sprint(badInput), func(t *testing.T) {
