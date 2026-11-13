@@ -69,12 +69,12 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 	}
 	check(nil)
 	root := executor.(*FunctionExpressionExecutor)
-	scratch := root.dictionaryScratch[0]
+	scratch := root.dictionaryState.scratch[0]
 	check(nil)
-	require.Same(t, scratch, root.dictionaryScratch[0], "reuse bounded argument storage")
+	require.Same(t, scratch, root.dictionaryState.scratch[0], "reuse bounded argument storage")
 	check([]bool{true, false, true, false})
 	executor.ResetForNextQuery()
-	require.Nil(t, root.dictionaryScratch)
+	require.Nil(t, root.dictionaryState)
 	check(nil)
 	t.Run("logical-string-kernels", func(t *testing.T) {
 		for _, name := range []string{"lower", "upper", "length", "char_length"} {
@@ -92,7 +92,7 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 				} else {
 					require.Equal(t, "AA", string(value.GetBytesAt(1)))
 				}
-				require.Empty(t, direct.(*FunctionExpressionExecutor).dictionaryScratch)
+				require.Nil(t, direct.(*FunctionExpressionExecutor).dictionaryState)
 			})
 		}
 	})
@@ -122,6 +122,49 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 		require.True(t, dict.IsDictionary())
 	})
 
+}
+
+func TestDictionaryFunctionStateCapacityFailureCleanup(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	for range 3 {
+		require.NoError(t, vector.AppendBytes(source, []byte("a source payload that is larger than inline storage"), false, mp))
+	}
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{2, 0, 2, 1}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	input, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { input.Free(mp) })
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(128)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	executor := &FunctionExpressionExecutor{m: mp, allocation: selection}
+	t.Cleanup(executor.freeDictionaryParameters)
+	_, err = executor.normalizeDictionaryParameters([]*vector.Vector{input}, false)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.NotNil(t, executor.dictionaryState)
+	executor.freeDictionaryParameters()
+	require.Nil(t, executor.dictionaryState)
+	require.Zero(t, account.Snapshot().Used)
+	// A failed normalization must not allocate state for a later flat input.
+	parameters, err := executor.normalizeDictionaryParameters([]*vector.Vector{source}, false)
+	require.NoError(t, err)
+	require.Same(t, source, parameters[0])
+	require.Nil(t, executor.dictionaryState)
 }
 
 func TestDictionaryCharComparisonReadsSelectedRows(t *testing.T) {
@@ -180,7 +223,7 @@ func testDictionaryStringComparison(t *testing.T, oid types.T) {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
 			}
 			require.True(t, result.IsNull(3))
-			require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch, "CHAR comparison must read the selected view directly")
+			require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState, "CHAR comparison must read the selected view directly")
 			require.True(t, dict.IsDictionary())
 		})
 	}
@@ -220,7 +263,7 @@ func TestDictionaryBetweenPreservesNaNNullAndRepeatedRows(t *testing.T) {
 		require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
 	}
 	require.True(t, result.IsNull(4))
-	require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch)
+	require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState)
 	t.Run("primitive-selected-comparisons", func(t *testing.T) {
 		for _, op := range []string{"=", ">="} {
 			compare, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, op, col, lit(2)))
@@ -233,7 +276,7 @@ func TestDictionaryBetweenPreservesNaNNullAndRepeatedRows(t *testing.T) {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](values, row))
 			}
 			require.True(t, values.IsNull(4))
-			require.Empty(t, compare.(*FunctionExpressionExecutor).dictionaryScratch)
+			require.Nil(t, compare.(*FunctionExpressionExecutor).dictionaryState)
 		}
 	})
 }

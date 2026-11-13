@@ -134,21 +134,38 @@ func (f *DictionaryInputFrame) materialize(source *vector.Vector, allocation *ve
 // Bind attaches borrowed frame pointers, including fused/memo executor roots.
 // Executors never free the frame; its containing operator is the sole owner.
 func (f *DictionaryInputFrame) Bind(executors []ExpressionExecutor) {
+	hasDictionary := false
+	if f != nil {
+		for _, input := range f.inputs {
+			if input != nil && input.IsDictionary() {
+				hasDictionary = true
+				break
+			}
+		}
+	}
+	f.bind(executors, hasDictionary)
+}
+
+func (f *DictionaryInputFrame) bind(executors []ExpressionExecutor, hasDictionary bool) {
 	for _, executor := range executors {
 		switch e := executor.(type) {
 		case *FunctionExpressionExecutor:
-			e.dictionaryFrame = f
-			f.Bind(e.parameterExecutor)
+			if e.dictionaryState != nil {
+				e.dictionaryState.frame = f
+			} else if hasDictionary {
+				e.dictionaryState = &functionDictionaryState{frame: f}
+			}
+			f.bind(e.parameterExecutor, hasDictionary)
 		case *decimalTypedExecutor:
-			f.Bind([]ExpressionExecutor{e.root})
+			f.bind([]ExpressionExecutor{e.root}, hasDictionary)
 		case *decimalMulSubExecutor:
-			f.Bind([]ExpressionExecutor{e.root})
+			f.bind([]ExpressionExecutor{e.root}, hasDictionary)
 		case *decimalChainExecutor:
-			f.Bind([]ExpressionExecutor{e.root})
+			f.bind([]ExpressionExecutor{e.root}, hasDictionary)
 		case *memoExpressionExecutor:
-			f.Bind([]ExpressionExecutor{e.state.executor})
+			f.bind([]ExpressionExecutor{e.state.executor}, hasDictionary)
 		case *memoRootExpressionExecutor:
-			f.Bind([]ExpressionExecutor{e.executor})
+			f.bind([]ExpressionExecutor{e.executor}, hasDictionary)
 		}
 	}
 }

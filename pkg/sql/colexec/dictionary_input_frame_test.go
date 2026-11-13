@@ -57,14 +57,32 @@ func TestDictionaryInputFrameSharesAndRefreshesColumns(t *testing.T) {
 	} // Exercise shared contiguous-input requests.
 	var frame DictionaryInputFrame
 	t.Cleanup(func() { frame.Free(mp) })
+	flatInput := batch.NewWithSize(1)
+	flatInput.Vecs[0] = source // Borrowed; source retains its existing cleanup owner.
+	flatInput.SetRowCount(source.Length())
+	frame.Begin(flatInput, nil, mp)
+	frame.Bind(executors)
+	for _, executor := range executors {
+		_, err := executor.Eval(proc, []*batch.Batch{flatInput}, nil)
+		require.NoError(t, err)
+		require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState,
+			"flat evaluation must not allocate optional dictionary state")
+	}
+	frame.End()
 	frame.Begin(input, nil, mp)
 	frame.Bind(executors)
 	for _, e := range executors {
 		_, err := e.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		root := e.(*FunctionExpressionExecutor)
-		require.Same(t, frame.flat[0], root.dictionaryParameters[0])
-		require.Nil(t, root.dictionaryScratch[0])
+		require.Same(t, frame.flat[0], root.dictionaryState.parameters[0])
+		require.Nil(t, root.dictionaryState.scratch[0])
+		// Resizing private argument storage must preserve its borrowed frame.
+		parameters, err := root.normalizeDictionaryParameters([]*vector.Vector{dict, dict}, false)
+		require.NoError(t, err)
+		require.Same(t, &frame, root.dictionaryState.frame)
+		require.Same(t, frame.flat[0], parameters[0])
+		require.Same(t, parameters[0], parameters[1])
 	}
 	require.Equal(t, "BB", string(frame.flat[0].GetBytesAt(0)))
 	require.Equal(t, uint64(1), frame.Gathers, "siblings must not repeat the same gather")
@@ -105,7 +123,7 @@ func TestDictionaryInputFrameSharesAndRefreshesColumns(t *testing.T) {
 						require.False(t, result.IsNull(uint64(row)))
 					}
 				}
-				require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch)
+				require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState)
 			})
 		}
 	})
@@ -119,4 +137,19 @@ func TestDictionaryInputFrameSharesAndRefreshesColumns(t *testing.T) {
 	require.Same(t, saved, flat)
 	require.Equal(t, "CC", string(flat.GetBytesAt(0)))
 	frame.End()
+	var nextFrame DictionaryInputFrame
+	t.Cleanup(func() { nextFrame.Free(mp) })
+	nextFrame.Begin(flatInput, nil, mp)
+	nextFrame.Bind(executors)
+	for _, executor := range executors {
+		require.Same(t, &nextFrame, executor.(*FunctionExpressionExecutor).dictionaryState.frame)
+	}
+	var detached *DictionaryInputFrame
+	detached.Bind(executors)
+	for _, executor := range executors {
+		require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState.frame)
+		executor.ResetForNextQuery()
+		require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState)
+	}
+	nextFrame.End()
 }

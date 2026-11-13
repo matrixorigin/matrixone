@@ -445,7 +445,9 @@ func clearPredicateInputs(executor ExpressionExecutor) {
 	switch e := executor.(type) {
 	case *FunctionExpressionExecutor:
 		clear(e.parameterResults)
-		clear(e.dictionaryParameters)
+		if e.dictionaryState != nil {
+			clear(e.dictionaryState.parameters)
+		}
 		clear(e.selectedParameterResults)
 		for _, child := range e.parameterExecutor {
 			clearPredicateInputs(child)

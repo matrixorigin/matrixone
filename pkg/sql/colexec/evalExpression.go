@@ -683,7 +683,6 @@ type FunctionExpressionExecutor struct {
 	// boundary.
 	parameterTypes []types.Type
 	functionInformationForEval
-	folded      functionFolding
 	selectList1 []bool
 	selectList2 []bool
 	selectList  function.FunctionSelectList
@@ -694,9 +693,6 @@ type FunctionExpressionExecutor struct {
 	// therefore compact row-aligned parameters, evaluate only selected rows, and
 	// scatter the result back to the original row positions. These buffers are
 	// allocated lazily and reused across batches.
-	dictionaryFrame          *DictionaryInputFrame
-	dictionaryParameters     []*vector.Vector
-	dictionaryScratch        []*vector.Vector
 	selectedRows             []int64
 	selectedParameterResults []*vector.Vector
 	selectedParameterVectors []*vector.Vector
@@ -707,8 +703,7 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults         []*vector.Vector
 	parameterExecutor        []ExpressionExecutor
-	flowControlKind          vector.PrepareParamKind
-	flowControlKindSeen      bool
+	dictionaryState          *functionDictionaryState
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource

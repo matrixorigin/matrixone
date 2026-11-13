@@ -21,6 +21,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// functionDictionaryState is allocated only for actual dictionary bindings or
+// normalization. The expression owns scratch vectors; the frame is borrowed.
+type functionDictionaryState struct {
+	frame      *DictionaryInputFrame
+	parameters []*vector.Vector
+	scratch    []*vector.Vector
+}
+
+func (state *functionDictionaryState) freeScratch(mp *mpool.MPool) {
+	for _, parameter := range state.scratch {
+		if parameter != nil {
+			parameter.Free(mp)
+		}
+	}
+	state.parameters, state.scratch = nil, nil
+}
+
 // normalizeDictionaryParameters owns the compatibility storage for functions
 // whose physical reads have not been converted. Never mutate borrowed arguments.
 // The all-flat path returns its original slice and allocates no scratch.
@@ -49,12 +66,20 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 		return parameters, nil
 	}
 
-	if len(expr.dictionaryParameters) != len(parameters) {
-		expr.freeDictionaryParameters()
-		expr.dictionaryParameters = make([]*vector.Vector, len(parameters))
-		expr.dictionaryScratch = make([]*vector.Vector, len(parameters))
+	state := expr.dictionaryState
+	if state == nil {
+		state = &functionDictionaryState{}
+		expr.dictionaryState = state
 	}
-	copy(expr.dictionaryParameters, parameters)
+	if len(state.parameters) != len(parameters) {
+		state.freeScratch(expr.m)
+		// Keep two initialization allocations, as with the previous separate
+		// slices, while keeping the expression's flat-only footprint small.
+		storage := make([]*vector.Vector, 2*len(parameters))
+		state.parameters = storage[:len(parameters):len(parameters)]
+		state.scratch = storage[len(parameters):len(storage):len(storage)]
+	}
+	copy(state.parameters, parameters)
 	for i := first; i < len(parameters); i++ {
 		source := parameters[i]
 		if source == nil || !source.IsDictionary() {
@@ -63,21 +88,21 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 		if source.AllocationAccountSelection() != nil && expr.allocation == nil {
 			return nil, mpool.ErrAllocationAccountInvalid
 		}
-		if flat, found, err := expr.dictionaryFrame.materialize(source, expr.allocation, expr.m); found {
+		if flat, found, err := state.frame.materialize(source, expr.allocation, expr.m); found {
 			if err != nil {
 				return nil, err
 			}
-			expr.dictionaryParameters[i] = flat
+			state.parameters[i] = flat
 			continue
 		}
-		dst := expr.dictionaryScratch[i]
+		dst := state.scratch[i]
 		if dst == nil {
 			var err error
 			dst, err = newExpressionOffHeapVector(*source.GetType(), expr.allocation)
 			if err != nil {
 				return nil, err
 			}
-			expr.dictionaryScratch[i] = dst
+			state.scratch[i] = dst
 		} else {
 			dst.Reset(*source.GetType())
 		}
@@ -85,19 +110,17 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 			return nil, err
 		}
 		source.CopyExpressionMetadataTo(dst)
-		expr.dictionaryParameters[i] = dst
+		state.parameters[i] = dst
 	}
-	return expr.dictionaryParameters, nil
+	return state.parameters, nil
 }
 
 func (expr *FunctionExpressionExecutor) freeDictionaryParameters() {
-	for _, p := range expr.dictionaryScratch {
-		if p != nil {
-			p.Free(expr.m)
-		}
+	if state := expr.dictionaryState; state != nil {
+		state.freeScratch(expr.m)
+		state.frame = nil
+		expr.dictionaryState = nil
 	}
-	expr.dictionaryScratch = nil
-	expr.dictionaryParameters = nil
 }
 
 // booleanProducesNoNulls proves result validity for this evaluation, independently
