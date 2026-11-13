@@ -327,16 +327,33 @@ class BaseCDCManager:
             base_sql += f" AND t.task_name = {sql_literal(task_name)}"
         return base_sql
 
+    #: Catalog relations read directly by the manager. A tenant that cannot see
+    #: them falls back to the ``SHOW CDC`` interface instead of failing.
+    _CDC_MISSING_TABLE = re.compile(
+        r"no\s+such\s+table\s*:?\s*['\"]?(?:[\w$]+\.)?(?:mo_cdc_task|mo_cdc_watermark)"
+        r"|(?:[\w$]+\.)?(?:mo_cdc_task|mo_cdc_watermark)['\"]?\s+"
+        r"(?:does\s+not\s+exist|doesn't\s+exist)",
+        re.IGNORECASE,
+    )
+
     @staticmethod
     def _catalog_unavailable(error: QueryError) -> bool:
-        """Recognize only CDC catalog visibility errors, not arbitrary query failures."""
-        message = str(error).lower()
-        if 'mo_cdc_task' not in message and 'mo_cdc_watermark' not in message:
+        """Recognize only CDC catalog visibility errors, not arbitrary query failures.
+
+        MatrixOne reports an invisible catalog relation as parser error ``1064``
+        (``SQL parser error: table "mo_cdc_task" does not exist``), while
+        MySQL-compatible servers report ``1146``. Privilege failures surface as
+        ``1044``/``1045``. Any other error propagates, so a genuine defect can
+        never be silently downgraded to the ``SHOW CDC`` fallback.
+        """
+        errno = getattr(error, 'errno', None)
+        if errno in (1044, 1045):
+            # These statements only touch the CDC catalog, so a privilege error
+            # here is exactly the visibility failure this fallback exists for.
+            return True
+        if errno is not None and errno not in (1064, 1146, 20403):
             return False
-        return error.errno in (1044, 1045, 1146, 20403) or any(
-            phrase in message
-            for phrase in ('does not exist', "doesn't exist", 'no such table', 'access denied', 'permission denied')
-        )
+        return BaseCDCManager._CDC_MISSING_TABLE.search(str(error)) is not None
 
     @staticmethod
     def _normalise_table_mappings(table_mappings) -> str:
