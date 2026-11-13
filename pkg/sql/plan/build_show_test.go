@@ -73,8 +73,8 @@ func TestCoverage_buildShowGrants_ForUserDefaultHost(t *testing.T) {
 }
 
 func TestCurrentUserShowGrantsColumnName(t *testing.T) {
-	assert.Equal(t, "Grants for ru30467_a@localhost", currentUserShowGrantsColumnName("ru30467_a"))
-	assert.Equal(t, "Grants for a``b@localhost", currentUserShowGrantsColumnName("a`b"))
+	assert.Equal(t, "`Grants for ru30467_a@localhost`", currentUserShowGrantsColumnName("ru30467_a"))
+	assert.Equal(t, "`Grants for a``b@localhost`", currentUserShowGrantsColumnName("a`b"))
 }
 
 func TestCoverage_buildShowRoles(t *testing.T) {

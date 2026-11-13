@@ -3143,6 +3143,15 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// A prepared executable explain cannot own the client LOCAL transfer
+	// either: every later EXECUTE would run the wrapped load without the pipe
+	// and upload goroutine that only a plain tree.Load admission creates
+	// (issue #32453). Reject the unsupported combination at admission, before
+	// any planning, caching or response publication, so no EXECUTE route can
+	// reach a nil upload stream.
+	if err := executableExplainLocalLoadReject(execCtx.reqCtx, saveStmt); err != nil {
+		return nil, err
+	}
 	// Every executable handle must prove which policy actually participated
 	// in planning. Publication cannot repair missing provenance afterward.
 	if !preparedOwnerPolicyCaptured(execCtx) {
@@ -5390,6 +5399,53 @@ func unwrapExecutableExplainStatement(stmt tree.Statement) tree.Statement {
 	}
 }
 
+// executableExplainWrapsLocalLoad reports whether an executable explain wrapper
+// directly or transitively wraps a LOCAL load statement.
+//
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute their wrapped statement in the
+// engine to collect runtime analysis data, but the client-to-server LOCAL
+// upload stream (io.Pipe, writer, and the transfer goroutine) is created only
+// by executeStatusStmt for a plain tree.Load. Executing a LOCAL load through
+// the explain runner leaves proc.LoadLocalReader unset, so the pipeline
+// dereferences a nil pipe reader at first read (issue #32453). Plain EXPLAIN
+// only plans the wrapped statement and never runs the load, so it is
+// deliberately not unwrapped here: a wrapped LOCAL load must keep planning.
+func executableExplainWrapsLocalLoad(stmt tree.Statement) bool {
+	for {
+		switch explain := stmt.(type) {
+		case *tree.ExplainAnalyze:
+			stmt = explain.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = explain.Statement
+		default:
+			load, ok := stmt.(*tree.Load)
+			return ok && load.Local
+		}
+	}
+}
+
+// executableExplainLocalLoadReject returns the canonical checked rejection for
+// a statement that would execute a LOAD DATA LOCAL INFILE through an explain
+// wrapper that cannot own the client LOCAL transfer (issue #32453). Every
+// other statement shape returns nil here: plain EXPLAIN, non-LOCAL loads and
+// bare loads keep their existing behavior at every admission point that shares
+// this predicate.
+func executableExplainLocalLoadReject(ctx context.Context, stmt tree.Statement) error {
+	switch explain := stmt.(type) {
+	case *tree.ExplainAnalyze:
+		if executableExplainWrapsLocalLoad(explain) {
+			return moerr.NewNotSupported(ctx,
+				"EXPLAIN ANALYZE LOAD DATA LOCAL INFILE is not supported")
+		}
+	case *tree.ExplainPhyPlan:
+		if executableExplainWrapsLocalLoad(explain) {
+			return moerr.NewNotSupported(ctx,
+				"EXPLAIN PHYPLAN LOAD DATA LOCAL INFILE is not supported")
+		}
+	}
+	return nil
+}
+
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func canExecuteStatementInUncommittedTransaction(
 	reqCtx context.Context,
@@ -6332,8 +6388,14 @@ func executeStmt(ses *Session,
 			ses.SetDatabaseName("")
 		}
 	case *tree.ExplainAnalyze:
+		if err = executableExplainLocalLoadReject(execCtx.reqCtx, st); err != nil {
+			return
+		}
 		ses.SetData(nil)
 	case *tree.ExplainPhyPlan:
+		if err = executableExplainLocalLoadReject(execCtx.reqCtx, st); err != nil {
+			return
+		}
 		ses.SetData(nil)
 	case *tree.ShowTableStatus:
 		ses.SetShowStmtType(ShowTableStatus)

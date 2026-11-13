@@ -31,7 +31,7 @@ show grants;
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_a`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_a`@`localhost`
 rename user ru30467_a to ru30467_mid, ru30467_b to ru30467_mid;
 invalid input: RENAME USER destination already exists
 select count(*)=1 as source_rolled_back from mo_catalog.mo_user where user_name='ru30467_a' and user_id={{ru30467_a_id}};
@@ -72,17 +72,17 @@ show grants;
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for current_user;
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for current_user();
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 rename user ru30467_b to ru30467_a;
 select connection_id() <> {{ru30467_old_conn}} as fresh_reused_name_login;
 ➤ fresh_reused_name_login[-6,8,0]  𝄀
@@ -107,17 +107,17 @@ show grants;
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for current_user;
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for current_user();
 ➤ Grants for ru30467_a@localhost[12,633,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for 'ru30467_a';
 ➤ Grants for ru30467_a@localhost[12,251,0]  𝄀
 GRANT connect ON account  `ru30467_a`@`localhost`
@@ -125,16 +125,16 @@ show grants for 'ru30467_moved';
 ➤ Grants for ru30467_moved@localhost[12,255,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for 'ru30467_moved'@'%';
 ➤ Grants for ru30467_moved@localhost[12,255,0]  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
 GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
-GRANT select ON table d.t `ru30467_moved`@`localhost`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_moved`@`localhost`
 show grants for role ru30467_reader;
 ➤ Grants for ru30467_reader[12,244,0]  𝄀
 GRANT connect ON account  `ru30467_reader`  𝄀
-GRANT select ON table d.t `ru30467_reader`
+GRANT select ON table `ru30467_db`.`marker` `ru30467_reader`
 rename user ru30467_moved to ru30467_a;
 invalid input: RENAME USER destination already exists
 rename user ru30467_missing to ru30467_mid;
