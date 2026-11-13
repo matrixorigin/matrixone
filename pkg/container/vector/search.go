@@ -455,6 +455,7 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 		}
 
 		if len(subVals) <= kMaxLenForBinarySearch {
+
 			start := 0
 			for i := 0; i < len(subVals); i++ {
 				if i > 0 && bytes.Equal(subVals[i], subVals[i-1]) {
@@ -481,32 +482,78 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 				start = pos
 			}
 		} else {
+
 			n2 := len(subVals)
 			i1, i2 := 0, 0
 			for i1 < n1 && i2 < n2 {
 				ord := bytes.Compare(varlenas[i1].GetByteSlice(area), subVals[i2])
-				if ord == 0 {
-					val := subVals[i2]
-					runStart := i1
-					for i1 < n1 && bytes.Equal(varlenas[i1].GetByteSlice(area), val) {
-						i1++
+				// Reuse the lower-bound comparison while the needle stays unchanged.
+				for {
+					if ord == 0 {
+						val := subVals[i2]
+						runStart := i1
+						for i1 < n1 && bytes.Equal(varlenas[i1].GetByteSlice(area), val) {
+							i1++
+						}
+						for j := runStart; j < i1; j++ {
+							sels = append(sels, int64(j))
+						}
+						for i2 < n2 && bytes.Equal(subVals[i2], val) {
+							i2++
+						}
+						break
 					}
-					for j := runStart; j < i1; j++ {
-						sels = append(sels, int64(j))
-					}
-					for i2 < n2 && bytes.Equal(subVals[i2], val) {
+					if ord > 0 {
 						i2++
+						break
 					}
-				} else if ord < 0 {
-					i1++
-				} else {
-					i2++
+					i1, ord = gallopVarlenGE(varlenas, area, subVals[i2], i1+1, n1)
+					if i1 == n1 {
+						return sels
+					}
 				}
 			}
 		}
 
 		return sels
 	}
+}
+
+// gallopVarlenGE finds the first row >= key in the sorted range [lo, hi).
+// It also returns that row's comparison, which is ignored when the range ends.
+// Keeping the comparison avoids testing the candidate twice for short gaps.
+func gallopVarlenGE(col []types.Varlena, area, key []byte, lo, hi int) (int, int) {
+	prev, cur, step := lo, lo, 1
+	candidateCmp := 0
+	for cur < hi {
+		ord := bytes.Compare(col[cur].GetByteSlice(area), key)
+		if ord >= 0 {
+			candidateCmp = ord
+			break
+		}
+		prev = cur + 1
+		if step >= hi-cur {
+			cur = hi
+			break
+		}
+		cur += step
+		if step > (hi-cur)/2 {
+			step = hi - cur
+		} else {
+			step *= 2
+		}
+	}
+	for prev < cur {
+		mid := prev + (cur-prev)/2
+		ord := bytes.Compare(col[mid].GetByteSlice(area), key)
+		if ord < 0 {
+			prev = mid + 1
+		} else {
+			cur = mid
+			candidateCmp = ord
+		}
+	}
+	return prev, candidateCmp
 }
 
 func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) int) func(*Vector) []int64 {
