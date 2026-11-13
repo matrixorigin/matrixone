@@ -1543,14 +1543,7 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
-			n,
-			owner,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			v.allocationAccount.dataSite,
-			v.allocationAccount.capacityClass,
-		)
+		kinds, err := makeSelectedSlice[PrepareParamKind](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return kinds, owner, err
 	}
 	if owner == nil {
@@ -1589,9 +1582,7 @@ func (v *Vector) allocateStringSources(
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		sources, err := mpool.MakeSliceAccountedWithCapacityClass[types.StringSource](
-			n, owner, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.dataSite, v.allocationAccount.capacityClass)
+		sources, err := makeSelectedSlice[types.StringSource](v.allocationAccount, n, owner, v.allocationAccount.dataSite)
 		return sources, owner, err
 	}
 	if owner == nil {
@@ -3638,9 +3629,7 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
+		storage, err = makeSelectedSlice[uint64](v.allocationAccount, words, mp, v.allocationAccount.nullsSite)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -3872,6 +3861,36 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	}
 	bs := toSliceOfLengthNoTypeCheck[types.Varlena](v, length)
 	return bs[i].GetByteSlice(v.area)
+}
+
+// GetBytesAtChecked reads mutable varlen input without trusting descriptor
+// offsets. The returned bytes still belong to v; this grants no read-only
+// qualification and does not validate a JSON document's contents.
+func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
+	if v == nil || !v.typ.IsVarlen() || i < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsConst() {
+		i = 0
+	} else if i >= v.length {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsDictionary() {
+		base, physicalRow := v.dictionaryPhysicalRow(i)
+		return base.GetBytesAtChecked(physicalRow)
+	}
+	if i >= len(v.data)/types.VarlenaSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](v, i+1)
+	descriptor := &values[i]
+	if !descriptor.IsSmall() {
+		offset, size := descriptor.OffsetLen()
+		if uint64(offset) > uint64(len(v.area)) || uint64(size) > uint64(len(v.area))-uint64(offset) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+		}
+	}
+	return descriptor.GetByteSlice(v.area), nil
 }
 
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
@@ -8410,13 +8429,18 @@ type FixedSourceRow struct {
 	Row int64
 }
 
-// TryUnionFlatFixedRows copies rows across source vectors without changing their
-// order. A false result leaves v untouched, allowing the caller to use UnionOne.
+// TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
+// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// false result leaves v untouched, allowing the caller to use UnionOne.
 // A true result transfers no source ownership; v owns every copied payload.
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
-	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() ||
+	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings ||
 		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
 		v.preflightStringSourceReady {
+		return false, nil
+	}
+	if inlineStrings && (types.IsUnicodeCollation(v.typ.Charset) || v.AreaBackingKind() != OwnedMPoolUnique) {
 		return false, nil
 	}
 	size := v.typ.TypeSize()
@@ -8437,6 +8461,10 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 			return false, nil
 		}
 		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		if inlineStrings && (w.AreaBackingKind() != OwnedMPoolUnique ||
+			!isNull && w.data[int(row.Row)*size] > types.VarlenaInlineSize) {
+			return false, nil
+		}
 		hasNulls = hasNulls || isNull
 		hasValues = hasValues || !isNull
 	}
@@ -8450,6 +8478,9 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 		for i, row := range rows {
 			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
 				nulls.Add(&v.nsp, uint64(oldLen+i))
+				if inlineStrings {
+					clear(v.data[(oldLen+i)*size : (oldLen+i+1)*size])
+				}
 				continue
 			}
 			dst, src := (oldLen+i)*size, int(row.Row)*size
@@ -8985,33 +9016,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			// Cases are payload widths in bytes; len(sels) is the output row count.
-			// The profiled 4/8-byte paths copy the first row directly, then
-			// check the tail once. The 1/2-byte paths retain their scalar loops.
+			// Typed carriers copy physical bits without per-row byte offsets.
+			// Logical type and metadata remain owned by this append path.
 			switch tlen {
 			case 8:
-				dst := unsafe.Pointer(&v.data[oldLen*8])
-				src := unsafe.Pointer(&w.data[int(sels[0])*8])
-				*(*uint64)(dst) = *(*uint64)(src)
-				if len(sels) > 1 {
-					// The first store uses the original checked indexes.
-					// Admit the tail before deriving the remaining pointers.
-					_ = v.data[(oldLen+len(sels))*8-1]
-					for i := 1; i < len(sels); i++ {
-						src = unsafe.Pointer(&w.data[int(sels[i])*8])
-						*(*uint64)(unsafe.Add(dst, i*8)) = *(*uint64)(src)
-					}
-				}
+				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
 			case 4:
-				dst := unsafe.Pointer(&v.data[oldLen*4])
-				src := unsafe.Pointer(&w.data[int(sels[0])*4])
-				*(*uint32)(dst) = *(*uint32)(src)
-				if len(sels) > 1 {
-					_ = v.data[(oldLen+len(sels))*4-1]
-					for i := 1; i < len(sels); i++ {
-						src = unsafe.Pointer(&w.data[int(sels[i])*4])
-						*(*uint32)(unsafe.Add(dst, i*4)) = *(*uint32)(src)
-					}
-				}
+				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
 			case 2:
 				for i, sel := range sels {
 					p1 := unsafe.Pointer(&v.data[(oldLen+i)*2])
@@ -11270,10 +11281,7 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			target.site, v.allocationAccount.capacityClass,
-		)
+		storage, err := makeSelectedSlice[uint64](v.allocationAccount, words, mp, target.site)
 		if err != nil {
 			for j := range i {
 				scratch[j].release(mp)

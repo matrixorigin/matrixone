@@ -13325,6 +13325,10 @@ simple_expr:
     {
         $$ = tree.NewTuple(append($2, $4))
     }
+|   ROW '(' expression_list ',' expression ')'
+    {
+        $$ = tree.NewTuple(append($3, $5))
+    }
 |   '+'  simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_PLUS, $2)
