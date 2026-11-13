@@ -37,6 +37,7 @@ type controlledLogtailer struct {
 	now       timestamp.Timestamp
 	tableFn   func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error)
 	barrierFn func(context.Context) (timestamp.Timestamp, error)
+	targetFn  func(api.TableID) (timestamp.Timestamp, bool)
 }
 
 var _ taelogtail.Logtailer = (*controlledLogtailer)(nil)
@@ -82,6 +83,16 @@ func (l *controlledLogtailer) ReadBarrier(ctx context.Context) (timestamp.Timest
 		return fn(ctx)
 	}
 	return frontier, nil
+}
+
+func (l *controlledLogtailer) TableReadTarget(table api.TableID) (timestamp.Timestamp, bool) {
+	l.mu.Lock()
+	fn := l.targetFn
+	l.mu.Unlock()
+	if fn == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return fn(table)
 }
 
 func (l *controlledLogtailer) notify(

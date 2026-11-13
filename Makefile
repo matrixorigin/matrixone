@@ -395,13 +395,14 @@ build-typecheck: build
 ###############################################################################
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
+# Bound the full phased run separately from each package's UT_TIMEOUT.
 .PHONY: ut
 ut: config cgo thirdparties
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################

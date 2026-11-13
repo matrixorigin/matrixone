@@ -902,7 +902,12 @@ type ExecCtx struct {
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
 	// Authorization uses a statement view independently of an old user SI transaction.
+	authorizationMu       sync.Mutex
 	authorizationSnapshot timestamp.Timestamp
+	protectedPolicyLoaded bool
+	protectedPolicyRaw    string
+	sequenceAuthorization sync.Once
+	sequenceAuthErr       error
 	// rootSQLOverride is the authoritative SQL for a statement planned
 	// recursively inside this request, such as the statement owned by PREPARE.
 	// A nil value falls back to the session SQL.
@@ -961,7 +966,7 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
-	execCtx.authorizationSnapshot = timestamp.Timestamp{}
+	execCtx.resetAuthorization()
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil
@@ -987,6 +992,16 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
 	execCtx.rewriteEnabled = false
+}
+
+func (execCtx *ExecCtx) resetAuthorization() {
+	execCtx.authorizationMu.Lock()
+	defer execCtx.authorizationMu.Unlock()
+	execCtx.authorizationSnapshot = timestamp.Timestamp{}
+	execCtx.protectedPolicyLoaded = false
+	execCtx.protectedPolicyRaw = ""
+	execCtx.sequenceAuthorization = sync.Once{}
+	execCtx.sequenceAuthErr = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -1444,15 +1459,6 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
 			return err
-		}
-	}
-
-	if name == ProtectedDatabases {
-		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
-			oldValue, _ := ses.GetGlobalSysVar(name)
-			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(ses, oldString)) != 0 {
-				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
-			}
 		}
 	}
 
