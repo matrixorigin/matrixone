@@ -75,6 +75,44 @@ func TestLiteralID(t *testing.T) {
 	}
 }
 
+func TestNumberBeforeDollarQuotedAlias(t *testing.T) {
+	for _, tc := range []struct {
+		sql, number, alias string
+	}{
+		{"1.0$$?$$", "1.0", "?"},
+		{".1$tag$? :ignored$tag$", ".1", "? :ignored"},
+		{"1e+2$$?$$", "1e+2", "?"},
+		{"1.2e3$$?$$", "1.2e3", "?"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			s := NewScanner(dialect.MYSQL, tc.sql)
+			defer PutScanner(s)
+			if token, value := s.Scan(); token != FLOAT || value != tc.number {
+				t.Fatalf("number token = (%s,%q), want (FLOAT,%q)", tokenName(token), value, tc.number)
+			}
+			if token, value := s.Scan(); token != STRING || value != tc.alias {
+				t.Fatalf("alias token = (%s,%q), want (STRING,%q)", tokenName(token), value, tc.alias)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		sql   string
+		token int
+		value string
+	}{
+		{"123name", ID, "123name"}, {"1e", ID, "1e"}, {"0xFE", HEXNUM, "0xfe"},
+		{"1.5e", LEX_ERROR, "1.5e"}, {"1.efoo", LEX_ERROR, "1.e"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			s := NewScanner(dialect.MYSQL, tc.sql)
+			defer PutScanner(s)
+			if token, value := s.Scan(); token != tc.token || value != tc.value {
+				t.Fatalf("token = (%s,%q), want (%s,%q)", tokenName(token), value, tokenName(tc.token), tc.value)
+			}
+		})
+	}
+}
+
 func TestQuotedUnicodeIdentifier(t *testing.T) {
 	tests := []struct {
 		name  string
