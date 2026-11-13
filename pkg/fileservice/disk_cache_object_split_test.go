@@ -190,6 +190,14 @@ func TestDiskObjectSplitConfig(t *testing.T) {
 	}).diskObjectSplit())
 }
 
+// disk-prefetch-memory-max defaults to 32 MiB and is at least 8 MiB.
+func TestDiskPrefetchMemoryMaxConfig(t *testing.T) {
+	require.Equal(t, int64(32<<20), (&CacheConfig{}).diskPrefetchMemoryMax())
+	require.Equal(t, int64(64<<20), (&CacheConfig{DiskPrefetchMemoryMax: ptrTo[toml.ByteSize](64 << 20)}).diskPrefetchMemoryMax())
+	require.Equal(t, int64(8<<20), (&CacheConfig{DiskPrefetchMemoryMax: ptrTo[toml.ByteSize](1)}).diskPrefetchMemoryMax())
+	require.Equal(t, int64(32<<20), (&CacheConfig{DiskPrefetchMemoryMax: ptrTo[toml.ByteSize](0)}).diskPrefetchMemoryMax())
+}
+
 // A full-object read does not wait for the read that holds its merge.
 func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)

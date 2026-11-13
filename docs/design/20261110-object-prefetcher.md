@@ -63,7 +63,7 @@ A file service without a prefetcher keeps the IO-pipeline prefetch.
 
 Every prefetch the prefetcher runs is one of two kinds of prefetch object:
 - A **MemoryPrefetchObject** holds ranges of at most `disk-prefetch-memory-max` bytes in
-  all (default 32 MiB). Each run of adjacent ranges is read into a buffer, which readers
+  all (default 32 MiB, at least 8 MiB). Each run of adjacent ranges is read into a buffer, which readers
   copy their bytes from as they arrive, and is then cached as a range file.
 - A **FilePrefetchObject** downloads to a file: an object read whole, or each run of
   ranges of more than `disk-prefetch-memory-max` bytes. Its bytes are written to the
@@ -294,7 +294,8 @@ way each time.
 - No persisted format changes.
 - **Configuration** (`[fileservice.cache]`): `disk-prefetch-object-split` (default 2;
   1 turns splitting off), `disk-prefetch-object-split-min` (default 16 MiB) and
-  `disk-prefetch-memory-max` (default 32 MiB), the most bytes of a MemoryPrefetchObject.
+  `disk-prefetch-memory-max` (default 32 MiB, at least 8 MiB), the most bytes of a
+  MemoryPrefetchObject.
 - **Metrics:** `mo_fs_prefetch_object_total{result}` counts prefetch requests and
   their outcomes: queued, merged, cached, downloaded, failed, missed (a read reached
   the object first), ended and dropped. A warning is logged, at most once per

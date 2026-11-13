@@ -60,7 +60,7 @@ type CacheConfig struct {
 	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
 	// DiskPrefetchMemoryMax is the most bytes a prefetch downloads into memory, as a
 	// MemoryPrefetchObject; a larger one downloads to a file, as a FilePrefetchObject.
-	// Default DefaultDiskPrefetchMemoryMax.
+	// Default DefaultDiskPrefetchMemoryMax, at least minDiskPrefetchMemoryMax.
 	DiskPrefetchMemoryMax *toml.ByteSize `toml:"disk-prefetch-memory-max"`
 	RemoteCacheEnabled    bool           `toml:"remote-cache-enabled"`
 	RPC                   morpc.Config   `toml:"rpc"`
@@ -250,11 +250,13 @@ const (
 	diskPrefetchObjectSplitMax = 4
 	// DefaultDiskPrefetchMemoryMax is the default DiskPrefetchMemoryMax.
 	DefaultDiskPrefetchMemoryMax = 32 << 20
+	// minDiskPrefetchMemoryMax is the least DiskPrefetchMemoryMax.
+	minDiskPrefetchMemoryMax = 8 << 20
 )
 
 func (c *CacheConfig) diskPrefetchMemoryMax() int64 {
 	if c.DiskPrefetchMemoryMax != nil && *c.DiskPrefetchMemoryMax > 0 {
-		return int64(*c.DiskPrefetchMemoryMax)
+		return max(int64(*c.DiskPrefetchMemoryMax), minDiskPrefetchMemoryMax)
 	}
 	return DefaultDiskPrefetchMemoryMax
 }
