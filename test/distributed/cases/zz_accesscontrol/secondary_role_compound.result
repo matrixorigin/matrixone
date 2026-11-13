@@ -1,0 +1,109 @@
+drop database if exists compound_role_db;
+drop user if exists compound_reader;
+drop role if exists compound_a, compound_b, compound_parent;
+create database compound_role_db;
+create table compound_role_db.a (yr int, amount int);
+create table compound_role_db.b (yr int, amount int);
+create table compound_role_db.denied (amount int);
+insert into compound_role_db.a values (2024, 10), (2025, 20);
+insert into compound_role_db.b values (2024, 2), (2025, 4);
+create role compound_a, compound_b, compound_parent;
+grant connect on account * to compound_a;
+grant select, insert on table compound_role_db.a to compound_a;
+grant select on table compound_role_db.b to compound_b;
+create user compound_reader identified by '123456' default role compound_a;
+grant compound_b to compound_reader;
+set enable_privilege_cache = off;
+set secondary role all;
+select sum(amount) from compound_role_db.a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+select sum(amount) from compound_role_db.b;
+➤ sum(amount)[-5,64,0]  𝄀
+6
+select p.amount, r.amount from (select amount from compound_role_db.a where yr = 2025 limit 1) p cross join (select amount from compound_role_db.b where yr = 2025 limit 1) r;
+➤ amount[4,32,0]  ¦  amount[4,32,0]  𝄀
+20  ¦  4
+with a24 as (select sum(amount) v from compound_role_db.a where yr = 2024),
+a25 as (select sum(amount) v from compound_role_db.a where yr = 2025),
+b24 as (select sum(amount) v from compound_role_db.b where yr = 2024),
+b25 as (select sum(amount) v from compound_role_db.b where yr = 2025)
+select a24.v, a25.v, b24.v, b25.v from a24 cross join a25 cross join b24 cross join b25;
+➤ v[-5,64,0]  ¦  v[-5,64,0]  ¦  v[-5,64,0]  ¦  v[-5,64,0]  𝄀
+10  ¦  20  ¦  2  ¦  4
+select count(*) from (
+with a24 as (select sum(amount) v from compound_role_db.a where yr = 2024),
+a25 as (select sum(amount) v from compound_role_db.a where yr = 2025),
+b24 as (select sum(amount) v from compound_role_db.b where yr = 2024),
+b25 as (select sum(amount) v from compound_role_db.b where yr = 2025)
+select a25.v / b25.v as ratio from a24 cross join a25 cross join b24 cross join b25
+union all
+select a24.v / b24.v as ratio from a24 cross join a25 cross join b24 cross join b25
+) totals;
+➤ count(*)[-5,64,0]  𝄀
+2
+select sum(a.amount + d.amount) from compound_role_db.a a cross join compound_role_db.denied d;
+internal error: do not have privilege to execute the statement
+begin;
+insert into compound_role_db.a select * from compound_role_db.b;
+select count(*) from compound_role_db.a;
+➤ count(*)[-5,64,0]  𝄀
+4
+rollback;
+set secondary role none;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+set enable_privilege_cache = on;
+set clear_privilege_cache = on;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+➤ sum(a.amount + b.amount)[-5,64,0]  𝄀
+72
+set clear_privilege_cache = on;
+select sum(b.amount + a.amount) from compound_role_db.b b cross join compound_role_db.a a;
+➤ sum(b.amount + a.amount)[-5,64,0]  𝄀
+72
+set clear_privilege_cache = on;
+select sum(amount) from compound_role_db.a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+select sum(amount) from compound_role_db.b;
+➤ sum(amount)[-5,64,0]  𝄀
+6
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+➤ sum(a.amount + b.amount)[-5,64,0]  𝄀
+72
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+➤ sum(a.amount + b.amount)[-5,64,0]  𝄀
+72
+set secondary role none;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+➤ sum(a.amount + b.amount)[-5,64,0]  𝄀
+72
+set role compound_b;
+set secondary role none;
+select sum(amount) from compound_role_db.a;
+internal error: do not have privilege to execute the statement
+set role compound_a;
+set secondary role all;
+revoke compound_b from compound_reader;
+grant compound_b to compound_parent;
+grant compound_parent to compound_a;
+set enable_privilege_cache = off;
+set secondary role none;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+➤ sum(a.amount + b.amount)[-5,64,0]  𝄀
+72
+revoke select on table compound_role_db.b from compound_b;
+set secondary role all;
+select sum(a.amount + b.amount) from compound_role_db.a a cross join compound_role_db.b b;
+internal error: do not have privilege to execute the statement
+select sum(amount) from compound_role_db.a;
+➤ sum(amount)[-5,64,0]  𝄀
+30
+drop user compound_reader;
+drop role compound_a, compound_parent, compound_b;
+drop database compound_role_db;
