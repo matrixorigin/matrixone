@@ -1347,6 +1347,25 @@ func (c *PushClient) ActivateTenantCatalog(ctx context.Context, e *Engine, accou
 	if c.lazyCatalog == nil || !c.lazyCatalog.isEnabled() {
 		return nil
 	}
+	c.lifecycleMu.Lock()
+	ownerCtx, closed := c.ctx, c.closed.Load()
+	c.lifecycleMu.Unlock()
+	if closed {
+		return context.Canceled
+	}
+	if ownerCtx != nil {
+		activationCtx, cancel := context.WithCancelCause(ctx)
+		stop := context.AfterFunc(ownerCtx, func() { cancel(context.Cause(ownerCtx)) })
+		defer cancel(context.Canceled)
+		defer stop()
+		if ownerCtx.Err() != nil {
+			cancel(context.Cause(ownerCtx))
+		}
+		ctx = activationCtx
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Backoff schedule: 500ms, 1s, 2s, 4s (total ~7.5s worst case).
 	backoff := 500 * time.Millisecond
