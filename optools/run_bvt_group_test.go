@@ -35,6 +35,7 @@ func TestRunBVTGroupPreservesCoverageAndBalanceAssignment(t *testing.T) {
 		"array/optimistic_only.sql", // Deliberately excluded by the existing contract.
 		"snapshot/a.sql",
 		"git4data/branch/a.sql",
+		"udf_python/a.sql",
 		"pessimistic_transaction/a.sql",
 		"log/a.sql",
 		"result_count/a.sql",
@@ -57,6 +58,7 @@ func TestRunBVTGroupPreservesCoverageAndBalanceAssignment(t *testing.T) {
 	}
 	runner := `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$@" > "$CAPTURE.args"
 while (($#)); do
   if [[ "$1" == "-i" ]]; then
     printf '%s' "$2" > "$CAPTURE"
@@ -77,12 +79,32 @@ exit 2
 
 	selected := make(map[string][]string)
 	seen := make(map[string]int)
+	resources := filepath.Join(root, "test resources")
+	if err := os.MkdirAll(resources, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, group := range []string{"0", "1"} {
 		capture := filepath.Join(root, "group-"+group)
-		cmd := exec.Command("bash", script, tester, cases, group)
+		args := []string{script, tester, cases, group}
+		if group == "1" {
+			args = append(args, resources)
+		}
+		cmd := exec.Command("bash", args...)
 		cmd.Env = append(os.Environ(), "CAPTURE="+capture)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("group %s: %v\n%s", group, err, output)
+		}
+		argv, err := os.ReadFile(capture + ".args")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotArgs := strings.Split(strings.TrimSuffix(string(argv), "\n"), "\n")
+		if group == "0" {
+			if len(gotArgs) != 7 {
+				t.Fatalf("default resources must not add arguments: %q", gotArgs)
+			}
+		} else if len(gotArgs) != 9 || gotArgs[7] != "-s" || gotArgs[8] != resources {
+			t.Fatalf("explicit resource directory must remain one argument: %q", gotArgs)
 		}
 		data, err := os.ReadFile(capture)
 		if err != nil {
