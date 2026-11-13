@@ -90,8 +90,8 @@ func TestCatalogChangesPKFilterAfterPartitionGC(t *testing.T) {
 	_, _, rel, err := p.D.Engine.GetRelationById(p.Ctx, read, catalog.MO_TABLES_ID)
 	require.NoError(t, err)
 	p.D.Engine.ForceGC(p.Ctx, to)
-	stateStart, err := disttae.GetPartitionStateStart(p.Ctx, rel)
-	require.NoError(t, err)
+	part := p.D.Engine.GetOrCreateLatestPart(p.Ctx, uint64(catalog.System_Account), catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID)
+	stateStart := part.Snapshot().GetStart()
 	require.True(t, stateStart.GT(&from), "the requested history must require checkpoint replay")
 
 	packer := types.NewPacker()

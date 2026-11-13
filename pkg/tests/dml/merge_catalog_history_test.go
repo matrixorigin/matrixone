@@ -68,14 +68,7 @@ func TestDataBranchMergeWithCheckpointCatalog(t *testing.T) {
 		// system tables or advancing beyond the completed checkpoint.
 		part := eng.GetOrCreateLatestPart(ctx, uint64(catalog.System_Account), catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID)
 		require.NoError(t, part.Truncate(ctx, [2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}, gcTS, nil))
-		read, err := service.GetTxnClient().New(ctx, types.TS{}.ToTimestamp())
-		require.NoError(t, err)
-		require.NoError(t, eng.New(ctx, read))
-		_, _, rel, err := eng.GetRelationById(ctx, read, catalog.MO_TABLES_ID)
-		require.NoError(t, err)
-		stateStart, err := disttae.GetPartitionStateStart(ctx, rel)
-		require.NoError(t, err)
-		require.NoError(t, read.Rollback(ctx))
+		stateStart := part.Snapshot().GetStart()
 		require.True(t, stateStart.GT(&beforeCreate), "the catalog history must require snapshot recovery")
 
 		start := time.Now()
