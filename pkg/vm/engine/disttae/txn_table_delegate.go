@@ -1461,6 +1461,7 @@ func (r *shardingLocalReader) Read(
 			}
 			r.iteratePhase = InRemote
 		case InRemote:
+			var decodeErr error
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadNext,
@@ -1469,20 +1470,14 @@ func (r *shardingLocalReader) Read(
 					param.ReadNextParam.Columns = cols
 				},
 				func(resp []byte) {
-					isEnd = types.DecodeBool(resp)
-					if isEnd {
-						return
-					}
-					resp = resp[1:]
-					l := types.DecodeUint32(resp)
-					resp = resp[4:]
-					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
-						panic(err)
-					}
+					isEnd, decodeErr = decodeShardingReadBatch(ctx, resp, bat, mp)
 				},
 			)
 			if err != nil {
 				return false, err
+			}
+			if decodeErr != nil {
+				return false, decodeErr
 			}
 			if isEnd {
 				r.iteratePhase = InEnd
@@ -1537,4 +1532,29 @@ func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
+}
+
+// decodeShardingReadBatch admits the received mutable batch before handing it
+// to the consuming scan. Read-only qualification never crosses the wire.
+func decodeShardingReadBatch(ctx context.Context, response []byte, output *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if len(response) < 1 {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read response")
+	}
+	if types.DecodeBool(response) {
+		return true, nil
+	}
+	if len(response) < 5 {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read batch length")
+	}
+	length := uint64(types.DecodeUint32(response[1:]))
+	if length > uint64(len(response)-5) {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read batch")
+	}
+	if err := output.UnmarshalBinaryWithAnyMp(response[5:5+int(length)], mp); err != nil {
+		return false, err
+	}
+	if err := objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(output.Vecs, mp, output.RowCount()); err != nil {
+		return false, err
+	}
+	return false, nil
 }
