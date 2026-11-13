@@ -1762,9 +1762,17 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 				break
 			}
 			if lt.Timestamp != nil {
+				assignment := h.timeAssignment
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					loc := parquetSessionLocation(proc)
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Date(0), func(v parquet.Value) (types.Date, error) {
+						if assignment {
+							dt, err := parquetLoadTimestampValueToDatetime(proc.Ctx, st, v, loc)
+							if err != nil {
+								return 0, err
+							}
+							return dt.ToDate(), nil
+						}
 						dt, err := parquetTimestampValueToDatetime(proc.Ctx, st, v, loc)
 						if err != nil {
 							return 0, err
@@ -1779,7 +1787,13 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 			if dateT == nil {
 				break
 			}
+			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				if assignment {
+					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Date(0), func(v parquet.Value) (types.Date, error) {
+						return parquetLoadDate32(proc.Ctx, v.Int32())
+					})
+				}
 				data := page.Data()
 				dict := page.Dictionary()
 				if dict == nil {
@@ -1830,9 +1844,17 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 				break
 			}
 			if lt.Date != nil {
+				assignment := h.timeAssignment
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					loc := parquetSessionLocation(proc)
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Timestamp(0), func(v parquet.Value) (types.Timestamp, error) {
+						if assignment {
+							date, err := parquetLoadDate32(proc.Ctx, v.Int32())
+							if err != nil {
+								return 0, err
+							}
+							return date.ToTimestamp(loc), nil
+						}
 						return types.DaysFromUnixEpochToDate(v.Int32()).ToTimestamp(loc), nil
 					})
 				}
@@ -1845,7 +1867,23 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 			}
 			// isAdjustedToUTC: true=UTC (use directly), false=local wall-clock time.
 			isAdjustedToUTC := tsT.IsAdjustedToUTC
+			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				if assignment {
+					// LOAD stages the true source precision (scale 6) and lets
+					// the standard assignment cast own target-scale rounding,
+					// SQL mode, and the final row-domain check.
+					loc := parquetSessionLocation(proc)
+					return processParquetTemporalAssignment[types.Timestamp](mp, page, proc, vec,
+						parquetTimestampStagingType,
+						func(v parquet.Value) (types.Timestamp, error) {
+							micros, err := parquetTimestampValueToMicros(proc.Ctx, v, lt)
+							if err != nil {
+								return 0, err
+							}
+							return parquetLoadTimestampMicrosToTimestamp(proc.Ctx, micros, isAdjustedToUTC, loc)
+						})
+				}
 				data := page.Data()
 				dict := page.Dictionary()
 
@@ -1967,7 +2005,17 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 			break
 		}
 		if lt.Date != nil {
+			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				if assignment {
+					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Datetime(0), func(v parquet.Value) (types.Datetime, error) {
+						date, err := parquetLoadDate32(proc.Ctx, v.Int32())
+						if err != nil {
+							return 0, err
+						}
+						return date.ToDatetime(), nil
+					})
+				}
 				data := page.Data()
 				dict := page.Dictionary()
 				if dict == nil {
@@ -2010,8 +2058,16 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 		if lt.Timestamp == nil {
 			break
 		}
+		assignment := h.timeAssignment
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			loc := parquetSessionLocation(proc)
+			if assignment {
+				return processParquetTemporalAssignment[types.Datetime](mp, page, proc, vec,
+					parquetDatetimeStagingType,
+					func(v parquet.Value) (types.Datetime, error) {
+						return parquetLoadTimestampValueToDatetime(proc.Ctx, st, v, loc)
+					})
+			}
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Datetime(0), func(v parquet.Value) (types.Datetime, error) {
 				return parquetTimestampValueToDatetime(proc.Ctx, st, v, loc)
 			})
