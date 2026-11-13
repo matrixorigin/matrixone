@@ -34,8 +34,6 @@ import (
 )
 
 func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
 	path, err := os.MkdirTemp("", "owned-cdc-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(path)) })
@@ -48,8 +46,10 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 				})
 			}
 		}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	require.NoError(t, cluster.Start())
 	first, err := cluster.GetCNService(0)
 	require.NoError(t, err)
@@ -57,6 +57,9 @@ func TestOwnedCDCTaskLeaseGuardsCatalog(t *testing.T) {
 	require.NoError(t, err)
 	var ts taskservice.TaskService
 	require.Eventually(t, func() bool { var ok bool; ts, ok = first.RawService().(cnservice.Service).GetTaskService(); return ok }, 90*time.Second, 100*time.Millisecond)
+	// Keep the scenario timeout independent of waiting for cluster admission.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=45s&writeTimeout=45s", first.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })

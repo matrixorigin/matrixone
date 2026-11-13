@@ -44,8 +44,6 @@ import (
 )
 
 func TestISCPManagedLeaseHandoff(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
-	defer cancel()
 	path, err := os.MkdirTemp("", "managed-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(path)) })
@@ -59,8 +57,10 @@ func TestISCPManagedLeaseHandoff(t *testing.T) {
 				})
 			}
 		}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	require.NoError(t, cluster.Start())
 	first, err := cluster.GetCNService(0)
 	require.NoError(t, err)
@@ -69,6 +69,9 @@ func TestISCPManagedLeaseHandoff(t *testing.T) {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=45s&writeTimeout=45s", first.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	// Keep the scenario timeout independent of waiting for cluster admission.
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
 	defer conn.Close()
