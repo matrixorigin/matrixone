@@ -1834,6 +1834,42 @@ func TestParquetFloat32Overflow(t *testing.T) {
 	})
 }
 
+func TestParquetFloat32SpecialValues(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, physical := range []parquet.Type{parquet.FloatType, parquet.DoubleType} {
+		for _, dictionary := range []bool{false, true} {
+			for _, value := range []float64{math.Inf(1), math.Inf(-1), math.NaN(), math.Copysign(0, -1)} {
+				t.Run(fmt.Sprintf("%s/dictionary=%t/value=%v", physical, dictionary, value), func(t *testing.T) {
+					v := parquet.DoubleValue(value)
+					if physical.Kind() == parquet.Float {
+						v = parquet.FloatValue(float32(value))
+					}
+					var file *parquet.File
+					var page parquet.Page
+					if dictionary {
+						file, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(physical), &parquet.RLEDictionary), []parquet.Value{v})
+					} else {
+						file, page = writeColumnAndGetPage(t, parquet.Leaf(physical), []parquet.Row{{v.Level(0, 0, 0)}})
+					}
+					vec := vector.NewVec(types.T_float32.ToType())
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+					var handler ParquetHandler
+					mapper := handler.getMapper(file.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
+					require.NotNil(t, mapper)
+					require.NoError(t, mapper.mapping(page, proc, vec))
+					got := vector.MustFixedColWithTypeCheck[float32](vec)
+					require.Len(t, got, 1)
+					if math.IsNaN(value) {
+						require.True(t, math.IsNaN(float64(got[0])))
+					} else {
+						require.Equal(t, math.Float32bits(float32(value)), math.Float32bits(got[0]))
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	ctx := context.Background()
 

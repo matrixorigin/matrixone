@@ -3247,7 +3247,7 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 }
 
 func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
-	if val > math.MaxFloat32 || val < -math.MaxFloat32 {
+	if !math.IsNaN(val) && !math.IsInf(val, 0) && (val > math.MaxFloat32 || val < -math.MaxFloat32) {
 		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
 	}
 	return float32(val), nil
