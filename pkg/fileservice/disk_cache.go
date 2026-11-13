@@ -78,9 +78,7 @@ type DiskCache struct {
 	// connsFreed, when set, is closed once reserved connections are freed.
 	connsMu         sync.Mutex
 	connsFreed      chan struct{}
-	prefetchFlights prefetchFlights
-	// filePrefetches are the FilePrefetchObjects under way.
-	filePrefetches filePrefetches
+	prefetchObjects prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -1238,7 +1236,7 @@ func (d *DiskCache) Flush(ctx context.Context) {
 	// The prefetch objects under way cache their bytes before they end.
 	done := make(chan struct{})
 	go func() {
-		d.prefetchFlights.reads.Wait()
+		d.prefetchObjects.reads.Wait()
 		close(done)
 	}()
 	select {

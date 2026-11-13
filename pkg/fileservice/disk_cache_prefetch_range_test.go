@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"sync"
@@ -74,7 +75,7 @@ func readRangeOf(t *testing.T, fs *S3FS, policy Policy, offset, size int64) []by
 	vec := &IOVector{FilePath: "object", Policy: policy | SkipFullFilePreloads | SkipMemoryCache,
 		Entries: []IOEntry{{Offset: offset, Size: size}}}
 	require.NoError(t, fs.Read(context.Background(), vec))
-	fs.diskCache.prefetchFlights.reads.Wait()
+	fs.diskCache.prefetchObjects.reads.Wait()
 	data := slices.Clone(vec.Entries[0].Data)
 	vec.Release()
 	return data
@@ -119,7 +120,7 @@ func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
 			opens.Add(1)
 			return nil, context.Canceled
 		})
-	fs.diskCache.prefetchFlights.reads.Wait()
+	fs.diskCache.prefetchObjects.reads.Wait()
 	require.False(t, ok)
 	require.Zero(t, reads)
 	require.Zero(t, opens.Load())
@@ -211,36 +212,33 @@ func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 	second := make(chan []byte, 1)
 	go func() { second <- readRangeOf(t, fs, 0, 6000, 100) }()
 	require.Eventually(t, func() bool {
-		fs.diskCache.prefetchFlights.mu.Lock()
-		defer fs.diskCache.prefetchFlights.mu.Unlock()
-		return len(fs.diskCache.prefetchFlights.m) == 1
+		fs.diskCache.prefetchObjects.mu.Lock()
+		defer fs.diskCache.prefetchObjects.mu.Unlock()
+		return len(fs.diskCache.prefetchObjects.m) == 1
 	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
 	close(storage.release)
 	require.Equal(t, data[5000:5002], <-first)
 	require.Equal(t, data[6000:6100], <-second)
 	require.Equal(t, int64(1), storage.reads.Load())
-	fs.diskCache.prefetchFlights.mu.Lock()
-	defer fs.diskCache.prefetchFlights.mu.Unlock()
-	require.Empty(t, fs.diskCache.prefetchFlights.m)
+	fs.diskCache.prefetchObjects.mu.Lock()
+	defer fs.diskCache.prefetchObjects.mu.Unlock()
+	require.Empty(t, fs.diskCache.prefetchObjects.m)
 }
 
 // addFlight registers a prefetch range of diskPath being read.
-func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time) *prefetchFlight {
-	f := &d.prefetchFlights
+func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time) *memoryPrefetchObject {
+	f := &d.prefetchObjects
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.m == nil {
-		f.m = make(map[string][]*prefetchFlight)
-	}
-	fl := newPrefetchFlight(start, end, began)
+	fl := newMemoryPrefetchObject(start, end, began)
 	fl.buf = make([]byte, end-start)
-	f.m[diskPath] = append(f.m[diskPath], fl)
+	f.registerLocked(diskPath, fl)
 	return fl
 }
 
 // deliver publishes content as the next bytes of the flight.
-func deliver(fl *prefetchFlight, content []byte) {
+func deliver(fl *memoryPrefetchObject, content []byte) {
 	copy(fl.buf[len(fl.content()):], content)
 	fl.wrote(len(content))
 }
@@ -308,10 +306,10 @@ func TestPrefetchFastestFlight(t *testing.T) {
 	now := time.Now()
 	slow := addFlight(&d, "p", 0, 4<<20, now)
 	fast := addFlight(&d, "p", 4096, 8192, now)
-	d.prefetchFlights.mu.Lock()
-	got := d.prefetchFlights.fastestLocked("p", 5000, 5010, now)
+	d.prefetchObjects.mu.Lock()
+	got := d.prefetchObjects.fastestLocked("p", 5000, 5010, now, 0)
 	eta := got.eta(now, 5010)
-	d.prefetchFlights.mu.Unlock()
+	d.prefetchObjects.mu.Unlock()
 	require.Same(t, fast, got)
 	require.Less(t, eta, time.Second)
 	_, ok := d.fastestPrefetch("p", 9000, 9010)
@@ -320,7 +318,7 @@ func TestPrefetchFastestFlight(t *testing.T) {
 	d.endPrefetch("p", slow)
 	_, ok = d.fastestPrefetch("p", 9000, 9010)
 	require.False(t, ok)
-	require.Empty(t, d.prefetchFlights.m)
+	require.Empty(t, d.prefetchObjects.m)
 }
 
 // A read of entries far apart fetches the units they are in, not the bytes between them.
@@ -330,7 +328,7 @@ func TestS3FSPrefetchRangeSkipsGapsBetweenEntries(t *testing.T) {
 		{Offset: 100, Size: 10}, {Offset: 40000, Size: 5000},
 	}}
 	require.NoError(t, fs.Read(context.Background(), vec))
-	fs.diskCache.prefetchFlights.reads.Wait()
+	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Equal(t, data[100:110], vec.Entries[0].Data)
 	require.Equal(t, data[40000:45000], vec.Entries[1].Data)
 	require.Equal(t, int64(2), storage.reads.Load())
@@ -354,7 +352,7 @@ func TestS3FSPrefetchRangeServesBytesAsTheyArrive(t *testing.T) {
 
 // A flight returns false to a reader of bytes it finished without.
 func TestPrefetchFlightWaitFor(t *testing.T) {
-	fl := newPrefetchFlight(100, 200, time.Now())
+	fl := newMemoryPrefetchObject(100, 200, time.Now())
 	fl.buf = make([]byte, 100)
 	fl.wrote(50)
 	content, ok := fl.waitFor(context.Background(), 150)
@@ -365,7 +363,7 @@ func TestPrefetchFlightWaitFor(t *testing.T) {
 	require.False(t, ok)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, ok = newPrefetchFlight(0, 10, time.Now()).waitFor(ctx, 5)
+	_, ok = newMemoryPrefetchObject(0, 10, time.Now()).waitFor(ctx, 5)
 	require.False(t, ok)
 }
 
@@ -374,7 +372,7 @@ func TestPrefetchFlightFailsWhenSourceStalls(t *testing.T) {
 	idle0 := sourceIdleTimeout
 	sourceIdleTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { sourceIdleTimeout = idle0 })
-	fl := newPrefetchFlight(0, 10, time.Now())
+	fl := newMemoryPrefetchObject(0, 10, time.Now())
 	err := fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 		return io.NopCloser(&stalledReader{ctx: ctx, data: []byte("abc")}), nil
 	})
@@ -456,7 +454,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	require.Equal(t, data[100:110], content)
 	cancel()
 	close(gate)
-	d.prefetchFlights.reads.Wait()
+	d.prefetchObjects.reads.Wait()
 	require.Equal(t, int64(1), opened.Load())
 	require.Equal(t, int64(1), ended.Load(), "read to its end")
 	r, ok := d.ranges.containing(d.rangeObjectKey("object"), 0, 128<<10, nil)
@@ -600,7 +598,7 @@ func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 	require.NoError(t, fs.Delete(ctx, "object"))
 	require.True(t, storage.canceled.Load(), "the delete cancels the read under way")
 	close(storage.release)
-	fs.diskCache.prefetchFlights.reads.Wait()
+	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object")))
 
 	recreated := slices.Clone(data)
@@ -615,7 +613,7 @@ func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 // from it. Buffers are of a power-of-two size up to 32 MiB, past which a flight allocates
 // its own.
 func TestPrefetchFlightBufferReusedAfterLastHolder(t *testing.T) {
-	fl := newPrefetchFlight(0, 100<<10, time.Now())
+	fl := newMemoryPrefetchObject(0, 100<<10, time.Now())
 	fl.buf = getFlightBuf(100 << 10)
 	require.Equal(t, 128<<10, cap(fl.buf))
 	fl.hold()
@@ -653,4 +651,29 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
 	d.prefetchFlightBytes = 7
 	require.Equal(t, int64(7), d.flightBytes())
+}
+
+// A read of a stopped MemoryPrefetchObject misses its bytes; a read of one whose read
+// failed gets the read's error.
+func TestMemoryPrefetchObjectUseErrors(t *testing.T) {
+	ctx := context.Background()
+	noop := func([]byte) error { return nil }
+
+	stopped := newMemoryPrefetchObject(0, 10, time.Now())
+	stopped.fail(context.Canceled)
+	require.ErrorIs(t, stopped.use(ctx, 0, 10, noop), errPrefetchMissed)
+
+	readErr := errors.New("read failed")
+	failed := newMemoryPrefetchObject(0, 10, time.Now())
+	failed.fail(readErr)
+	require.ErrorIs(t, failed.use(ctx, 0, 10, noop), readErr)
+
+	short := newMemoryPrefetchObject(0, 10, time.Now())
+	short.buf = make([]byte, 10)
+	deliver(short, []byte{1, 2, 3})
+	short.finish()
+	var got []byte
+	require.NoError(t, short.use(ctx, 1, 2, func(bs []byte) error { got = append(got, bs...); return nil }))
+	require.Equal(t, []byte{2, 3}, got)
+	require.ErrorIs(t, short.use(ctx, 0, 10, noop), errPrefetchMissed)
 }

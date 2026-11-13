@@ -531,8 +531,9 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	objectPath := s.diskCache.pathForFile(path.File)
 	s.diskCache.prefetched.storeCurrent(objectPath, req.Size, req.deletes)
 	ctx, done := s.diskCache.startFilePrefetch(ctx, objectPath, 0, req.Size)
-	defer done()
-	if err := s.PrefetchFile(ctx, req.FilePath); err != nil {
+	err = s.PrefetchFile(ctx, req.FilePath)
+	done(err)
+	if err != nil {
 		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))
 		return

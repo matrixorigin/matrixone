@@ -164,7 +164,7 @@ func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	// A run's buffer is at least 64 KiB, the bytes it counts for.
 	fs.diskCache.prefetchFlightBytes = 64 << 10
-	f := &fs.diskCache.prefetchFlights
+	f := &fs.diskCache.prefetchObjects
 	f.mu.Lock()
 	f.bytes = 1
 	f.mu.Unlock()

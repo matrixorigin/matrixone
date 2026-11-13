@@ -229,7 +229,7 @@ func TestS3FSPrefetchPastMemoryMaxDownloadsFiles(t *testing.T) {
 		require.True(t, cached)
 	}
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
-	require.Empty(t, fs.diskCache.prefetchFlights.m, "no MemoryPrefetchObject")
+	require.Empty(t, fs.diskCache.prefetchObjects.m, "no MemoryPrefetchObject")
 	require.Equal(t, data[200<<10+5:200<<10+15], readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10))
 	require.Equal(t, int64(30), storage.bytes.Load(), "served from the cached range")
 }
@@ -323,7 +323,7 @@ func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 		defer close(second)
 		fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 20, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}}})
 	}()
-	f := &fs.diskCache.prefetchFlights
+	f := &fs.diskCache.prefetchObjects
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
