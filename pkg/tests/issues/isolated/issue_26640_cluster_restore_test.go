@@ -389,7 +389,8 @@ func runIssue28742RestoreWithMetadataProbe(
 	}, 30*time.Second, 10*time.Millisecond,
 		"restore did not reach the lifecycle coordination barrier")
 
-	probeCtx, cancelProbe := context.WithTimeout(ctx, 120*time.Second)
+	// The probe must remain live while the restore owns the lifecycle gate.
+	probeCtx, cancelProbe := context.WithCancel(ctx)
 	defer cancelProbe()
 	go func() {
 		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
