@@ -26,8 +26,10 @@ if ! [[ "${group_id}" =~ ^[01]$ ]]; then
 fi
 
 declare -a included_scripts=()
+declare -a resource_args=()
 if [[ -n "${resource_dir}" ]]; then
     resource_dir=$(cd "${resource_dir}" && pwd)
+    resource_args=(-s "${resource_dir}")
 fi
 
 while IFS= read -r script_path; do
