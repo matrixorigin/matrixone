@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
@@ -2252,19 +2251,11 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
 
-	// Check if node has distinct aggregation, which should run in single CPU
-	hasDistinctAgg := false
-	if node.NodeType == plan.Node_AGG && len(node.AggList) > 0 {
-		for _, agg := range node.AggList {
-			if f, ok := agg.Expr.(*plan.Expr_F); ok {
-				if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-					hasDistinctAgg = true
-					break
-				}
-			}
-		}
+	if node.NodeType == plan.Node_AGG && node.Stats == nil {
+		node.Stats = DefaultStats()
 	}
-
+	// COUNT(DISTINCT) merges exact saved keys; other DISTINCT states stay serial.
+	hasDistinctAgg := RequiresSingleStageDistinctAgg(node)
 	if hasDistinctAgg {
 		// distinct aggregation should run in only one node and without any parallel
 		if node.Stats == nil {
