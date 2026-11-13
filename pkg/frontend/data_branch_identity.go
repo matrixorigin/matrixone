@@ -16,12 +16,11 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 )
 
 type logicalRestoreDatabaseDefinition struct {
@@ -70,29 +69,15 @@ func lockDataBranchDatabaseCatalogRow(ctx context.Context, ses *Session, bh Back
 	if !ok || back.backSes == nil {
 		return moerr.NewInternalError(ctx, "database branch lock requires a background executor")
 	}
-	lockProc := newDataBranchCloneLockProcess(ctx, ses, bh)
-	defer lockProc.Free()
-	txnOp := lockProc.GetTxnOperator()
+	txnOp := cloneSnapshotTxnOperator(ses, bh)
 	if !txnOp.Txn().IsPessimistic() {
 		return moerr.NewNotSupportedNoCtx("DATA BRANCH DELETE DATABASE requires a pessimistic transaction")
 	}
-	targetCtx := defines.AttachAccountId(ctx, accountID)
-	eng := lockProc.GetSessionInfo().StorageEngine
-	db, err := eng.Database(targetCtx, catalog.MO_CATALOG, txnOp)
-	if err != nil {
-		return err
-	}
-	rel, err := db.Relation(targetCtx, catalog.MO_DATABASE, nil)
-	if err != nil {
-		return err
-	}
-	lockBat, err := dataBranchCloneCatalogLockBatch(lockProc, accountID, databaseName)
-	if err != nil {
-		return err
-	}
-	defer lockBat.Vecs[0].Free(lockProc.Mp())
-	return withDataBranchCloneLockContext(lockProc, targetCtx, func() error {
-		return lockop.LockRows(eng, lockProc, rel, rel.GetTableID(targetCtx), lockBat, 0,
-			*lockBat.Vecs[0].GetType(), lock.LockMode_Exclusive, lock.Sharding_None, accountID)
-	})
+	// This catalog's primary key is (account_id, datname), the same key used
+	// by lockMoDatabase during object DDL. Use the ordinary statement executor
+	// so its existing RC retry owner refreshes a lock wait before validation.
+	query := fmt.Sprintf("select dat_id from mo_catalog.mo_database where account_id = %d and datname = %s for update", accountID, quoteSQLStringLiteral(databaseName))
+	result, err := runSqlWithBackExec(ctx, ses, bh, query)
+	result.Close()
+	return err
 }
