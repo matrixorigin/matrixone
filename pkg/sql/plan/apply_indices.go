@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -36,6 +37,7 @@ const (
 	NonEqualIndexCondition    = 2
 	SpatialIndexCondition     = 3
 	RangeIndexCondition       = 4
+	KeySetIndexCondition      = 5
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -1641,34 +1643,104 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 		}
 	}
-	//small table means this table maybe not flushed yet, or it's not worse to go index
+	// Small tables may not be flushed yet, or an index may not be more expensive.
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
+	keySetBudget := newIndexKeySetWorkBudget()
+	var declinedKeySets map[int]struct{}
 	idxToChoose := -1
 	var filterIdx []int32
+	keySetSize := 0
 	if !pointBlocked {
-		idxToChoose, filterIdx = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
 	}
-	// A cardinality-proven unique point cannot produce the broad output that
-	// the aggregate scan estimates below are intended to guard against.
-	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
-		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
-	if !ignoreStats && !singletonPoint {
-		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
-			// for cluster by table, make it less prone to go index
-			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
-				return nodeID
+	selectEqualityFallback := func() {
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, false, keySetBudget, nil)
+	}
+	allowedByScanStats := func() bool {
+		// A schema-proven singleton may bypass the broad-scan guard. A key
+		// set is not a singleton, and must use the ordinary guard.
+		singletonPoint := idxToChoose != -1 && keySetSize == 0 && indexes[idxToChoose].Unique &&
+			len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
+		if ignoreStats || singletonPoint {
+			return true
+		}
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK) {
+			return false
+		}
+		return !(node.Stats.Selectivity >= InFilterSelectivityLimit ||
+			node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)))
+	}
+	if !allowedByScanStats() {
+		// A rejected broad scan estimate can hide a complete unique key set,
+		// including when a nonunique candidate was ranked first. Only admit
+		// one after exact lowering establishes its actual candidate bound.
+		if !pointBlocked {
+			if retID, idxTableNodeID := builder.applyBoundedUniqueKeySet(indexes, node, scanSnapshot, sortedSelectivity, keySetBudget, declinedKeySets); idxTableNodeID >= 0 {
+				return retID
 			}
 		}
-		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+		if keySetSize == 0 {
+			return nodeID
+		}
+		// The key-set gate must not mask a previously usable equality point.
+		selectEqualityFallback()
+		if !allowedByScanStats() {
 			return nodeID
 		}
 	}
 
-	// Apply unique/secondary indices for point select
-	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
-		return retID
+	// Apply unique/secondary indices for point select or a finite key set.
+	for idxToChoose != -1 {
+		condType := EqualIndexCondition
+		var reservation *indexKeySetReservation
+		if keySetSize > 0 {
+			condType = KeySetIndexCondition
+			work, ok := keySetBudget.estimate(node.FilterList, filterIdx)
+			if !ok || !keySetBudget.charge(work) {
+				// The candidate must not hide a cheaper key set or equality.
+				if declinedKeySets == nil {
+					declinedKeySets = make(map[int]struct{})
+				}
+				declinedKeySets[idxToChoose] = struct{}{}
+				idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+				continue
+			}
+			reservation = &indexKeySetReservation{budget: keySetBudget, work: work}
+		}
+		retID, idxTableNodeID := int32(-1), int32(-1)
+		if reservation != nil {
+			prepared, err := builder.prepareIndexJoinWithBudget(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot, reservation)
+			propagateKeySetControlError(builder.GetContext(), err)
+			if err == nil && prepared != nil {
+				retID, idxTableNodeID = builder.publishIndexJoin(prepared, node)
+			}
+		} else {
+			retID, idxTableNodeID = builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
+		}
+		if idxTableNodeID >= 0 {
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
+		if keySetSize == 0 {
+			return nodeID
+		}
+		// Failed key-set lowering has published no nodes and changed no scan
+		// state. Try another affordable key set or the prior equality path.
+		if declinedKeySets == nil {
+			declinedKeySets = make(map[int]struct{})
+		}
+		declinedKeySets[idxToChoose] = struct{}{}
+		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+		if !allowedByScanStats() {
+			if retID, scanID := builder.applyBoundedUniqueKeySet(indexes, node, scanSnapshot, sortedSelectivity, keySetBudget, declinedKeySets); scanID >= 0 {
+				return retID
+			}
+			selectEqualityFallback()
+			if !allowedByScanStats() {
+				return nodeID
+			}
+		}
 	}
 
 	if sortedSelectivity < 1 {
@@ -1693,6 +1765,207 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//no index applied
 	return nodeID
+}
+
+// applyBoundedUniqueKeySet considers only complete unique key sets when the
+// ordinary scan gate rejected the initially selected candidate. Preparation
+// does not publish a node; an exact, non-NULL IN vector must exist before its
+// deduplicated cardinality can justify admission or candidate ranking.
+func (builder *QueryBuilder) applyBoundedUniqueKeySet(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32) {
+	if retID, scanID, ok := builder.applyBoundedUniqueKeySetRanked(indexes, node, snapshot, sortedSelectivity, budget, declined); ok {
+		return retID, scanID
+	}
+	return builder.applyBoundedUniqueKeySetExhaustive(indexes, node, snapshot, sortedSelectivity, budget, declined)
+}
+
+// Rank by the exact count of distinct serial encodings of the IN component,
+// then materialize candidates in score order until one succeeds. The input
+// count can be shared only by the same IN filter; prepared keys and filters
+// always belong to their own ordered index. Any unproved input or mismatch
+// returns to the exhaustive path before publishing a node.
+func (builder *QueryBuilder) applyBoundedUniqueKeySetRanked(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32, bool) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1, true
+	}
+	type candidate struct {
+		index       *IndexDef
+		filters     []int32
+		count       int
+		selectivity float64
+		work        uint64
+	}
+	candidates := []candidate{}
+	counts := make(map[int32]int)
+	for index, idxDef := range indexes {
+		if _, skip := declined[index]; skip {
+			continue
+		}
+		filters, ok := completeUniqueKeySetFilters(idxDef, node, budget)
+		if !ok {
+			continue
+		}
+		work, ok := budget.estimate(node.FilterList, filters)
+		if !ok {
+			continue
+		}
+		inPos := int32(-1)
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filter := node.FilterList[pos]
+			fn := filter.GetF()
+			if fn.Func.ObjName == "in" {
+				inPos = pos
+			} else {
+				// A literal is invariant over every tuple. Dynamic or NULL
+				// equality expressions keep the exhaustive fallback semantics.
+				lit := fn.Args[1].GetLit()
+				if lit == nil || lit.Isnull || lit.Src != nil {
+					return -1, -1, false
+				}
+			}
+			filterSelectivity *= filter.Selectivity
+		}
+		if inPos < 0 {
+			return -1, -1, false
+		}
+		if !indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), budget.inputBound(node.FilterList[inPos]).count, builder.scanHintsForceIndexes(node)) {
+			continue
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		count, exists := counts[inPos]
+		if !exists {
+			// Distinct counting can itself encode each IN component. Reserve
+			// that work once per filter, including failed count attempts.
+			if !budget.charge(budget.inputBound(node.FilterList[inPos]).bytes) {
+				continue
+			}
+			count, ok = distinctKeySetComponentCount(node.FilterList[inPos])
+			if !ok {
+				return -1, -1, false
+			}
+			counts[inPos] = count
+		}
+		rows := float64(count)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		selectivity = min(filterSelectivity, selectivity)
+		if selectivity >= sortedSelectivity {
+			continue
+		}
+		if len(candidates) == 0 {
+			// Avoid allocating when no candidate is eligible.
+			candidates = make([]candidate, 0, len(indexes))
+		}
+		candidates = append(candidates, candidate{index: idxDef, filters: filters, count: count, selectivity: selectivity, work: work})
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.selectivity < b.selectivity {
+			return -1
+		}
+		if a.selectivity > b.selectivity {
+			return 1
+		}
+		return 0
+	})
+	for _, c := range candidates {
+		if !budget.charge(c.work) {
+			continue
+		}
+		prepared, err := builder.prepareIndexJoinWithBudget(c.index, node, KeySetIndexCondition, c.filters, snapshot, &indexKeySetReservation{budget: budget, work: c.work})
+		propagateKeySetControlError(builder.GetContext(), err)
+		if err != nil || prepared == nil {
+			continue
+		}
+		count, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		if count != c.count {
+			return -1, -1, false
+		}
+		retID, scanID := builder.publishIndexJoin(prepared, node)
+		builder.applyExtraFiltersOnIndex(c.index, node, builder.qry.Nodes[scanID], c.filters)
+		return retID, scanID, true
+	}
+	return -1, -1, true
+}
+
+func (builder *QueryBuilder) applyBoundedUniqueKeySetExhaustive(indexes []*IndexDef, node *plan.Node, snapshot *Snapshot, sortedSelectivity float64, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int32, int32) {
+	if !hasKnownScanCardinality(node.Stats) {
+		return -1, -1
+	}
+	bestSelectivity := sortedSelectivity
+	var best *preparedIndexJoin
+	var bestFilters []int32
+	for index, idxDef := range indexes {
+		if _, skip := declined[index]; skip {
+			continue
+		}
+		filters, ok := completeUniqueKeySetFilters(idxDef, node, budget)
+		if !ok {
+			continue
+		}
+		work, ok := budget.estimate(node.FilterList, filters)
+		if !ok {
+			continue
+		}
+		var count int
+		for _, pos := range filters {
+			if bound := budget.inputBound(node.FilterList[pos]); bound.ok {
+				count = bound.count
+				break
+			}
+		}
+		if !indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), count, builder.scanHintsForceIndexes(node)) || !budget.charge(work) {
+			continue
+		}
+		prepared, err := builder.prepareIndexJoinWithBudget(idxDef, node, KeySetIndexCondition, filters, snapshot, &indexKeySetReservation{budget: budget, work: work})
+		propagateKeySetControlError(builder.GetContext(), err)
+		if err != nil || prepared == nil {
+			continue
+		}
+		keyCount, ok := exactUniqueKeySetSize(prepared.idxFilter)
+		if !ok {
+			continue
+		}
+		rows := float64(keyCount)
+		selectivity := rows / node.Stats.TableCnt
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) &&
+			(selectivity >= InFilterSelectivityLimit/2 || rows >= InFilterCardLimitNonPK) {
+			continue
+		}
+		if selectivity >= InFilterSelectivityLimit ||
+			rows >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			continue
+		}
+		filterSelectivity := 1.0
+		for _, pos := range filters {
+			filterSelectivity *= node.FilterList[pos].Selectivity
+		}
+		if math.IsNaN(filterSelectivity) || math.IsInf(filterSelectivity, 0) || filterSelectivity < 0 || filterSelectivity > 1 {
+			continue
+		}
+		candidateSelectivity := min(filterSelectivity, selectivity)
+		if candidateSelectivity >= bestSelectivity {
+			continue
+		}
+		bestSelectivity, best, bestFilters = candidateSelectivity, prepared, filters
+	}
+	if best == nil {
+		return -1, -1
+	}
+	retID, idxTableNodeID := builder.publishIndexJoin(best, node)
+	builder.applyExtraFiltersOnIndex(best.idxDef, node, builder.qry.Nodes[idxTableNodeID], bestFilters)
+	return retID, idxTableNodeID
 }
 
 // regularIndexColumnMap describes the values available in a regular index scan.
@@ -2102,6 +2375,17 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	if leadingEqualCond {
 		leadingPos = tryMatchMoreLeadingFilters(idxDef, node, leadingPos[0])
 	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return -1
+	}
+	for i := range leadingPos {
+		if prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])] > 0 {
+			// Full values cannot probe a truncated key, even if the column is
+			// also available from a full primary-key component.
+			return -1
+		}
+	}
 
 	if !leadingEqualCond && node.Stats != nil && node.Stats.TableCnt >= 50000 {
 		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
@@ -2344,6 +2628,14 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if !idxDef.Unique {
 			numParts--
 		}
+		if numParts <= 0 {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || prefixLengths[catalog.ResolveAlias(idxDef.Parts[0])] > 0 {
+			// The range/IN bounds below are full values, not index prefixes.
+			continue
+		}
 		if idxDef.Unique && numParts == 1 {
 			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
 		} else if !idxDef.Unique && numParts >= 1 {
@@ -2534,17 +2826,50 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	return expr
 }
 
-func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+type preparedIndexJoin struct {
+	idxDef      *IndexDef
+	idxTag      int32
+	idxObjRef   *ObjectRef
+	idxTableDef *TableDef
+	idxFilter   *plan.Expr
+}
+
+type indexKeySetReservation struct {
+	budget *indexKeySetWorkBudget
+	work   uint64
+}
+
+// Preserve cancellation and deadline identities while treating an unavailable
+// optional key-set candidate like the existing broad-scan fallback does.
+func propagateKeySetControlError(ctx context.Context, err error) {
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		panic(err)
+	}
+}
+
+// prepareIndexJoin may decline an optional key set without publishing a scan or
+// changing the original node. Its exact key count can then be used for costing.
+func (builder *QueryBuilder) prepareIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (*preparedIndexJoin, error) {
+	return builder.prepareIndexJoinWithBudget(idxDef, node, filterType, filterIdx, scanSnapshot, nil)
+}
+
+func (builder *QueryBuilder) prepareIndexJoinWithBudget(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot, reservation *indexKeySetReservation) (*preparedIndexJoin, error) {
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
-
+	if filterType == KeySetIndexCondition && (idxObjRef == nil || idxTableDef == nil) {
+		return nil, nil
+	}
+	if reservation != nil && !reservation.budget.revalidate(node.FilterList, filterIdx, reservation.work, builder.indexKeySetCostStats(node.Stats), builder.scanHintsForceIndexes(node)) {
+		return nil, nil
+	}
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+	} else if filterType == KeySetIndexCondition {
+		idxFilter = builder.replaceKeySetCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
 	} else if filterType == SpatialIndexCondition {
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
@@ -2553,6 +2878,30 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	} else {
 		idxFilter = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
 	}
+
+	// A declined key-set lowering must not publish an invalid scan or mutate
+	// the original scan. The caller will retry the ordinary access paths.
+	if filterType == KeySetIndexCondition && idxFilter == nil {
+		return nil, nil
+	}
+	return &preparedIndexJoin{idxDef: idxDef, idxTag: idxTag, idxObjRef: idxObjRef, idxTableDef: idxTableDef, idxFilter: idxFilter}, nil
+}
+
+func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	prepared, err := builder.prepareIndexJoin(idxDef, node, filterType, filterIdx, scanSnapshot)
+	if err != nil {
+		panic(err)
+	}
+	if prepared == nil {
+		return -1, -1
+	}
+	return builder.publishIndexJoin(prepared, node)
+}
+
+func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node *plan.Node) (int32, int32) {
+	idxDef, idxTag := prepared.idxDef, prepared.idxTag
+	idxObjRef, idxTableDef, idxFilter := prepared.idxObjRef, prepared.idxTableDef, prepared.idxFilter
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	// recod index table scan info
 	idxScanInfo := plan.IndexScanInfo{
@@ -2609,49 +2958,112 @@ func hasKnownScanCardinality(stats *plan.Stats) bool {
 		!math.IsNaN(stats.TableCnt) && !math.IsInf(stats.TableCnt, 0)
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32, int) {
+	return builder.getMostSelectiveIndexForPointSelectWithKeySets(indexes, node, ignoreStats, maxSelectivity, true)
+}
+
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelectWithKeySets(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool) (int, []int32, int) {
+	return builder.selectPointIndexWithBudget(indexes, node, ignoreStats, maxSelectivity, allowKeySet, newIndexKeySetWorkBudget(), nil)
+}
+
+func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int, []int32, int) {
 	currentSel := maxSelectivity
 	currentIdx := -1
 	knownCardinality := hasKnownScanCardinality(node.Stats)
+	forced := builder.scanHintsForceIndexes(node)
 	selectedCompleteUnique := false
 	savedFilterIdx := make([]int32, 0)
+	savedKeySetSize := 0
 
 	col2filter := make(map[int32]int32)
+	inCol2filter := make(map[int32]int32)
+	inFilterSize := make(map[int32]int)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = int32(i)
+			continue
+		}
+		fn := node.FilterList[i].GetF()
+		if allowKeySet && fn != nil && fn.Func != nil && fn.Func.ObjName == "in" {
+			if bound := budget.inputBound(node.FilterList[i]); bound.ok {
+				inCol2filter[bound.column] = int32(i)
+				inFilterSize[bound.column] = bound.count
+			}
 		}
 	}
 
-	filterIdx := make([]int32, 0, len(col2filter))
+	filterIdx := make([]int32, 0, len(col2filter)+len(inCol2filter))
+	var keySetFilterIdx []int32
 	for i, idxDef := range indexes {
 		numParts := len(idxDef.Parts)
 		numKeyParts := numParts
 		if !idxDef.Unique {
 			numKeyParts--
 		}
-		if numKeyParts == 0 {
+		if numKeyParts <= 0 {
 			continue
 		}
-
-		usePartialIndex := false
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			continue
+		}
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
 			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
+			if prefixLengths[tmpName] > 0 {
+				// Equality lowering serializes the full value. Stop before a
+				// truncated key part so the fallback cannot lose matching rows.
+				break
+			}
 			colIdx := node.TableDef.Name2ColIndex[tmpName]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
 			}
 			filterIdx = append(filterIdx, idx)
+		}
+
+		// A bounded IN on any one user key part completes a finite composite
+		// key set when every other part is equality bound. Keep the original
+		// equality-only candidate when this general form does not apply.
+		candidateKeySetSize := 0
+		_, wasDeclined := declined[i]
+		if allowKeySet && !wasDeclined && numKeyParts > 1 && len(inCol2filter) > 0 && keySetIndexSupported(idxDef) {
+			keySetFilterIdx = keySetFilterIdx[:0]
+			inCount := 0
+			for j := 0; j < numKeyParts; j++ {
+				colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
+				if idx, ok := col2filter[colIdx]; ok {
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+				} else if idx, ok := inCol2filter[colIdx]; ok {
+					keySetFilterIdx = append(keySetFilterIdx, idx)
+					inCount++
+					candidateKeySetSize = inFilterSize[colIdx]
+				} else {
+					break
+				}
+			}
+			if inCount == 1 && len(keySetFilterIdx) == numKeyParts &&
+				indexKeySetWorthwhile(builder.indexKeySetCostStats(node.Stats), candidateKeySetSize, forced) {
+				if _, ok := budget.estimate(node.FilterList, keySetFilterIdx); ok {
+					filterIdx = append(filterIdx[:0], keySetFilterIdx...)
+				} else {
+					candidateKeySetSize = 0
+				}
+			} else {
+				candidateKeySetSize = 0
+			}
+		}
+
+		usePartialIndex := false
+		for _, idx := range filterIdx {
 			filter := node.FilterList[idx]
 			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
 			}
 		}
-
 		if len(filterIdx) < numParts && (idxDef.Unique || !usePartialIndex) {
 			continue
 		}
@@ -2674,7 +3086,11 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 				continue
 			}
 			if completeUnique {
-				compositeFilterSel = min(compositeFilterSel, 1/node.Stats.TableCnt)
+				maxRows := 1.0
+				if candidateKeySetSize > 1 {
+					maxRows = float64(candidateKeySetSize)
+				}
+				compositeFilterSel = min(compositeFilterSel, maxRows/node.Stats.TableCnt)
 			}
 			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
 			if compositeFilterSel >= currentSel && !forceFallback {
@@ -2686,8 +3102,9 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		selectedCompleteUnique = completeUnique
 		savedFilterIdx = savedFilterIdx[:0]
 		savedFilterIdx = append(savedFilterIdx, filterIdx...)
+		savedKeySetSize = candidateKeySetSize
 	}
-	return currentIdx, savedFilterIdx
+	return currentIdx, savedFilterIdx, savedKeySetSize
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {

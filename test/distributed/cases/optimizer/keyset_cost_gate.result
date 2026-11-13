@@ -1,0 +1,109 @@
+drop database if exists keyset_cost_gate;
+create database keyset_cost_gate;
+use keyset_cost_gate;
+create table gate (id int primary key, a int not null, b int not null, payload int, unique key uq_ab(a,b));
+insert into gate select result,1,result,result from generate_series(1,1000) g;
+select mo_ctl('dn','flush','keyset_cost_gate.gate');
+➤ mo_ctl(dn, flush, keyset_cost_gate.gate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table gate;
+-- @regex(".*", true)
+➤ approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(a)[-5,64,0]  ¦  approx_count_distinct(b)[-5,64,0]  ¦  approx_count_distinct(payload)[-5,64,0]  𝄀
+1000  ¦  1  ¦  1000  ¦  1000
+explain verbose select payload from gate;
+-- @regex("Table Scan.*cost=1000[.]00", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project[1] (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: gate.payload  𝄀
+  ->  Table Scan[0] on keyset_cost_gate.gate (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=16.15)  𝄀
+        Output: gate.payload  𝄀
+        Table: 'gate' (0:'payload') shuffle: hash(id)
+explain select count(*),sum(payload) from gate where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100);
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1), sum(gate.payload)  𝄀
+        ->  Table Scan on keyset_cost_gate.gate  𝄀
+              Filter Cond: gate.b in ([1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]... 100 values), (gate.a = 1)  𝄀
+              Block Filter Cond: (gate.a = 1)
+select count(*),sum(payload) from gate where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100);
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+100  ¦  5050
+select count(*),sum(payload) from gate ignore index(uq_ab) where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100);
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+100  ¦  5050
+explain select payload from gate where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128);
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on keyset_cost_gate.gate  𝄀
+        Filter Cond: gate.b in ([1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]... 128 values), (gate.a = 1)  𝄀
+        Block Filter Cond: (gate.a = 1)
+explain select payload from gate force index(uq_ab) where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128);
+-- @regex("Index Table Scan.*uq_ab", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (gate.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on keyset_cost_gate.gate [ForceOneCN]  𝄀
+              Filter Cond: gate.b in ([1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]... 128 values), (gate.a = 1)  𝄀
+              Block Filter Cond: (gate.a = 1)  𝄀
+              Runtime Filter Probe: gate.id  𝄀
+        ->  Index Table Scan on gate.uq_ab [ForceOneCN]  𝄀
+              Filter Cond: __mo_index_idx_col in ([:\x15\x01:\x15\x01 :\x15\x01:\x15\x02 :\x15\x01:\x15\x03 :\x15\x01:\x15\x04 :\x15\x01:\x15\x05 :\x15\x01:\x15\x06 :\x15\x01:\x15\a :\x15\x01:\x15\b :\x15\x01:\x15\t :\x15\x01:\x15\n :\x15\x01:\x15\v :\x15\x01:\x15\f :\x15\x01:\x15\r :\x15\x01:\x15\x0e :\x15\x01:\x15\x0f :\x15\x01:\x15\x10]... 128 values)  𝄀
+              Block Filter Cond: __mo_index_idx_col in ([:\x15\x01:\x15\x01 :\x15\x01:\x15\x02 :\x15\x01:\x15\x03 :\x15\x01:\x15\x04 :\x15\x01:\x15\x05 :\x15\x01:\x15\x06 :\x15\x01:\x15\a :\x15\x01:\x15\b :\x15\x01:\x15\t :\x15\x01:\x15\n :\x15\x01:\x15\v :\x15\x01:\x15\f :\x15\x01:\x15\r :\x15\x01:\x15\x0e :\x15\x01:\x15\x0f :\x15\x01:\x15\x10]... 128 values)
+select count(*),sum(payload) from gate where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128);
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+128  ¦  8256
+select count(*),sum(payload) from gate ignore index(uq_ab) where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128);
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+128  ¦  8256
+select count(*),sum(payload) from gate force index(uq_ab) where a=1 and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128);
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+128  ¦  8256
+prepare keyset_cost_param from 'select count(*),sum(payload) from gate where a=? and b in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128)';
+set @a=1;
+execute keyset_cost_param using @a;
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+128  ¦  8256
+set @a=2;
+execute keyset_cost_param using @a;
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+0  ¦  null
+deallocate prepare keyset_cost_param;
+create table duplicate_keys (id int primary key, a int, b varchar(20), payload int, key ix_ab(a,b));
+insert into duplicate_keys values (1,1,'alpha',10),(2,1,'alpha',20),(3,1,'beta',30),(4,2,'alpha',40);
+explain select payload from duplicate_keys force index(ix_ab) where a=1 and b in ('alpha','beta');
+-- @regex("Index Table Scan.*ix_ab", true)
+-- @regex("prefix_in", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (duplicate_keys.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on keyset_cost_gate.duplicate_keys [ForceOneCN]  𝄀
+              Filter Cond: (duplicate_keys.a = 1), duplicate_keys.b in ([alpha beta])  𝄀
+              Block Filter Cond: (duplicate_keys.a = 1)  𝄀
+              Runtime Filter Probe: duplicate_keys.id  𝄀
+        ->  Index Table Scan on duplicate_keys.ix_ab [ForceOneCN]  𝄀
+              Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_in(__mo_index_idx_col)
+select count(*),sum(payload) from duplicate_keys force index(ix_ab) where a=1 and b in ('alpha','beta');
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+3  ¦  60
+select count(*),sum(payload) from duplicate_keys ignore index(ix_ab) where a=1 and b in ('alpha','beta');
+➤ count(*)[-5,64,0]  ¦  sum(payload)[-5,64,0]  𝄀
+3  ¦  60
+drop database keyset_cost_gate;
