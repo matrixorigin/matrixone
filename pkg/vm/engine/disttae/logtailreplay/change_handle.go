@@ -1164,7 +1164,7 @@ func (p *baseHandle) getObjectEntries(
 	var (
 		totalAppendable, prunedAppendable int
 		totalCNCreated, prunedCNCreated   int
-		totalTNStatic, prunedTNStatic     int
+		totalTNStatic                     int
 	)
 	for objIter.Next() {
 		entry := objIter.Item()
@@ -1201,14 +1201,11 @@ func (p *baseHandle) getObjectEntries(
 			if entry.CreateTime.GT(&end) {
 				continue
 			}
-			// PK zonemap pruning for TN non-appendable objects.
-			if !objectMayMatchPK(entry, pkf, tombstone) {
-				prunedTNStatic++
-				continue
-			}
 			// Keep every TN-produced non-appendable object in the create-time index so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
 			// replacement object created at the predecessor's delete timestamp.
+			// A disjoint replacement still proves that the chain is complete; its
+			// payload can be pruned only after resolving terminal objects.
 			tnByCreateTS[entry.CreateTime] = append(tnByCreateTS[entry.CreateTime], &entryCopy)
 			tnKeySet[entry.CreateTime] = struct{}{}
 			// After checkpoint + GC + restart, older appendable predecessors may be gone;
@@ -1238,7 +1235,6 @@ func (p *baseHandle) getObjectEntries(
 			zap.Int("cn-created-total", totalCNCreated),
 			zap.Int("cn-created-pruned", prunedCNCreated),
 			zap.Int("tn-static-total", totalTNStatic),
-			zap.Int("tn-static-pruned", prunedTNStatic),
 			zap.String("start", start.ToString()),
 			zap.String("end", end.ToString()),
 		)
@@ -1269,6 +1265,10 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 ) ([]*objectio.ObjectEntry, error) {
 	if len(visible) == 0 && len(tnByCreateTS) == 0 {
 		return visible, nil
+	}
+	var pkFilter *engine.PKFilter
+	if p.changesHandle != nil {
+		pkFilter = p.changesHandle.pkFilter
 	}
 	resolved := make([]*objectio.ObjectEntry, 0, len(visible))
 	queue := make([]*objectio.ObjectEntry, 0, len(visible))
@@ -1319,6 +1319,11 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 				)
 			}
 			queue = append(queue, next...)
+			continue
+		}
+		// Resolve deleted intermediates before applying payload pruning. Omitting
+		// their metadata would make a disjoint successor look like a missing file.
+		if !objectMayMatchPK(*current, pkFilter, isTombstone) {
 			continue
 		}
 		exists, err := p.objectFileExists(ctx, current)
@@ -1380,6 +1385,9 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			}
 			visited[name] = struct{}{}
 			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&end) {
+				continue
+			}
+			if !objectMayMatchPK(*obj, pkFilter, isTombstone) {
 				continue
 			}
 			exists, err := p.objectFileExists(ctx, obj)
