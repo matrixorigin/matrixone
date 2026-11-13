@@ -2,9 +2,9 @@
 
 ## 0. 版本、范围与审批状态
 
-- 文档版本：**v2**，2026-11-13；v1 的独立审查为 REQUEST_CHANGES，§4.6—4.7 关闭两项设计决定缺口，并在§8区分尚未完成的实现修改。所属 [issue #32265](https://github.com/matrixorigin/matrixone/issues/32265)，实现 [PR #32520](https://github.com/matrixorigin/matrixone/pull/32520)，目标 `4.1.6-hotfix`。
+- 文档版本：**v3**，2026-11-13；本版整理公开说明，保留技术设计契约。历史独立设计审查的精确版本与结论见相邻审查记录，本版未新增独立审查。所属 [issue #32265](https://github.com/matrixorigin/matrixone/issues/32265)，实现 [PR #32520](https://github.com/matrixorigin/matrixone/pull/32520)，目标 `4.1.6-hotfix`。
 - 实现审阅锚点：`16082594b63b24b0ecf4aba43c92e15edc4f8a0b`，已合并目标 `9937f1b74a7a7a01f8e0dcb6e7d3ff447e0ce29e`。本 PR 自有实现与 `0a88c1d8cd412b106901b95dfcb7ac4ad949be6e` 相同；新增基线包含 #32609、#32596、#32591，不归为本设计的实现成果。
-- **审批状态：独立设计审查结论以相邻版本化审查记录为准；维护者批准待定，实现批准路径暂停。** 本文的设计决定不代表代码已符合；§8列出的实现阻塞必须另行关闭。PR 正文必须链接被审阅的精确 Git revision，而非只链接可移动分支。
+- **审批状态：维护者设计批准待定。** 本文描述设计契约，不代替实现验证或维护者批准；独立审查结论只对应记录中的精确版本。PR 正文必须链接精确 Git revision，而非只链接可移动分支。
 - 这是针对已经实现的改动补做设计门禁。此前局部修复演变为架构变更时没有及时重新分类；不把历史实现、测试通过或用户授权写文档当成设计批准。本轮先冻结设计，再单独评审并记录决定；任何实现修改须在设计决定后另行验证。
 - 触发门禁：排除测试、生成 parser 和上游合并后，手写生产 Go 为新增651/删除35，共686行增删（另有grammar 5行）；更正早先786行的误计；更重要的是改变分支输出与全局消费者的求值、身份及类型证明边界，并影响热路径。
 - `groupingStage` 是 query-local binder 状态及 lowering 辅助逻辑，**不是新执行算子、协议字段或跨查询缓存**。这种区别不豁免设计审查。
@@ -125,7 +125,7 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 - 每次证明更新必须先于该层的 quantified-subquery flatten/MARK 优化；不只是在 UNION 之后刷新。分支消费者先取证明B、全局消费者再取证明U，详见§4.6。本设计不改 MARK→ANTI 的算法，只保证其前提真实。
 - 逻辑窗口的 partition/order/function 依赖都要采集；最终 remap 后 PARTITION-only key 属于上游 PARTITION 输入坐标，可能已从 WINDOW child 剪掉，不能再按 WINDOW 的坐标访问它或用越界 guard 掩盖 owner 错误。
 - 对 AGG，GROUPING 读取保留下来的键 bitmap；对 SAMPLE，它是分支 origin 的标量 mask（按参数顺序左移，缺失为 1），不可能从采样后 NULL 值重新计算。
-- 对 **AGG 与 SAMPLE 的 DISTINCT 都一样**：选择键 g 不授予对其隐藏 GROUPING marker 的访问。bitmap 能运输不等于 DISTINCT 等价类上来源唯一。具体保守准入规则和现有实现差距见§4.7；不得把来源加入去重键来规避歧义。
+- 对 **AGG 与 SAMPLE 的 DISTINCT 都一样**：选择键 g 不授予对其隐藏 GROUPING marker 的访问。bitmap 能运输不等于 DISTINCT 等价类上来源唯一。具体保守准入规则见§4.7；不得把来源加入去重键来规避歧义。
 
 ### 4.5 行重数、优化与错误
 
@@ -136,8 +136,6 @@ SAMPLE 隐藏排序可能同时需要 selected chosen 和未选出的 marker：`
 - flatten 完成的公开 PROJECT 不得残留可执行期不能消费的 Sub；CTAS 失败后目录中无目标表、服务仍能执行后续查询是独立公有断言。
 
 ### 4.6 设计决定：两层 NULL 证明，覆盖最早消费者
-
-v1 把刷新描述为 UNION 后操作，漏掉分支 HAVING 及 SAMPLE 物化之前的 flatten；仅补最终列 metadata 不足以修复已经做出的优化决定。
 
 **证明B（分支逻辑输出发布点）**：groupingFlag 与完整根键映射确定后、任何消费 AGG/SAMPLE 输出的表达式进入 flatten/布尔简化/NULL 敏感优化之前，创建该分支输出类型视图。缺失 group key 的输出 NotNullable=false；聚合输出仍由其函数规则推导，采样原始值仍用 SAMPLE 自身语义。保持 owner tag/ordinal，不在这一层改为 UNION tag。
 
@@ -162,8 +160,6 @@ v1 把刷新描述为 UNION 后操作，漏掉分支 HAVING 及 SAMPLE 物化之
 4. 禁止将隐藏marker运输到DISTINCT key，禁止用`IS NULL`推导mask，禁止采用首个/最后一个来源的隐式选择。相同V含不同flag时，显式选出flag就改变了用户tuple，这种保留两行是正确而非重复。
 
 最小反例：`t(g)` 有NULL、1，`SELECT DISTINCT g FROM t GROUP BY g WITH ROLLUP ORDER BY GROUPING(g) DESC,g IS NULL,g LIMIT 1` 必须在绑定/规划时1149，CTAS无残表。选出`g,GROUPING(g) flag`的合法对照结果按flag排序应明确区分实际NULL和subtotal；再加重复集合、无NULL输入、SAMPLE、alias和LIMIT控制，证明此决定不是数据依赖特判。
-
-这是对当前实现的**待实施设计约束**：`groupingDistinctOrder` 当前允许递归重建未选出的AGG GROUPING，不能因v1已有局部测试通过就宣称符合v2。后续修复须保留合法 selected-marker 和普通 `chosen+1` 路径，并以统一AGG/SAMPLE门禁覆盖该边界。
 
 ## 5. 状态生命周期、资源与性能
 
@@ -226,8 +222,6 @@ v1 把刷新描述为 UNION 后操作，漏掉分支 HAVING 及 SAMPLE 物化之
 | review7：独立volatile a/b被结构匹配偷换 | I4/I8；[identity tests](../../pkg/sql/plan/grouping_order_identity_test.go) `TestGroupingVolatileAliasSlot` / `TestGroupingOrderReferenceAndStructuralFallback` | 比较实际返回 b 的排序，不固定random golden，不retry到成功；CTAS用row_number记录输入ordinal再验证 |
 | review8：mixed SAMPLE ORDER BY未来输出自引用 | I4/I9；identity `TestGroupingSampleMixedOrderScope` | arithmetic/CASE/list/quantified/scalar混合；分支payload无projectTag自引用；DISTINCT非法marker1149及零残表 |
 | review9：GROUPING(alias)取未来输出而非根键 | I3/I4；identity `TestGroupingArgumentAliasOrigin` | alias shadow/quoted/CUBE多参数顺序；actual NULL；selected-marker与未选SAMPLE-marker控制 |
-| 设计审查DR1：AGG DISTINCT等价类丢失未选lineage | I2/I3/I7；**待新增**全局DISTINCT前后可用依赖断言；AGG/SAMPLE同一准入矩阵 | §4.7的NULL/subtotal/duplicate-set/alias/LIMIT；未选marker1149和CTAS清理、selected完整表达式合法对照；本轮未执行 |
-| 设计审查DR2：分支先于UNION消费旧NULL证明 | I3/I6；**待新增**证明B先于HAVING/SAMPLE flatten的typed断言与证明U对照 | §4.6的分支HAVING/早期SAMPLE，空/NULL RHS、fallback、原始采样值；本轮未执行 |
 
 公有回归汇总：[grouping_ctas.sql](../../test/distributed/cases/function/grouping_ctas.sql) / [生成并比较的 result](../../test/distributed/cases/function/grouping_ctas.result)。三行 fixture `(g,h,v)=(1,10,5),(1,20,7),(2,10,9)` 加独立 nullable、PK、empty、小型binary对象；不加入宽键大数据或延迟断言。相邻 SAMPLE、CTAS、ROLLUP、hint CTE 用现有 suite，不为文档新增集群 fixture。
 
@@ -254,8 +248,6 @@ v1 把刷新描述为 UNION 后操作，漏掉分支 HAVING 及 SAMPLE 物化之
 | D8 分支证明B与合并证明U双发布 | 关闭早期HAVING/SAMPLE consumer与flatten时序，不修改输入编码类型 | 新消费阶段/表达式替换绕过相应证明发布点 |
 
 **设计阶段验收**：替代方案、I1—I9、owner/slot/NULL/lineage与成本模型一致；所有设计阻塞有决定；独立审查指明版本与PASS/REQUEST_CHANGES。设计通过允许继续实施验证，不等于所有发布测试已完成。
-
-**当前实现阻塞（不得靠文档宣称已修复）**：DR1，AGG DISTINCT的隐藏GROUPING准入不符合§4.7；DR2，当前流程缺少§4.6要求的分支早期证明闭合，需要针对相关调用验证并修复。依据是设计与源码时序/准入不一致，本轮没有执行新的反例，不宣称已运行得到某个错误结果。作者在设计获准后补最小失败证据、实现与上述回归，再审查实现符合性；文档发布不能解除这两项实现阻塞。
 
 **实现/发布阶段待办（不是可默默豁免的证据）**：维护者对精确设计revision的决定；新基线的受影响消费链验证；真实多CN边界证据；支持的release源与持久视图升级检查；若目标工作负载要求性能SLA，则在发布前由发布owner确认。作者负责补证据，维护者负责合并门禁，release owner负责支持矩阵/投产验收；没有这些证据不宣称可发布。
 
