@@ -1286,17 +1286,18 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
-						vecs[rid] = vec
-					} else {
+						vecs[rid] = vector.TryUnmarshalBinaryVarlena(data.Vec.Data)
+					}
+					if vecs[rid] == nil {
+						// Fast-path rejection reaches this evaluator too. A bad
+						// membership payload is unknown, not evidence to prune a block.
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
 				}
 
-				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
+				if !vecs[rid].GetType().IsVarlen() || vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}

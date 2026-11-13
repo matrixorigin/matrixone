@@ -879,8 +879,11 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(val)
+			vec := vector.TryUnmarshalBinaryVarlena(val)
+			if vec == nil {
+				canCompile = false
+				return
+			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {

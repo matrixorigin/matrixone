@@ -307,15 +307,21 @@ func ConstructBasePKFilter(
 			if !ok {
 				return
 			}
+			vec := vector.TryUnmarshalBinaryVarlena(vals[0])
+			if vec == nil {
+				// PK readers are another consumer after range-pruning fallback.
+				// Unknown payloads cannot be used to restrict visible rows.
+				return BasePKFilter{}, nil
+			}
+			// PK search indexes physical elements up to Vec.Length(). Repeated
+			// logical constant rows form a singleton prefix set. Normalize only
+			// this filter-owned view, not the serialized plan or generic decoder.
+			if vec.IsConst() && vec.Length() > 1 {
+				vec.SetLength(1)
+			}
 			filter.Valid = true
 			filter.Op = function.PREFIX_IN
-			{
-				vec := vector.NewVec(types.T_any.ToType())
-				if err = vec.UnmarshalBinary(vals[0]); err != nil {
-					return BasePKFilter{}, err
-				}
-				filter.Vec = vec
-			}
+			filter.Vec = vec
 			filter.Oid = oid
 
 		case "in_range":
