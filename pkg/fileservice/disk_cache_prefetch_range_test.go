@@ -169,11 +169,6 @@ func TestS3FSPrefetchRangeOff(t *testing.T) {
 	require.Equal(t, int64(2), storage.bytes.Load())
 }
 
-func TestDiskPrefetchRangeConfig(t *testing.T) {
-	var c CacheConfig
-	require.Equal(t, prefetchRangeConfig{on: true}, c.diskPrefetchRange())
-}
-
 func TestAutoPrefetchUnit(t *testing.T) {
 	require.Equal(t, int64(64<<10), autoPrefetchUnit(0))
 	require.Equal(t, int64(64<<10), autoPrefetchUnit(1000))
@@ -181,9 +176,7 @@ func TestAutoPrefetchUnit(t *testing.T) {
 	require.Equal(t, int64(2<<20), autoPrefetchUnit(2<<20))
 	require.Equal(t, int64(8<<20), autoPrefetchUnit(100e-3*2000*(1<<20)))
 
-	latency0, bytesPerS0 := rangeReadCosts.latency, rangeReadCosts.bytesPerS
-	t.Cleanup(func() { rangeReadCosts.latency, rangeReadCosts.bytesPerS = latency0, bytesPerS0 })
-	rangeReadCosts.latency, rangeReadCosts.bytesPerS = 0.025, 100<<20
+	rangeCosts(t, 0.025, 100<<20)
 	require.Equal(t, int64(4<<20), prefetchRangeConfig{on: true}.unit())
 	require.Equal(t, int64(16<<20), prefetchRangeConfig{on: true, fixed: 16 << 20}.unit())
 	require.Equal(t, int64(0), prefetchRangeConfig{fixed: 16 << 20}.unit())
@@ -241,6 +234,7 @@ func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time)
 		f.m = make(map[string][]*prefetchFlight)
 	}
 	fl := newPrefetchFlight(start, end, began)
+	fl.buf = make([]byte, end-start)
 	f.m[diskPath] = append(f.m[diskPath], fl)
 	return fl
 }
@@ -308,16 +302,15 @@ func TestS3FSPrefetchRangeNeverReadsABlockTwice(t *testing.T) {
 
 // A block takes its bytes from the containing flight that ends first.
 func TestPrefetchFastestFlight(t *testing.T) {
-	latency0, bytesPerS0 := rangeReadCosts.latency, rangeReadCosts.bytesPerS
-	t.Cleanup(func() { rangeReadCosts.latency, rangeReadCosts.bytesPerS = latency0, bytesPerS0 })
-	rangeReadCosts.latency, rangeReadCosts.bytesPerS = 0.01, 1<<20
+	rangeCosts(t, 0.01, 1<<20)
 
 	var d DiskCache
 	now := time.Now()
 	slow := addFlight(&d, "p", 0, 4<<20, now)
 	fast := addFlight(&d, "p", 4096, 8192, now)
 	d.prefetchFlights.mu.Lock()
-	got, eta := d.prefetchFlights.fastestLocked("p", 5000, 5010, now)
+	got := d.prefetchFlights.fastestLocked("p", 5000, 5010, now)
+	eta := got.eta(now, 5010)
 	d.prefetchFlights.mu.Unlock()
 	require.Same(t, fast, got)
 	require.Less(t, eta, time.Second)
@@ -362,7 +355,7 @@ func TestS3FSPrefetchRangeServesBytesAsTheyArrive(t *testing.T) {
 // A flight returns false to a reader of bytes it finished without.
 func TestPrefetchFlightWaitFor(t *testing.T) {
 	fl := newPrefetchFlight(100, 200, time.Now())
-	copy(fl.buf, make([]byte, 50))
+	fl.buf = make([]byte, 100)
 	fl.wrote(50)
 	content, ok := fl.waitFor(context.Background(), 150)
 	require.True(t, ok)
@@ -374,6 +367,19 @@ func TestPrefetchFlightWaitFor(t *testing.T) {
 	cancel()
 	_, ok = newPrefetchFlight(0, 10, time.Now()).waitFor(ctx, 5)
 	require.False(t, ok)
+}
+
+// A flight whose source stops sending fails after the idle timeout with the bytes it got.
+func TestPrefetchFlightFailsWhenSourceStalls(t *testing.T) {
+	idle0 := sourceIdleTimeout
+	sourceIdleTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { sourceIdleTimeout = idle0 })
+	fl := newPrefetchFlight(0, 10, time.Now())
+	err := fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		return io.NopCloser(&stalledReader{ctx: ctx, data: []byte("abc")}), nil
+	})
+	require.ErrorIs(t, err, errSourceIdle)
+	require.Equal(t, []byte("abc"), fl.content())
 }
 
 // Objects whose paths have a separator read their ranges alone: the range index does
@@ -390,12 +396,10 @@ func TestS3FSPrefetchRangeSkipsPathsWithSeparator(t *testing.T) {
 
 // A prefetch read is a sample of the latency of range reads.
 func TestS3FSPrefetchRangeSamplesLatency(t *testing.T) {
-	latency0 := rangeReadCosts.latency
-	t.Cleanup(func() { rangeReadCosts.latency = latency0 })
-	rangeReadCosts.latency = 10
+	rangeCosts(t, 10, rangeReadCosts.get().bytesPerS)
 	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
 	readRangeOf(t, fs, 0, 5000, 2)
-	require.Less(t, rangeReadCosts.latency, 10.0)
+	require.Less(t, rangeReadCosts.get().latency, 10.0)
 }
 
 type trackedReader struct {

@@ -69,11 +69,10 @@ type DiskCache struct {
 	objectSplit          objectSplitConfig
 	prefetched           prefetchedObjects
 	// downloadConns counts the object-storage connections whole-object downloads hold,
-	// at most maxDownloadConns when set, or else half the default connection pool.
-	downloadConns       atomic.Int64
-	maxDownloadConns    int64
-	maxDownloadConnsSet bool
-	prefetchFlights     prefetchFlights
+	// at most maxDownloadConns.
+	downloadConns    atomic.Int64
+	maxDownloadConns int64
+	prefetchFlights  prefetchFlights
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -110,7 +109,7 @@ type DiskCache struct {
 	beforeEvictionStart func(path string)
 	// deletes counts the deletes of objects; see objectDeletes.
 	deletes objectDeletes
-	// prefetchFlightBytes, when positive, is the limit instead of prefetchFlightBytesMax.
+	// prefetchFlightBytes is the most bytes of prefetch range runs under way.
 	prefetchFlightBytes int64
 }
 
@@ -221,6 +220,8 @@ func newDiskCache(
 		prefetchRange:        opts.prefetchRange,
 		objectSplit:          opts.objectSplit,
 		preloads:             newPreloadUsage(),
+		maxDownloadConns:     int64(maxConnsPerHost / 2),
+		prefetchFlightBytes:  prefetchFlightBytesMax,
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
@@ -535,6 +536,13 @@ func (d *DiskCache) Read(
 		}
 		return rangeKey
 	}
+	var fullPath string
+	objectPath := func() string {
+		if fullPath == "" {
+			fullPath = d.pathForFile(path.File)
+		}
+		return fullPath
+	}
 
 	fillEntry := func(entry *IOEntry) error {
 		LogEvent(ctx, str_disk_cache_fill_entry_begin)
@@ -577,7 +585,7 @@ func (d *DiskCache) Read(
 		var downloading bool
 		if !openedOK {
 			// try full file
-			diskPath = d.pathForFile(path.File)
+			diskPath = objectPath()
 			var filled bool
 			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
 			if err != nil {
@@ -704,7 +712,7 @@ func (d *DiskCache) Read(
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
 		readOffset, readSize := rangeOffset, entry.Size
-		if diskPath == d.pathForFile(path.File) {
+		if diskPath == objectPath() {
 			readOffset = entry.Offset
 			d.preloads.read(diskPath, entry.Size)
 		}
@@ -1021,7 +1029,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		d.downloadConns.Add(-conns)
 		conns = 0
 	}
-	defer func() { releaseConns() }()
+	defer releaseConns()
 
 	// write data
 	f, err := d.createCacheTempFile(filepath.Dir(diskPath))
@@ -1046,12 +1054,15 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		}
 	}
 
-	from, err := openReader(ctx)
+	readCtx, idle := newIdleReader(ctx)
+	defer idle.Close()
+	from, err := openReader(readCtx)
 	if err != nil {
 		return false, &diskCacheSourceError{err: err}
 	}
 	defer from.Close()
-	source := &diskCacheSourceReader{Reader: from}
+	idle.r = from
+	source := &diskCacheSourceReader{Reader: idle}
 
 	// do eviction before write
 	forceEvict := int64(0)
@@ -1065,13 +1076,8 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	d.cache.Evict(ctx, nil, forceEvict)
 
 	var n int64
-	if parts, ok := from.(objectRangeOpener); ok && download != nil && download.split() {
-		n, err = copyParts(ctx, f, download, parts)
-		releaseConns()
-		download.end(err == nil)
-		if err != nil {
-			return false, err
-		}
+	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
+		n, err = copyParts(ctx, f, download, l.openRange, bounds)
 	} else {
 		var buf []byte
 		put := ioBufferPool.Get(&buf)
@@ -1080,16 +1086,16 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			download.begin(0)
 		}
 		n, err = io.CopyBuffer(dst, source, buf)
-		releaseConns()
-		if download != nil {
-			download.end(err == nil)
+		if err != nil && source.err != nil {
+			err = &diskCacheSourceError{err: source.err}
 		}
-		if err != nil {
-			if source.err != nil {
-				return false, &diskCacheSourceError{err: source.err}
-			}
-			return false, err
-		}
+	}
+	releaseConns()
+	if download != nil {
+		download.end(err == nil)
+	}
+	if err != nil {
+		return false, err
 	}
 
 	if download != nil {
@@ -1575,20 +1581,7 @@ func (d *DiskCache) setFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 ) error {
-	return d.setFileSized(ctx, filePath, openReader, asyncFinalize, nil)
-}
-
-// setFileSized downloads the whole object of filePath through openReader; objectSize, when
-// set, returns the object's size before the download starts, so a large object downloads
-// as parts.
-func (d *DiskCache) setFileSized(
-	ctx context.Context,
-	filePath string,
-	openReader func(context.Context) (io.ReadCloser, error),
-	asyncFinalize bool,
-	objectSize objectLayout,
-) error {
-	return d.fillFileSized(ctx, filePath, openReader, asyncFinalize, storageFill, objectSize)
+	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill, nil)
 }
 
 // setFileContent caches content already in memory as the whole file of filePath.
@@ -1600,7 +1593,7 @@ func (d *DiskCache) setFileContent(
 ) error {
 	return d.fillFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(content)), nil
-	}, asyncFinalize, contentFill)
+	}, asyncFinalize, contentFill, nil)
 }
 
 // wholeFill is how a write fills a disk-cache file.
@@ -1615,17 +1608,10 @@ const (
 	storageFill
 )
 
+// fillFile caches the whole object of filePath read through openReader; objectSize, when
+// set, returns the object's size before a download starts, so a large object downloads
+// as parts.
 func (d *DiskCache) fillFile(
-	ctx context.Context,
-	filePath string,
-	openReader func(context.Context) (io.ReadCloser, error),
-	asyncFinalize bool,
-	fill wholeFill,
-) error {
-	return d.fillFileSized(ctx, filePath, openReader, asyncFinalize, fill, nil)
-}
-
-func (d *DiskCache) fillFileSized(
 	ctx context.Context,
 	filePath string,
 	openReader func(context.Context) (io.ReadCloser, error),
@@ -1664,14 +1650,15 @@ func (d *DiskCache) DeletePaths(
 		return err
 	}
 	for _, path := range canonical {
+		diskPath := d.pathForFile(path)
 		// Counted first: an entry read before it and cached after it is retracted.
-		d.deletes.deleted(d.pathForFile(path))
+		d.deletes.deleted(diskPath)
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return
 		}
-		d.prefetched.forget(d.pathForFile(path))
+		d.prefetched.forget(diskPath)
 		// No prefetch range read before the delete caches its range after it.
-		if err = d.dropPrefetches(ctx, d.pathForFile(path)); err != nil {
+		if err = d.dropPrefetches(ctx, diskPath); err != nil {
 			return
 		}
 		if err = d.removeRangeFiles(ctx, path); err != nil {

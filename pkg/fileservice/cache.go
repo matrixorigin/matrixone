@@ -188,7 +188,7 @@ func newFileServiceCaches(
 			config.MetricScope,
 			diskCacheOptions{
 				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
-				prefetchRange:        config.diskPrefetchRange(),
+				prefetchRange:        prefetchRangeConfig{on: true},
 				objectSplit:          config.diskObjectSplit(),
 			},
 		)
@@ -234,12 +234,6 @@ func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
 		return DefaultDiskDownloadMaxExtraWait
 	}
 	return c.DiskDownloadMaxExtraWait.Duration
-}
-
-// diskPrefetchRange returns the prefetch ranges of the disk cache: always on, so range
-// reads fetch and cache the aligned ranges around them.
-func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {
-	return prefetchRangeConfig{on: true}
 }
 
 const (

@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -149,10 +150,12 @@ func TestPrefetchedObjectsBound(t *testing.T) {
 	size, ok := o.size("a")
 	require.True(t, ok)
 	require.Equal(t, int64(10), size)
-	require.Equal(t, int64(1), o.n.Load())
-	o.n.Store(prefetchedObjectsMax)
+	require.Len(t, o.m, 1)
+	for i := len(o.m); i < prefetchedObjectsMax; i++ {
+		o.store(fmt.Sprint(i), 1)
+	}
 	o.store("b", 20)
-	require.Equal(t, int64(1), o.n.Load(), "past the bound the sizes are dropped")
+	require.Len(t, o.m, 1, "past the bound the sizes are dropped")
 	_, ok = o.size("a")
 	require.False(t, ok)
 }

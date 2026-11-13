@@ -97,12 +97,9 @@ func TestS3FSObjectSplitSkipsSmallObjects(t *testing.T) {
 func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.downloads.mu.Lock()
-	d.downloads.m = make(map[string]*objectDownload)
 	for i := 0; i < objectSplitMaxDownloads; i++ {
-		d.downloads.m[fmt.Sprintf("other-%d", i)] = newObjectDownload("", false, nil)
+		d.downloads.store(fmt.Sprintf("other-%d", i), newObjectDownload("", false, nil))
 	}
-	d.downloads.mu.Unlock()
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
@@ -148,10 +145,6 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	_, wait := o.estimate(0, 1)
 	require.GreaterOrEqual(t, wait, rangeReadCosts.firstByte(), "a part not yet read is a latency away")
 	o.advance(1, 4)
-	o.mu.Lock()
-	require.Zero(t, o.progressLocked(0, 4), "the other part's bytes are not progress for the first")
-	require.Equal(t, int64(4), o.progressLocked(2, 6))
-	o.mu.Unlock()
 	written, ok := o.waitFor(ctx, 4, 8, time.Millisecond)
 	require.True(t, ok)
 	require.Equal(t, int64(8), written)
@@ -304,7 +297,7 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		d := fs.diskCache
 		d.objectSplit = objectSplitConfig{parts: 1}
 		d.prefetched.store(d.pathForFile("object"), int64(len(data)))
-		require.Equal(t, tc.limit, d.downloadConnLimit(), "conns %d", tc.conns)
+		require.Equal(t, tc.limit, d.maxDownloadConns, "conns %d", tc.conns)
 		got, err := readFullObjectOf(fs, 100, 10)
 		require.NoError(t, err)
 		require.Equal(t, data[100:110], got)

@@ -208,16 +208,17 @@ func newPrefetcher(max int, limit func() int64, have func(ObjectPrefetch) bool, 
 
 // add queues req, or moves the queued object nearer the front when req needs it sooner.
 func (p *prefetcher) add(req ObjectPrefetch) {
+	if !req.Scan.live() {
+		return
+	}
+	have := p.have(req)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return
 	}
-	if !req.Scan.live() {
-		return
-	}
 	if e, ok := p.entries[req.FilePath]; ok {
-		if e.index >= 0 && p.have(req) {
+		if e.index >= 0 && have {
 			metric.FSPrefetchCachedCounter.Inc()
 			return
 		}
@@ -236,7 +237,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		}
 		return
 	}
-	if p.have(req) {
+	if have {
 		metric.FSPrefetchCachedCounter.Inc()
 		return
 	}
@@ -272,13 +273,18 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.startLocked()
 }
 
-// dropLocked drops the queued download at index i of the queue.
-func (p *prefetcher) dropLocked(i int) {
+// removeLocked removes the queued download at index i of the queue.
+func (p *prefetcher) removeLocked(i int) *prefetchEntry {
 	e := heap.Remove(&p.queue, i).(*prefetchEntry)
 	delete(p.entries, e.req.FilePath)
 	p.queuedBytes -= e.req.Size
 	p.queued.Add(-1)
-	if e.live() {
+	return e
+}
+
+// dropLocked drops the queued download at index i of the queue.
+func (p *prefetcher) dropLocked(i int) {
+	if p.removeLocked(i).live() {
 		metric.FSPrefetchDroppedCounter.Inc()
 	} else {
 		metric.FSPrefetchEndedCounter.Inc()
@@ -319,17 +325,6 @@ func (p *prefetcher) isRunning(filePath string) bool {
 	return ok && e.index < 0
 }
 
-// isQueued reports whether the download of filePath is queued and not started.
-func (p *prefetcher) isQueued(filePath string) bool {
-	if p.queued.Load() == 0 {
-		return false
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	e, ok := p.entries[filePath]
-	return ok && e.index >= 0
-}
-
 // remove drops the queued download of filePath, as a read reached the object before it,
 // and reports whether it was queued.
 func (p *prefetcher) remove(filePath string) bool {
@@ -348,10 +343,7 @@ func (p *prefetcher) take(filePath string, want func(ObjectPrefetch) bool) (Obje
 	if !ok || e.index < 0 || !want(e.req) {
 		return ObjectPrefetch{}, false
 	}
-	heap.Remove(&p.queue, e.index)
-	delete(p.entries, filePath)
-	p.queuedBytes -= e.req.Size
-	p.queued.Add(-1)
+	p.removeLocked(e.index)
 	return e.req, true
 }
 

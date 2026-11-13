@@ -320,3 +320,14 @@ func TestPrefetcherTake(t *testing.T) {
 	_, ok = p.take("a", whole)
 	require.False(t, ok, "nothing queued")
 }
+
+// isQueued reports whether the download of filePath is queued and not started.
+func (p *prefetcher) isQueued(filePath string) bool {
+	if p.queued.Load() == 0 {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[filePath]
+	return ok && e.index >= 0
+}

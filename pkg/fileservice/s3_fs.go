@@ -193,7 +193,6 @@ func NewS3FS(
 		if fs.diskCache != nil {
 			if args.MaxConnsPerHost > 0 {
 				fs.diskCache.maxDownloadConns = int64(args.MaxConnsPerHost / 2)
-				fs.diskCache.maxDownloadConnsSet = true
 			}
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(workers), fs.haveObject, fs.prefetchObject)
@@ -530,12 +529,13 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.setFileSized(
+	if err := s.diskCache.fillFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
 		s.asyncUpdate,
+		storageFill,
 		s.prefetchedSize(path.File, 0),
 	); err != nil {
 		return err
@@ -960,11 +960,7 @@ read_disk_cache:
 	// An exact read of bytes a flight is reading waits for them instead of reading them.
 	if s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads) {
 		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
-			var allocator CacheDataAllocator
-			if s.memCache != nil {
-				allocator = s.memCache
-			}
-			if err := s.diskCache.readFromFlights(ctx, path.File, vector, allocator); err != nil {
+			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
 				finishFill()
 				return err
 			}
@@ -1638,7 +1634,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	started := make(chan *objectDownload, 1)
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- s.diskCache.setFileSized(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		setDone <- s.diskCache.fillFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			download := s.diskCache.download(diskPath)
@@ -1649,7 +1645,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			}
 			started <- download
 			return &lazyObjectReader{ctx: fillCtx, read: getReader}, nil
-		}, s.asyncUpdate, s.prefetchedSize(file, firstNeeded(vector)))
+		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)))
 	}()
 	var setErr error
 	setFinished := false
