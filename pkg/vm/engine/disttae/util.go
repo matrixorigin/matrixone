@@ -25,7 +25,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -864,31 +863,33 @@ func execReadSql(
 }
 
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {
+	return fillTsVecForSysTableQueryBatchWithAppend(bat, ts, m, nil)
+}
+
+// appendTS is a scoped fault injection for testing partial timestamp allocation.
+// The production path uses the normal append directly.
+func fillTsVecForSysTableQueryBatchWithAppend(bat *batch.Batch, ts types.TS, m *mpool.MPool, appendTS func(*vector.Vector, types.TS, *mpool.MPool) error) error {
 	tsvec := vector.NewVec(types.T_TS.ToType())
-	for i := 0; i < bat.RowCount(); i++ {
-		if err := vector.AppendFixed(tsvec, ts, false, m); err != nil {
-			tsvec.Free(m)
-			return err
+	var err error
+	if appendTS == nil {
+		for i := 0; i < bat.RowCount(); i++ {
+			if err = vector.AppendFixed(tsvec, ts, false, m); err != nil {
+				break
+			}
 		}
+	} else {
+		for i := 0; i < bat.RowCount(); i++ {
+			if err = appendTS(tsvec, ts, m); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		tsvec.Free(m)
+		return err
 	}
 	bat.Vecs = append([]*vector.Vector{bat.Vecs[0] /*rowid*/, tsvec}, bat.Vecs[1:]...)
 	return nil
-}
-
-func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
-	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
-	if len(bs) <= 1 {
-		return true
-	}
-	prevTableId := vector.GetFixedAtNoTypeCheck[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
-	for _, b := range bs[1:] {
-		firstId := vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], 0)
-		if firstId == prevTableId {
-			return false
-		}
-		prevTableId = vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], b.RowCount()-1)
-	}
-	return true
 }
 
 // shrinkBatchWithRowids shrinks the batch with rowids

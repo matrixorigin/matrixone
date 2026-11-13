@@ -98,16 +98,27 @@ func formatStatsInfo(stats *plan.Stats) string {
 //
 //	(A INNER JOIN C) LEFT JOIN B
 //
-// when the upper join only references A and C and C is unique on the join
+// The same rotation applies to ANTI in place of LEFT, provided all inputs are
+// total and deterministic so reordered empty-input shortcuts cannot expose or
+// suppress a data error. Apply it when the upper join only references A and C
+// and C is unique on the join
 // key.  The INNER JOIN can only remove rows from A, so doing it first cannot
 // increase the input of the LEFT JOIN.  This is especially important when B
 // is a large fact table and C carries a selective dimension predicate.
 func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int32, bool) {
+	return builder.applyPreservedSideJoinRule(nodeID, plan.Node_LEFT)
+}
+
+func (builder *QueryBuilder) applyAntiJoinPreservedSideRule(nodeID int32) (int32, bool) {
+	return builder.applyPreservedSideJoinRule(nodeID, plan.Node_ANTI)
+}
+
+func (builder *QueryBuilder) applyPreservedSideJoinRule(nodeID int32, joinType plan.Node_JoinType) (int32, bool) {
 	node := builder.qry.Nodes[nodeID]
 	changed := false
 	for i, child := range node.Children {
 		var childChanged bool
-		node.Children[i], childChanged = builder.applyOuterJoinPreservedSideRule(child)
+		node.Children[i], childChanged = builder.applyPreservedSideJoinRule(child, joinType)
 		changed = changed || childChanged
 	}
 
@@ -119,7 +130,7 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int3
 	outerPos := -1
 	for i, childID := range node.Children {
 		child := builder.qry.Nodes[childID]
-		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_LEFT &&
+		if child.NodeType == plan.Node_JOIN && child.JoinType == joinType &&
 			!joinNodeHasLocalSemantics(child) && !builder.joinOwnsConstantDiagnostic(child) {
 			outerPos = i
 			break
@@ -132,6 +143,19 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int3
 	outer := builder.qry.Nodes[node.Children[outerPos]]
 	preservedID := outer.Children[0]
 	otherID := node.Children[1-outerPos]
+	antiSelectivity := 0.0
+	if outer.JoinType == plan.Node_ANTI {
+		if !builder.scalarRuntimeFilterSiblingIsSafeToSkip(preservedID) ||
+			!builder.scalarRuntimeFilterSiblingIsSafeToSkip(outer.Children[1]) ||
+			!builder.scalarRuntimeFilterSiblingIsSafeToSkip(otherID) {
+			return nodeID, changed
+		}
+		var known bool
+		antiSelectivity, known = builder.getJoinActiveDomainSelectivity(outer.NodeId)
+		if !known {
+			return nodeID, changed
+		}
+	}
 
 	allowedTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(preservedID) {
@@ -157,7 +181,12 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int3
 		node.Stats.HashmapStats.HashOnPK = false
 	}
 	determineHashOnPK(node.NodeId, builder)
-	if node.Stats == nil || node.Stats.HashmapStats == nil || !node.Stats.HashmapStats.HashOnPK {
+	preferInner := true
+	if outer.JoinType == plan.Node_ANTI {
+		innerSelectivity, known := builder.getJoinActiveDomainSelectivity(node.NodeId)
+		preferInner = known && innerSelectivity < antiSelectivity
+	}
+	if !preferInner || node.Stats == nil || node.Stats.HashmapStats == nil || !node.Stats.HashmapStats.HashOnPK {
 		node.Children = originalChildren
 		if node.Stats != nil && node.Stats.HashmapStats != nil {
 			node.Stats.HashmapStats.HashOnPK = false
