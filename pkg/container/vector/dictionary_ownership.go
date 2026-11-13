@@ -382,6 +382,11 @@ func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.
 		if err := account.validate(); err != nil {
 			return false, err
 		}
+		// A transient policy cannot promote an account-only cache pin.
+		// Decline so the loader copies through its admitted owned path.
+		if account.transient != nil {
+			return false, nil
+		}
 		size := lease.AccountedBytes()
 		if size < 0 {
 			return false, moerr.NewInvalidInputNoCtx("invalid cache pin size")
