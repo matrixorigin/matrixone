@@ -180,7 +180,10 @@ func (ls *LocalDisttaeDataSource) String() string {
 }
 
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
-	ls.OrderBy = orderby
+	ls.OrderBy = nil
+	if len(orderby) > 0 && orderby[0] != nil && orderby[0].Expr != nil && orderby[0].Expr.GetCol() != nil {
+		ls.OrderBy = orderby
+	}
 }
 
 func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
@@ -188,6 +191,9 @@ func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (ls *LocalDisttaeDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	if len(ls.OrderBy) == 0 || !readutil.OrderByZoneMapMatches(zm, ls.OrderBy[0]) {
+		return
+	}
 	if !ls.filterZM.IsInited() {
 		ls.filterZM = zm.Clone()
 		return
@@ -218,6 +224,8 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
 
 	def := ls.table.tableDef
+	sliceLen := ls.rangeSlice.Len()
+	ls.blockZMS = make([]index.ZM, sliceLen)
 
 	// Find the column by name instead of using ColPos directly.
 	// In JOIN scenarios, ColPos points to the projection list position,
@@ -229,6 +237,15 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// Use LastIndex to handle cases where column name itself might contain dots
 	if idx := strings.LastIndex(orderByColName, "."); idx >= 0 {
 		orderByColName = orderByColName[idx+1:]
+	}
+	// A literal dotted name can share its suffix with a different column.
+	for _, col := range def.Cols {
+		if col != nil {
+			name := strings.ToLower(col.Name)
+			if strings.Contains(name, ".") && strings.HasSuffix(name, "."+orderByColName) {
+				return
+			}
+		}
 	}
 
 	// Validate RelPos: In JOIN scenarios, RelPos indicates which table the column belongs to.
@@ -249,9 +266,12 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// Note: Name2ColIndex keys should be lowercase according to proto definition
 	if def.Name2ColIndex != nil {
 		if colIdx, ok := def.Name2ColIndex[orderByColName]; ok {
-			if int(colIdx) < len(def.Cols) {
+			if colIdx >= 0 && int(colIdx) < len(def.Cols) {
 				// Verify the found column's type matches the ORDER BY expression type
 				foundCol := def.Cols[colIdx]
+				if foundCol == nil || strings.ToLower(foundCol.Name) != orderByColName {
+					return
+				}
 				if foundCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
 					orderByColIDX = int(foundCol.Seqnum)
 				} else {
@@ -267,7 +287,7 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// If Name2ColIndex is not available or lookup failed, search by name
 	if orderByColIDX == -1 {
 		for _, col := range def.Cols {
-			if strings.ToLower(col.Name) == orderByColName {
+			if col != nil && strings.ToLower(col.Name) == orderByColName {
 				// Verify type match before using this column
 				if col.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
 					orderByColIDX = int(col.Seqnum)
@@ -282,59 +302,30 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 		}
 	}
 
-	// Fallback to ColPos only if:
-	// 1. Name lookup completely failed
-	// 2. RelPos is 0 or -1 (indicating it's from the current table, not a joined table)
-	// 3. ColPos is within valid bounds
-	// This fallback is risky in JOIN scenarios, so we add extra validation
+	// A compiled ColPos may refer to a projection rather than this table.
+	// If the name is not resolved, retain every block instead of guessing.
 	if orderByColIDX == -1 {
-		if relPos <= 0 && int(orderByCol.Col.ColPos) < len(def.Cols) {
-			fallbackCol := def.Cols[int(orderByCol.Col.ColPos)]
-			// Verify type match before using fallback
-			if fallbackCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
-				orderByColIDX = int(fallbackCol.Seqnum)
-				logutil.Debug("getBlockZMs: using ColPos fallback",
-					zap.String("column", orderByCol.Col.Name),
-					zap.Int32("ColPos", orderByCol.Col.ColPos),
-					zap.String("foundColumn", fallbackCol.Name))
-			} else {
-				logutil.Warn("getBlockZMs: ColPos fallback type mismatch",
-					zap.String("column", orderByCol.Col.Name),
-					zap.Int32("ColPos", orderByCol.Col.ColPos),
-					zap.Int32("foundType", fallbackCol.Typ.Id),
-					zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
-			}
-		}
+		return
 	}
-
-	// If we still haven't found the column, panic with detailed error information
-	if orderByColIDX == -1 {
-		var availableCols []string
-		for _, col := range def.Cols {
-			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
-		}
-		panic(fmt.Sprintf(
-			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
-			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols))
-	}
-
-	sliceLen := ls.rangeSlice.Len()
-	ls.blockZMS = make([]index.ZM, sliceLen)
-	var objDataMeta objectio.ObjectDataMeta
-	var location objectio.Location
+	var meta objectio.ObjectMeta
+	var objectName objectio.ObjectNameShort
+	haveObject := false
 	for i := ls.rangesCursor; i < sliceLen; i++ {
-		location = ls.rangeSlice.Get(i).MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			objMeta, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
+		location := ls.rangeSlice.Get(i).MetaLocation()
+		if !haveObject || !location.ShortName().Equal(objectName[:]) {
+			loaded, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
 			if err != nil {
 				panic("load object meta error when ordered scan!")
 			}
-			objDataMeta = objMeta.MustDataMeta()
+			meta = loaded
+			objectName = *location.ShortName()
+			haveObject = true
 		}
-		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		// Detach the zonemap so block ordering cannot pin the full object metadata.
-		ls.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap().Clone()
+		if orderByColIDX < int(objectio.SEQNUM_UPPER) {
+			ls.blockZMS[i] = readutil.OrderByBlockZoneMap(meta, uint32(location.ID()), uint16(orderByColIDX), ls.OrderBy[0])
+		}
 	}
+
 }
 
 func (ls *LocalDisttaeDataSource) sortBlockList() {

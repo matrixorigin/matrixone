@@ -168,7 +168,7 @@ select id,payload from top_probe ignore index(ix_top) order by payload,id limit 
 -- lies beyond the current TopValue. Both indexed and base scans must retain it.
 create table nullable_top (id int primary key, a int not null, payload int, key ix_null_top(a));
 set @@max_dop=1;
-insert into nullable_top values (1,1,1);
+insert into nullable_top values (1,1,-10),(5,5,-20);
 select mo_ctl('dn','flush','force_index_order.nullable_top');
 select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
 where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
@@ -176,13 +176,59 @@ insert into nullable_top values (2,2,100),(3,3,null);
 select mo_ctl('dn','flush','force_index_order.nullable_top');
 select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
 where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+insert into nullable_top values (4,4,-10);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
 -- @separator:table
 -- @regex("Index Table Scan.*ix_null_top",true)
--- @regex("MsgTopValue",false)
+-- @regex("MsgTopValue",true)
 explain select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
 select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+-- @separator:table
+-- @regex("MsgTopValue",true)
+explain select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
 select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
 select id,payload from nullable_top where payload is null;
+
+-- A bound may arrive from transaction-local rows before persisted NULL blocks.
+begin;
+insert into nullable_top values (6,6,-30);
+select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+rollback;
+
+-- With NULLS LAST, a NULL heap root must not become a numeric bound.
+-- The later -10 block is still needed even though its maximum is below zero.
+-- @separator:table
+-- @regex("Index Table Scan.*ix_null_top",true)
+-- @regex("MsgTopValue",true)
+explain select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
+select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
+select id,payload from nullable_top ignore index(ix_null_top) order by payload desc,id desc limit 2;
+
+-- Equal first keys across blocks remain candidates for the second key.
+-- @separator:table
+-- @regex("MsgTopValue",true)
+explain select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+select id,payload from nullable_top ignore index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+
+-- An old block may not contain a column added after it was flushed.
+create table nullable_evo (id int primary key);
+insert into nullable_evo values (1);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+alter table nullable_evo add column payload int;
+insert into nullable_evo values (2,-10),(3,100);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+-- @separator:table
+-- @regex("MsgTopValue",true)
+explain select id,payload from nullable_evo order by payload desc limit 3;
+select id,payload from nullable_evo order by payload desc limit 3;
+-- A missing column is NULL in the old block and must win ASC NULLS FIRST.
+-- @separator:table
+-- @regex("MsgTopValue",true)
+explain select id,payload from nullable_evo order by payload limit 1;
+select id,payload from nullable_evo order by payload limit 1;
 set @@max_dop=0;
 
 -- An integer range after an equality prefix can bound the physical index,

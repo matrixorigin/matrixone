@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type fixedObjectIter struct {
@@ -541,73 +541,6 @@ func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
 	return delBat
 }
 
-// TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup tests the column lookup logic
-// that fixes the bug where ColPos in JOIN scenarios points to projection list position
-// instead of table column position.
-func TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup(t *testing.T) {
-	// This test focuses on testing the column lookup logic without requiring actual block data.
-	// We test that the function correctly finds columns by name even when ColPos is wrong.
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
-			{Name: "remark", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 8},      // Position 8: VARCHAR
-			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 9}, // Position 9: DATETIME
-		},
-		Name2ColIndex: map[string]int32{
-			"id":         0, // Index in Cols array
-			"remark":     1, // Index in Cols array
-			"created_at": 2, // Index in Cols array
-		},
-	}
-
-	// Test case 1: Find column by qualified name "table.column"
-	orderByCol := &plan.ColRef{
-		Name:   "table.created_at",
-		ColPos: 8, // Wrong ColPos (points to remark in projection list)
-	}
-	orderByColName := "table.created_at"
-	if idx := strings.LastIndex(strings.ToLower(orderByColName), "."); idx >= 0 {
-		orderByColName = orderByColName[idx+1:]
-	}
-	require.Equal(t, "created_at", orderByColName, "Should extract column name from qualified name")
-
-	var orderByColIDX int = -1
-	if tableDef.Name2ColIndex != nil {
-		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
-			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
-		}
-	}
-	require.Equal(t, 9, orderByColIDX, "Should find created_at (seqnum 9) by name, not remark (seqnum 8)")
-
-	// Test case 2: Find column by simple name
-	orderByColName = "created_at"
-	orderByColIDX = -1
-	if tableDef.Name2ColIndex != nil {
-		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
-			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
-		}
-	}
-	require.Equal(t, 9, orderByColIDX, "Should find created_at by simple name")
-
-	// Test case 3: Fallback to ColPos when name lookup fails
-	orderByColName = "nonexistent_column"
-	orderByCol.ColPos = 1 // Valid ColPos pointing to remark (index 1 in Cols array)
-	orderByColIDX = -1
-	if tableDef.Name2ColIndex != nil {
-		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
-			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
-		}
-	}
-	// Fallback to ColPos
-	if orderByColIDX == -1 {
-		if int(orderByCol.ColPos) < len(tableDef.Cols) {
-			orderByColIDX = int(tableDef.Cols[int(orderByCol.ColPos)].Seqnum)
-		}
-	}
-	require.Equal(t, 8, orderByColIDX, "Should fallback to ColPos 1 (remark, seqnum 8) when name lookup fails")
-}
-
 // TestLocalDisttaeDataSource_getBlockZMs tests the fix for the bug where
 // ColPos in JOIN scenarios points to projection list position instead of table column position.
 // This test verifies that getBlockZMs correctly finds columns by name.
@@ -705,21 +638,21 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 		ls.getBlockZMs()
 	}, "getBlockZMs should work with simple column name")
 
-	// Test case 3: Test fallback to ColPos when name lookup fails
+	// Test case 3: An unresolved name must not guess a projection position.
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
 	ls.blockZMS = nil
 	require.NotPanics(t, func() {
 		ls.getBlockZMs()
-	}, "getBlockZMs should fallback to ColPos when name lookup fails")
+	}, "getBlockZMs should retain unknown metadata when the name is unresolved")
 
-	// Test case 4: Test panic when both name lookup and ColPos fail
+	// Test case 4: An invalid position must not panic or select another column.
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
 	ls.blockZMS = nil
-	require.Panics(t, func() {
+	require.NotPanics(t, func() {
 		ls.getBlockZMs()
-	}, "getBlockZMs should panic when both name lookup and ColPos fail")
+	}, "getBlockZMs should retain unknown metadata when the name is unresolved")
 
 	// Test case 5: Test with Name2ColIndex (O(1) lookup)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
@@ -799,7 +732,73 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 				}
 			})
 		}
+		t.Run("reject_incompatible_threshold", func(t *testing.T) {
+			ds := &LocalDisttaeDataSource{ctx: ctx, fs: cachedFS, table: &txnTbl, rangeSlice: data.GetBlockInfoSlice()}
+			defer ds.Close()
+			ds.SetOrderBy([]*plan.OrderBySpec{{Expr: ls.OrderBy[0].Expr, Flag: plan.OrderBySpec_DESC}})
+			wrong := objectio.NewZM(types.T_int64, 0)
+			value := int64(9)
+			index.UpdateZM(wrong, types.EncodeInt64(&value))
+			ds.SetFilterZM(wrong)
+			require.False(t, ds.filterZM.IsInited())
+			ds.SetFilterZM(meta.MustDataMeta().GetBlockMeta(1).ColumnMeta(9).ZoneMap())
+			require.True(t, ds.filterZM.IsInited())
+		})
+		t.Run("unresolved_name_retains_blocks", func(t *testing.T) {
+			ds := &LocalDisttaeDataSource{ctx: ctx, fs: cachedFS, table: &txnTbl, rangeSlice: data.GetBlockInfoSlice()}
+			defer ds.Close()
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{Name: "missing", ColPos: 9},
+			}}
+			ds.SetOrderBy([]*plan.OrderBySpec{{Expr: expr, Flag: plan.OrderBySpec_DESC}})
+			ds.handleOrderBy()
+			require.Len(t, ds.blockZMS, 3)
+			ds.SetFilterZM(meta.MustDataMeta().GetBlockMeta(1).ColumnMeta(9).ZoneMap())
+			require.True(t, ds.filterZM.IsInited())
+			for i := range ds.blockZMS {
+				require.False(t, ds.blockZMS[i].IsInited())
+				require.True(t, ds.needReadBlkByZM(i))
+			}
+		})
 	})
+	t.Run("missing_or_incompatible_column_metadata", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			seq  uint16
+			typ  types.T
+		}{
+			{name: "column_added_after_block", seq: 0, typ: types.T_int64},
+			{name: "physical_type_differs", seq: 9, typ: types.T_varchar},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				writer := ioutil.ConstructWriter(0, []uint16{tc.seq}, -1, false, false, fs)
+				bat := batch.NewWithSize(1)
+				t.Cleanup(func() { bat.Clean(proc.Mp()) })
+				bat.Vecs[0] = vector.NewVec(tc.typ.ToType())
+				if tc.typ == types.T_varchar {
+					require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(5), false, proc.Mp()))
+				}
+				bat.SetRowCount(1)
+				_, err := writer.WriteBatch(bat)
+				require.NoError(t, err)
+				_, _, err = writer.Sync(ctx)
+				require.NoError(t, err)
+				stats := writer.GetObjectStats()
+				data := readutil.NewBlockListRelationData(0)
+				block := stats.ConstructBlockInfo(0)
+				data.AppendBlockInfo(&block)
+				ds := &LocalDisttaeDataSource{ctx: ctx, fs: fs, table: &txnTbl, rangeSlice: data.GetBlockInfoSlice()}
+				defer ds.Close()
+				ds.SetOrderBy([]*plan.OrderBySpec{{Expr: ls.OrderBy[0].Expr, Flag: plan.OrderBySpec_DESC}})
+				require.NotPanics(t, ds.getBlockZMs)
+				require.Len(t, ds.blockZMS, 1)
+				require.False(t, ds.blockZMS[0].IsInited(), "unknown metadata must not prune the block")
+			})
+		}
+	})
+
 }
 
 // TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction

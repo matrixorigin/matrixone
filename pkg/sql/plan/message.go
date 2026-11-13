@@ -116,11 +116,6 @@ func (builder *QueryBuilder) handleMessageFromTopToScanInRoot(nodeID, rootID int
 		// not remove its build while leaving that probe waiting for a message.
 		return
 	}
-	// Zonemaps do not describe NULL ordering. A block whose non-NULL values
-	// are worse than the threshold may still contain the winning NULL.
-	if !scanOrderExpr.Typ.NotNullable {
-		return
-	}
 	if !encodedOrderMatchesSQLOrder(scanOrderExpr) {
 		return
 	}
@@ -147,7 +142,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScanInRoot(nodeID, rootID int
 	enableOrderedLimit := false
 	// A leading-key block order is not a complete multi-key row order: retain
 	// the original Top comparator and never install a static reader limit.
-	if len(node.OrderBy) == 1 && canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
+	if scanOrderExpr.Typ.NotNullable && len(node.OrderBy) == 1 && canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
 		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil &&
 			isPositiveLiteralLimit(node.Limit)
 		if eligibleOrderedLimit {
