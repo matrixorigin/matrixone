@@ -4244,7 +4244,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return moerr.NewCCPRReadOnly(c.proc.Ctx)
 	}
 
-	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
+	if tableDef := rel.GetTableDef(c.proc.Ctx); tableDef.TableType == catalog.SystemExternalRel {
+		// Terminal truncation decision on the live relation: cached and
+		// synthesized TRUNCATE scopes execute without the planner admission,
+		// so a read-only file external mapping must fail here too instead of
+		// being silently acknowledged as a no-op (issue #31920). Writable
+		// mappings get their dedicated rejection; other external mappings
+		// keep the existing no-op contract.
+		if err := plan2.RejectFileExternalTruncate(c.proc.Ctx, tableDef, table); err != nil {
+			return err
+		}
 		return nil
 	}
 

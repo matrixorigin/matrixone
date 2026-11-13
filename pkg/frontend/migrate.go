@@ -17,12 +17,15 @@ package frontend
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // migrateController is created in Routine and used to serialize lifecycle
 // operations with routine cleanup.
 type migrateController struct {
 	sync.Mutex
+	// cancelled is the KILL admission boundary shared with the routine.
+	cancelled   atomic.Bool
 	migrateOnce sync.Once
 	// migrateErr is the stable result returned to duplicate migration calls.
 	migrateErr error
@@ -190,6 +193,11 @@ func (mc *migrateController) startOperationLocked(ctx context.Context) (context.
 		return nil, false
 	}
 	if mc.inProgress || mc.requestInProgress {
+		return nil, false
+	}
+	// This load linearizes admission against the KILL atomic swap. An
+	// overlapping operation that observed false was already admitted.
+	if mc.cancelled.Load() {
 		return nil, false
 	}
 	operationCtx, cancel := context.WithCancel(ctx)

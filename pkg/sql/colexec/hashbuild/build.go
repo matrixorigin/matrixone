@@ -593,6 +593,11 @@ func (hashBuild *HashBuild) build(
 
 		runtimeFilterLimit := int32(-1)
 		ctr.hashmapBuilder.runtimeFilterKeysRequired = needUniqueVec && hashBuild.RuntimeFilterSpec.MustApply
+		ctr.hashmapBuilder.optionalRuntimeFilterMaxKeyBytes = hashBuild.OptionalRuntimeFilterMaxKeyBytes
+		ctr.hashmapBuilder.optionalRuntimeFilterMaxKeys = 0
+		if hashBuild.OptionalRuntimeFilterMaxKeyBytes > 0 && hashBuild.RuntimeFilterSpec != nil {
+			ctr.hashmapBuilder.optionalRuntimeFilterMaxKeys = int(hashBuild.RuntimeFilterSpec.UpperLimit)
+		}
 		if needUniqueVec && !hashBuild.RuntimeFilterSpec.UseMembershipFilter {
 			runtimeFilterLimit = hashBuild.RuntimeFilterSpec.UpperLimit
 		}
