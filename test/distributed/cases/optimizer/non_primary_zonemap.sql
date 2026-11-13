@@ -91,8 +91,35 @@ set @zm_partition_value=11;
 execute zm_partition using @zm_partition_value;
 deallocate prepare zm_partition;
 
+-- 同一持久化块混合真假值，BOOL 摘要不能把 true 行排除。
+set optimizer_hints='';
+create table bool_values (id int, enabled bool);
+insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
+select id from bool_values where enabled = true order by id;
+-- @regex("returnStr.*OK",true)
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_values');
+select id from bool_values where enabled = true order by id;
+select id from bool_values where enabled = false order by id;
+select id from bool_values where enabled is null order by id;
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+-- 输入各两行，必须同时保留匹配、仅左侧和仅右侧三种结果。
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
+
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+select id from bool_values where enabled = true order by id;
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
 prepare zm_partition from 'select a from range_bound where a = ?';
 execute zm_partition using @zm_partition_value;
 set @zm_partition_value=null;
