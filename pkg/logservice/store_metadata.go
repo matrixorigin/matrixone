@@ -308,6 +308,19 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 	l.mustSaveMetadata()
 }
 
+func (l *store) markReplicaRetiring(shardID, replicaID uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.mu.metadata.Shards {
+		rec := &l.mu.metadata.Shards[i]
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
+			rec.Retiring = true
+			l.mustSaveMetadata()
+			return
+		}
+	}
+}
+
 func (l *store) getReplicaID(shardID uint64) int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()

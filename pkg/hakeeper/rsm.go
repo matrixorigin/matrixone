@@ -558,7 +558,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
 		if c.DeleteCNStore != nil {
-			s.handleDeleteCNCmd(c.UUID)
+			s.handleDeleteCNCmd(c.UUID, c.DeleteCNStore.DownTime)
 			delete(s.state.ScheduleCommands, c.UUID)
 			continue
 		}
@@ -1397,15 +1397,20 @@ func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
 	return result
 }
 
-func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
+func (s *stateMachine) handleDeleteCNCmd(uuid string, downTimeArg ...int64) sm.Result {
+	var downTime int64
+	if len(downTimeArg) != 0 {
+		downTime = downTimeArg[0]
+	}
 	deletedTimeout := time.Hour * 24 * 7
-	var pos int
+	kept := s.state.DeletedStores[:0]
 	for _, store := range s.state.DeletedStores {
-		if time.Now().UnixNano()-store.DownTime > int64(deletedTimeout) {
-			pos++
+		if downTime <= 0 || (store.DownTime > 0 &&
+			(store.DownTime > downTime || downTime-store.DownTime <= int64(deletedTimeout))) {
+			kept = append(kept, store)
 		}
 	}
-	s.state.DeletedStores = s.state.DeletedStores[pos:]
+	s.state.DeletedStores = kept
 	delete(s.state.ViewMetadataAdmissionCNReady, uuid)
 	delete(s.state.ViewMetadataAdmissionCNTargets, uuid)
 	delete(s.state.ViewMetadataAdmissionCNTargetTicks, uuid)
@@ -1421,7 +1426,7 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 			StoreType: "CN",
 			Address:   addr,
 			UpTime:    store.UpTime,
-			DownTime:  time.Now().UnixNano(),
+			DownTime:  downTime,
 		})
 	}
 	return sm.Result{}
@@ -1710,7 +1715,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.PatchCNStore:
 		return s.handlePatchCNStore(cmd), nil
 	case pb.RemoveCNStore:
-		return s.handleDeleteCNCmd(parseDeleteCNStoreCmd(cmd).StoreID), nil
+		request := parseDeleteCNStoreCmd(cmd)
+		return s.handleDeleteCNCmd(request.StoreID, request.DownTime), nil
 	case pb.ProxyHeartbeatUpdate:
 		return s.handleProxyHeartbeat(cmd), nil
 	case pb.UpdateNonVotingReplicaNum:

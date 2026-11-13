@@ -78,6 +78,8 @@ message LogShard {
   uint64 ReplicaID  = 2;
   // NonVoting indicates if the replica is a non-voting one.
   bool NonVoting = 3;
+  // Retirement was persisted before stopping the replica; cleanup may be retried after restart.
+  bool Retiring = 4;
 }
 
 // TNStore TN store metadata

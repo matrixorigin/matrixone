@@ -114,6 +114,7 @@ func TestTruncationExportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -468,6 +469,7 @@ func TestTruncationRealignsSnapshotIndexAfterStaleReplicaCleanup(t *testing.T) {
 					Method: pb.TRUNCATE,
 					LogRequest: pb.LogRequest{
 						ShardID: shardID,
+						TNID:    tnID,
 						Lsn:     4,
 					},
 				}
@@ -579,6 +581,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -612,6 +615,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     10,
 			},
 		}
@@ -644,6 +648,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     15,
 			},
 		}
@@ -743,6 +748,7 @@ func TestTruncationImportSnapshot2(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}
@@ -861,6 +867,7 @@ func TestTruncationDropNewestOnTimeout(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    tnID,
 				Lsn:     4,
 			},
 		}

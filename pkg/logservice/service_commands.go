@@ -159,7 +159,17 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
-	s.handleStopReplica(cmd)
+	s.store.markReplicaRetiring(shardID, replicaID)
+	if err := s.store.stopReplica(shardID, replicaID); err != nil {
+		if s.store.localReplicaPresent(shardID, replicaID) {
+			s.runtime.Logger().Error("failed to stop zombie replica", zap.Error(err))
+			return
+		}
+	}
+	if err := s.store.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
+		s.runtime.Logger().Error("failed to remove zombie exported snapshots", zap.Error(err))
+		return
+	}
 	s.store.removeMetadata(shardID, replicaID)
 }
 

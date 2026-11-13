@@ -131,6 +131,19 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 	activeReplicas := l.startedReplicaIDs()
 	processed := make(map[uint64]struct{})
 	for _, shard := range l.getShards() {
+		if shard.Retiring {
+			if l.localReplicaPresent(shard.ShardID, shard.ReplicaID) {
+				if err := l.stopReplica(shard.ShardID, shard.ReplicaID); err != nil {
+					l.runtime.Logger().Error("stop retiring replica failed", zap.Error(err))
+				}
+			}
+			replicas := l.startedReplicaIDs()[shard.ShardID]
+			if !l.localReplicaPresent(shard.ShardID, shard.ReplicaID) {
+				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID,
+					l.newestActiveSnapshotIndex(shard.ShardID, replicas))
+			}
+			continue
+		}
 		if shard.ShardID == hakeeper.DefaultHAKeeperShardID {
 			continue
 		}
@@ -179,6 +192,16 @@ func (l *store) startedReplicaIDs() map[uint64]map[uint64]struct{} {
 		replicas[ci.ShardID][ci.ReplicaID] = struct{}{}
 	}
 	return replicas
+}
+
+func (l *store) localReplicaPresent(shardID, replicaID uint64) bool {
+	nhi := l.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true})
+	for _, replica := range nhi.ShardInfoList {
+		if replica.ShardID == shardID && replica.ReplicaID == replicaID {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *store) newestActiveSnapshotIndex(

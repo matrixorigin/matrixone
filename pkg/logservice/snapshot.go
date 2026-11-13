@@ -501,6 +501,9 @@ func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error
 	if err := sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID)); err != nil {
 		return err
 	}
+	if ss, ok := sm.snapshots[nid]; ok {
+		ss.release()
+	}
 	delete(sm.snapshots, nid)
 	return nil
 }
