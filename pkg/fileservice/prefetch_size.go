@@ -28,8 +28,8 @@ const prefetchedObjectsMax = 1 << 16
 
 // prefetchedObjects holds, by disk path, the size of each object a prefetch told of.
 type prefetchedObjects struct {
-	m sync.Map
-	n atomic.Int64
+	mu sync.Mutex
+	m  map[string]int64
 	// deletes counts the objects deleted; a prefetch queued before a delete does not
 	// store its size.
 	deletes atomic.Uint64
@@ -37,29 +37,38 @@ type prefetchedObjects struct {
 
 // forget drops the size of the object at diskPath, which is deleted.
 func (o *prefetchedObjects) forget(diskPath string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.deletes.Add(1)
-	if _, loaded := o.m.LoadAndDelete(diskPath); loaded {
-		o.n.Add(-1)
+	delete(o.m, diskPath)
+}
+
+// storeCurrent stores the size of the object at diskPath unless an object was deleted
+// since the delete count was deletes.
+func (o *prefetchedObjects) storeCurrent(diskPath string, size int64, deletes uint64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.deletes.Load() == deletes {
+		o.storeLocked(diskPath, size)
 	}
 }
 
 func (o *prefetchedObjects) store(diskPath string, size int64) {
-	if o.n.Load() >= prefetchedObjectsMax {
-		o.m.Clear()
-		o.n.Store(0)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.storeLocked(diskPath, size)
+}
+
+func (o *prefetchedObjects) storeLocked(diskPath string, size int64) {
+	if o.m == nil || len(o.m) >= prefetchedObjectsMax {
+		o.m = make(map[string]int64)
 	}
-	if _, loaded := o.m.Swap(diskPath, size); !loaded {
-		o.n.Add(1)
-	}
+	o.m[diskPath] = size
 }
 
 func (o *prefetchedObjects) size(diskPath string) (int64, bool) {
-	if o.n.Load() == 0 {
-		return 0, false
-	}
-	v, ok := o.m.Load(diskPath)
-	if !ok {
-		return 0, false
-	}
-	return v.(int64), true
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	size, ok := o.m[diskPath]
+	return size, ok
 }

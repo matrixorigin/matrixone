@@ -141,13 +141,29 @@ pre-filter plan copies from it, and the exact branches of adaptive and scalar ve
 plans, are not marked. Master and regular secondary indexes are out of scope.
 
 A row fetch never downloads a whole object on a read. Ahead of the scan, for each object:
-- When the columns it reads are under half of the object's bytes, it prefetches the
-  ranges of those columns, across all the object's blocks.
-- Otherwise, or when the object records no column ranges, it prefetches the whole
-  object as other scans do: at that share, one whole download costs fewer requests than
-  one request per column, for at most twice the bytes.
-- When the object stores none of the columns, as for columns added after it was
-  written, it prefetches nothing.
+- It prefetches the ranges of the columns it reads, across all the object's blocks,
+  whatever share of the object they are.
+- When the object records no column ranges, or stores none of the columns, as for
+  columns added after it was written, it prefetches nothing.
+- A read that reaches an object before its column ranges are downloaded takes their
+  queued request and downloads them first, as a read of a queued whole object takes it
+  over. A read that misses otherwise reads each of its entries apart when the range
+  around them holds other bytes.
+
+Every read made under a row fetch's context, including the block pruning's reads, reads
+exactly its entries and never a whole object. Object metadata and bloom filter loads read
+exactly their extents in every scan: a prefetch range around them would hold the last
+columns of the object. Probes that read a few columns of an object to check keys or
+visibility, as the CN's insert and upsert dedup, the TN's precommit dedup and MVCC loads,
+read exactly their entries and never the whole object. A
+row fetch never reads the bytes of a column it does not read, such as the vector column
+(decision 2026-11-12). A read made inside another read, as the take-over's downloads are,
+logs its slow events apart from the outer read.
+
+A row fetch exists to skip the columns it does not read, chiefly the vector column. With
+a share rule, a table whose scalar columns read outweigh its vector column would download
+the whole object, vector column included (decision 2026-11-12). When the columns are most
+of the object, the cost is a few requests more than one whole download, for fewer bytes.
 
 The choice depends only on the object and the columns read, so a query makes it the same
 way each time.
@@ -162,9 +178,6 @@ way each time.
 - A request of ranges is skipped while cached ranges cover them or the whole object is
   cached or downloading. Requests of ranges for one object add up, and a request of the
   whole object takes over a queued request of ranges.
-- A row fetch's whole request carries the ranges of its columns: it is skipped while
-  cached ranges cover them, even when earlier requests of other column sets cached them.
-  Merged with a request that needs the whole object, it needs it too.
 - The index search keeps whole-object prefetch of its own tables.
 
 ### Parallel range downloads of whole objects (decision)
@@ -192,7 +205,9 @@ way each time.
 | Queued downloads | the prefetcher | the queue bound above; at most one entry per object |
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
-| Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full |
+| Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
+| Prefetch range runs under way | the disk cache | 256 MiB of buffers in all; past it a read reads its own entries |
+| Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by whole-object downloads | the disk cache | half the host's connections |
 
 ## Alternatives
@@ -212,9 +227,9 @@ way each time.
 - **Column ranges for every scan.** A scan that reads every block of an object reads a
   large share of it, and TPC-H's whole-object prefetch is measured; changing it needs its
   own measurement.
-- **Column ranges for a row fetch whatever its share.** A row fetch that reads the vector
-  or text column reads most of each object; one request per column per object costs
-  more requests than one whole download for the same bytes.
+- **Whole object for a row fetch whose columns are half the object or more.** One whole
+  download costs fewer requests, but downloads the columns the row fetch skips, such as
+  the vector column when many scalar columns are read.
 - **Prefetch only the blocks a row fetch reads.** A `limit 10` fulltext row fetch reads
   about one block per object, yet 20 such queries downloaded the whole table (38 objects,
   about 2.8 GB on the emulated remote store) to read about 200 rows. Prefetching only

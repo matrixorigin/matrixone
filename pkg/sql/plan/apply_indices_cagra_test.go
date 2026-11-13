@@ -367,7 +367,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
 	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
-	require.True(t, builder.qry.Nodes[join.Children[0]].NarrowScan, "the base table is read back only for the candidates")
+	require.True(t, readsColumnRanges(builder.qry.Nodes[join.Children[0]]), "the base table is read back only for the candidates")
 	spec := right.IndexSearchScan
 	require.NotNil(t, spec)
 	assert.Equal(t, "l2_distance", spec.DistanceFunction)

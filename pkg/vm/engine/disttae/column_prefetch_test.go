@@ -95,21 +95,22 @@ func newColumnPrefetchSource(t *testing.T, recordColumns bool) (*LocalDisttaeDat
 	return ls, fs, stats
 }
 
-// A column-prefetch scan downloads the ranges of the columns it reads while they are under
-// half of the object, and the whole object otherwise; other scans keep whole objects.
+// A column-prefetch scan downloads the ranges of the columns it reads, however much of the
+// object they are, and never the whole object; other scans keep whole objects.
 func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		policy  fileservice.Policy
-		seqNums []uint16
-		ranges  int // ranges of the one request; -1 means the whole object; -2 no request
-		needs   int // ranges a whole request needs
-		bare    bool
+		name     string
+		policy   fileservice.Policy
+		seqNums  []uint16
+		ranges   int // ranges of the one request; -1 means the whole object; -2 no request
+		bare     bool
+		overHalf bool // the columns read are at least half of the object
 	}{
 		{name: "small column", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: 1},
-		{name: "most of the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0, 1}, ranges: -1, needs: 2},
+		{name: "column over half of the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{1}, ranges: 1, overHalf: true},
+		{name: "all columns", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0, 1}, ranges: 2},
 		{name: "columns not in the object", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{7}, ranges: -2},
-		{name: "column ranges not recorded", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: -1, bare: true},
+		{name: "column ranges not recorded", policy: fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch, seqNums: []uint16{0}, ranges: -2, bare: true},
 		{name: "scan", seqNums: []uint16{0}, ranges: -1},
 		{name: "whole preloads skipped", policy: fileservice.SkipFullFilePreloads, seqNums: []uint16{0}, ranges: -2},
 	} {
@@ -129,12 +130,18 @@ func TestColumnPrefetchRangesOrWholeObject(t *testing.T) {
 				require.Equal(t, int64(stats.Size()), req.Size)
 				require.Equal(t, 3, req.Reads)
 				require.Equal(t, 3, req.Blocks)
-				require.Len(t, req.Needs, tc.needs, "the column ranges that, cached, make the download unneeded")
 				return
 			}
 			require.Len(t, req.Ranges, tc.ranges)
-			require.Equal(t, req.Ranges[0].Size, req.Size)
-			require.Less(t, req.Size*2, int64(stats.Size()))
+			var size int64
+			for _, r := range req.Ranges {
+				size += r.Size
+			}
+			require.Equal(t, size, req.Size)
+			require.Less(t, req.Size, int64(stats.Size()), "the columns not read are not downloaded")
+			if tc.overHalf {
+				require.GreaterOrEqual(t, req.Size*2, int64(stats.Size()))
+			}
 		})
 	}
 }

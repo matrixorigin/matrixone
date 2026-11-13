@@ -207,21 +207,6 @@ func TestObjectPrefetchMerge(t *testing.T) {
 	got = ObjectPrefetch{Size: 1000}.merge(columns)
 	require.Nil(t, got.Ranges, "the whole object stays whole")
 	require.Equal(t, int64(1000), got.Size)
-	require.Nil(t, got.Needs, "the whole object is wanted whatever is cached")
-
-	needing := ObjectPrefetch{Size: 1000, Needs: []PrefetchRange{id, name}}
-	got = needing.merge(columns)
-	require.Nil(t, got.Ranges)
-	require.Equal(t, int64(1000), got.Size)
-	require.Equal(t, []PrefetchRange{id, name, cat}, got.Needs, "cached, the ranges of both satisfy both")
-	got = columns.merge(needing)
-	require.Equal(t, int64(1000), got.Size)
-	require.Equal(t, []PrefetchRange{id, cat, name}, got.Needs)
-	got = needing.merge(ObjectPrefetch{Size: 1000})
-	require.Nil(t, got.Needs, "a request of the object without needs wants it whatever is cached")
-	got = ObjectPrefetch{Size: 1000}.merge(needing)
-	require.Nil(t, got.Needs)
-	require.Equal(t, []PrefetchRange{id, name}, needing.Needs)
 }
 
 // A request merged into a queued one does not widen it when the cache already satisfies
@@ -230,12 +215,12 @@ func TestPrefetcherMergeOfCachedRequestKeepsQueuedDownload(t *testing.T) {
 	r := newPrefetchRecorder()
 	cached := PrefetchRange{Offset: 500, Size: 50}
 	p := newPrefetcher(0, func() int64 { return 1 << 40 }, func(req ObjectPrefetch) bool {
-		return slices.Equal(req.Needs, []PrefetchRange{cached})
+		return slices.Equal(req.Ranges, []PrefetchRange{cached})
 	}, r.run)
 	columns := ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}}
 	p.add(columns)
-	p.add(ObjectPrefetch{FilePath: "a", Size: 1000, Needs: []PrefetchRange{cached}})
-	require.Equal(t, columns.Ranges, p.entries["a"].req.Ranges, "the cache satisfies the whole request")
+	p.add(ObjectPrefetch{FilePath: "a", Size: 50, Ranges: []PrefetchRange{cached}})
+	require.Equal(t, columns.Ranges, p.entries["a"].req.Ranges, "the cache satisfies the request")
 	require.Equal(t, int64(10), p.queuedBytes)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 1000})
 	require.Nil(t, p.entries["a"].req.Ranges, "the whole object takes over")
@@ -315,4 +300,34 @@ func TestPrefetcherOversizedRequestDropsNothing(t *testing.T) {
 	require.True(t, p.isQueued("a"))
 	require.True(t, p.isQueued("b"))
 	p.close(context.Background())
+}
+
+// take drops a queued download only when its request is wanted.
+func TestPrefetcherTake(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(0, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
+	defer p.close(context.Background())
+	whole := func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 }
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
+	_, ok := p.take("a", whole)
+	require.False(t, ok)
+	require.True(t, p.isQueued("a"))
+	got, ok := p.take("a", func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	require.True(t, ok)
+	require.Equal(t, []PrefetchRange{{Offset: 0, Size: 10}}, got.Ranges)
+	require.False(t, p.isQueued("a"))
+	require.Zero(t, p.queuedBytes)
+	_, ok = p.take("a", whole)
+	require.False(t, ok, "nothing queued")
+}
+
+// isQueued reports whether the download of filePath is queued and not started.
+func (p *prefetcher) isQueued(filePath string) bool {
+	if p.queued.Load() == 0 {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[filePath]
+	return ok && e.index >= 0
 }

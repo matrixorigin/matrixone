@@ -97,12 +97,9 @@ func TestS3FSObjectSplitSkipsSmallObjects(t *testing.T) {
 func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.downloads.mu.Lock()
-	d.downloads.m = make(map[string]*objectDownload)
 	for i := 0; i < objectSplitMaxDownloads; i++ {
-		d.downloads.m[fmt.Sprintf("other-%d", i)] = newObjectDownload("", false, nil)
+		d.downloads.store(fmt.Sprintf("other-%d", i), newObjectDownload("", false, nil))
 	}
-	d.downloads.mu.Unlock()
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
@@ -148,10 +145,6 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	_, wait := o.estimate(0, 1)
 	require.GreaterOrEqual(t, wait, rangeReadCosts.firstByte(), "a part not yet read is a latency away")
 	o.advance(1, 4)
-	o.mu.Lock()
-	require.Zero(t, o.progressLocked(0, 4), "the other part's bytes are not progress for the first")
-	require.Equal(t, int64(4), o.progressLocked(2, 6))
-	o.mu.Unlock()
 	written, ok := o.waitFor(ctx, 4, 8, time.Millisecond)
 	require.True(t, ok)
 	require.Equal(t, int64(8), written)
@@ -282,4 +275,33 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	fs.prefetchObject(ctx, taken)
 	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
 	require.False(t, known, "a prefetch made before the delete does not store its size")
+}
+
+// Whole-object downloads hold at most half the configured connections per host: with one
+// connection they hold none, so a read reads its range; with two they hold one.
+func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
+	for _, tc := range []struct {
+		conns    int
+		limit    int64
+		download bool
+	}{{1, 0, false}, {2, 1, true}} {
+		ctx := context.Background()
+		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
+			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
+			MemoryCapacity: ptrTo[toml.ByteSize](0),
+		}, nil, false, false)
+		require.NoError(t, err)
+		fs.SetAsyncUpdate(false)
+		data := make([]byte, 300<<10)
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+		d := fs.diskCache
+		d.objectSplit = objectSplitConfig{parts: 1}
+		d.prefetched.store(d.pathForFile("object"), int64(len(data)))
+		require.Equal(t, tc.limit, d.maxDownloadConns, "conns %d", tc.conns)
+		got, err := readFullObjectOf(fs, 100, 10)
+		require.NoError(t, err)
+		require.Equal(t, data[100:110], got)
+		require.Equal(t, tc.download, d.cache.Contains(d.pathForFile("object")), "conns %d", tc.conns)
+		fs.Close(ctx)
+	}
 }

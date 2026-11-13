@@ -431,12 +431,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return err
 }
 
-// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads: the
+// planner's read policy, and an index-file object read for an IVF-Flat entries table.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
-	var policy fileservice.Policy
-	if node.GetNarrowScan() {
-		policy = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
-	}
+	policy := fileservice.Policy(node.GetReadPolicy())
 	if node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
 		policy |= fileservice.IndexFileObject
 	}
@@ -1254,6 +1252,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	if err != nil {
 		return err
 	}
+	// The block pruning reads, of object metadata and bloom filters, take the scan's
+	// read policy too.
+	if policy := scanReadPolicy(s.DataSource.node); policy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|policy)
+	}
 
 	if s.NodeInfo.CNCNT == 1 {
 		rsp := &engine.RangesShuffleParam{
@@ -1983,6 +1986,12 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSupported bool, err error) {
+	if s.DataSource != nil && s.DataSource.markGuard != nil {
+		// The scan template can survive a retry while workers reset separately.
+		if scan, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+			scan.RuntimeFilterExprs = nil
+		}
+	}
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
@@ -2195,6 +2204,9 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSup
 			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
 		}
 		readers = newReaders
+	}
+	if !emptyScan && s.DataSource.markGuard != nil {
+		s.applyMarkScanGuard(c)
 	}
 	return
 }

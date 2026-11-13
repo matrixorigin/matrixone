@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The base table scan joined back to a fulltext search reads only the candidate rows;
-// the scan copied from it to filter the whole table does not.
+// The base table scan joined back to a fulltext search reads column ranges; the scan
+// copied from it filters the whole table.
 func TestFullTextJoinBackScanIsNarrow(t *testing.T) {
 	for _, algo := range []struct {
 		name string
@@ -60,8 +60,8 @@ func TestFullTextJoinBackScanIsNarrow(t *testing.T) {
 					if n.NodeType != plan.Node_TABLE_SCAN || n.TableDef.GetName() != "ft" {
 						continue
 					}
-					if n.NarrowScan {
-						require.True(t, joined[n.NodeId], "a narrow scan is the row fetch of a join")
+					if joined[n.NodeId] {
+						require.True(t, readsColumnRanges(n), "the row fetch of a join reads column ranges")
 						narrow++
 					} else {
 						whole++

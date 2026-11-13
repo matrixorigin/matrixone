@@ -530,12 +530,13 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.setFileSized(
+	if err := s.diskCache.fillFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
 		s.asyncUpdate,
+		storageFill,
 		s.prefetchedSize(path.File, 0),
 	); err != nil {
 		return err
@@ -561,6 +562,18 @@ func (s *S3FS) readQueuedObject(vector *IOVector) {
 		vector.Policy |= SkipFullFilePreloads
 		metric.FSPrefetchMissedCounter.Inc()
 	}
+}
+
+// readQueuedColumns downloads now the queued column ranges of the object of vector, which
+// the read reached first, so the read is served from them. A queued download of the whole
+// object stays queued.
+func (s *S3FS) readQueuedColumns(ctx context.Context, vector *IOVector) {
+	req, ok := s.prefetcher.take(vector.FilePath, func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	if !ok {
+		return
+	}
+	metric.FSPrefetchMissedCounter.Inc()
+	s.prefetchObject(withoutEventLogger(ctx), req)
 }
 
 // firstNeeded returns the least offset of the entries of vector not done.
@@ -724,6 +737,12 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if s.diskCache != nil {
+		mark := s.diskCache.readDeletes()
+		for i := range vector.Entries {
+			vector.Entries[i].readDeletes = mark
+		}
+	}
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
@@ -882,6 +901,9 @@ read_disk_cache:
 		}
 	}
 
+	if vector.Policy.Any(ColumnPrefetch) && s.prefetcher != nil {
+		s.readQueuedColumns(ctx, vector)
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -946,12 +968,29 @@ read_disk_cache:
 		}
 	}
 
+	// An exact read of bytes a flight is reading waits for them instead of reading them.
+	if s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads) {
+		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
+			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+		}
+	}
+
 	if vector.downloadDeclined && !forcePerEntryRangeRead && !forceMinimalRangeRead {
 		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
 			forcePerEntryRangeRead = true
 		} else {
 			forceMinimalRangeRead = true
 		}
+	}
+	// An exact read reads its entries apart when one range around them holds other bytes.
+	if vector.Policy.Any(ColumnPrefetch, ExactRead) && !forcePerEntryRangeRead && vector.sparse() {
+		forcePerEntryRangeRead = true
 	}
 	if forcePerEntryRangeRead || forceMinimalRangeRead {
 		goto read_s3
@@ -1603,21 +1642,26 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stopOnClose = context.AfterFunc(closing, cancelFill)
 	}
 	diskPath := s.diskCache.pathForFile(file)
-	started := make(chan *objectDownload, 1)
+	type admittedDownload struct {
+		download *objectDownload
+		file     io.ReaderAt
+	}
+	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- s.diskCache.setFileSized(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		setDone <- s.diskCache.fillFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
+			var admitted admittedDownload
 			download := s.diskCache.download(diskPath)
 			if download != nil {
-				if _, ok := download.acquire(); !ok {
-					download = nil
+				if f, ok := download.acquire(); ok {
+					admitted = admittedDownload{download: download, file: f}
 				}
 			}
-			started <- download
+			started <- admitted
 			return &lazyObjectReader{ctx: fillCtx, read: getReader}, nil
-		}, s.asyncUpdate, s.prefetchedSize(file, firstNeeded(vector)))
+		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)))
 	}()
 	var setErr error
 	setFinished := false
@@ -1630,18 +1674,18 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return setErr
 	}
 
-	var download *objectDownload
+	var admitted admittedDownload
 	select {
-	case download = <-started:
+	case admitted = <-started:
 	case setErr = <-setDone:
 		setFinished = true
 		// A download that started and already ended still has the bytes it wrote.
 		select {
-		case download = <-started:
+		case admitted = <-started:
 		default:
 		}
 	}
-	if download == nil {
+	if admitted.download == nil {
 		if err := waitSet(); err != nil {
 			return true, err
 		}
@@ -1649,13 +1693,22 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
-	defer download.release()
+	download := admitted.download
+	defer func() {
+		defer download.release()
+		read.finish(download, done && err == nil)
+	}()
 
-	captured := read.capture(ctx, download)
+	captured, captureErr := read.capture(ctx, download, admitted.file, file)
 	if err := ctx.Err(); err != nil {
 		cancelFill()
 		_ = waitSet()
 		return true, err
+	}
+	if captureErr != nil {
+		cancelFill()
+		_ = waitSet()
+		return true, captureErr
 	}
 	if captured && s.asyncUpdate {
 		select {
@@ -1676,7 +1729,14 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if !captured {
-		if !read.capture(ctx, download) && !download.isComplete() {
+		captured, captureErr = read.capture(ctx, download, admitted.file, file)
+		if err := ctx.Err(); err != nil {
+			return true, err
+		}
+		if captureErr != nil {
+			return true, captureErr
+		}
+		if !captured && !download.isComplete() {
 			// SetFile did not consume the whole reader. Keep the original read path so
 			// the caller still gets data without trusting a partial download.
 			return false, nil
@@ -1692,6 +1752,7 @@ var backgroundFills = make(chan struct{}, 8)
 type fullObjectDiskCacheReader struct {
 	vector   *IOVector
 	captures []fullObjectEntryCapture
+	toServe  int64
 }
 
 type fullObjectEntryCapture struct {
@@ -1700,7 +1761,6 @@ type fullObjectEntryCapture struct {
 	size   int64
 	data   bytes.Buffer
 	read   bool
-	served bool
 }
 
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
@@ -1721,10 +1781,11 @@ func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	return ret
 }
 
-// capture reads each capture's range from download once it is written, a capture to the
-// end of the object once the whole object is. It returns whether every capture holds its
-// range; a capture that cannot complete holds what the download wrote of it.
-func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objectDownload) bool {
+// capture reads available ranges from the request's admitted file. An incomplete
+// object may leave a range partial; a file read error is returned to the caller.
+func (r *fullObjectDiskCacheReader) capture(
+	ctx context.Context, download *objectDownload, source io.ReaderAt, file string,
+) (bool, error) {
 	all := true
 	for i := range r.captures {
 		c := &r.captures[i]
@@ -1741,31 +1802,36 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 			if c.size >= 0 {
 				want = min(want, c.size)
 			}
-			if ok && want > 0 && !c.served {
-				// The bytes count before they are read, as readFromDownload counts them.
-				download.serve(want)
-				c.served = true
-			}
-			if want > 0 && !r.readRange(download, c, want) {
-				all = false
-				continue
+			if want > 0 {
+				c.data.Reset()
+				n, err := io.Copy(&c.data, io.NewSectionReader(source, c.offset, want))
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return false, ctxErr
+				}
+				if err != nil {
+					return false, err
+				}
+				if n != want {
+					return false, moerr.NewUnexpectedEOFNoCtx(file)
+				}
+				if ok {
+					r.toServe += n
+				}
 			}
 			c.read = ok
 		}
 		all = all && c.read
 	}
-	return all
+	return all, nil
 }
 
-func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64) bool {
-	f, ok := download.acquire()
-	if !ok {
-		return false
+// finish charges captured bytes once, while the request still holds the file.
+func (r *fullObjectDiskCacheReader) finish(download *objectDownload, success bool) {
+	n := r.toServe
+	r.toServe = 0
+	if success && n > 0 {
+		download.serve(n)
 	}
-	defer download.release()
-	c.data.Reset()
-	_, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
-	return err == nil
 }
 
 func (r *fullObjectDiskCacheReader) fillVector(

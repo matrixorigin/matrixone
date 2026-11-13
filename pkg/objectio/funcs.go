@@ -143,7 +143,7 @@ func ReadOneBlock(
 		sharedPosition = 0
 	}
 	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy,
-		sharedPosition, nil)
+		sharedPosition, nil, privateJSONColumnCacheConstructorFactory)
 }
 
 // ReadOneBlockWithScopedDecode opts one requested column into immutable decoded
@@ -158,7 +158,7 @@ func ReadOneBlockWithScopedDecode(
 		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtxf(
 			"scoped decode column position %d is outside column/type lists", sharedPosition)
 	}
-	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition, nil)
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition, nil, privateJSONColumnCacheConstructorFactory)
 }
 
 func ReadOneBlockWithMeta(
@@ -173,13 +173,14 @@ func ReadOneBlockWithMeta(
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1, nil)
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1, nil, nil)
 }
 
 func readOneBlockWithMeta(
 	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
 	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
 	factory CacheConstructorFactory, policy fileservice.Policy, sharedPosition int, selectedEntry *fileservice.IOEntry,
+	privateJSONFactory CacheConstructorFactory,
 ) (ioVec fileservice.IOVector, err error) {
 	ioVec = fileservice.IOVector{
 		FilePath: name,
@@ -235,7 +236,11 @@ func readOneBlockWithMeta(
 		// read written normal column
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
-		entry := newColumnIOEntry(ext, factory)
+		entryFactory := factory
+		if privateJSONFactory != nil && i < len(typs) && typs[i].Oid == types.T_json && JSONReadSetFromContext(ctx).Requested(seqnum) {
+			entryFactory = privateJSONFactory
+		}
+		entry := newColumnIOEntry(ext, entryFactory)
 		if i == sharedPosition && selectedEntry != nil {
 			entry = *selectedEntry
 		} else if i == sharedPosition && typs[i].Oid.IsArrayRelate() {

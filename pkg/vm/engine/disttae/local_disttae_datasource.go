@@ -1487,7 +1487,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
+	deleted := rawRowIdDeletes.offsets[ls.table.tableId]
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deleted[*bid])
 
 	return leftRows
 }
@@ -1774,7 +1775,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 		}
 		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
-		var needs []fileservice.PrefetchRange
 		if policy.Any(fileservice.ColumnPrefetch) {
 			if !isPrefetcher {
 				continue
@@ -1784,30 +1784,21 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
 				continue
 			}
-			if recorded && len(ranges) == 0 {
-				// The object stores none of the columns.
+			if !recorded || len(ranges) == 0 {
+				// The object records no column ranges, or stores none of the columns.
 				continue
 			}
-			// The columns are downloaded alone while under half of the object.
-			if recorded && (size <= 0 || bytes*2 < size) {
-				if ls.rc.prefetchScan == nil {
-					ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-				}
-				err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
-					FilePath: blk.MetaLocation().Name().String(),
-					Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
-				})
-				if err != nil {
-					logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
-				}
-				continue
+			if ls.rc.prefetchScan == nil {
+				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
 			}
-			if size <= 0 {
-				continue
+			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
+				FilePath: blk.MetaLocation().Name().String(),
+				Size:     bytes, Due: due, Ranges: ranges, Scan: ls.rc.prefetchScan,
+			})
+			if err != nil {
+				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
 			}
-			if recorded {
-				needs = ranges
-			}
+			continue
 		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
@@ -1820,7 +1811,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Needs: needs, Scan: ls.rc.prefetchScan,
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
 			})
 		} else {
 			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
