@@ -98,14 +98,17 @@ Project  𝄀
   ->  Sort  𝄀
         Sort Key: t.b DESC, t.id DESC  𝄀
         Limit: 2  𝄀
+        Send Message: [tag 2 , type MsgTopValue]  𝄀
         ->  Join  𝄀
               Join Type: INDEX  𝄀
               Join Cond: (t.id = __mo_index_pri_col)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on force_index_order.t [ForceOneCN]  𝄀
+                    Sort Key: t.b DESC  𝄀
                     Filter Cond: (t.a = 1)  𝄀
                     Block Filter Cond: (t.a = 1)  𝄀
                     Runtime Filter Probe: t.id  𝄀
+                    Recv Message: [tag 2 , type MsgTopValue]  𝄀
               ->  Index Table Scan on t.ix_ab [ForceOneCN]  𝄀
                     Sort Key: __mo_index_idx_col DESC
 select id,payload from t force index for order by(ix_ab)
@@ -386,7 +389,7 @@ select id,payload from top_probe ignore index(ix_top) order by payload,id limit 
 3  ¦  20
 create table nullable_top (id int primary key, a int not null, payload int, key ix_null_top(a));
 set @@max_dop=1;
-insert into nullable_top values (1,1,1);
+insert into nullable_top values (1,1,-10),(5,5,-20);
 select mo_ctl('dn','flush','force_index_order.nullable_top');
 ➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
 {
@@ -434,30 +437,182 @@ where relname in (select index_table_name from mo_catalog.mo_indexes where name=
   ]
 }
 
+insert into nullable_top values (4,4,-10);
+select mo_ctl('dn','flush','force_index_order.nullable_top');
+➤ mo_ctl(dn, flush, force_index_order.nullable_top)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_null_top');
+➤ mo_ctl(dn, flush, cast(rel_id as varchar(32)))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 explain select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
 -- @regex("Index Table Scan.*ix_null_top", true)
--- @regex("MsgTopValue", false)
+-- @regex("MsgTopValue", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: nullable_top.payload INTERNAL  𝄀
         Limit: 1  𝄀
+        Send Message: [tag 2 , type MsgTopValue]  𝄀
         ->  Join  𝄀
               Join Type: INDEX  𝄀
               Join Cond: (nullable_top.id = __mo_index_pri_col)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on force_index_order.nullable_top [ForceOneCN]  𝄀
+                    Sort Key: nullable_top.payload INTERNAL  𝄀
                     Runtime Filter Probe: nullable_top.id  𝄀
+                    Recv Message: [tag 2 , type MsgTopValue]  𝄀
               ->  Index Table Scan on nullable_top.ix_null_top [ForceOneCN]
 select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
 ➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
 3  ¦  null
+explain select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_top.payload INTERNAL  𝄀
+        Limit: 1  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on force_index_order.nullable_top  𝄀
+              Sort Key: nullable_top.payload INTERNAL  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
 select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
 ➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
 3  ¦  null
 select id,payload from nullable_top where payload is null;
 ➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
 3  ¦  null
+begin;
+insert into nullable_top values (6,6,-30);
+select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null
+rollback;
+explain select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
+-- @regex("Index Table Scan.*ix_null_top", true)
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_top.payload DESC, nullable_top.id DESC  𝄀
+        Limit: 2  𝄀
+        Send Message: [tag 2 , type MsgTopValue]  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (nullable_top.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.nullable_top [ForceOneCN]  𝄀
+                    Sort Key: nullable_top.payload DESC  𝄀
+                    Runtime Filter Probe: nullable_top.id  𝄀
+                    Recv Message: [tag 2 , type MsgTopValue]  𝄀
+              ->  Index Table Scan on nullable_top.ix_null_top [ForceOneCN]
+select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  100  𝄀
+4  ¦  -10
+select id,payload from nullable_top ignore index(ix_null_top) order by payload desc,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  100  𝄀
+4  ¦  -10
+explain select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_top.payload INTERNAL, nullable_top.id DESC  𝄀
+        Limit: 2  𝄀
+        Send Message: [tag 2 , type MsgTopValue]  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (nullable_top.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on force_index_order.nullable_top [ForceOneCN]  𝄀
+                    Sort Key: nullable_top.payload INTERNAL  𝄀
+                    Filter Cond: (nullable_top.id <> 5)  𝄀
+                    Runtime Filter Probe: nullable_top.id  𝄀
+                    Recv Message: [tag 2 , type MsgTopValue]  𝄀
+              ->  Index Table Scan on nullable_top.ix_null_top [ForceOneCN]
+select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  -10
+select id,payload from nullable_top ignore index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  -10
+create table nullable_evo (id int primary key);
+insert into nullable_evo values (1);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+➤ mo_ctl(dn, flush, force_index_order.nullable_evo)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+alter table nullable_evo add column payload int;
+insert into nullable_evo values (2,-10),(3,100);
+select mo_ctl('dn','flush','force_index_order.nullable_evo');
+➤ mo_ctl(dn, flush, force_index_order.nullable_evo)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+explain select id,payload from nullable_evo order by payload desc limit 3;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_evo.payload DESC  𝄀
+        Limit: 3  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on force_index_order.nullable_evo  𝄀
+              Sort Key: nullable_evo.payload DESC  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
+select id,payload from nullable_evo order by payload desc limit 3;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+3  ¦  100  𝄀
+2  ¦  -10  𝄀
+1  ¦  null
+explain select id,payload from nullable_evo order by payload limit 1;
+-- @regex("MsgTopValue", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: nullable_evo.payload INTERNAL  𝄀
+        Limit: 1  𝄀
+        Send Message: [tag 1 , type MsgTopValue]  𝄀
+        ->  Table Scan on force_index_order.nullable_evo  𝄀
+              Sort Key: nullable_evo.payload INTERNAL  𝄀
+              Recv Message: [tag 1 , type MsgTopValue]
+select id,payload from nullable_evo order by payload limit 1;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  null
 set @@max_dop=0;
 explain select id,payload from t force index(ix_ab) where a=1 and b between 1 and 2 order by id;
 -- @regex("Block Filter Cond:.*prefix_between", true)

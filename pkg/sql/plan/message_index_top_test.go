@@ -28,11 +28,16 @@ func TestTopValueThroughIndexJoin(t *testing.T) {
 		name, barrier                                                           string
 		project, shared, sharedStep, rightKey, shuffledParent, nullable, direct bool
 		want                                                                    bool
+		flag                                                                    planpb.OrderBySpec_OrderByFlag
 	}{
 		{name: "probe", want: true},
 		{name: "row_preserving_project", project: true, want: true},
-		{name: "nullable_first_key", nullable: true},
-		{name: "nullable_direct_scan", nullable: true, direct: true},
+		{name: "nullable_first_key", nullable: true, want: true},
+		{name: "nullable_direct_scan", nullable: true, direct: true, want: true},
+		{name: "nullable_desc_defaults_last", nullable: true, flag: planpb.OrderBySpec_DESC, want: true},
+		{name: "nullable_asc_explicit_last", nullable: true, flag: planpb.OrderBySpec_ASC | planpb.OrderBySpec_NULLS_LAST, want: true},
+		{name: "nullable_desc_explicit_first", nullable: true, flag: planpb.OrderBySpec_DESC | planpb.OrderBySpec_NULLS_FIRST, want: true},
+		{name: "nullable_desc_direct_scan", nullable: true, direct: true, flag: planpb.OrderBySpec_DESC, want: true},
 		{name: "nonnullable_direct_scan", direct: true, want: true},
 		{name: "project_limit", project: true, barrier: "project_limit"},
 		{name: "project_filter", project: true, barrier: "project_filter"},
@@ -66,7 +71,7 @@ func TestTopValueThroughIndexJoin(t *testing.T) {
 			join := &planpb.Node{NodeId: 3, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INDEX,
 				Children: []int32{probe, 1}}
 			top := &planpb.Node{NodeId: 4, NodeType: planpb.Node_SORT, Children: []int32{3},
-				OrderBy: []*planpb.OrderBySpec{{Expr: sortExpr}}, Limit: makePlan2Uint64ConstExprWithType(20)}
+				OrderBy: []*planpb.OrderBySpec{{Expr: sortExpr, Flag: tc.flag}}, Limit: makePlan2Uint64ConstExprWithType(20)}
 			union := &planpb.Node{NodeId: 5, NodeType: planpb.Node_UNION_ALL, Children: []int32{4, 3}}
 			shuffled := &planpb.Node{NodeId: 6, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
 				Children: []int32{3, 1}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{Shuffle: true}},

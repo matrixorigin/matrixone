@@ -230,10 +230,8 @@ func (rs *RemoteDataSource) GetTombstones(
 }
 
 func (rs *RemoteDataSource) SetOrderBy(orderBy []*plan.OrderBySpec) {
-	// Zonemaps alone cannot exclude a block containing a better NULL key.
 	rs.orderBy = nil
-	if len(orderBy) > 0 && orderBy[0] != nil && orderBy[0].Expr != nil &&
-		orderBy[0].Expr.GetCol() != nil && orderBy[0].Expr.Typ.NotNullable {
+	if len(orderBy) > 0 && orderBy[0] != nil && orderBy[0].Expr != nil && orderBy[0].Expr.GetCol() != nil {
 		rs.orderBy = orderBy
 	}
 }
@@ -247,7 +245,7 @@ func (rs *RemoteDataSource) descending() bool {
 }
 
 func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
-	if len(rs.orderBy) == 0 || !zm.IsInited() || int32(zm.GetType()) != rs.orderBy[0].Expr.Typ.Id {
+	if len(rs.orderBy) == 0 || !OrderByZoneMapMatches(zm, rs.orderBy[0]) {
 		return
 	}
 	if !rs.filterZM.IsInited() ||
@@ -255,6 +253,54 @@ func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
 		(!rs.descending() && rs.filterZM.CompareMin(zm) > 0) {
 		rs.filterZM = zm.Clone()
 	}
+}
+
+// OrderByZoneMapMatches checks that a TopValue bound is comparable to its ORDER BY key.
+func OrderByZoneMapMatches(zm objectio.ZoneMap, orderBy *plan.OrderBySpec) bool {
+	if !zm.IsInited() || orderBy == nil || orderBy.Expr == nil || int32(zm.GetType()) != orderBy.Expr.Typ.Id {
+		return false
+	}
+	return (zm.GetType() != types.T_decimal64 && zm.GetType() != types.T_decimal128) || zm.GetScale() == orderBy.Expr.Typ.Scale
+}
+
+// OrderByBlockZoneMap returns a detached, safe bound for TopValue pruning.
+// Unknown formats, missing or incompatible columns, and possible winning NULLs
+// retain the block. V3 writers supply the NULL count used by IS NULL pruning.
+func OrderByBlockZoneMap(meta objectio.ObjectMeta, blockID uint32, seqNum uint16, orderBy *plan.OrderBySpec) objectio.ZoneMap {
+	if len(meta) < objectio.IOEntryHeaderSize || orderBy == nil || orderBy.Expr == nil || orderBy.Expr.GetCol() == nil ||
+		seqNum >= objectio.SEQNUM_UPPER {
+		return nil
+	}
+	header := objectio.DecodeIOEntryHeader(meta)
+	if header.Type != objectio.IOET_ObjMeta || header.Version != objectio.IOET_ObjectMeta_V3 {
+		return nil
+	}
+	dataMeta, ok := meta.DataMeta()
+	if !ok || blockID >= dataMeta.BlockCount() {
+		return nil
+	}
+	block := dataMeta.GetBlockMeta(blockID)
+	if seqNum > block.GetMaxSeqnum() || seqNum >= block.GetMetaColumnCount() {
+		return nil
+	}
+	col := block.ColumnMeta(seqNum)
+	if int32(col.DataType()) != orderBy.Expr.Typ.Id {
+		return nil
+	}
+	zm := col.ZoneMap()
+	if !zm.IsInited() {
+		return zm.Clone()
+	}
+	if !OrderByZoneMapMatches(zm, orderBy) {
+		return nil
+	}
+	flag := orderBy.Flag
+	nullsFirst := flag&plan.OrderBySpec_NULLS_FIRST != 0 ||
+		(flag&plan.OrderBySpec_NULLS_LAST == 0 && flag&plan.OrderBySpec_DESC == 0)
+	if !orderBy.Expr.Typ.NotNullable && nullsFirst && col.NullCnt() != 0 {
+		return nil
+	}
+	return zm.Clone()
 }
 
 func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colTypes []types.Type, seqNums []uint16) error {
@@ -281,26 +327,26 @@ func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colT
 	}
 
 	blocks := make([]orderedRemoteBlock, rs.data.DataCnt())
-	var meta objectio.ObjectDataMeta
+	var meta objectio.ObjectMeta
+	var objectName objectio.ObjectNameShort
+	haveObject := false
 	for i := range blocks {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		blk := rs.data.GetBlockInfo(i)
 		location := blk.MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, meta) {
+		if !haveObject || !location.ShortName().Equal(objectName[:]) {
 			loaded, err := objectio.FastLoadObjectMeta(ctx, &location, false, rs.fs)
 			if err != nil {
 				return err
 			}
-			meta = loaded.MustDataMeta()
+			meta = loaded
+			objectName = *location.ShortName()
+			haveObject = true
 		}
 		blocks[i].index = i
-		blockMeta := meta.GetBlockMeta(uint32(location.ID()))
-		if seqNums[col] <= blockMeta.GetMaxSeqnum() {
-			// Detach the zonemap so this reader cannot pin the full object metadata.
-			blocks[i].zm = blockMeta.ColumnMeta(seqNums[col]).ZoneMap().Clone()
-		}
+		blocks[i].zm = OrderByBlockZoneMap(meta, uint32(location.ID()), seqNums[col], rs.orderBy[0])
 	}
 	slices.SortFunc(blocks, func(a, b orderedRemoteBlock) int {
 		ai, bi := a.zm.IsInited(), b.zm.IsInited()

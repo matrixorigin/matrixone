@@ -649,6 +649,10 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	} else {
 		vec = ctr.cmps[ctr.poses[0]].Vector()
 	}
+	// NULL cannot be encoded as a zonemap threshold.
+	if vec.IsNull(uint64(x)) {
+		return nil, false
+	}
 	if vec.GetType().IsVarlen() {
 		return vec.GetBytesAt(x), true
 	}
