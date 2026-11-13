@@ -1326,6 +1326,11 @@ type OndupUpdateBinder struct {
 type TableBinder struct {
 	baseBinder
 	allowSubquery bool
+	// joinOn marks the binder that resolves a JOIN ON predicate: there, an
+	// unresolved table qualifier is out of clause scope, and the failure is
+	// classified per MySQL as an unknown on-clause column instead of a
+	// Postgres-style missing FROM entry.
+	joinOn bool
 }
 
 type WhereBinder struct {
