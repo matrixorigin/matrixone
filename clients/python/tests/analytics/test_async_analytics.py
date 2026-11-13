@@ -107,9 +107,9 @@ async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, 
     probes_ready, start_staging = asyncio.Event(), asyncio.Event()
     qualified = 0
 
-    async def probe_then_wait(engine, generation):
+    async def probe_then_wait(engine, generation, operation=None):
         nonlocal qualified
-        file_format = await original_probe(engine, generation)
+        file_format = await original_probe(engine, generation, operation)
         qualified += 1
         if qualified == 2:
             probes_ready.set()
@@ -159,9 +159,9 @@ async def test_upload_probe_pool_wait_cancellation_preserves_stream_owner(trial,
     original_probe = manager._upload_format
     probe_entered = asyncio.Event()
 
-    async def observed_probe(engine, generation):
+    async def observed_probe(engine, generation, operation=None):
         probe_entered.set()
-        return await original_probe(engine, generation)
+        return await original_probe(engine, generation, operation)
 
     monkeypatch.setattr(manager, '_upload_format', observed_probe)
     stream = manager.query('SELECT 7 AS n', batch_size=1)

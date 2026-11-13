@@ -526,7 +526,7 @@ class AsyncAnalyticsManager:
             raise RuntimeError('Connect the MatrixOne client first')
         return self.client._engine
 
-    async def _upload_format(self, engine, generation):
+    async def _upload_format(self, engine, generation, operation=None):
         from .capabilities import check_arrow_load_async
 
         connection = None
@@ -544,7 +544,10 @@ class AsyncAnalyticsManager:
         finally:
             if connection is not None:
                 try:
-                    await self._cleanup(connection.close(), sys.exc_info()[1])
+                    close_task = asyncio.ensure_future(connection.close())
+                    if operation is not None:
+                        operation.hold_connection_cleanup(close_task)
+                    await self._cleanup(close_task, sys.exc_info()[1])
                 except BaseException:
                     _abort(connection)
                     raise
@@ -663,7 +666,7 @@ class AsyncAnalyticsManager:
         try:
             await self._offload(_arrow)
             await self._offload(Path(staging_dir).resolve, strict=True)
-            file_format = await self._upload_format(engine, generation)
+            file_format = await self._upload_format(engine, generation, operation)
             operation_phase = 'staging'
             staged = await operation.prepare(
                 partial(_stage_arrow, file_format=file_format), data, staging_dir, schema, batch_size, max_staging_bytes
@@ -706,7 +709,8 @@ class AsyncAnalyticsManager:
             operation.finish()
             # A canceled producer can still be blocked in foreign I/O. Its own
             # concurrent-future callback performs unlink after it really exits.
-            if not operation.status()['worker_running']:
+            status = operation.status()
+            if not status['worker_running'] and not status['connection_cleanup_pending']:
                 try:
                     await self._cleanup(operation.wait_cleanup())
                 except BaseException as error:

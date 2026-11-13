@@ -175,6 +175,14 @@ unsupported/disabled overrides still reject before staging or SQL. Caller
 overrides are assertions, not SDK certification. MatrixOne 4.2.8 rejects native
 Arrow LOAD; its SDK uploads use this checked Parquet path.
 
+If a probe's connection close remains blocked after an error or cancellation,
+the upload keeps its existing admission until that close actually finishes.
+`pending_operations()` reports `connection_cleanup_pending=True` for that state.
+At most two uploads can retain probe closes; subsequent uploads wait before
+checkout or input consumption. The close callback returns capacity through the
+ordinary staging cleanup owner. Reconnect retains its existing guard against
+unfinished database cleanup.
+
 SQL text logging now defaults to `off`, as do the logger factories. Driver error
 logs retain category/code without rendering SQL, parameters or server-echoed
 values. The raised exception preserves its original diagnostics. Existing
