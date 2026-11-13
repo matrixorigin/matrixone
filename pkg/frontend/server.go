@@ -65,7 +65,6 @@ var ConnIDAllocKey = "____server_conn_id"
 
 const (
 	clientDisconnectProbeInterval = 5 * time.Second
-	clientDisconnectProbeGrace    = 30 * time.Second
 )
 
 // MOServer MatrixOne Server

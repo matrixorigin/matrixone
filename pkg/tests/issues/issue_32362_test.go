@@ -94,7 +94,7 @@ func issue32362QueryVisible(ctx context.Context, db *sql.DB, marker string) (boo
 
 func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -212,6 +212,92 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 				require.Equal(t, 0, r.sleep)
 				require.Equal(t, 323620995, r.marker)
 			case <-time.After(15 * time.Second):
+				t.Fatal("half-closed client did not receive its result")
+			}
+		})
+
+		t.Run("graceful full close completes and cleans up", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			conn, raw := issue32362Conn(t, ctx, addr)
+			var connID uint32
+			require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			defer func() {
+				cancel()
+				_ = raw.Close()
+				select {
+				case <-finished:
+				case <-time.After(5 * time.Second):
+					t.Error("closed client's worker did not exit")
+				}
+			}()
+			go func() {
+				defer close(finished)
+				_, err := conn.ExecContext(ctx, "insert into "+dbName+".t values (2, sleep(4) + 0 * 323620997)")
+				done <- err
+			}()
+			visible(t, "323620997")
+			require.NoError(t, raw.Close())
+			select {
+			case err := <-done:
+				require.Error(t, err, "the fully closed client cannot receive the result")
+			case <-time.After(10 * time.Second):
+				t.Fatal("fully closed client did not return")
+			}
+			require.Eventually(t, func() bool {
+				var count int
+				err := admin.QueryRowContext(ctx, "select count(*) from "+dbName+".t where id = 2 and v = 0").Scan(&count)
+				return err == nil && count == 1
+			}, 15*time.Second, 50*time.Millisecond, "accepted work must complete after a graceful FIN")
+			require.Eventually(t, func() bool {
+				var count int
+				err := admin.QueryRowContext(ctx, fmt.Sprintf("select count(*) from processlist() a where conn_id = %d", connID)).Scan(&count)
+				return err == nil && count == 0
+			}, 10*time.Second, 50*time.Millisecond, "closed session must be removed")
+		})
+
+		t.Run("write half close preserves a result after 30 seconds", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			conn, raw := issue32362Conn(t, ctx, addr)
+			var connID uint32
+			require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
+			type result struct {
+				sleep, marker int
+				err           error
+			}
+			done := make(chan result, 1)
+			finished := make(chan struct{})
+			defer func() {
+				cancel()
+				_ = raw.Close()
+				select {
+				case <-finished:
+				case <-time.After(5 * time.Second):
+					t.Error("half-closed client's worker did not exit")
+				}
+			}()
+			go func() {
+				defer close(finished)
+				var r result
+				r.err = conn.QueryRowContext(ctx, "select sleep(42),323620996").Scan(&r.sleep, &r.marker)
+				done <- r
+			}()
+			visible(t, "323620996")
+			require.NoError(t, raw.CloseWrite())
+			select {
+			case r := <-done:
+				require.NoError(t, r.err)
+				require.Equal(t, 0, r.sleep)
+				require.Equal(t, 323620996, r.marker)
+				require.Eventually(t, func() bool {
+					var count int
+					err := admin.QueryRowContext(ctx, fmt.Sprintf("select count(*) from processlist() a where conn_id = %d", connID)).Scan(&count)
+					return err == nil && count == 0
+				}, 10*time.Second, 50*time.Millisecond, "session must be removed after EOF")
+			case <-time.After(60 * time.Second):
 				t.Fatal("half-closed client did not receive its result")
 			}
 		})

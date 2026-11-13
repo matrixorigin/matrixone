@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !linux
+//go:build !linux && !darwin
 
 package frontend
 
@@ -22,6 +22,6 @@ type connectionLivenessMonitor struct {
 	rm *RoutineManager
 }
 
-func (monitor *connectionLivenessMonitor) scan(now time.Time) {
-	monitor.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
-}
+// Platforms without a confirmed terminal-socket probe leave cleanup to the
+// connection owner; a read-side FIN does not prove the response path is closed.
+func (monitor *connectionLivenessMonitor) scan(time.Time) {}

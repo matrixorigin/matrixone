@@ -34,8 +34,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func terminalSocketEvents(tcp *net.TCPConn) (int16, error) {
-	raw, err := tcp.SyscallConn()
+func terminalSocketEvents(socket syscall.Conn) (int16, error) {
+	raw, err := socket.SyscallConn()
 	if err != nil {
 		return 0, err
 	}
@@ -52,8 +52,8 @@ func terminalSocketEvents(tcp *net.TCPConn) (int16, error) {
 	return events, pollErr
 }
 
-func terminalSocketHasEvent(tcp *net.TCPConn, flag int16) bool {
-	events, err := terminalSocketEvents(tcp)
+func terminalSocketHasEvent(socket syscall.Conn, flag int16) bool {
+	events, err := terminalSocketEvents(socket)
 	return err == nil && events&flag != 0
 }
 
@@ -81,7 +81,7 @@ func TestTerminalProbeAfterTLSHandshake(t *testing.T) {
 	go func() { serverHandshake <- tlsServer.Handshake() }()
 	require.NoError(t, tlsClient.Handshake())
 	require.NoError(t, <-serverHandshake)
-	probe := newTerminalTCPProbe(terminalTCPConn(tlsServer))
+	probe := newTerminalSocketProbe(terminalSocketConn(tlsServer))
 	require.NotNil(t, probe)
 	_, err = tlsClient.Write([]byte("request"))
 	require.NoError(t, err)
@@ -178,11 +178,11 @@ func TestTerminalConnectionMonitorReplacedSocketAtCacheLimit(t *testing.T) {
 	conn := &Conn{conn: oldServer}
 	monitor := connectionLivenessMonitor{
 		rm:     &RoutineManager{clients: make(map[*Conn]*Routine)},
-		probes: make(map[*Conn]*terminalTCPProbe, terminalConnectionProbeCacheLimit),
+		probes: make(map[*Conn]*terminalSocketProbe, terminalConnectionProbeCacheLimit),
 	}
 	monitor.rm.clients[conn] = routine
-	monitor.probes[conn] = newTerminalTCPProbe(oldServer.(*net.TCPConn))
-	unused := &terminalTCPProbe{}
+	monitor.probes[conn] = newTerminalSocketProbe(oldServer.(*net.TCPConn))
+	unused := &terminalSocketProbe{}
 	for len(monitor.probes) < terminalConnectionProbeCacheLimit {
 		monitor.probes[&Conn{}] = unused
 	}
@@ -202,6 +202,8 @@ func TestTerminalConnectionMonitorReplacedSocketAtCacheLimit(t *testing.T) {
 	require.Nil(t, monitor.probes, "stale and retired probes must be evicted")
 }
 
+const formerDisconnectProbeGrace = 30 * time.Second
+
 func TestConnectionLivenessMonitorSnapshotsRequestAge(t *testing.T) {
 	now := time.Now()
 	client := func(start time.Time, closing bool) (*Conn, *Routine) {
@@ -212,9 +214,9 @@ func TestConnectionLivenessMonitorSnapshotsRequestAge(t *testing.T) {
 		routine.closing.Store(closing)
 		return &Conn{}, routine
 	}
-	recentConn, recent := client(now.Add(-clientDisconnectProbeGrace+time.Nanosecond), false)
-	exactConn, exact := client(now.Add(-clientDisconnectProbeGrace), false)
-	oldConn, old := client(now.Add(-clientDisconnectProbeGrace-time.Second), false)
+	recentConn, recent := client(now.Add(-formerDisconnectProbeGrace+time.Nanosecond), false)
+	exactConn, exact := client(now.Add(-formerDisconnectProbeGrace), false)
+	oldConn, old := client(now.Add(-formerDisconnectProbeGrace-time.Second), false)
 	futureConn, future := client(now.Add(time.Nanosecond), false)
 	idleConn, idle := client(time.Time{}, false)
 	closingConn, closing := client(now.Add(-time.Minute), true)
@@ -224,26 +226,18 @@ func TestConnectionLivenessMonitorSnapshotsRequestAge(t *testing.T) {
 		nil: old, {}: nil,
 	}}}
 	monitor.snapshot(now)
-	eligible := make(map[*Conn]bool, len(monitor.requests))
+	selected := make(map[*Conn]bool, len(monitor.requests))
 	for _, request := range monitor.requests {
-		eligible[request.conn] = request.legacyEligible
+		selected[request.conn] = true
 	}
-	require.Len(t, eligible, 3)
-	require.Contains(t, eligible, recentConn)
-	require.False(t, eligible[recentConn])
-	require.True(t, eligible[exactConn])
-	require.True(t, eligible[oldConn])
+	require.Len(t, selected, 3)
+	require.Contains(t, selected, recentConn)
+	require.Contains(t, selected, exactConn)
+	require.Contains(t, selected, oldConn)
 
-	// The old monitor also selected by the ticker time before probing sockets.
-	old.requestStartedAt.Store(clientRequestClockValue(now))
-	for _, request := range monitor.requests {
-		if request.conn == oldConn {
-			require.True(t, request.legacyEligible)
-		}
-	}
 }
 
-func TestConnectionLivenessMonitorPreservesFINGrace(t *testing.T) {
+func TestConnectionLivenessMonitorPreservesFINAcrossFormerGrace(t *testing.T) {
 	server, client := tcpConnectionPair(t)
 	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
@@ -252,7 +246,7 @@ func TestConnectionLivenessMonitorPreservesFINGrace(t *testing.T) {
 	t.Cleanup(cancel)
 	routine.setCancelRequestFunc(cancel)
 	now := time.Now()
-	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace + time.Nanosecond)))
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-formerDisconnectProbeGrace + time.Nanosecond)))
 	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
 		{conn: server}: routine,
 	}}}
@@ -260,114 +254,86 @@ func TestConnectionLivenessMonitorPreservesFINGrace(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return terminalSocketHasEvent(server.(*net.TCPConn), unix.POLLRDHUP)
 	}, 3*time.Second, time.Millisecond)
-	monitor.scan(now)
-	require.NoError(t, ctx.Err(), "FIN before the request-age grace must not cancel the request")
-	monitor.scan(now.Add(time.Nanosecond))
-	require.ErrorIs(t, ctx.Err(), context.Canceled, "the existing FIN policy applies at the grace boundary")
+	for _, at := range []time.Time{now, now.Add(time.Nanosecond), now.Add(5 * time.Second), now.Add(time.Minute)} {
+		monitor.scan(at)
+		require.NoError(t, ctx.Err(), "FIN must not cancel a request at any age")
+	}
+	_, err := server.Write([]byte("reply"))
+	require.NoError(t, err)
+	var response [5]byte
+	_, err = io.ReadFull(client, response[:])
+	require.NoError(t, err)
+	require.Equal(t, "reply", string(response[:]))
 }
 
-func TestConnectionLivenessMonitorPrioritizesTerminalBeforeLegacyClose(t *testing.T) {
-	legacy := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
-	terminal := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
-	late := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
-	t.Cleanup(legacy.cancelRoutineFunc)
-	t.Cleanup(terminal.cancelRoutineFunc)
-	t.Cleanup(late.cancelRoutineFunc)
-
-	legacyCtx, cancelLegacy := context.WithCancel(context.Background())
-	terminalCtx, cancelTerminal := context.WithCancel(context.Background())
-	lateCtx, cancelLate := context.WithCancel(context.Background())
-	t.Cleanup(cancelLegacy)
-	t.Cleanup(cancelTerminal)
-	t.Cleanup(cancelLate)
-	legacy.setCancelRequestFunc(cancelLegacy)
-	terminal.setCancelRequestFunc(cancelTerminal)
-	late.setCancelRequestFunc(cancelLate)
-	now := time.Now()
-	legacy.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
-	terminal.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
-	late.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
-	unsupported := &Routine{}
-	invalid := &Routine{}
-	unsupported.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
-	invalid.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
-	pipeServer, pipeClient := net.Pipe()
-	t.Cleanup(func() { _ = pipeServer.Close(); _ = pipeClient.Close() })
-	invalidTCP := &net.TCPConn{}
-	require.Nil(t, newTerminalTCPProbe(invalidTCP))
-
-	terminalServer, terminalClient := tcpConnectionPair(t)
-	lateServer, lateClient := tcpConnectionPair(t)
-	t.Cleanup(func() {
-		_ = terminalServer.Close()
-		_ = terminalClient.Close()
-		_ = lateServer.Close()
-		_ = lateClient.Close()
-	})
-	require.NoError(t, terminalClient.(*net.TCPConn).SetLinger(0))
-	require.NoError(t, terminalClient.Close())
-	require.Eventually(t, func() bool {
-		return terminalSocketHasEvent(terminalServer.(*net.TCPConn), unix.POLLERR)
-	}, 3*time.Second, time.Millisecond)
-
-	legacyConn := &Conn{remoteAddr: "blocked legacy"}
-	unsupportedConn := &Conn{conn: pipeServer}
-	invalidConn := &Conn{conn: invalidTCP}
-	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
-		legacyConn:             legacy,
-		unsupportedConn:        unsupported,
-		invalidConn:            invalid,
-		{conn: terminalServer}: terminal,
-		{conn: lateServer}:     late,
-	}}}
-	legacy.mc.Lock()
-	var releaseOnce sync.Once
-	releaseLegacy := func() { releaseOnce.Do(legacy.mc.Unlock) }
-	done := make(chan struct{})
-	t.Cleanup(func() {
-		releaseLegacy()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			t.Error("liveness pass did not finish after releasing the lock")
-		}
-	})
-	go func() {
-		defer close(done)
-		monitor.scan(now)
-	}()
-	select {
-	case <-legacyCtx.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("legacy close did not reach the blocked lifecycle lock")
+func TestConnectionLivenessMonitorRetriesBusyAndSkipsUnknown(t *testing.T) {
+	for _, which := range []string{"routine", "controller", "operation"} {
+		t.Run(which, func(t *testing.T) {
+			busy := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			ready := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			t.Cleanup(busy.cancelRoutineFunc)
+			t.Cleanup(ready.cancelRoutineFunc)
+			busyCtx, cancelBusy := context.WithCancel(context.Background())
+			readyCtx, cancelReady := context.WithCancel(context.Background())
+			t.Cleanup(cancelBusy)
+			t.Cleanup(cancelReady)
+			busy.setCancelRequestFunc(cancelBusy)
+			ready.setCancelRequestFunc(cancelReady)
+			require.True(t, busy.setInProcessRequest(true))
+			require.True(t, ready.setInProcessRequest(true))
+			busyServer, busyClient := tcpConnectionPair(t)
+			readyServer, readyClient := tcpConnectionPair(t)
+			pipeServer, pipeClient := net.Pipe()
+			t.Cleanup(func() {
+				_ = busyServer.Close()
+				_ = busyClient.Close()
+				_ = readyServer.Close()
+				_ = readyClient.Close()
+				_ = pipeServer.Close()
+				_ = pipeClient.Close()
+			})
+			for _, client := range []net.Conn{busyClient, readyClient} {
+				require.NoError(t, client.(*net.TCPConn).SetLinger(0))
+				require.NoError(t, client.Close())
+			}
+			for _, server := range []net.Conn{busyServer, readyServer} {
+				require.Eventually(t, func() bool {
+					return terminalSocketHasEvent(server.(*net.TCPConn), unix.POLLERR)
+				}, 3*time.Second, time.Millisecond)
+			}
+			invalidTCP := &net.TCPConn{}
+			require.Nil(t, newTerminalSocketProbe(invalidTCP))
+			monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
+				{conn: busyServer}: busy, {conn: readyServer}: ready,
+				{conn: nil}: busy, {conn: pipeServer}: busy, {conn: invalidTCP}: busy,
+			}}}
+			var unlock func()
+			switch which {
+			case "routine":
+				busy.mu.Lock()
+				unlock = busy.mu.Unlock
+			case "controller":
+				busy.mc.Lock()
+				unlock = busy.mc.Unlock
+			case "operation":
+				require.True(t, busy.mc.beginOperation())
+				unlock = busy.mc.endOperation
+			}
+			var once sync.Once
+			release := func() { once.Do(unlock) }
+			t.Cleanup(release)
+			monitor.scan(time.Now())
+			require.NoError(t, busyCtx.Err(), "a busy routine must retain ownership")
+			require.ErrorIs(t, readyCtx.Err(), context.Canceled, "a busy or unknown connection must not block other resets")
+			require.Empty(t, monitor.requests)
+			for _, request := range monitor.requests[:cap(monitor.requests)] {
+				require.Empty(t, request, "the snapshot must release session references")
+			}
+			release()
+			monitor.scan(time.Now())
+			require.ErrorIs(t, busyCtx.Err(), context.Canceled, "a later scan must retry the busy reset")
+		})
 	}
-	require.ErrorIs(t, terminalCtx.Err(), context.Canceled, "the terminal pass must finish before a legacy close can block")
-	require.NoError(t, lateCtx.Err())
-	require.Len(t, monitor.requests, 3, "all legacy candidates must survive terminal probe skips")
-	for _, request := range monitor.requests {
-		if request.conn != nil {
-			require.Contains(t, []*Conn{legacyConn, unsupportedConn, invalidConn}, request.conn)
-			require.True(t, request.legacyEligible)
-		}
-	}
-	for _, request := range monitor.requests[len(monitor.requests):cap(monitor.requests)] {
-		require.Empty(t, request, "ineligible snapshot slots must release references")
-	}
-
-	require.NoError(t, lateClient.(*net.TCPConn).SetLinger(0))
-	require.NoError(t, lateClient.Close())
-	require.Eventually(t, func() bool {
-		return terminalSocketHasEvent(lateServer.(*net.TCPConn), unix.POLLERR)
-	}, 3*time.Second, time.Millisecond)
-	require.NoError(t, lateCtx.Err(), "a reset after the terminal pass waits for the blocked legacy close")
-	releaseLegacy()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("liveness pass did not finish after releasing the lock")
-	}
-	monitor.scan(time.Now())
-	require.ErrorIs(t, lateCtx.Err(), context.Canceled, "a later pass must retry the reset")
 }
 
 func TestTerminalTCPProbe(t *testing.T) {
@@ -393,7 +359,7 @@ func TestTerminalTCPProbe(t *testing.T) {
 			t.Fatal("IPv6 accept timed out")
 		}
 		t.Cleanup(func() { _ = server.Close() })
-		probe := newTerminalTCPProbe(server.(*net.TCPConn))
+		probe := newTerminalSocketProbe(server.(*net.TCPConn))
 		require.NotNil(t, probe)
 		require.NoError(t, client.(*net.TCPConn).SetLinger(0))
 		require.NoError(t, client.Close())
@@ -404,7 +370,7 @@ func TestTerminalTCPProbe(t *testing.T) {
 		server, client := tcpConnectionPair(t)
 		t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 		tcpServer, tcpClient := server.(*net.TCPConn), client.(*net.TCPConn)
-		probe := newTerminalTCPProbe(tcpServer)
+		probe := newTerminalSocketProbe(tcpServer)
 		require.NotNil(t, probe)
 		require.False(t, probe.terminal())
 		require.NoError(t, tcpClient.SetLinger(0))
@@ -427,7 +393,7 @@ func TestTerminalTCPProbe(t *testing.T) {
 		server, client := tcpConnectionPair(t)
 		t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 		tcpServer, tcpClient := server.(*net.TCPConn), client.(*net.TCPConn)
-		probe := newTerminalTCPProbe(tcpServer)
+		probe := newTerminalSocketProbe(tcpServer)
 		require.NotNil(t, probe)
 		require.NoError(t, tcpClient.CloseWrite())
 		require.Eventually(t, func() bool { return terminalSocketHasEvent(tcpServer, unix.POLLRDHUP) }, 3*time.Second, time.Millisecond)
@@ -444,7 +410,7 @@ func TestTerminalTCPProbe(t *testing.T) {
 		server, client := tcpConnectionPair(t)
 		t.Cleanup(func() { _ = server.Close() })
 		tcpServer := server.(*net.TCPConn)
-		probe := newTerminalTCPProbe(tcpServer)
+		probe := newTerminalSocketProbe(tcpServer)
 		require.NoError(t, client.Close())
 		require.Eventually(t, func() bool { return terminalSocketHasEvent(tcpServer, unix.POLLRDHUP) }, 3*time.Second, time.Millisecond)
 		require.False(t, probe.terminal())
@@ -467,7 +433,7 @@ func TestTerminalTCPProbe(t *testing.T) {
 		_, err = io.ReadFull(client, received[:])
 		require.NoError(t, err)
 		require.Eventually(t, func() bool { return terminalSocketHasEvent(tcpServer, unix.POLLERR) }, 3*time.Second, time.Millisecond)
-		probe := newTerminalTCPProbe(tcpServer)
+		probe := newTerminalSocketProbe(tcpServer)
 		require.False(t, probe.terminal())
 		events, err := terminalSocketEvents(tcpServer)
 		require.NoError(t, err)
@@ -483,13 +449,45 @@ func TestTerminalTCPProbe(t *testing.T) {
 		server, client := tcpConnectionPair(t)
 		t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 		tlsServer := tls.Server(server, &tls.Config{})
-		require.Same(t, server, terminalTCPConn(tlsServer))
+		require.Same(t, server, terminalSocketConn(tlsServer))
 		pipe1, pipe2 := net.Pipe()
 		t.Cleanup(func() { _ = pipe1.Close(); _ = pipe2.Close() })
-		require.Nil(t, terminalTCPConn(pipe1))
-		require.Nil(t, terminalTCPConn(nil))
-		probe := newTerminalTCPProbe(server.(*net.TCPConn))
+		require.Nil(t, terminalSocketConn(pipe1))
+		require.Nil(t, terminalSocketConn(nil))
+		probe := newTerminalSocketProbe(server.(*net.TCPConn))
 		require.NoError(t, server.Close())
 		require.False(t, probe.terminal())
 	})
+}
+
+func TestTerminalConnectionMonitorIgnoresReplacedSocketReset(t *testing.T) {
+	oldServer, oldClient := tcpConnectionPair(t)
+	newServer, newClient := tcpConnectionPair(t)
+	t.Cleanup(func() {
+		_ = oldServer.Close()
+		_ = oldClient.Close()
+		_ = newServer.Close()
+		_ = newClient.Close()
+	})
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	routine.setCancelRequestFunc(cancel)
+	require.True(t, routine.setInProcessRequest(true))
+	conn := &Conn{conn: oldServer}
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}}
+	monitor.scan(time.Now())
+	require.NotNil(t, monitor.probes[conn])
+	require.NoError(t, oldClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, oldClient.Close())
+	require.Eventually(t, func() bool { return terminalSocketHasEvent(oldServer.(*net.TCPConn), unix.POLLERR) }, 3*time.Second, time.Millisecond)
+	conn.UseConn(newServer)
+	monitor.scan(time.Now())
+	require.NoError(t, ctx.Err(), "the old socket's reset cannot retire its replacement")
+	require.NoError(t, newClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, newClient.Close())
+	require.Eventually(t, func() bool { return terminalSocketHasEvent(newServer.(*net.TCPConn), unix.POLLERR) }, 3*time.Second, time.Millisecond)
+	monitor.scan(time.Now())
+	require.ErrorIs(t, ctx.Err(), context.Canceled, "the replacement's own reset must be detected")
 }
