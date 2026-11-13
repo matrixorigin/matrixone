@@ -786,13 +786,44 @@ func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, sna
 	if obj != nil && obj.ObjName != "" {
 		physical = obj.ObjName
 	}
-	if err = checkResolvedIndexRelation(tcc.execCtx, tableName, physical, def.TableType, def.FeatureFlag); err != nil {
+	if err = checkResolvedIndexRelation(tcc.execCtx, tableName, physical, def.TableType, def.FeatureFlag); err != nil &&
+		!tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
 		return nil, nil, err
 	}
 	if result != nil {
 		result.Borrow = resolved.Borrow
 	}
 	return obj, def, nil
+}
+
+// mayReadOwnIndexForDirectSelect admits only a real tenant administrator's
+// direct SELECT in its own catalog. Other statement types and catalog scopes
+// stay on the existing restrictive path.
+func (tcc *TxnCompilerContext) mayReadOwnIndexForDirectSelect(obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) bool {
+	if tcc == nil || tcc.execCtx == nil || tcc.execCtx.ses == nil || obj == nil || def == nil ||
+		snapshot != nil || obj.PubInfo != nil || tcc.viewSchemaRead || hiddenIndexCaller(tcc.execCtx.reqCtx) != nil {
+		return false
+	}
+	ses := tcc.execCtx.ses
+	if ses.IsBackgroundSession() || !ses.GetFromRealUser() {
+		return false
+	}
+	stmt := tcc.execCtx.stmt
+	if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+		stmt = prepare.Stmt
+	}
+	if _, ok := stmt.(*tree.Select); !ok {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || tenant.GetUser() == "" || !tenant.IsAccountAdminRole() {
+		return false
+	}
+	accountID, err := defines.GetAccountId(tcc.GetContext())
+	if err != nil || accountID != tenant.GetTenantID() {
+		return false
+	}
+	return tcc.resolvePhysicalObjectAccount(obj, def, snapshot) == tenant.GetTenantID()
 }
 
 // resolveForCatalogValidation checks a cached plan's object identity/version.
