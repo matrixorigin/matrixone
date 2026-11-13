@@ -293,7 +293,12 @@ func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 		require.True(t, first.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), first.SessionInfo.FixedOffsetSeconds)
 		require.Empty(t, first.SessionInfo.TimeZoneName)
-		require.Empty(t, first.SessionInfo.TimeZone)
+		require.NotEmpty(t, first.SessionInfo.TimeZone)
+		// Simulate an old receiver that ignores the new fixed-offset fields.
+		var legacyTime time.Time
+		require.NoError(t, legacyTime.UnmarshalBinary(first.SessionInfo.TimeZone))
+		_, legacyOffset := legacyTime.Zone()
+		require.Equal(t, offset, legacyOffset)
 		wire, err := first.Marshal()
 		require.NoError(t, err)
 		var received pipeline.ProcessInfo
@@ -309,7 +314,10 @@ func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, forwarded.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), forwarded.SessionInfo.FixedOffsetSeconds)
-		require.Empty(t, forwarded.SessionInfo.TimeZone)
+		require.NotEmpty(t, forwarded.SessionInfo.TimeZone)
+		require.NoError(t, legacyTime.UnmarshalBinary(forwarded.SessionInfo.TimeZone))
+		_, forwardedLegacyOffset := legacyTime.Zone()
+		require.Equal(t, offset, forwardedLegacyOffset)
 	}
 	for _, offset := range []int{1 << 32, -(1 << 32)} {
 		proc.Base.SessionInfo.TimeZone = time.FixedZone("", offset)
