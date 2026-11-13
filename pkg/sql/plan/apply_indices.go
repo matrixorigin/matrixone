@@ -959,9 +959,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
-		// A FORCE hint that cannot provide the requested ordering/grouping still
-		// excludes other secondary indexes from replacing the base scan.
-		builder.protectedScans[scanNode.NodeId]++
+		// This index cannot provide the requested ordering/grouping. Only the
+		// full-value composite unique trailing-IN rewrite may use the filter phase;
+		// exposing other point lookups can probe truncated prefix keys.
+		filterIndexes := builder.filterRegularIndexesByScanHints(scanNode, scanNode.TableDef.Indexes)
+		if !builder.scanHintsForceIndexes(scanNode) || !regularIndexesHaveFullValueParts(filterIndexes) ||
+			!hasCompositeUniqueTrailingInCandidate(filterIndexes, scanNode) {
+			builder.protectedScans[scanNode.NodeId]++
+		}
 		return scanNode.NodeId, nil
 	}
 	return scanNode.NodeId, nil
@@ -1648,10 +1653,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if !pointBlocked {
 		idxToChoose, filterIdx = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
 	}
-	// A cardinality-proven unique point cannot produce the broad output that
-	// the aggregate scan estimates below are intended to guard against.
+	// Only an equality on every unique-key part proves singleton output. A
+	// trailing IN remains subject to the aggregate cardinality guard below.
 	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
-		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
+		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats) &&
+		node.FilterList[filterIdx[len(filterIdx)-1]].GetF().Func.ObjName == "="
 	if !ignoreStats && !singletonPoint {
 		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 			// for cluster by table, make it less prone to go index
@@ -1883,6 +1889,28 @@ func isFloatIndexFilterExpr(expr *plan.Expr) bool {
 	return typ == types.T_float32 || typ == types.T_float64
 }
 
+// compositeUniqueInValues admits only a finite, runtime-constant list whose
+// values can be serialized with the preceding unique-key equality values.
+func compositeUniqueInValues(filter *plan.Expr) ([]*plan.Expr, bool) {
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 || !hasNonNilFunctionArgs(fn, 2) {
+		return nil, false
+	}
+	if fn.Args[0].GetCol() == nil || isFloatIndexFilterExpr(fn.Args[0]) {
+		return nil, false
+	}
+	values, ok := inRHSValues(fn.Args[1], fn.Args[0].Typ)
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	for _, value := range values {
+		if value == nil || !isRuntimeConstExpr(value) || value.Typ.Id != fn.Args[0].Typ.Id {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 	for i := range node.FilterList {
@@ -1914,6 +1942,40 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 
 	// a=1 and b=2, change to prefix_eq
 	compositeFilterSel := 1.0
+	if numParts > 1 && idxDef.Unique && len(filterPos) == numParts {
+		lastFilter := filterList[filterPos[len(filterPos)-1]]
+		if values, ok := compositeUniqueInValues(lastFilter); ok {
+			prefixValues := make([]*plan.Expr, numParts-1)
+			for i := range prefixValues {
+				filter := filterList[filterPos[i]]
+				prefixValues[i] = filter.GetF().Args[1]
+				compositeFilterSel *= filter.Selectivity
+			}
+			compositeFilterSel *= lastFilter.Selectivity
+
+			keys := make([]*plan.Expr, len(values))
+			for i, value := range values {
+				args := append(DeepCopyExprList(prefixValues), DeepCopyExpr(value))
+				keys[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), args)
+			}
+			leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+			rightArg := &plan.Expr{Typ: leadingColExpr.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: keys}}}
+			args := []*plan.Expr{leadingColExpr, rightArg}
+			keyType := makeTypeByPlan2Expr(leadingColExpr)
+			overload, err := function.GetFunctionByName(builder.GetContext(), "in", []types.Type{keyType, keyType})
+			if err != nil {
+				panic(err)
+			}
+			overloadID := overload.GetEncodedOverloadID()
+			resultType := overload.GetReturnType()
+			typ := makePlan2Type(&resultType)
+			typ.NotNullable = function.DeduceNotNullable(overloadID, args)
+			return &plan.Expr{Typ: typ, Selectivity: compositeFilterSel, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: getFunctionObjRef(overloadID, "in"), Args: args,
+			}}}
+		}
+	}
+
 	serialArgs := make([]*plan.Expr, len(filterPos))
 	for i := range filterPos {
 		filter := filterList[filterPos[i]]
@@ -2609,20 +2671,92 @@ func hasKnownScanCardinality(stats *plan.Stats) bool {
 		!math.IsNaN(stats.TableCnt) && !math.IsInf(stats.TableCnt, 0)
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
-	currentSel := maxSelectivity
-	currentIdx := -1
-	knownCardinality := hasKnownScanCardinality(node.Stats)
-	selectedCompleteUnique := false
-	savedFilterIdx := make([]int32, 0)
-
+func pointSelectFilterIndexes(node *plan.Node) (map[int32]int32, map[int32]int32) {
 	col2filter := make(map[int32]int32)
+	col2infilter := make(map[int32]int32)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = int32(i)
+		} else if _, ok := compositeUniqueInValues(node.FilterList[i]); ok {
+			col2infilter[col.ColPos] = int32(i)
 		}
 	}
+	return col2filter, col2infilter
+}
+
+// matchCompositeUniqueTrailingIn admits only exact keys whose stored parts all
+// contain complete base values. Complete equality takes precedence over IN on
+// the final part, matching ordinary point-candidate selection.
+func matchCompositeUniqueTrailingIn(idxDef *IndexDef, node *plan.Node, col2filter, col2infilter map[int32]int32) ([]int32, bool) {
+	if !usableRegularHintIndex(idxDef) || !idxDef.Unique || len(idxDef.Parts) < 2 || node == nil || node.TableDef == nil {
+		return nil, false
+	}
+	lastPart := len(idxDef.Parts) - 1
+	lastCol, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[lastPart])]
+	if !ok {
+		return nil, false
+	}
+	if _, equal := col2filter[lastCol]; equal {
+		return nil, false
+	}
+	lastFilter, ok := col2infilter[lastCol]
+	if !ok {
+		return nil, false
+	}
+
+	filterIdx := make([]int32, len(idxDef.Parts))
+	for j := 0; j < lastPart; j++ {
+		colIdx, exists := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
+		if !exists {
+			return nil, false
+		}
+		filterIdx[j], ok = col2filter[colIdx]
+		if !ok {
+			return nil, false
+		}
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil || len(prefixLengths) > 0 {
+		return nil, false
+	}
+	filterIdx[lastPart] = lastFilter
+	return filterIdx, true
+}
+
+func hasCompositeUniqueTrailingInCandidate(indexes []*IndexDef, node *plan.Node) bool {
+	col2filter, col2infilter := pointSelectFilterIndexes(node)
+	for _, idxDef := range indexes {
+		if _, ok := matchCompositeUniqueTrailingIn(idxDef, node, col2filter, col2infilter); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter selection can choose any hinted regular index, including through the
+// complete-equality fallback. Do not expose that phase to truncated keys.
+func regularIndexesHaveFullValueParts(indexes []*IndexDef) bool {
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil || len(prefixLengths) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
+	currentSel := maxSelectivity
+	currentIdx := -1
+	knownCardinality := hasKnownScanCardinality(node.Stats)
+	selectedUnknownStatsRank := 0
+	savedFilterIdx := make([]int32, 0)
+
+	col2filter, col2infilter := pointSelectFilterIndexes(node)
 
 	filterIdx := make([]int32, 0, len(col2filter))
 	for i, idxDef := range indexes {
@@ -2636,16 +2770,24 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		}
 
 		usePartialIndex := false
+		trailingIn := false
 
 		filterIdx = filterIdx[:0]
-		for j := 0; j < numKeyParts; j++ {
-			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
-			colIdx := node.TableDef.Name2ColIndex[tmpName]
-			idx, ok := col2filter[colIdx]
-			if !ok {
-				break
+		if trailingFilterIdx, ok := matchCompositeUniqueTrailingIn(idxDef, node, col2filter, col2infilter); ok {
+			filterIdx = append(filterIdx, trailingFilterIdx...)
+			trailingIn = true
+		} else {
+			for j := 0; j < numKeyParts; j++ {
+				tmpName := catalog.ResolveAlias(idxDef.Parts[j])
+				colIdx := node.TableDef.Name2ColIndex[tmpName]
+				idx, ok := col2filter[colIdx]
+				if !ok {
+					break
+				}
+				filterIdx = append(filterIdx, idx)
 			}
-			filterIdx = append(filterIdx, idx)
+		}
+		for _, idx := range filterIdx {
 			filter := node.FilterList[idx]
 			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
@@ -2658,13 +2800,21 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 		completeUnique := idxDef.Unique && len(filterIdx) == len(idxDef.Parts)
 		if !knownCardinality {
-			// Unset/neutral estimates cannot compare unknown candidates. Within
-			// the existing cost bypass, prefer a schema-bounded unique point;
-			// preserve catalog order within each class and a nonunique fallback.
+			// Unset/neutral estimates cannot compare unknown candidates. Prefer a
+			// schema-proven singleton over a bounded unique key set, and either over
+			// a nonunique/partial fallback. Equal ranks retain catalog order.
+			candidateRank := 0
+			if completeUnique {
+				candidateRank = 1
+				if !trailingIn {
+					candidateRank = 2
+				}
+			}
 			if !ignoreStats || maxSelectivity != 1 ||
-				(currentIdx != -1 && (selectedCompleteUnique || !completeUnique)) {
+				(currentIdx != -1 && candidateRank <= selectedUnknownStatsRank) {
 				continue
 			}
+			selectedUnknownStatsRank = candidateRank
 		} else {
 			compositeFilterSel := 1.0
 			for k := range filterIdx {
@@ -2673,7 +2823,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			if math.IsNaN(compositeFilterSel) || math.IsInf(compositeFilterSel, 0) || compositeFilterSel < 0 || compositeFilterSel > 1 {
 				continue
 			}
-			if completeUnique {
+			if completeUnique && !trailingIn {
 				compositeFilterSel = min(compositeFilterSel, 1/node.Stats.TableCnt)
 			}
 			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
@@ -2683,7 +2833,6 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			currentSel = compositeFilterSel
 		}
 		currentIdx = i
-		selectedCompleteUnique = completeUnique
 		savedFilterIdx = savedFilterIdx[:0]
 		savedFilterIdx = append(savedFilterIdx, filterIdx...)
 	}
