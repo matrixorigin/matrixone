@@ -303,6 +303,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select max(b) from bool_aggregate;
 ➤ max(b)[-7,1,0]  𝄀
 0
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  false
 select count(1), min(b), max(b) from bool_aggregate;
 ➤ count(1)[-5,64,0]  ¦  min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 2  ¦  0  ¦  0
@@ -326,6 +329,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 0  ¦  0
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  false
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
 0  ¦  0  ¦  0
@@ -346,6 +352,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 1  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+true  ¦  true
 truncate table bool_aggregate;
 insert into bool_aggregate values (false),(true),(null);
 select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
@@ -363,6 +372,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 0  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  true
 select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
 0  ¦  1  ¦  1
@@ -383,6 +395,9 @@ select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
 select min(b), max(b) from bool_aggregate;
 ➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
 null  ¦  null
+select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as min_length, length(mo_table_col_max('non_primary_zonemap','bool_aggregate','b')) as max_length;
+➤ min_length[-5,64,0]  ¦  max_length[-5,64,0]  𝄀
+0  ¦  0
 set optimizer_hints='blockFilter=2';
 select id from bool_values where enabled = true order by id;
 ➤ id[4,32,0]  𝄀

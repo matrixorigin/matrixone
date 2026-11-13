@@ -476,8 +476,6 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
 		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
@@ -486,30 +484,18 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 	var updateMu sync.Mutex
 	onObjFn := func(obj objectio.ObjectEntry) error {
-		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
 			return err
 		}
 		updateMu.Lock()
 		defer updateMu.Unlock()
-		meta = objMeta.MustDataMeta()
-		if inited {
-			for idx := range zms {
-				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				if !zm.IsInited() {
-					continue
-				}
-				index.UpdateZM(zms[idx], zm.GetMaxBuf())
-				index.UpdateZM(zms[idx], zm.GetMinBuf())
-			}
-		} else {
-			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				tableTypes[idx] = uint8(cols[idx].Typ.Id)
-			}
-			inited = true
+		meta := objMeta.MustDataMeta()
+		if err := updateColumnSummaries(ctx, meta, location, cols, zms, tableTypes, fs, tbl.getTxn().proc.Mp()); err != nil {
+			return err
 		}
+		inited = true
 
 		return nil
 	}
