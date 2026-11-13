@@ -82,7 +82,11 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=4.2-dev
-      - approved-reviews-by=XuPeng-SH
+      - or:
+          - approved-reviews-by=XuPeng-SH
+          - and:
+              - author=XuPeng-SH
+              - github-review-decision=APPROVED
     actions:
       queue:
         name: release-4.2
