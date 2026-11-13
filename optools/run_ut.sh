@@ -80,8 +80,8 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
-# Keep an explicit caller cap for engine admission. Default the subsequent
-# heavy/plan wave to three only after the exclusive engine budget is resolved.
+# Keep an explicit caller cap for engine admission. Resolve the subsequent
+# heavy/plan default only after the exclusive engine budget is resolved.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
@@ -2647,6 +2647,17 @@ function run_embedded_tests(){
     return "${test_status}"
 }
 
+function default_heavy_race_parallel(){
+    # Only this overlap profile has complete joined-wall and resource evidence.
+    if [[ "${OSTYPE_PREFIX}" == linux && "${UT_PARALLEL}" == 8 &&
+          "${UT_OVERLAP_PLAN}" == 1 && "${PLAN_RACE_PARALLEL}" == 2 &&
+          "${PLAN_RACE_SHARDS}" == 2 ]]; then
+        printf '%s\n' 4
+    else
+        printf '%s\n' 3
+    fi
+}
+
 function run_tests(){
     if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
     cd $BUILD_WKSP
@@ -2670,7 +2681,7 @@ function run_tests(){
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
     echo "#  UT STDERR:       $UT_STDERR"
-    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-3} total package slots"
+    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-$(default_heavy_race_parallel)} total package slots"
     horiz_rule
     mark_ut_stage "routing" "validate shard and package partition" start
 
@@ -2875,8 +2886,10 @@ function run_tests(){
             logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
-        if ! [[ "${HEAVY_RACE_PARALLEL:-3}" =~ ^[1-9][0-9]*$ ]] ||
-            (( ${HEAVY_RACE_PARALLEL:-3} > 64 )); then
+        local heavy_race_default
+        heavy_race_default=$(default_heavy_race_parallel)
+        if ! [[ "${HEAVY_RACE_PARALLEL:-${heavy_race_default}}" =~ ^[1-9][0-9]*$ ]] ||
+            (( ${HEAVY_RACE_PARALLEL:-${heavy_race_default}} > 64 )); then
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
@@ -2889,7 +2902,7 @@ function run_tests(){
             (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
             engine_race_parallel=${HEAVY_RACE_PARALLEL}
         fi
-        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-3}
+        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-${heavy_race_default}}
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -3133,7 +3146,7 @@ function run_tests(){
 
         # The plan race wave is independent after the engine wave has completed.
         # Reserve exactly its configured process count from the existing heavy
-        # budget, so plan+resource work never exceeds the prior three-slot cap.
+        # budget, so plan+resource work never exceeds the configured task cap.
         # If the budget cannot admit both waves, keep the phases sequential.
         if should_run_ut_stage heavy; then
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
