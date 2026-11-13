@@ -339,9 +339,9 @@ func newDataBranchCloneLockProcess(
 func dataBranchCloneCatalogLockBatch(
 	proc *process.Process,
 	accountID uint32,
-	names ...string,
+	databaseName, tableName string,
 ) (*batch.Batch, error) {
-	inputs := make([]*vector.Vector, len(names)+1)
+	inputs := make([]*vector.Vector, 3)
 	defer func() {
 		for _, input := range inputs {
 			if input != nil {
@@ -353,7 +353,7 @@ func dataBranchCloneCatalogLockBatch(
 	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
 		return nil, err
 	}
-	for i, name := range names {
+	for i, name := range []string{databaseName, tableName} {
 		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
 		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
 			return nil, err
