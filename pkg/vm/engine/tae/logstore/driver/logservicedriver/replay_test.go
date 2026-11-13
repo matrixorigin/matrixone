@@ -1138,7 +1138,7 @@ func Test_ReplayerReadsLegacyV2SkipCmd(t *testing.T) {
 		30,
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
-			if record.Lsn == 120 {
+			if record.Lsn == 121 {
 				return legacyEntry
 			}
 			return baseUnmarshal(record)
