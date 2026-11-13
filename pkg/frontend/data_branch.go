@@ -3319,6 +3319,9 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	if pkFilter == nil {
 		return nil, "empty-mo-tables-cpkey-filter", nil
 	}
+	// mo_tables is sorted by this composite PK, unlike cluster-by data tables
+	// and rowid-sorted tombstone objects.
+	pkFilter.ObjectZMIsPK = true
 	pkFilter.ReplaySpec = &engine.PKReplaySpec{
 		Op:   function.EQUAL,
 		Keys: [][]byte{replayKey},
