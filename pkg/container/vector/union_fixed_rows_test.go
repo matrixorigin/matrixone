@@ -24,8 +24,13 @@ import (
 )
 
 func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
-	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256} {
-		for _, prefix := range []int{0, 1, 2} {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256, types.T_char, types.T_varchar} {
+		varlen := oid == types.T_char || oid == types.T_varchar
+		prefixes := []int{0, 1, 2}
+		if varlen {
+			prefixes = []int{1}
+		}
+		for _, prefix := range prefixes {
 			for _, onlyNulls := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/prefix%d/all_null%t", oid, prefix, onlyNulls), func(t *testing.T) {
 					mp := mpool.MustNewZero()
@@ -38,21 +43,33 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 						require.Zero(t, mp.CurrNB())
 					})
 					for k, v := range []*Vector{a, b} {
-						require.NoError(t, v.PreExtend(20, mp))
-						v.SetLength(20)
-						for i := 0; i < 20*oid.TypeLen(); i++ {
-							v.data[i] = byte(i*3 + k*17)
+						if varlen {
+							for row := range 20 {
+								require.NoError(t, AppendBytes(v, []byte(fmt.Sprintf("\xff\x00%d-%d", k, row)), false, mp))
+							}
+						} else {
+							require.NoError(t, v.PreExtend(20, mp))
+							v.SetLength(20)
+							for i := 0; i < 20*oid.TypeLen(); i++ {
+								v.data[i] = byte(i*3 + k*17)
+							}
 						}
 						v.SetNull(2)
 						v.SetNull(4)
 					}
 					if prefix != 0 {
-						sel := int64(0)
-						if prefix == 2 {
-							sel = 2
+						if varlen && prefix == 1 {
+							for _, dst := range []*Vector{got, want} {
+								require.NoError(t, AppendBytes(dst, []byte("an existing out-of-line prefix"), false, mp))
+							}
+						} else {
+							sel := int64(0)
+							if prefix == 2 {
+								sel = 2
+							}
+							require.NoError(t, got.UnionOne(a, sel, mp))
+							require.NoError(t, want.UnionOne(a, sel, mp))
 						}
-						require.NoError(t, got.UnionOne(a, sel, mp))
-						require.NoError(t, want.UnionOne(a, sel, mp))
 					}
 					rows := []FixedSourceRow{{a, 8}, {b, 2}, {a, 8}, {b, 0}, {a, 4}, {b, 19}}
 					if onlyNulls {
@@ -73,7 +90,11 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
 						require.Equal(t, want.gsp.Contains(uint64(i)), got.gsp.Contains(uint64(i)))
 						if !want.IsNull(uint64(i)) {
-							require.Equal(t, want.data[i*width:(i+1)*width], got.data[i*width:(i+1)*width])
+							if varlen {
+								require.Equal(t, want.GetBytesAt(i), got.GetBytesAt(i))
+							} else {
+								require.Equal(t, want.data[i*width:(i+1)*width], got.data[i*width:(i+1)*width])
+							}
 						}
 					}
 				})
@@ -83,14 +104,26 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 }
 
 func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "parameter", "binary", "borrowed", "alias", "type", "negative", "past_end", "singleton"} {
+	for _, shape := range []string{"const", "grouping", "parameter", "binary", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			a, b, dst := NewVec(types.T_int64.ToType()), NewVec(types.T_int64.ToType()), NewVec(types.T_int64.ToType())
+			typ := types.T_int64.ToType()
+			if shape == "unicode" || shape == "out_of_line" {
+				typ = types.New(types.T_varchar, 64, 0)
+				if shape == "unicode" {
+					typ.Charset = types.CharsetUTF8MB4UnicodeCI
+				}
+			}
+			a, b, dst := NewVec(typ), NewVec(typ), NewVec(typ)
 			t.Cleanup(func() { b.cantFreeData = false; a.Free(mp); b.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) })
 			for _, v := range []*Vector{a, b} {
-				require.NoError(t, AppendFixed(v, int64(10), false, mp))
-				require.NoError(t, AppendFixed(v, int64(20), false, mp))
+				if typ.IsVarlen() {
+					require.NoError(t, AppendBytes(v, []byte("inline"), false, mp))
+					require.NoError(t, AppendBytes(v, []byte("a string longer than inline storage"), false, mp))
+				} else {
+					require.NoError(t, AppendFixed(v, int64(10), false, mp))
+					require.NoError(t, AppendFixed(v, int64(20), false, mp))
+				}
 			}
 			require.NoError(t, dst.UnionOne(a, 0, mp))
 			rows := []FixedSourceRow{{a, 0}, {b, 1}}
