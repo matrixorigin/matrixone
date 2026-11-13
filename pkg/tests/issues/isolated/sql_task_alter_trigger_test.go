@@ -158,6 +158,15 @@ func TestSQLTaskAlterAfterTriggerOnRealStorage(t *testing.T) {
 			require.NoError(t, err)
 			n, err := result.RowsAffected()
 			require.NoError(t, err)
+			if n != 1 {
+				var generation, count uint64
+				readErr := tx.QueryRowContext(ctx, "select schedule_generation, trigger_count from mo_task.sql_task where task_id=?", observed.TaskID).Scan(&generation, &count)
+				otherRows, otherErr := first.GetStorage().QuerySQLTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, observed.TaskID))
+				t.Logf("conditional update missed: task=%d observed generation=%d count=%d; writer transaction generation=%d count=%d error=%v; other CN rows=%d error=%v", observed.TaskID, observed.ScheduleGeneration, observed.TriggerCount, generation, count, readErr, len(otherRows), otherErr)
+				if len(otherRows) == 1 {
+					t.Logf("other CN generation=%d count=%d", otherRows[0].ScheduleGeneration, otherRows[0].TriggerCount)
+				}
+			}
 			require.EqualValues(t, 1, n)
 			firingID := name + "_firing"
 			// A paused synthetic firing is neither scheduled nor truncated while
