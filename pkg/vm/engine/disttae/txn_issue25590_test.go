@@ -6276,7 +6276,7 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 	require.NoError(t, e.ResetGCWorkerPool(pool))
 	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
-	rel, err := txn.getTable(ctx, 1, "db", "tbl")
+	rel, err := txn.getTable(ctx, 1, 7, "db", "tbl")
 	require.NoError(t, err)
 	tbl, ok := rel.(*txnTable)
 	require.True(t, ok)
@@ -7140,7 +7140,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
 	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
-	rel, err := txn.getTable(ctx, 1, "db", "tbl")
+	rel, err := txn.getTable(ctx, 1, 7, "db", "tbl")
 	require.NoError(t, err)
 	tbl, ok := rel.(*txnTable)
 	require.True(t, ok)

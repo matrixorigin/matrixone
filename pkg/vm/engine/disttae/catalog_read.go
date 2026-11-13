@@ -219,9 +219,16 @@ func (tbl *txnTable) readCatalogSnapshot(ctx context.Context) (*logtailreplay.Pa
 	if err := tail.UnmarshalBinary(result.Responses[0].CNOpResponse.Payload); err != nil {
 		return nil, err
 	}
+	ts := types.TimestampToTS(snapshot)
+	var start types.TS
 	if tail.CkpLocation != "" {
 		checkpoint := logtail.TableLogtail{CkpLocation: tail.CkpLocation}
-		parseCkpDuration(&checkpoint)
+		start, _ = parseCkpDuration(&checkpoint)
+		if start.GT(&ts) {
+			// An ordinary pull may start at a global checkpoint newer than
+			// this snapshot. Rebuild from the historical checkpoint chain.
+			return eng.getOrCreateSnapPartBy(pullCtx, tbl, ts)
+		}
 		if err := taelogtail.ConsumeCheckpointEntries(pullCtx, eng.service, checkpoint.CkpLocation,
 			tbl.tableId, tbl.tableName, tbl.db.databaseId, tbl.db.databaseName,
 			state.HandleObjectEntry, eng.mp, eng.fs); err != nil {
@@ -243,8 +250,7 @@ func (tbl *txnTable) readCatalogSnapshot(ctx context.Context) (*logtailreplay.Pa
 	if err := pullCtx.Err(); err != nil {
 		return nil, err
 	}
-	ts := types.TimestampToTS(snapshot)
-	state.UpdateDuration(types.TS{}, ts)
+	state.UpdateDuration(start, ts)
 	state.UpdateAppliedTo(ts)
 	return state, nil
 }

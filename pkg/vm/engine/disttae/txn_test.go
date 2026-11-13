@@ -838,16 +838,16 @@ func TestAdjustUpdateOrderLockedUsesAdjustedWriteOffset(t *testing.T) {
 func TestTransactionGetTableNilGuards(t *testing.T) {
 	txn := &Transaction{}
 
-	_, err := txn.getTable(context.Background(), 0, "db", "tbl")
+	_, err := txn.getTable(context.Background(), 0, 7, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disttae txn engine is nil")
 
 	txn.engine = &Engine{}
-	_, err = txn.getTable(nil, 0, "db", "tbl")
+	_, err = txn.getTable(nil, 0, 7, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disttae table lookup context is nil")
 
-	_, err = txn.getTable(context.Background(), 0, "db", "tbl")
+	_, err = txn.getTable(context.Background(), 0, 7, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disttae txn operator is nil")
 }
@@ -888,7 +888,7 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
-	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 1, nil)
+	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, 7, "db", "tbl", 1, nil)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
@@ -896,17 +896,17 @@ func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, "db", "tbl", 1, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, 7, "db", "tbl", 1, bat)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, 7, "db", "tbl", catalog.MO_TABLES_ID, bat)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 42, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, 7, "db", "tbl", 42, bat)
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.Equal(t, -1, pos)
@@ -1216,6 +1216,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		context.Background(),
 		INSERT,
 		1,
+		7,
 		"db",
 		"tbl",
 		42,
@@ -1229,6 +1230,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		context.Background(),
 		INSERT,
 		1,
+		7,
 		"db",
 		"tbl",
 		42,
@@ -1242,6 +1244,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		context.Background(),
 		DELETE,
 		1,
+		7,
 		"db",
 		"tbl",
 		42,
@@ -1255,6 +1258,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		context.Background(),
 		INSERT,
 		1,
+		7,
 		"db",
 		"tbl",
 		42,

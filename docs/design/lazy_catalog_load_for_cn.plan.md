@@ -127,7 +127,10 @@ reader 保留已有订阅、pending logtail 和 snapshot coverage 检查。普�
 获取完整 checkpoint + delta。
 结果仅属于本次 reader，不写回共享 push partition，不发布 cache ready，也不添加 wanted account。
 CN 仅额外保留三张表的固定 bootstrap 基线；其 COW fork 在 engine 锁内串行，RPC/I/O 在锁外。
-历史 snapshot 仍走原有 checkpoint coverage 路径；同事务写入仍由 workspace 合并。
+回源结果保留 checkpoint 的实际起始时间，不能宣称覆盖 `[0, snapshot]`。若全局 checkpoint
+晚于请求 snapshot，则复用原有历史 checkpoint 选择、读取及 snapshot manager，不发布账户 ready。
+同事务写入仍由 workspace 合并。workspace 维护优先按 account、database ID 和表名复用事务已打开
+的 Relation，保留事务内删除及 RC schema/database 身份失效检查，避免 Commit 关闭 SQL 入口后再回读元数据。
 
 只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以使用
 内部 replay 标记；普通 SQL 的快路径只依赖谓词证明，不得借用该标记。系统表的物理 `accountId=0` 不代表调用方

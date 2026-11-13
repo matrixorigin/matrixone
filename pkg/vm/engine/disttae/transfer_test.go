@@ -20,16 +20,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"go.uber.org/zap"
 
@@ -134,6 +138,86 @@ func TestTombstoneTransferLookupReentry(t *testing.T) {
 	txn.Unlock()
 	require.True(t, txn.TryLock(), "no lock may remain after caller unlocks")
 	txn.Unlock()
+}
+
+func TestTombstoneTransferUsesOpenedRelation(t *testing.T) {
+	for _, name := range []string{"opened relation", "other account", "other database", "deleted relation", "deleted database", "recreated database", "removed workspace", "canceled lookup"} {
+		t.Run(name, func(t *testing.T) {
+			lookupErr := errors.New("internal SQL is unavailable during commit")
+			calls := 0
+			sql := executor.NewMemExecutor(func(string) (executor.Result, error) {
+				calls++
+				return executor.Result{}, lookupErr
+			})
+			eng, db, txn, _ := newResultOwnershipFixture(t, sql, false)
+			catalogCache := cache.NewCatalog()
+			catalogCache.UpdateDuration(types.BuildTS(200, 0), types.MaxTs())
+			eng.catalog.Store(catalogCache)
+			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 100}).AnyTimes()
+			origin := &txnTable{eng: eng, db: db, accountId: 1, tableId: 42, tableName: "tbl"}
+			origin.proc.Store(txn.proc)
+			key := genTableKey(1, "tbl", 7, "db")
+			txn.tableCache.Store(key, &txnTableDelegate{origin: origin})
+			lookup := tombstoneTransferKey{accountId: 1, databaseId: 7, tableId: 42}
+			switch name {
+			case "other account":
+				lookup.accountId++
+			case "other database":
+				lookup.databaseId++
+			case "deleted relation":
+				txn.tableOps.addDeleteTable(key, 1, origin.tableId)
+			case "deleted database", "recreated database":
+				databaseKey := genDatabaseKey(1, "db")
+				txn.databaseOps.addDeleteDatabase(databaseKey, 1, 7)
+				if name == "recreated database" {
+					txn.databaseOps.addCreateDatabase(databaseKey, 2, &txnDatabase{
+						op: txn.op, accountId: 1, databaseId: 8, databaseName: "db",
+					})
+				}
+			case "removed workspace":
+				txn.removed = true
+			case "canceled lookup":
+				canceled, cancel := context.WithCancel(t.Context())
+				cancel()
+				txn.proc.Ctx = canceled
+			}
+			tables := map[tombstoneTransferKey]tombstoneTransferTable{
+				lookup: {databaseName: "db", hasDeletes: [2]bool{true, true}, writeNames: [2]string{"tbl", "tbl"}},
+			}
+			txn.Lock()
+			defer txn.Unlock()
+			callbacks := 0
+			err := txn.forEachTableHasDeletesLocked(tables, 0, func(got *txnTable, writeName string) error {
+				callbacks++
+				require.Same(t, origin, got)
+				require.Equal(t, "tbl", writeName)
+				return nil
+			})
+			if name != "opened relation" {
+				switch name {
+				case "deleted relation":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+				case "deleted database":
+					require.ErrorIs(t, err, moerr.GetOkExpectedEOB())
+				case "removed workspace":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+				case "canceled lookup":
+					require.ErrorIs(t, err, context.Canceled)
+				default:
+					require.ErrorIs(t, err, lookupErr)
+				}
+				require.Zero(t, callbacks)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, callbacks)
+			require.NoError(t, txn.forEachTableHasDeletesLocked(tables, 1, func(got *txnTable, _ string) error {
+				require.Same(t, origin, got)
+				return nil
+			}))
+			require.Zero(t, calls)
+		})
+	}
 }
 
 // Empty/insert-only workspaces must not require a process or SHARED FS.

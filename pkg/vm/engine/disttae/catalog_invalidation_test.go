@@ -103,6 +103,22 @@ func TestGetCachedTableByKeyRevalidatesAfterCatalogReplayAndGC(t *testing.T) {
 	eng.GetLatestCatalogCache().GC(timestamp.Timestamp{PhysicalTime: 150})
 	insertCatalogTableAt(t, eng, txn, 7, 10, 43, 1, "db", "t", types.BuildTS(300, 0))
 	require.Nil(t, txn.getCachedTableByKey(context.Background(), key, key))
+
+	// Commit can reuse the relation without reopening its database. A newer
+	// database identity must still invalidate that transaction-local handle.
+	eng.catalog.Store(cache.NewCatalog())
+	txn.tableCache.Store(key, delegate)
+	require.Same(t, delegate, txn.getCachedTableByKey(context.Background(), key, key))
+	packer := types.NewPacker()
+	defer packer.Close()
+	bat, err := catalog.GenCreateDatabaseTuple("", 7, 0, 0, "db", 11, "", txn.proc.Mp(), packer)
+	require.NoError(t, err)
+	defer bat.Clean(txn.proc.Mp())
+	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	require.NoError(t, err)
+	vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(400, 0)
+	eng.GetLatestCatalogCache().InsertDatabase(bat)
+	require.Nil(t, txn.getCachedTableByKey(context.Background(), key, key))
 }
 
 // A new session definition is visible without advancing an existing data

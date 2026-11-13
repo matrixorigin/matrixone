@@ -104,7 +104,7 @@ func TestIssue25590RCTombstoneTransferBoundToTheAdmissionLedger(t *testing.T) {
 	failFS := issue25590SwapProcSharedFS(t, txn)
 	e.fs = failFS
 
-	rel, err := txn.getTable(ctx, 1, "db", "tbl")
+	rel, err := txn.getTable(ctx, 1, 7, "db", "tbl")
 	require.NoError(t, err)
 	tbl, ok := rel.(*txnTable)
 	require.True(t, ok)

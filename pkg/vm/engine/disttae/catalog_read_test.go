@@ -262,3 +262,56 @@ func TestCatalogReadSnapshotCancellation(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-result, context.Canceled)
 }
+
+func TestCatalogReadSnapshotCheckpointCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		checkpoint string
+		start      types.TS
+		historical bool
+	}{
+		{name: "no checkpoint"},
+		{name: "covered snapshot", checkpoint: "2;[50-0_80-0]", start: types.BuildTS(50, 0)},
+		{name: "coverage boundary", checkpoint: "2;[100-0_100-0]", start: types.BuildTS(100, 0)},
+		{name: "snapshot before checkpoint", checkpoint: "2;[101-0_101-0]", historical: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tbl, op := newCatalogReadFixture(t)
+			payload, err := (&api.SyncLogTailResp{CkpLocation: tc.checkpoint}).MarshalBinary()
+			require.NoError(t, err)
+			op.EXPECT().Read(gomock.Any(), gomock.Any()).Return(&rpc.SendResult{
+				Responses: []txn.TxnResponse{{CNOpResponse: &txn.CNOpResponse{Payload: payload}}},
+			}, nil)
+			previous := RequestSnapshotRead
+			t.Cleanup(func() { RequestSnapshotRead = previous })
+			fallbackErr := moerr.NewInternalErrorNoCtx("historical checkpoint read failed")
+			calls := 0
+			RequestSnapshotRead = func(ctx context.Context, relation *txnTable, snapshot *types.TS) (any, error) {
+				calls++
+				require.NoError(t, ctx.Err())
+				require.Same(t, tbl, relation)
+				require.Equal(t, types.BuildTS(100, 0), *snapshot)
+				return nil, fallbackErr
+			}
+			state, err := tbl.readCatalogSnapshot(t.Context())
+			if tc.historical {
+				require.ErrorIs(t, err, fallbackErr)
+				require.Nil(t, state)
+				require.Equal(t, 1, calls)
+			} else {
+				require.NoError(t, err)
+				start, end := state.GetDuration()
+				require.Equal(t, tc.start, start)
+				require.Equal(t, types.BuildTS(100, 0), end)
+				require.True(t, state.CanServe(types.BuildTS(100, 0)))
+				if !start.IsEmpty() {
+					require.False(t, state.CanServe(start.Prev()))
+				}
+				require.Zero(t, calls)
+			}
+			eng := tbl.eng.(*Engine)
+			require.Empty(t, eng.partitions)
+			require.False(t, eng.pClient.CanServeAccount(20, timestamp.Timestamp{PhysicalTime: 100}))
+		})
+	}
+}

@@ -600,6 +600,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			ctx,
 			typ,
 			accountId,
+			databaseId,
 			databaseName,
 			tableName,
 			tableId,
@@ -934,7 +935,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 			return idx, nil
 		}
 		if _, ok := tablesDef[e.tableId]; !ok {
-			tbl, err := txn.getTable(ctx, e.accountId, e.databaseName, e.tableName)
+			tbl, err := txn.getTable(ctx, e.accountId, e.databaseId, e.databaseName, e.tableName)
 			if err != nil {
 				return -1, err
 			}
@@ -3339,7 +3340,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 
 	txn.Unlock()
 	for _, k := range keys {
-		tbl, terr := txn.getTable(ctx, k.accountId, k.dbName, k.name)
+		tbl, terr := txn.getTable(ctx, k.accountId, k.databaseId, k.dbName, k.name)
 		if terr != nil {
 			txn.Lock()
 			return nil, false, terr
@@ -3362,6 +3363,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 func (txn *Transaction) getTable(
 	ctx context.Context,
 	id uint32,
+	databaseId uint64,
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
@@ -3404,8 +3406,44 @@ func (txn *Transaction) getTable(
 	if txnOp == nil {
 		return nil, moerr.NewInternalErrorNoCtx("disttae txn operator is nil")
 	}
+	if _, err := txnIsValid(txnOp); err != nil {
+		return nil, err
+	}
 
 	ctx = defines.AttachAccountId(ctx, id)
+	if dbName != catalog.MO_CATALOG && txn.databaseOps != nil {
+		databaseKey := genDatabaseKey(id, dbName)
+		if txn.databaseOps.existAndDeleted(databaseKey) {
+			return nil, moerr.GetOkExpectedEOB()
+		}
+		if database := txn.databaseOps.existAndActive(databaseKey); database != nil {
+			return database.Relation(ctx, tbName, nil)
+		}
+	}
+	accountId := id
+	openSys := databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(tbName)
+	if openSys {
+		accountId = catalog.System_Account
+	}
+	key := genTableKey(accountId, tbName, databaseId, dbName)
+	if !openSys && txn.tableOps != nil {
+		if txn.tableOps.existAndDeleted(key) {
+			return nil, moerr.NewNoSuchTable(ctx, dbName, tbName)
+		}
+		if table := txn.tableOps.existAndActive(key); table != nil {
+			table.proc.Store(txn.proc)
+			return table, nil
+		}
+	}
+	// Commit seals SQL admission before workspace maintenance. Reuse the
+	// transaction's relation, including RC revalidation, before a cold database
+	// lookup can try to start another internal SQL statement.
+	if txn.tableCache != nil {
+		if table := txn.getCachedTable(ctx, key); table != nil {
+			table.origin.proc.Store(txn.proc)
+			return table, nil
+		}
+	}
 
 	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {
@@ -3430,6 +3468,7 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	ctx context.Context,
 	typ int,
 	accountId uint32,
+	databaseId uint64,
 	databaseName, tableName string,
 	tableId uint64,
 	bat *batch.Batch,
@@ -3451,7 +3490,7 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 		return -1, false, nil
 	}
 
-	tbl, err := txn.getTable(ctx, accountId, databaseName, tableName)
+	tbl, err := txn.getTable(ctx, accountId, databaseId, databaseName, tableName)
 	if err != nil {
 		return -1, false, err
 	}
@@ -4949,6 +4988,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	type lookup struct {
 		key          tableKey
 		relationName string
+		databaseId   uint64
 	}
 	tables := make(map[tableKey]engine.Relation)
 	for {
@@ -4965,7 +5005,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 				}
 				if _, ok := tables[k]; !ok && !seen[k] {
 					seen[k] = true
-					missing = append(missing, lookup{k, physicalCatalogTableName(summary.databaseId, summary.tableId, summary.tbName)})
+					missing = append(missing, lookup{k, physicalCatalogTableName(summary.databaseId, summary.tableId, summary.tbName), summary.databaseId})
 				}
 				return true
 			})
@@ -4976,7 +5016,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		txn.Unlock()
 		for _, entry := range missing {
 			k := entry.key
-			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, entry.relationName)
+			tbl, err := txn.getTable(ctx, k.accountId, entry.databaseId, k.dbName, entry.relationName)
 			if err != nil {
 				txn.Lock()
 				return nil, err
@@ -5665,7 +5705,7 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 		rel, err := func() (engine.Relation, error) {
 			txn.Unlock()
 			defer txn.Lock()
-			return txn.getTable(txn.proc.Ctx, key.accountId, dbName, name)
+			return txn.getTable(txn.proc.Ctx, key.accountId, key.databaseId, dbName, name)
 		}()
 		if err != nil {
 			return err
@@ -5730,12 +5770,13 @@ func (txn *Transaction) getCachedTableByKey(
 
 		catalogCache := txn.engine.GetLatestCatalogCache()
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  k.accountId,
-			DatabaseId: k.databaseId,
-			Name:       k.name,
-			Version:    tbl.origin.version,
-			TableId:    tbl.origin.tableId,
-			Ts:         tbl.origin.lastTS,
+			AccountId:    k.accountId,
+			DatabaseId:   k.databaseId,
+			DatabaseName: k.dbName,
+			Name:         k.name,
+			Version:      tbl.origin.version,
+			TableId:      tbl.origin.tableId,
+			Ts:           tbl.origin.lastTS,
 		}
 		if catalogCache.HasNewerVersion(tblKey) {
 			txn.tableCache.Delete(genTableKey(k.accountId, k.name, k.databaseId, k.dbName))
