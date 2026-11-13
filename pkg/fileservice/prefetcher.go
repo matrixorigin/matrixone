@@ -43,6 +43,8 @@ type ObjectPrefetch struct {
 	Scan     *PrefetchScan
 	// deletes is the file service's count of deleted objects when the request was made.
 	deletes uint64
+	// live is set once a read waits for the download.
+	live bool
 }
 
 // PrefetchRange is a range of an object.
@@ -125,7 +127,16 @@ type prefetchEntry struct {
 	req   ObjectPrefetch
 	scans []*PrefetchScan
 	seq   uint64
-	index int // in the queue, or -1 once its download started
+	queue *fetchQueue // the queue it waits in, nil once its download started
+	index int         // in queue
+	// started is closed once reads can join the download, or it ended.
+	started chan struct{}
+	once    sync.Once
+}
+
+// start marks the download joinable.
+func (e *prefetchEntry) start() {
+	e.once.Do(func() { close(e.started) })
 }
 
 // live reports whether a read the download is for has not ended.
@@ -179,31 +190,57 @@ func (q *prefetchQueue) Pop() any {
 	return e
 }
 
-// prefetcher downloads the objects queued for it, a bounded number at once, those the
-// reads reach soonest first, whatever order they are asked for in. An object is queued
-// once, and never while it is being downloaded or cached.
+// fetchQueue is a queue of downloads and its workers, which run at most max of them at
+// once.
+type fetchQueue struct {
+	queue   prefetchQueue
+	bytes   int64
+	max     int
+	running int
+}
+
+func (q *fetchQueue) push(e *prefetchEntry) {
+	heap.Push(&q.queue, e)
+	e.queue = q
+	q.bytes += e.req.Size
+}
+
+func (q *fetchQueue) remove(e *prefetchEntry) {
+	heap.Remove(&q.queue, e.index)
+	e.queue = nil
+	q.bytes -= e.req.Size
+}
+
+// prefetcher downloads the objects queued for it, those the reads reach soonest first,
+// whatever order they are asked for in. A read that reaches an object whose download
+// waits moves it to the live queue, whose workers run before the prefetch queue's start
+// more. An object is queued once, and never while it is being downloaded or cached.
 type prefetcher struct {
 	run    func(context.Context, ObjectPrefetch)
 	ctx    context.Context
 	cancel context.CancelFunc
 	have   func(ObjectPrefetch) bool // what the request downloads is cached or being downloaded
 	limit  func() int64              // the most bytes queued
-	max    int
 	queued atomic.Int64
+	known  atomic.Int64 // entries
 
-	mu          sync.Mutex
-	queue       prefetchQueue
-	queuedBytes int64
-	entries     map[string]*prefetchEntry
-	seq         uint64
-	running     int
-	closed      bool
-	wg          sync.WaitGroup
+	mu       sync.Mutex
+	prefetch fetchQueue // downloads ahead of the reads
+	live     fetchQueue // downloads a read waits for
+	entries  map[string]*prefetchEntry
+	seq      uint64
+	closed   bool
+	wg       sync.WaitGroup
 }
 
-func newPrefetcher(max int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
+func newPrefetcher(workers int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &prefetcher{run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, max: max, entries: make(map[string]*prefetchEntry)}
+	return &prefetcher{
+		run: run, ctx: ctx, cancel: cancel, have: have, limit: limit,
+		prefetch: fetchQueue{max: workers},
+		live:     fetchQueue{max: max(workers, 1)},
+		entries:  make(map[string]*prefetchEntry),
+	}
 }
 
 // add queues req, or moves the queued object nearer the front when req needs it sooner.
@@ -218,22 +255,22 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		return
 	}
 	if e, ok := p.entries[req.FilePath]; ok {
-		if e.index >= 0 && have {
+		if e.queue == &p.prefetch && have {
 			metric.FSPrefetchCachedCounter.Inc()
 			return
 		}
 		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
-		if e.index >= 0 {
+		if e.queue == &p.prefetch {
 			merged := e.req.merge(req)
-			if grow := merged.Size - e.req.Size; grow > 0 && p.queuedBytes+grow > p.limit() {
+			if grow := merged.Size - e.req.Size; grow > 0 && p.prefetch.bytes+grow > p.limit() {
 				// Past the queue's bytes, the queued download keeps what it downloads.
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
 				metric.FSPrefetchDroppedCounter.Inc()
 			}
-			p.queuedBytes += merged.Size - e.req.Size
+			p.prefetch.bytes += merged.Size - e.req.Size
 			e.req = merged
-			heap.Fix(&p.queue, e.index)
+			heap.Fix(&p.prefetch.queue, e.index)
 		}
 		return
 	}
@@ -242,77 +279,95 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		return
 	}
 	p.seq++
-	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq}
+	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq, started: make(chan struct{})}
 	limit := p.limit()
 	if req.Size > limit {
 		metric.FSPrefetchDroppedCounter.Inc()
 		return
 	}
-	for p.queuedBytes+req.Size > limit {
+	for q := p.prefetch.queue; p.prefetch.bytes+req.Size > limit; q = p.prefetch.queue {
 		last := -1
-		for i := range p.queue {
-			if !p.queue[i].live() {
+		for i := range q {
+			if !q[i].live() {
 				last = i
 				break
 			}
-			if last < 0 || p.queue[last].before(p.queue[i]) {
+			if last < 0 || q[last].before(q[i]) {
 				last = i
 			}
 		}
-		if last < 0 || p.queue[last].live() && !e.before(p.queue[last]) {
+		if last < 0 || q[last].live() && !e.before(q[last]) {
 			metric.FSPrefetchDroppedCounter.Inc()
 			return
 		}
-		p.dropLocked(last)
+		p.dropLocked(q[last])
 	}
-	heap.Push(&p.queue, e)
+	p.prefetch.push(e)
 	metric.FSPrefetchQueuedCounter.Inc()
 	p.entries[req.FilePath] = e
-	p.queuedBytes += req.Size
+	p.known.Add(1)
 	p.queued.Add(1)
 	p.startLocked()
 }
 
-// removeLocked removes the queued download at index i of the queue.
-func (p *prefetcher) removeLocked(i int) *prefetchEntry {
-	e := heap.Remove(&p.queue, i).(*prefetchEntry)
+func (p *prefetcher) forgetLocked(e *prefetchEntry) {
 	delete(p.entries, e.req.FilePath)
-	p.queuedBytes -= e.req.Size
-	p.queued.Add(-1)
-	return e
+	p.known.Add(-1)
 }
 
-// dropLocked drops the queued download at index i of the queue.
-func (p *prefetcher) dropLocked(i int) {
-	if p.removeLocked(i).live() {
+// removeLocked removes the queued download e, which no read waits for then.
+func (p *prefetcher) removeLocked(e *prefetchEntry) {
+	e.queue.remove(e)
+	p.forgetLocked(e)
+	p.queued.Add(-1)
+	e.start()
+}
+
+// dropLocked drops the queued download e.
+func (p *prefetcher) dropLocked(e *prefetchEntry) {
+	live := e.live()
+	p.removeLocked(e)
+	if live {
 		metric.FSPrefetchDroppedCounter.Inc()
 	} else {
 		metric.FSPrefetchEndedCounter.Inc()
 	}
 }
 
+// startLocked starts the downloads the workers have room for, those of the live queue
+// first; the prefetch queue starts none while the live queue waits.
 func (p *prefetcher) startLocked() {
-	for p.running < p.max && len(p.queue) > 0 {
-		e := heap.Pop(&p.queue).(*prefetchEntry)
-		p.queuedBytes -= e.req.Size
+	p.startQueueLocked(&p.live)
+	if len(p.live.queue) == 0 {
+		p.startQueueLocked(&p.prefetch)
+	}
+}
+
+func (p *prefetcher) startQueueLocked(q *fetchQueue) {
+	for q.running < q.max && len(q.queue) > 0 {
+		e := q.queue[0]
+		q.remove(e)
 		p.queued.Add(-1)
-		if !e.live() {
-			delete(p.entries, e.req.FilePath)
+		// A read waits for a live download, whatever the scans it was asked for.
+		if q == &p.prefetch && !e.live() {
+			p.forgetLocked(e)
+			e.start()
 			metric.FSPrefetchEndedCounter.Inc()
 			continue
 		}
-		p.running++
+		q.running++
 		p.wg.Add(1)
 		go func() {
 			defer func() {
 				p.mu.Lock()
-				delete(p.entries, e.req.FilePath)
-				p.running--
+				p.forgetLocked(e)
+				q.running--
+				e.start()
 				p.startLocked()
 				p.mu.Unlock()
 				p.wg.Done()
 			}()
-			p.run(p.ctx, e.req)
+			p.run(withDownloadStarted(p.ctx, e.start), e.req)
 		}()
 	}
 }
@@ -322,29 +377,45 @@ func (p *prefetcher) isRunning(filePath string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
-	return ok && e.index < 0
+	return ok && e.queue == nil
 }
 
-// remove drops the queued download of filePath, as a read reached the object before it,
-// and reports whether it was queued.
+// remove drops the queued download of filePath, and reports whether it was queued.
 func (p *prefetcher) remove(filePath string) bool {
-	_, ok := p.take(filePath, func(ObjectPrefetch) bool { return true })
-	return ok
-}
-
-// take drops and returns the queued download of filePath when want accepts its request.
-func (p *prefetcher) take(filePath string, want func(ObjectPrefetch) bool) (ObjectPrefetch, bool) {
 	if p.queued.Load() == 0 {
-		return ObjectPrefetch{}, false
+		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
-	if !ok || e.index < 0 || !want(e.req) {
-		return ObjectPrefetch{}, false
+	if !ok || e.queue == nil {
+		return false
 	}
-	p.removeLocked(e.index)
-	return e.req, true
+	p.removeLocked(e)
+	return true
+}
+
+// join returns, when want accepts the request of the download of filePath, a channel
+// closed once reads can join the download, or it ended. A download still waiting in the
+// prefetch queue moves to the live queue.
+func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (<-chan struct{}, bool) {
+	if p.known.Load() == 0 {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[filePath]
+	if !ok || !want(e.req) {
+		return nil, false
+	}
+	if e.queue == &p.prefetch {
+		metric.FSPrefetchMissedCounter.Inc()
+		p.prefetch.remove(e)
+		e.req.live = true
+		p.live.push(e)
+		p.startLocked()
+	}
+	return e.started, true
 }
 
 // close drops the queued downloads, cancels the running ones and waits for them, or ctx.
@@ -352,12 +423,11 @@ func (p *prefetcher) close(ctx context.Context) {
 	p.mu.Lock()
 	p.closed = true
 	p.cancel()
-	for _, e := range p.queue {
-		delete(p.entries, e.req.FilePath)
+	for _, q := range []*fetchQueue{&p.prefetch, &p.live} {
+		for len(q.queue) > 0 {
+			p.removeLocked(q.queue[0])
+		}
 	}
-	p.queued.Add(-int64(len(p.queue)))
-	p.queue = nil
-	p.queuedBytes = 0
 	p.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
@@ -367,6 +437,27 @@ func (p *prefetcher) close(ctx context.Context) {
 	select {
 	case <-done:
 	case <-ctx.Done():
+	}
+}
+
+type downloadStartedKey struct{}
+
+// withDownloadStarted returns ctx, through which a download calls started once reads
+// can join it.
+func withDownloadStarted(ctx context.Context, started func()) context.Context {
+	return context.WithValue(ctx, downloadStartedKey{}, started)
+}
+
+// isDownload reports whether ctx is that of a prefetcher's download.
+func isDownload(ctx context.Context) bool {
+	_, ok := ctx.Value(downloadStartedKey{}).(func())
+	return ok
+}
+
+// downloadStarted tells the prefetcher whose download ctx is for that reads can join it.
+func downloadStarted(ctx context.Context) {
+	if started, ok := ctx.Value(downloadStartedKey{}).(func()); ok {
+		started()
 	}
 }
 
@@ -457,7 +548,7 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 			return s.storage.Read(ctx, key, &start, &end)
 		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
-		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
+		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open, req.live); ok {
 			if err != nil {
 				metric.FSPrefetchFailedCounter.Inc()
 				logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))

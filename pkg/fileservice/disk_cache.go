@@ -1075,6 +1075,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var dst io.Writer = f
 	if fill != notWholeFill {
 		download = d.startDownload(diskPath, f.Name(), fill == storageFill, bounds)
+		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
 		endUpdate := doneUpdate
 		doneUpdate = func() error {

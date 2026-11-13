@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +112,7 @@ func TestPrefetcherRemove(t *testing.T) {
 	require.False(t, p.remove("b"), "already dropped")
 	require.False(t, p.remove("first"), "a running download is not queued")
 	require.False(t, p.remove("missing"))
-	require.Equal(t, int64(200), p.queuedBytes)
+	require.Equal(t, int64(200), p.prefetch.bytes)
 	close(r.release)
 	for range 2 {
 		<-r.started
@@ -221,10 +222,10 @@ func TestPrefetcherMergeOfCachedRequestKeepsQueuedDownload(t *testing.T) {
 	p.add(columns)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 50, Ranges: []PrefetchRange{cached}})
 	require.Equal(t, columns.Ranges, p.entries["a"].req.Ranges, "the cache satisfies the request")
-	require.Equal(t, int64(10), p.queuedBytes)
+	require.Equal(t, int64(10), p.prefetch.bytes)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 1000})
 	require.Nil(t, p.entries["a"].req.Ranges, "the whole object takes over")
-	require.Equal(t, int64(1000), p.queuedBytes)
+	require.Equal(t, int64(1000), p.prefetch.bytes)
 	p.close(context.Background())
 }
 
@@ -239,10 +240,10 @@ func TestPrefetcherMergeKeepsQueueBytes(t *testing.T) {
 	require.Equal(t, columns.Ranges, got.Ranges, "the whole object is past the queue's bytes")
 	require.Equal(t, int64(10), got.Size)
 	require.Equal(t, int64(-1), got.Due, "it is still needed sooner")
-	require.Equal(t, int64(10), p.queuedBytes)
+	require.Equal(t, int64(10), p.prefetch.bytes)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 100})
 	require.Nil(t, p.entries["a"].req.Ranges, "within the queue's bytes the whole object takes over")
-	require.Equal(t, int64(100), p.queuedBytes)
+	require.Equal(t, int64(100), p.prefetch.bytes)
 	p.close(context.Background())
 }
 
@@ -302,23 +303,116 @@ func TestPrefetcherOversizedRequestDropsNothing(t *testing.T) {
 	p.close(context.Background())
 }
 
-// take drops a queued download only when its request is wanted.
-func TestPrefetcherTake(t *testing.T) {
+// A read joins a download only when it wants its request. One still in the prefetch
+// queue moves to the live queue, whose worker starts it while the prefetch worker is
+// busy, and the read waits until reads can join it.
+func TestPrefetcherJoin(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(0, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
-	defer p.close(context.Background())
-	whole := func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 }
+	joinable := make(chan struct{})
+	run := func(ctx context.Context, req ObjectPrefetch) {
+		r.started <- req.FilePath
+		if req.live {
+			<-joinable
+			downloadStarted(ctx)
+		}
+		<-r.release
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 10})
+	require.Equal(t, "first", <-r.started)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}})
-	_, ok := p.take("a", whole)
+	p.add(ObjectPrefetch{FilePath: "b", Size: 20})
+	columns := func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 }
+
+	_, ok := p.join("a", func(req ObjectPrefetch) bool { return len(req.Ranges) == 0 })
 	require.False(t, ok)
 	require.True(t, p.isQueued("a"))
-	got, ok := p.take("a", func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	started, ok := p.join("a", columns)
 	require.True(t, ok)
-	require.Equal(t, []PrefetchRange{{Offset: 0, Size: 10}}, got.Ranges)
+	require.Equal(t, "a", <-r.started, "a live worker starts it")
 	require.False(t, p.isQueued("a"))
-	require.Zero(t, p.queuedBytes)
-	_, ok = p.take("a", whole)
-	require.False(t, ok, "nothing queued")
+	require.Equal(t, int64(20), p.prefetch.bytes)
+	select {
+	case <-started:
+		t.Fatal("joinable before its download says so")
+	default:
+	}
+	close(joinable)
+	<-started
+	again, ok := p.join("a", columns)
+	require.True(t, ok, "a running download is joined")
+	<-again
+
+	close(r.release)
+	require.Equal(t, "b", <-r.started)
+	p.close(context.Background())
+	_, ok = p.join("a", columns)
+	require.False(t, ok, "an ended download is not joined")
+}
+
+// The prefetch queue starts nothing while a download waits in the live queue.
+func TestPrefetcherLiveQueueGoesFirst(t *testing.T) {
+	started := make(chan string, 8)
+	release := map[string]chan struct{}{}
+	for _, path := range []string{"first", "a", "b", "c"} {
+		release[path] = make(chan struct{})
+	}
+	run := func(_ context.Context, req ObjectPrefetch) {
+		started <- req.FilePath
+		<-release[req.FilePath]
+	}
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, run)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 10})
+	require.Equal(t, "first", <-started)
+	for _, path := range []string{"a", "b", "c"} {
+		p.add(ObjectPrefetch{FilePath: path, Size: 10})
+	}
+	all := func(ObjectPrefetch) bool { return true }
+	_, ok := p.join("b", all)
+	require.True(t, ok)
+	require.Equal(t, "b", <-started)
+	waiting, ok := p.join("c", all)
+	require.True(t, ok)
+
+	close(release["first"])
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.prefetch.running == 0
+	}, 10*time.Second, time.Millisecond)
+	require.True(t, p.isQueued("a"), "the free prefetch worker waits for the live queue")
+
+	close(release["b"])
+	require.ElementsMatch(t, []string{"c", "a"}, []string{<-started, <-started},
+		"the prefetch queue starts once the live queue is empty")
+	close(release["c"])
+	<-waiting
+	close(release["a"])
+	p.close(context.Background())
+}
+
+// Closing the prefetcher wakes the reads waiting for downloads it drops.
+func TestPrefetcherCloseWakesJoins(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 10})
+	require.Equal(t, "first", <-r.started)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 10})
+	p.add(ObjectPrefetch{FilePath: "b", Size: 10})
+	all := func(ObjectPrefetch) bool { return true }
+	_, ok := p.join("a", all)
+	require.True(t, ok)
+	require.Equal(t, "a", <-r.started)
+	waiting, ok := p.join("b", all)
+	require.True(t, ok)
+	closed := make(chan struct{})
+	go func() {
+		p.close(context.Background())
+		close(closed)
+	}()
+	<-waiting
+	close(r.release)
+	<-closed
 }
 
 // isQueued reports whether the download of filePath is queued and not started.
@@ -329,5 +423,5 @@ func (p *prefetcher) isQueued(filePath string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[filePath]
-	return ok && e.index >= 0
+	return ok && e.queue != nil
 }

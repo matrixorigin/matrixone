@@ -555,25 +555,23 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}}, nil
 }
 
-// readQueuedObject drops the queued download of the object of vector, which the read
-// reached first, and the read reads its ranges.
-func (s *S3FS) readQueuedObject(vector *IOVector) {
-	if s.prefetcher.remove(vector.FilePath) {
-		vector.Policy |= SkipFullFilePreloads
-		metric.FSPrefetchMissedCounter.Inc()
+// joinQueued waits until the read can join the prefetcher's download of the object of
+// vector, when it is one the read would join: its column ranges for a column read, the
+// whole object for a read that may download it. A download still waiting moves to the
+// live queue. The reads of a download join none.
+func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) {
+	columns := vector.Policy.Any(ColumnPrefetch)
+	if !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
+		return
 	}
-}
-
-// readQueuedColumns downloads now the queued column ranges of the object of vector, which
-// the read reached first, so the read is served from them. A queued download of the whole
-// object stays queued.
-func (s *S3FS) readQueuedColumns(ctx context.Context, vector *IOVector) {
-	req, ok := s.prefetcher.take(vector.FilePath, func(req ObjectPrefetch) bool { return len(req.Ranges) > 0 })
+	started, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool { return (len(req.Ranges) > 0) == columns })
 	if !ok {
 		return
 	}
-	metric.FSPrefetchMissedCounter.Inc()
-	s.prefetchObject(withoutEventLogger(ctx), req)
+	select {
+	case <-started:
+	case <-ctx.Done():
+	}
 }
 
 // firstNeeded returns the least offset of the entries of vector not done.
@@ -747,9 +745,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
 	}
-	if !vector.Policy.Any(SkipFullFilePreloads) && s.prefetcher != nil {
-		s.readQueuedObject(vector)
-	}
 	var finishDecode func()
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket
@@ -901,8 +896,8 @@ read_disk_cache:
 		}
 	}
 
-	if vector.Policy.Any(ColumnPrefetch) && s.prefetcher != nil {
-		s.readQueuedColumns(ctx, vector)
+	if s.prefetcher != nil {
+		s.joinQueued(ctx, vector)
 	}
 	if s.diskCache != nil {
 
