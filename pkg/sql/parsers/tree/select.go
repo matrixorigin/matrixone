@@ -90,6 +90,8 @@ type Rewrite struct {
 	TableName string
 	DbName    string
 	Stmt      Statement
+	// 保存经过校验的规则原文；每次绑定重新解析，不能修改共享 Stmt。
+	SQL string
 }
 
 type TimeWindow struct {

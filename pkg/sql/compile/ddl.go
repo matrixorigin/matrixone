@@ -1932,6 +1932,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	return c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName)
+}
+
+func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
@@ -1945,6 +1949,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			// 传递外层源查询的有效规则，不从诊断 SQL 重建策略。
+			ctxWithSession = attachInternalExecutorRewriteOption(ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -1965,6 +1971,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	return nil
+}
+
+func (c *Compile) ctasRewriteOption() *tree.RewriteOption {
+	createTable, ok := c.stmt.(*tree.CreateTable)
+	if !ok || createTable.AsSource == nil {
+		return nil
+	}
+	return createTable.AsSource.RewriteOption
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {

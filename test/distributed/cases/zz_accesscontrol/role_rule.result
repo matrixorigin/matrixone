@@ -36,40 +36,275 @@ insert into db1.t_dup values (1,1),(1,2),(2,3);
 create role test_rule_role;
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 28
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 28
 alter role non_existent_role add rule "select * from db1.t1" on table db1.t1;
 internal error: there is no role non_existent_role
 alter role test_rule_role add rule "select * from db1.t1 where age > 50" on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 50
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 50
 alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 50
-db2.t2    select id from db2.t2_new
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 50  𝄀
+db2.t2  ¦  select id from db2.t2_new
 alter role test_rule_role drop rule on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db2.t2    select id from db2.t2_new
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db2.t2  ¦  select id from db2.t2_new
 alter role non_existent_role drop rule on table db1.t1;
 internal error: there is no role non_existent_role
 alter role test_rule_role drop rule on table no_such.rule;
 internal error: rule 'no_such.rule' does not exist for role 'test_rule_role'
 alter role test_rule_role drop rule on table db2.t2;
 show rules on role test_rule_role;
-rule_name    rule
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]
 show rules on role non_existent_role;
 internal error: there is no role non_existent_role
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
 create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
+grant create table, drop table on database db1 to test_rule_role;
+alter role test_rule_role add rule "select * from db1.t_dup where marker = 2 and a = 1" on table db1.t_dup;
 set enable_remap_hint = 1;
 select * from db1.t1;
-a    age
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
+create table db1.ctas_visible as select a from db1.t1;
+select * from db1.ctas_visible order by a;
+➤ a[4,32,0]  𝄀
+100
+select sum(a) as total, count(*) as n from db1.t1 where age < 28;
+➤ total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  0
+create table db1.ctas_aggregate as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t1 where age < 28) src;
+select * from db1.ctas_aggregate order by rn;
+➤ rn[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  null  ¦  0
+select sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+➤ total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  0
+create table db1.ctas_second as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t_dup where marker = 1) src;
+select * from db1.ctas_second order by rn;
+➤ rn[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  null  ¦  0
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+➤ kind[12,-1,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+total  ¦  null  ¦  0
+create table db1.ctas_union as
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+select * from db1.ctas_union order by kind;
+➤ kind[12,-1,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+total  ¦  null  ¦  0
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+➤ first_a[4,32,0]  ¦  marker[4,32,0]  𝄀
+100  ¦  2
+create table db1.ctas_join as
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+select * from db1.ctas_join order by first_a, marker;
+➤ first_a[4,32,0]  ¦  marker[4,32,0]  𝄀
+100  ¦  2
+select * from db1.ctas_visible order by a;
+➤ a[4,32,0]  𝄀
+100
+select * from db1.ctas_aggregate order by rn;
+➤ rn[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  null  ¦  0
+select * from db1.ctas_second order by rn;
+➤ rn[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  null  ¦  0
+select * from db1.ctas_union order by kind;
+➤ kind[12,-1,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+total  ¦  null  ¦  0
+select * from db1.ctas_join order by first_a, marker;
+➤ first_a[4,32,0]  ¦  marker[4,32,0]  𝄀
+100  ¦  2
+create table db1.ctas_unrestricted as select sum(a) as total, count(*) as n from db1.t1;
+select * from db1.ctas_unrestricted;
+➤ total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+103  ¦  3
+drop table db1.ctas_visible;
+drop table db1.ctas_aggregate;
+drop table db1.ctas_second;
+drop table db1.ctas_union;
+drop table db1.ctas_join;
+drop table db1.ctas_unrestricted;
+create table db1.ctas_policy_source(k int, amount int);
+insert into db1.ctas_policy_source values (1,10),(2,90);
+alter role test_rule_role add rule "select k, sum(amount) as amount from db1.ctas_policy_source where k = 1 group by k with rollup" on table db1.ctas_policy_source;
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source order by k;
+➤ k[4,32,0]  ¦  amount[-5,64,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+create table db1.ctas_rollup as select * from db1.ctas_policy_source;
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+➤ n[-5,64,0]  ¦  total[-5,64,0]  𝄀
+2  ¦  20
+select * from db1.ctas_rollup order by k;
+➤ k[4,32,0]  ¦  amount[-5,64,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+➤ n[-5,64,0]  ¦  total[-5,64,0]  𝄀
+2  ¦  20
+drop table db1.ctas_rollup;
+alter role test_rule_role add rule "select amount from db1.ctas_policy_source where k = 1" on table db1.ctas_policy_source;
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source;
+➤ amount[4,32,0]  𝄀
+10
+create table db1.ctas_project as select * from db1.ctas_policy_source;
+create table db1.ctas_project_paren as (select * from db1.ctas_policy_source);
+create table db1.ctas_project_nested as ((select * from db1.ctas_policy_source));
+select * from db1.ctas_project;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_project_paren;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_project_nested;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_project;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_project_paren;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_project_nested;
+➤ amount[4,32,0]  𝄀
+10
+drop table db1.ctas_project;
+drop table db1.ctas_project_paren;
+drop table db1.ctas_project_nested;
+create role test_rule_ctas_wide;
+grant connect on account * to test_rule_ctas_wide;
+grant select on table *.* to test_rule_ctas_wide;
+grant create table, drop table on database db1 to test_rule_ctas_wide;
+grant test_rule_ctas_wide to test_rule_user;
+set enable_remap_hint = 1;
+prepare ctas_policy_stmt from 'create table db1.ctas_prepared as (select * from db1.ctas_policy_source)';
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+execute ctas_policy_stmt;
+table ctas_prepared already exists
+drop table db1.ctas_prepared;
+set role test_rule_ctas_wide;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared order by k;
+➤ k[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  90
+drop table db1.ctas_prepared;
+set role test_rule_role;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+select * from db1.ctas_prepared;
+➤ amount[4,32,0]  𝄀
+10
+drop table db1.ctas_prepared;
+deallocate prepare ctas_policy_stmt;
+set @ctas_policy_sql = 'create table db1.ctas_prepared_var as select * from db1.ctas_policy_source';
+prepare ctas_policy_var from @ctas_policy_sql;
+execute ctas_policy_var;
+deallocate prepare ctas_policy_var;
+select * from db1.ctas_prepared_var;
+➤ amount[4,32,0]  𝄀
+10
+drop table db1.ctas_prepared_var;
+drop database if exists db_ctas_context;
+create database db_ctas_context;
+create table db_ctas_context.ctas_policy_source(k int, amount int);
+insert into db_ctas_context.ctas_policy_source values (9,900);
+grant create table, drop table on database db_ctas_context to test_rule_ctas_wide;
+set enable_remap_hint = 1;
+use db1;
+/* from misleading prefix */ prepare ctas_bound_stmt from create table ctas_bound as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_bound_stmt;
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+execute ctas_bound_stmt;
+table ctas_bound already exists
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+select * from db1.ctas_bound;
+➤ amount[4,32,0]  𝄀
+10
+select count(*) from mo_catalog.mo_tables where reldatabase='db_ctas_context' and relname='ctas_bound';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table db1.ctas_bound;
+deallocate prepare ctas_bound_stmt;
+set role test_rule_ctas_wide;
+use db1;
+/* from misleading prefix */ prepare ctas_qualified_stmt from create table db_ctas_context.ctas_qualified as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_qualified_stmt;
+select database();
+➤ database()[12,-1,0]  𝄀
+db_ctas_context
+deallocate prepare ctas_qualified_stmt;
+select * from db_ctas_context.ctas_qualified order by k;
+➤ k[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  90
+use db1;
+/*!50700 prepare ctas_exec_comment from */ create table ctas_exec_comment as select 'marker*/tail' as marker;
+execute ctas_exec_comment;
+deallocate prepare ctas_exec_comment;
+select * from db1.ctas_exec_comment;
+➤ marker[12,-1,0]  𝄀
+marker*/tail
+drop table db1.ctas_exec_comment;
+drop role if exists test_rule_revoke;
+create role test_rule_revoke;
+grant connect on account * to test_rule_revoke;
+grant create table, drop table on database db1 to test_rule_revoke;
+grant select on table db1.ctas_policy_source to test_rule_revoke;
+grant select on table db_ctas_context.ctas_policy_source to test_rule_revoke;
+grant test_rule_revoke to test_rule_user;
+set secondary role none;
+set enable_remap_hint = 1;
+set enable_privilege_cache = 0;
+use db1;
+prepare ctas_revoke_stmt from 'create table ctas_revoked as select * from ctas_policy_source';
+revoke select on table db1.ctas_policy_source from test_rule_revoke;
+use db_ctas_context;
+select count(*) from db1.ctas_policy_source;
+internal error: do not have privilege to execute the statement
+execute ctas_revoke_stmt;
+internal error: do not have privilege to execute the statement
+select sum(amount)+2 from ctas_policy_source;
+➤ sum(amount) + 2[-5,64,0]  𝄀
+902
+deallocate prepare ctas_revoke_stmt;
+select count(*) from mo_catalog.mo_tables where reldatabase='db1' and relname='ctas_revoked';
+➤ count(*)[-5,64,0]  𝄀
+0
+revoke test_rule_revoke from test_rule_user;
+drop role test_rule_revoke;
+drop database db_ctas_context;
+revoke test_rule_ctas_wide from test_rule_user;
+drop role test_rule_ctas_wide;
+drop table db1.ctas_policy_source;
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);
@@ -86,24 +321,24 @@ grant select on table db2.t2 to test_rule_role_multi_b;
 grant test_rule_role_multi_b to test_rule_user_multi;
 set enable_remap_hint = 1;
 select * from db1.t1 order by a;
-a    age
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 select * from db2.t2 order by a;
-a    age
-20    35
-200    60
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+20  ¦  35  𝄀
+200  ¦  60
 set secondary role none;
 select * from db1.t1 order by a;
-a    age
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 create role test_rule_role_multi_c;
 create role test_rule_role_multi_d;
 alter role test_rule_role_multi_c add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -116,7 +351,7 @@ grant test_rule_role_multi_d to test_rule_user_multi_diff;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a
+➤ a[4,32,0]  𝄀
 2
 create role test_rule_role_inherit_a;
 create role test_rule_role_inherit_b;
@@ -127,16 +362,16 @@ grant select on table db2.t2 to test_rule_role_inherit_b;
 grant test_rule_role_inherit_b to test_rule_role_inherit_a;
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
-a    age
-20    35
-200    60
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+20  ¦  35  𝄀
+200  ¦  60
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;
 invalid input: invalid rewrite rule SQL "delete from db1.t1 where a = 1": only accept SELECT-like statements as rewrites
 show rules on role test_rule_role_validate;
-rule_name    rule
-db1.t1    select a, age from db1.t1 where age > 28
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select a, age from db1.t1 where age > 28
 create role test_rule_role_unmergeable_a;
 create role test_rule_role_unmergeable_b;
 alter role test_rule_role_unmergeable_a add rule "select a, age from db1.t1 where age > 28 order by a limit 1" on table db1.t1;
@@ -149,9 +384,9 @@ grant test_rule_role_unmergeable_b to test_rule_user_unmergeable;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 create role test_rule_role_alias_a;
 create role test_rule_role_alias_b;
 alter role test_rule_role_alias_a add rule "select a, age from db1.t1 where age >= 1" on table db1.t1;
@@ -164,8 +399,8 @@ grant test_rule_role_alias_b to test_rule_user_alias;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-30    100
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+30  ¦  100
 create role test_rule_role_where_a;
 create role test_rule_role_where_b;
 alter role test_rule_role_where_a add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -178,10 +413,10 @@ grant test_rule_role_where_b to test_rule_user_where;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
@@ -193,14 +428,14 @@ grant select on table db1.t_dup to test_rule_role_dup_projection_b;
 grant test_rule_role_dup_projection_b to test_rule_user_dup_projection;
 set enable_remap_hint = 1;
 select count(*) from db1.t_dup;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
-a    count(*)
-1    2
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
 select count(*) from db1.t_dup;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
@@ -214,8 +449,8 @@ grant test_rule_role_expr_projection_b to test_rule_user_expr_projection;
 set enable_remap_hint = 1;
 set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
-b    count(*)
-2    2
+➤ b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+2  ¦  2
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;

@@ -67,9 +67,10 @@ type TxnComputationWrapper struct {
 	//holds values of params in the PREPARE
 	paramVals []any
 
-	explainBuffer *bytes.Buffer
-	binaryPrepare bool
-	prepareName   string
+	explainBuffer   *bytes.Buffer
+	binaryPrepare   bool
+	prepareName     string
+	prepareDatabase string
 }
 
 func InitTxnComputationWrapper(
@@ -127,6 +128,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.runResult = nil
 	cwft.paramVals = nil
 	cwft.prepareName = ""
+	cwft.prepareDatabase = ""
 	cwft.binaryPrepare = false
 }
 
@@ -255,7 +257,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err != nil {
 				return nil, err
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan)
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan, cwft.prepareDatabase)
 			if err != nil {
 				return nil, err
 			}
@@ -282,7 +284,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if stmt != nil {
 				cwft.stmt = stmt
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan, cwft.prepareDatabase)
 			if err != nil {
 				return nil, err
 			}
@@ -303,7 +305,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, cwft.ses.GetSql(), cwft.stmt, cwft.plan, fill, false)
+			database := cwft.ses.GetDatabaseName()
+			if ctas, ok := cwft.stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+				database = cwft.prepareDatabase
+			}
+			cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, cwft.ses.GetSql(), cwft.stmt, cwft.plan, fill, false, database)
 			if err != nil {
 				return nil, err
 			}
@@ -323,7 +329,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		   }
 		*/
 	} else {
-		cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, execCtx.sqlOfStmt, cwft.stmt, cwft.plan, fill, false)
+		cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, execCtx.sqlOfStmt, cwft.stmt, cwft.plan, fill, false, cwft.ses.GetDatabaseName())
 		if err != nil {
 			return nil, err
 		}
@@ -332,7 +338,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	return cwft.compile, err
 }
 
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan, database string) (statistic.StatsArray, error) {
+	if ctas, ok := stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		// 源 SELECT 会在鉴权中重新规划；名称绑定必须与实际物化一致，
+		// 不能鉴权当前库 B 的同名表却执行准备时库 A 的读取。
+		compileCtx := ses.GetTxnCompileCtx()
+		oldDatabase := compileCtx.DefaultDatabase()
+		compileCtx.SetDatabase(database)
+		defer compileCtx.SetDatabase(oldDatabase)
+	}
 	var stats statistic.StatsArray
 	stats.Reset()
 	switch stmt.(type) {
@@ -433,6 +447,12 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	if err != nil {
 		return nil, nil, nil, "", err
 	}
+	if err = refreshPreparedCTAS(reqCtx, ses, prepareStmt); err != nil {
+		return nil, nil, nil, "", err
+	}
+	if ctas, ok := prepareStmt.PrepareStmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		cwft.prepareDatabase = prepareStmt.ctasDatabase
+	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
@@ -482,7 +502,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		preparePlan = newPlan.GetDcl().GetPrepare()
 		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
 			//only DQL & DML will pre compile
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
+			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, ses.GetDatabaseName())
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 					return nil, nil, nil, "", err
@@ -545,6 +565,7 @@ func createCompile(
 	plan *plan2.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
+	database string,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := ""
@@ -586,7 +607,7 @@ func createCompile(
 	}()
 	retCompile = compile.NewCompile(
 		addr,
-		ses.GetDatabaseName(),
+		database,
 		ses.GetSql(),
 		tenant,
 		ses.GetUserName(),
@@ -599,6 +620,12 @@ func createCompile(
 	)
 	retCompile.SetIsPrepare(isPrepare)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		if ctas, ok := stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+			compileCtx := ses.GetTxnCompileCtx()
+			oldDatabase := compileCtx.DefaultDatabase()
+			compileCtx.SetDatabase(database)
+			defer compileCtx.SetDatabase(oldDatabase)
+		}
 		// No permission verification is required when retry execute buildPlan
 		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {

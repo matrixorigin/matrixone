@@ -288,7 +288,11 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {
-		switch stmt.(type) {
+		switch s := stmt.(type) {
+		case *tree.CreateTable:
+			if s.AsSource == nil {
+				continue
+			}
 		case *tree.Select, *tree.ParenSelect, *tree.Insert:
 			// ok
 		default:
@@ -341,7 +345,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 			if _, ok := rewriteOption.Rewrites[key]; ok {
 				return moerr.NewParseError(ctx, "duplicate mapping names")
 			}
-			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st}
+			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st, SQL: v}
 		}
 		if len(rewriteOption.Rewrites) > 0 {
 			switch s := stmt.(type) {
@@ -351,6 +355,9 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 				if s.Select != nil {
 					s.Select.RewriteOption = rewriteOption
 				}
+			case *tree.CreateTable:
+				// CTAS 的源查询必须保留有效行规则，内部填充时继续传递。
+				s.AsSource.RewriteOption = rewriteOption
 			case *tree.Insert:
 				if s.Rows != nil {
 					s.Rows.RewriteOption = rewriteOption

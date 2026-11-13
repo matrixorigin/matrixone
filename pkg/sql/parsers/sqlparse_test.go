@@ -370,6 +370,44 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
+	const hint = `/*+ {"rewrites":{"db1.t1":"select * from db1.t1 where tenant_id = 1 and amount > 0","db1.t2":"select * from db1.t2 where tenant_id = 2"}} */ `
+	for _, source := range []string{
+		"select * from db1.t1",
+		"select row_number() over () as rn, src.* from (select sum(amount) as total, count(*) as n from db1.t1) src",
+		"select tenant_id from db1.t1 union all select tenant_id from db1.t2",
+	} {
+		t.Run(source, func(t *testing.T) {
+			stmts, err := parseAndApply(t, hint+"create table db1.copy as "+source)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			ctas := stmts[0].(*tree.CreateTable)
+			require.NotNil(t, ctas.AsSource)
+			require.NotNil(t, ctas.AsSource.RewriteOption)
+			require.NotNil(t, ctas.AsSource.RewriteOption.Rewrites["db1.t1"])
+			require.NotNil(t, ctas.AsSource.RewriteOption.Rewrites["db1.t2"])
+		})
+	}
+	t.Run("without source", func(t *testing.T) {
+		stmts, err := parseAndApply(t, hint+"create table db1.copy (id int)")
+		require.NoError(t, err)
+		defer stmts[0].Free()
+		require.Nil(t, stmts[0].(*tree.CreateTable).AsSource)
+	})
+	t.Run("without policy", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "create table db1.copy as select * from db1.t1")
+		require.NoError(t, err)
+		defer stmts[0].Free()
+		require.Nil(t, stmts[0].(*tree.CreateTable).AsSource.RewriteOption)
+	})
+	t.Run("invalid policy is rejected", func(t *testing.T) {
+		stmts, err := parseAndApply(t, `/*+ {"rewrites":{"db1.t1":"delete from db1.t1"}} */ create table db1.copy as select * from db1.t1`)
+		defer stmts[0].Free()
+		require.ErrorContains(t, err, "only accept SELECT-like statements as rewrites")
+	})
+}
+
 func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	sql := "/*+ {\"rewrites\": {\"db2.t2\": \"(select 1)\"}} */ select 2"
 	stmts, err := parseAndApply(t, sql)

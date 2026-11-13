@@ -220,9 +220,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		return splits[0], splits[1]
 	}
 
-	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
-		stmt = s.Select
-	}
+	// bindSelect 先加载外层规则再统一剥离括号；提前剥离会丢失投影策略。
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, err
 	}

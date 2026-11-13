@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
@@ -525,10 +526,15 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	ses := rt.getSession()
 	resp.DB = ses.GetDatabaseName()
 	for _, st := range ses.GetPrepareStmts() {
+		database := resp.DB
+		if ctas, ok := st.PrepareStmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+			database = st.ctasDatabase
+		}
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,
 			ParamTypes: st.ParamTypes,
+			Database:   database,
 		})
 	}
 	return nil

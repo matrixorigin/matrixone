@@ -73,10 +73,201 @@ alter role test_rule_role add rule "select * from db1.t1 where age > 28" on tabl
 create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
+grant create table, drop table on database db1 to test_rule_role;
+alter role test_rule_role add rule "select * from db1.t_dup where marker = 2 and a = 1" on table db1.t_dup;
 -- @session:id=1&user=sys:test_rule_user:test_rule_role&password=123456
 set enable_remap_hint = 1;
 select * from db1.t1;
+
+-- CTAS 的普通明细与 SELECT 遵守同一行权限。
+create table db1.ctas_visible as select a from db1.t1;
+select * from db1.ctas_visible order by a;
+
+-- 聚合虽返回一行，也不能物化权限外金额或条数。
+select sum(a) as total, count(*) as n from db1.t1 where age < 28;
+create table db1.ctas_aggregate as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t1 where age < 28) src;
+select * from db1.ctas_aggregate order by rn;
+
+-- 第二张受控表使用不同的复合规则，派生表包装不得绕过规则。
+select sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+create table db1.ctas_second as
+select row_number() over () as rn, src.*
+from (select sum(a) as total, count(*) as n from db1.t_dup where marker = 1) src;
+select * from db1.ctas_second order by rn;
+
+-- 空分组与无分组合计保留不同基数，两条 UNION 分支均须受控。
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+create table db1.ctas_union as
+select 'grouped' as kind, sum(a) as total, count(*) as n from db1.t1 where age < 28 group by age
+union all
+select 'total' as kind, sum(a) as total, count(*) as n from db1.t_dup where marker = 1;
+select * from db1.ctas_union order by kind;
+
+-- 有可见数据的对照：两张表的规则独立生效，不能全部过滤。
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+create table db1.ctas_join as
+select l.a as first_a, r.marker from db1.t1 l join db1.t_dup r on r.a = 1;
+select * from db1.ctas_join order by first_a, marker;
 -- @session
+
+-- 管理员只核对实际物化内容；受限查询和 CTAS 均由上方受限用户执行。
+select * from db1.ctas_visible order by a;
+select * from db1.ctas_aggregate order by rn;
+select * from db1.ctas_second order by rn;
+select * from db1.ctas_union order by kind;
+select * from db1.ctas_join order by first_a, marker;
+-- 无规则的 CTAS 保持原行为。
+create table db1.ctas_unrestricted as select sum(a) as total, count(*) as n from db1.t1;
+select * from db1.ctas_unrestricted;
+drop table db1.ctas_visible;
+drop table db1.ctas_aggregate;
+drop table db1.ctas_second;
+drop table db1.ctas_union;
+drop table db1.ctas_join;
+drop table db1.ctas_unrestricted;
+
+-- CTAS 多次规划不得修改 ROLLUP 策略，管理员核对真正物化的行数和金额。
+create table db1.ctas_policy_source(k int, amount int);
+insert into db1.ctas_policy_source values (1,10),(2,90);
+alter role test_rule_role add rule "select k, sum(amount) as amount from db1.ctas_policy_source where k = 1 group by k with rollup" on table db1.ctas_policy_source;
+-- @session:id=90&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source order by k;
+create table db1.ctas_rollup as select * from db1.ctas_policy_source;
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+-- @session
+select * from db1.ctas_rollup order by k;
+select count(*) as n, sum(amount) as total from db1.ctas_rollup;
+drop table db1.ctas_rollup;
+
+-- 同一投影规则下，普通、单层和多层括号 CTAS 必须推导相同列数。
+alter role test_rule_role add rule "select amount from db1.ctas_policy_source where k = 1" on table db1.ctas_policy_source;
+-- @session:id=91&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.ctas_policy_source;
+create table db1.ctas_project as select * from db1.ctas_policy_source;
+create table db1.ctas_project_paren as (select * from db1.ctas_policy_source);
+create table db1.ctas_project_nested as ((select * from db1.ctas_policy_source));
+select * from db1.ctas_project;
+select * from db1.ctas_project_paren;
+select * from db1.ctas_project_nested;
+-- @session
+select * from db1.ctas_project;
+select * from db1.ctas_project_paren;
+select * from db1.ctas_project_nested;
+drop table db1.ctas_project;
+drop table db1.ctas_project_paren;
+drop table db1.ctas_project_nested;
+
+-- PREPARE 的内层 CTAS 与 EXECUTE 当前角色共用行策略和列推导。
+create role test_rule_ctas_wide;
+grant connect on account * to test_rule_ctas_wide;
+grant select on table *.* to test_rule_ctas_wide;
+grant create table, drop table on database db1 to test_rule_ctas_wide;
+grant test_rule_ctas_wide to test_rule_user;
+-- @session:id=92&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+prepare ctas_policy_stmt from 'create table db1.ctas_prepared as (select * from db1.ctas_policy_source)';
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+execute ctas_policy_stmt;
+drop table db1.ctas_prepared;
+set role test_rule_ctas_wide;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared order by k;
+drop table db1.ctas_prepared;
+set role test_rule_role;
+execute ctas_policy_stmt;
+select * from db1.ctas_prepared;
+-- @session
+select * from db1.ctas_prepared;
+drop table db1.ctas_prepared;
+-- @session:id=92&user=sys:test_rule_user:test_rule_role&password=123456
+deallocate prepare ctas_policy_stmt;
+-- 变量入口同样解析内层语句，不能绕过准备时的投影规则。
+set @ctas_policy_sql = 'create table db1.ctas_prepared_var as select * from db1.ctas_policy_source';
+prepare ctas_policy_var from @ctas_policy_sql;
+execute ctas_policy_var;
+deallocate prepare ctas_policy_var;
+-- @session
+select * from db1.ctas_prepared_var;
+drop table db1.ctas_prepared_var;
+
+-- 默认库在 PREPARE 时绑定；USE 只改变当前会话，不改变目标、源表或鉴权库。
+drop database if exists db_ctas_context;
+create database db_ctas_context;
+create table db_ctas_context.ctas_policy_source(k int, amount int);
+insert into db_ctas_context.ctas_policy_source values (9,900);
+grant create table, drop table on database db_ctas_context to test_rule_ctas_wide;
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+use db1;
+/* from misleading prefix */ prepare ctas_bound_stmt from create table ctas_bound as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_bound_stmt;
+select database();
+execute ctas_bound_stmt;
+select database();
+-- @session
+select * from db1.ctas_bound;
+select count(*) from mo_catalog.mo_tables where reldatabase='db_ctas_context' and relname='ctas_bound';
+drop table db1.ctas_bound;
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+deallocate prepare ctas_bound_stmt;
+set role test_rule_ctas_wide;
+use db1;
+/* from misleading prefix */ prepare ctas_qualified_stmt from create table db_ctas_context.ctas_qualified as select * from ctas_policy_source;
+use db_ctas_context;
+execute ctas_qualified_stmt;
+select database();
+deallocate prepare ctas_qualified_stmt;
+-- @session
+select * from db_ctas_context.ctas_qualified order by k;
+
+-- 可执行包装的关闭符不属于内层 CTAS；字符串内的关闭符必须保留。
+-- @session:id=93&user=sys:test_rule_user:test_rule_role&password=123456
+use db1;
+/*!50700 prepare ctas_exec_comment from */ create table ctas_exec_comment as select 'marker*/tail' as marker;
+execute ctas_exec_comment;
+deallocate prepare ctas_exec_comment;
+-- @session
+select * from db1.ctas_exec_comment;
+drop table db1.ctas_exec_comment;
+
+-- 源表撤权后，不能在另一默认库鉴权同名表、再物化原库的数据。
+drop role if exists test_rule_revoke;
+create role test_rule_revoke;
+grant connect on account * to test_rule_revoke;
+grant create table, drop table on database db1 to test_rule_revoke;
+grant select on table db1.ctas_policy_source to test_rule_revoke;
+grant select on table db_ctas_context.ctas_policy_source to test_rule_revoke;
+grant test_rule_revoke to test_rule_user;
+-- @session:id=94&user=sys:test_rule_user:test_rule_revoke&password=123456
+set secondary role none;
+set enable_remap_hint = 1;
+set enable_privilege_cache = 0;
+use db1;
+prepare ctas_revoke_stmt from 'create table ctas_revoked as select * from ctas_policy_source';
+-- @session
+revoke select on table db1.ctas_policy_source from test_rule_revoke;
+-- @session:id=94&user=sys:test_rule_user:test_rule_revoke&password=123456
+use db_ctas_context;
+select count(*) from db1.ctas_policy_source;
+execute ctas_revoke_stmt;
+select sum(amount)+2 from ctas_policy_source;
+deallocate prepare ctas_revoke_stmt;
+-- @session
+select count(*) from mo_catalog.mo_tables where reldatabase='db1' and relname='ctas_revoked';
+revoke test_rule_revoke from test_rule_user;
+drop role test_rule_revoke;
+drop database db_ctas_context;
+revoke test_rule_ctas_wide from test_rule_user;
+drop role test_rule_ctas_wide;
+drop table db1.ctas_policy_source;
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;

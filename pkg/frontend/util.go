@@ -1364,6 +1364,7 @@ type UserInput struct {
 	stmtName            string
 	stmt                tree.Statement
 	preparePlan         *plan.Plan // binary protocol execute
+	prepareSQL          string     // 协议 PREPARE 的用户原文，未注入当前角色规则、未脱敏
 	sqlSourceType       []string
 	isRestore           bool
 	isBinaryProtExecute bool

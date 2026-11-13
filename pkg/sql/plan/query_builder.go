@@ -5031,10 +5031,24 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 			key := schema + "." + table
 			if rewrite, ok := ctx.remapOption.Rewrites[key]; ok {
+				// 绑定会修改 ROLLUP 等 AST；每次引用使用独立树，不能污染
+				// 列推导、鉴权或后续 INSERT 共用的有效策略。
+				sql := rewrite.SQL
+				if sql == "" {
+					// 兼容仅以 AST 构造的规则，不使用外层诊断 SQL。
+					sql = tree.StringWithOpts(rewrite.Stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+				}
+				var stmt tree.Statement
+				stmt, err = mysql.ParseOne(builder.GetContext(), sql, 1)
+				if err != nil {
+					return
+				}
+				defer stmt.Free()
 				// prevent recursion from occurring
 				m := ctx.remapOption
 				ctx.remapOption = nil
-				nodeID, err = builder.buildTable(rewrite.Stmt, ctx, preNodeId, leftCtx)
+				nodeID, err = builder.buildTable(stmt, ctx, preNodeId, leftCtx)
+				ctx.remapOption = m
 				if err != nil {
 					return
 				}
@@ -5043,7 +5057,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
 					builder.ctxByNode[nodeID].cteName = key
 				}
-				ctx.remapOption = m
 				return
 			}
 		}

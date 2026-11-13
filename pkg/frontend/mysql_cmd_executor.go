@@ -1272,9 +1272,21 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 }
 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
-	originSql := strings.TrimLeft(sql[idx:], " ")
-	// fmt.Print(originSql)
+	var originSql string
+	if ctas, ok := st.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		if ses.GetCmd() == COM_STMT_PREPARE {
+			originSql = execCtx.input.prepareSQL
+		} else {
+			var err error
+			originSql, err = directPreparedCTASSourceSQL(execCtx.reqCtx, execCtx.rawSQLOfStmt)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
+		originSql = strings.TrimLeft(sql[idx:], " ")
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
@@ -1317,8 +1329,15 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, moerr.NewInvalidInput(execCtx.reqCtx, "cannot prepare multi statements")
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
 	if err != nil {
+		stmts[0].Free()
 		return nil, err
 	}
 
@@ -1338,6 +1357,20 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
+	var ctasDatabase string
+	if ctas, ok := saveStmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+		// prepared owner 持有独立原文，不能借用协议请求可能复用的缓冲区。
+		originSQL = strings.Clone(originSQL)
+		if err := applyPreparedCTASRewrite(execCtx.reqCtx, ses, ctas, originSQL); err != nil {
+			return nil, err
+		}
+		ctasDatabase = strings.Clone(ses.GetDatabaseName())
+		bindPreparedCTASTargetDatabase(ctas, ctasDatabase)
+		if s, ok := stmt.(*tree.PrepareString); ok {
+			// 使用同一棵带策略的内层 AST 推导列，不能让 buildPrepare 再解析丢失规则。
+			stmt = &tree.PrepareStmt{Name: s.Name, Stmt: saveStmt}
+		}
+	}
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
@@ -1346,7 +1379,7 @@ func createPrepareStmt(
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, ses.GetDatabaseName())
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -1363,6 +1396,7 @@ func createPrepareStmt(
 	prepareStmt := &PrepareStmt{
 		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
 		Sql:                 originSQL,
+		ctasDatabase:        ctasDatabase,
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
@@ -2387,6 +2421,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		// AST 属于 prepared handle；编译/鉴权提前失败也不能由 wrapper 释放。
+		tcw.ifIsExeccute = true
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
 		cws = append(cws, tcw)
@@ -3441,6 +3477,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 	}()
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	var rawSQLRecord []string // 仅直接 CTAS PREPARE 使用，每批至多切分一次。
 
 	for i, cw := range cws {
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
@@ -3513,6 +3550,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
 		execCtx.sqlOfStmt = sqlRecord[i]
+		execCtx.rawSQLOfStmt = ""
+		if prepare, ok := stmt.(*tree.PrepareStmt); ok && ses.GetCmd() != COM_STMT_PREPARE {
+			if ctas, ok := prepare.Stmt.(*tree.CreateTable); ok && ctas.AsSource != nil {
+				if rawSQLRecord == nil {
+					rawSQLRecord = parsers.SplitSqlBySemicolon(input.getSql())
+				}
+				if i >= len(rawSQLRecord) {
+					return moerr.NewParseError(execCtx.reqCtx, "CTAS PREPARE source index mismatch")
+				}
+				execCtx.rawSQLOfStmt = rawSQLRecord[i]
+			}
+		}
 		execCtx.cw = cw
 		execCtx.proc = proc
 		execCtx.resper = resper
@@ -3666,6 +3715,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		prepareSQL := sql
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
 			var rewriteErr error
@@ -3683,7 +3733,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, prepareSQL: prepareSQL})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
