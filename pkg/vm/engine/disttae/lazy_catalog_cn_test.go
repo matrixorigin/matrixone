@@ -38,7 +38,7 @@ func TestLazyCatalogCNState_BasicStateTransitions(t *testing.T) {
 	_, ok := s.getAccountReadyTS(10)
 	assert.False(t, ok)
 
-	seq := s.beginCatchingUp(10)
+	seq, _ := s.beginCatchingUp(10)
 	assert.True(t, seq > 0)
 	assert.False(t, s.isAccountReady(10))
 	assert.True(t, s.hasCatchingUp())
@@ -76,7 +76,7 @@ func TestLazyCatalogCNState_CleanupFailedActivation(t *testing.T) {
 	s := newLazyCatalogCNState()
 	s.enable()
 
-	seq := s.beginCatchingUp(10)
+	seq, _ := s.beginCatchingUp(10)
 	assert.True(t, s.hasCatchingUp())
 	assert.True(t, s.isAccountCatchingUp(10))
 
@@ -92,8 +92,8 @@ func TestLazyCatalogCNState_CleanupFailedActivation(t *testing.T) {
 func TestLazyCatalogCNState_StaleSeqCleanup(t *testing.T) {
 	s := newLazyCatalogCNState()
 
-	seq1 := s.beginCatchingUp(10)
-	seq2 := s.beginCatchingUp(10)
+	seq1, _ := s.beginCatchingUp(10)
+	seq2, _ := s.beginCatchingUp(10)
 	assert.NotEqual(t, seq1, seq2)
 
 	ok := s.cleanupFailedActivation(10, seq1)
@@ -112,7 +112,7 @@ func TestLazyCatalogCNState_DelayAccountCacheApply(t *testing.T) {
 	delayed := s.delayAccountCacheApply(10, f)
 	assert.False(t, delayed)
 
-	seq := s.beginCatchingUp(10)
+	seq, _ := s.beginCatchingUp(10)
 
 	delayed = s.delayAccountCacheApply(10, f)
 	assert.True(t, delayed)
@@ -130,7 +130,7 @@ func TestLazyCatalogCNState_DelayAccountCacheApply(t *testing.T) {
 func TestLazyCatalogCNState_ReadyTransitionDrainsAccountDCA(t *testing.T) {
 	s := newLazyCatalogCNState()
 	s.enable()
-	seq := s.beginCatchingUp(10)
+	seq, _ := s.beginCatchingUp(10)
 
 	count := 0
 	for i := 0; i < 5; i++ {
@@ -158,13 +158,13 @@ func TestLazyCatalogCNState_RejectsCompletionAfterReconnect(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			s := newLazyCatalogCNState()
 			s.enable()
-			seq := s.beginCatchingUp(10)
+			seq, _ := s.beginCatchingUp(10)
 			if phase == "during drain" {
 				_, current := s.beginAccountReadyTransition(10, seq)
 				require.True(t, current)
 			}
 			s.resetAllStates()
-			newSeq := s.beginCatchingUp(10)
+			newSeq, _ := s.beginCatchingUp(10)
 			if phase == "before drain" {
 				_, current := s.beginAccountReadyTransition(10, seq)
 				require.False(t, current)
@@ -230,7 +230,7 @@ func TestLazyCatalogCNState_ResetAllStates(t *testing.T) {
 
 func TestLazyCatalogCNState_ResetAllStatesNotifiesPendingResponses(t *testing.T) {
 	s := newLazyCatalogCNState()
-	ch := s.registerPendingResponse(10, 42)
+	_, ch := s.beginCatchingUp(10)
 
 	s.resetAllStates()
 
@@ -238,22 +238,42 @@ func TestLazyCatalogCNState_ResetAllStatesNotifiesPendingResponses(t *testing.T)
 	assert.Nil(t, resp)
 }
 
+func TestLazyCatalogCNState_BeginPublishesReconnectWaiter(t *testing.T) {
+	s := newLazyCatalogCNState()
+	s.enable()
+	seq, response := s.beginCatchingUp(10)
+	s.mu.RLock()
+	registeredResponse, registered := s.pendingActivationResponses[activationResponseKey{accountID: 10, seq: seq}]
+	s.mu.RUnlock()
+	require.True(t, registered, "an activation sequence must never be visible without its reconnect waiter")
+	require.Equal(t, response, registeredResponse)
+	s.resetAllStates()
+
+	select {
+	case resp := <-response:
+		require.Nil(t, resp, "reset must interrupt the attempt before its TN response arrives")
+	default:
+		t.Fatal("reconnect notification was lost")
+	}
+	require.False(t, s.deliverActivationResponse(&logtail.ActivateAccountForCatalogResponse{AccountId: 10, Seq: seq}))
+}
+
 func TestLazyCatalogCNState_PendingResponse(t *testing.T) {
 	s := newLazyCatalogCNState()
 
-	ch := s.registerPendingResponse(10, 42)
+	seq, ch := s.beginCatchingUp(10)
 	require.NotNil(t, ch)
 
 	resp := &logtail.ActivateAccountForCatalogResponse{
 		AccountId: 10,
-		Seq:       42,
+		Seq:       seq,
 	}
 	ok := s.deliverActivationResponse(resp)
 	assert.True(t, ok)
 
 	received := <-ch
 	assert.Equal(t, uint32(10), received.AccountId)
-	assert.Equal(t, uint64(42), received.Seq)
+	assert.Equal(t, seq, received.Seq)
 
 	ok = s.deliverActivationResponse(resp)
 	assert.False(t, ok)
@@ -262,13 +282,11 @@ func TestLazyCatalogCNState_PendingResponse(t *testing.T) {
 func TestLazyCatalogCNState_PendingResponseIgnoresStaleSeq(t *testing.T) {
 	s := newLazyCatalogCNState()
 
-	seq1 := s.beginCatchingUp(10)
-	ch1 := s.registerPendingResponse(10, seq1)
+	seq1, ch1 := s.beginCatchingUp(10)
 	require.NotNil(t, ch1)
 	require.True(t, s.cleanupFailedActivation(10, seq1))
 
-	seq2 := s.beginCatchingUp(10)
-	ch2 := s.registerPendingResponse(10, seq2)
+	seq2, ch2 := s.beginCatchingUp(10)
 	require.NotNil(t, ch2)
 
 	ok := s.deliverActivationResponse(&logtail.ActivateAccountForCatalogResponse{

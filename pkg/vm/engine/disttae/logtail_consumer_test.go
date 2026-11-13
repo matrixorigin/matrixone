@@ -74,8 +74,7 @@ func TestActivationResponseDoesNotDeliverFailedTail(t *testing.T) {
 	c := &e.pClient
 	c.lazyCatalog = newLazyCatalogCNState()
 	c.lazyCatalog.enable()
-	seq := c.lazyCatalog.beginCatchingUp(10)
-	response := c.lazyCatalog.registerPendingResponse(10, seq)
+	seq, response := c.lazyCatalog.beginCatchingUp(10)
 	table := api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID, DbName: catalog.MO_CATALOG, TbName: catalog.MO_TABLES}
 	part := e.GetOrCreateLatestPart(t.Context(), 0, table.DbId, table.TbId)
 	require.NoError(t, part.Lock(t.Context()))

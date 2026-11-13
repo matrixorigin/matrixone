@@ -415,6 +415,11 @@ func (e *Engine) init(ctx context.Context) error {
 		return err
 	}
 
+	e.catalogReadBase = map[uint64]*logtailreplay.PartitionState{
+		catalog.MO_DATABASE_ID: e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}].Snapshot().Copy(),
+		catalog.MO_TABLES_ID:   e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}].Snapshot().Copy(),
+		catalog.MO_COLUMNS_ID:  e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}].Snapshot().Copy(),
+	}
 	e.catalog.Store(newcache)
 	return nil
 }

@@ -4,7 +4,6 @@ set @acc_id = (
 select account_id from mo_catalog.mo_account
 where account_name = 'acc_branch_meta'
 );
-set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
 drop database if exists br_meta_db;
 create database br_meta_db;
 use br_meta_db;

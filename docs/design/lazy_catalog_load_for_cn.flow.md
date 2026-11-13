@@ -28,7 +28,7 @@
 
 **B. CN 侧**：
 1. X 已 ready → 返回。
-2. Inflight dedup（sync.Map leader/waiter） → `catching_up` + `accountDCA` + 分配 `seq` + 发送 request。
+2. Inflight dedup（sync.Map leader/waiter） → 同锁发布 `catching_up`、`accountDCA`、`seq` 和 response waiter → 发送 request。reset 无法落在 seq 发布和 waiter 注册之间。
 
 **C. TN 侧**：
 1. Phase1 worker 从 0 拉三表历史 delta（**立即过滤**），入 `activationTailChan`。
@@ -68,10 +68,14 @@
 
 1. `Engine.Database("mo_catalog")` 短路（`engine.go:369`），不查 cache。
 2. `relation("mo_tables")` 强制 `accountId=0`（`txn_database.go:107`），sys 始终 ready。
-3. `execReadSql(SELECT ... FROM mo_tables WHERE account_id=X)` 扫描 `PartitionState`。
+3. `execReadSql(SELECT ... FROM mo_tables WHERE account_id=X)` 进入 catalog reader。
+4. 普通 sys SQL 或 caller account 未就绪时，在现有订阅与 snapshot coverage 检查后，
+   通过 TN `OpGetLogTail` 按事务 snapshot TS 读取完整 checkpoint + delta。
+5. 从固定 bootstrap 基线 fork reader 私有 `PartitionState`，不写回共享 PS，不激活冷租户。
 
-**数据新鲜度**：返回 subscribe-time 快照。subscribe 后 TN push 按 account 过滤，inactive account 增量不到达 CN。
-**安全性**：login 在 tenant SQL 前激活；后台升级有版本守卫；同事务写入通过 workspace 可见。
+**数据新鲜度**：不能用缺少冷租户增量的共享 push PS 回答普通 SQL。
+**边界**：已就绪 tenant 仍使用本地 PS；已接收完整 tail 的内部 account replay 跳过回退；
+历史 snapshot 沿用已有 checkpoint coverage 路径，同事务写入由 workspace 合并。
 
 ---
 

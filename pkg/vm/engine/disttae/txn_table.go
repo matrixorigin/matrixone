@@ -2885,6 +2885,9 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.P
 		return nil, err
 	}
 	if ready {
+		if tbl.needsAuthoritativeCatalogRead(ctx) {
+			return tbl.readCatalogSnapshot(ctx)
+		}
 		return ps, nil
 	}
 

@@ -1299,6 +1299,7 @@ func (c *PushClient) replayCatalogCacheAt(
 	// through the always-ready sys catalog, not the not-yet-ready tenant
 	// catalog that we are in the process of activating.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+	ctx = context.WithValue(ctx, catalogReplayContextKey{}, true)
 
 	var op client.TxnOperator
 	ccache := e.catalog.Load()
@@ -1426,8 +1427,7 @@ func (c *PushClient) tryActivateTenantCatalog(ctx context.Context, e *Engine, ac
 
 func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, accountID uint32) error {
 	startedAt := time.Now()
-	seq := c.lazyCatalog.beginCatchingUp(accountID)
-	respCh := c.lazyCatalog.registerPendingResponse(accountID, seq)
+	seq, respCh := c.lazyCatalog.beginCatchingUp(accountID)
 
 	// Concise event recording: builds the struct with common fields, caller
 	// supplies only the varying parts.
