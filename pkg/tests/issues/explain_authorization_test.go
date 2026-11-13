@@ -154,18 +154,17 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		exec(reader, "set secondary role all")
 		exec(reader, "set enable_privilege_cache = off")
 		combined := "select a.id from app.t a join app.other b on a.id = b.id"
-		_, coldErr := reader.ExecContext(ctx, combined)
-		require.ErrorContains(t, coldErr, "do not have privilege")
+		exec(reader, combined)
 		exec(reader, "set enable_privilege_cache = on")
-		deny(reader, combined) // No old facts: partial fills must not mix either.
+		exec(reader, combined) // Cold cache: each effective role supplies one item.
 		for _, warmOrder := range [][]string{{"app.t", "app.other"}, {"app.other", "app.t"}} {
 			for _, table := range warmOrder {
 				exec(reader, "select id from "+table)
 			}
-			deny(reader, combined)
-			deny(reader, "select a.id from app.other b join app.t a on a.id = b.id")
+			exec(reader, combined)
+			exec(reader, "select a.id from app.other b join app.t a on a.id = b.id")
 		}
-		// Inherited siblings remain distinct even though they share an active root.
+		// Inherited siblings can supply separate items under the same active root.
 		for _, query := range []string{"create role combined_reader", "grant reader,other_reader to combined_reader", "grant combined_reader to u"} {
 			exec(admin, query)
 		}
@@ -174,8 +173,16 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		exec(reader, "set role combined_reader")
 		exec(reader, "select id from app.t")
 		exec(reader, "select id from app.other")
+		exec(reader, combined)
+		// Removing the only grant on the second object must still deny access,
+		// including after successful checks with the same roles and session.
+		exec(admin, "revoke select on table app.other from other_reader")
+		syncCommit()
 		deny(reader, combined)
-		// One inherited role with both facts satisfies the unchanged SQL rule.
+		exec(reader, "set enable_privilege_cache = off")
+		deny(reader, combined)
+		exec(reader, "set enable_privilege_cache = on")
+		// One inherited role with both facts also satisfies the compound.
 		exec(admin, "grant select on table app.other to reader")
 		syncCommit()
 		exec(reader, combined)
