@@ -17,7 +17,9 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1553,6 +1556,182 @@ func TestInvalidTxnOp(t *testing.T) {
 	require.Error(t, err)
 }
 
+// subscribeMissingTable waits only through transient transport failures. A nil
+// result is a failure: the requested table does not exist.
+func subscribeMissingTable(ctx context.Context, attempt func(context.Context) error) error {
+	return subscribeMissingTableWithLimits(ctx, 25*time.Second, 5*time.Millisecond, 1000, attempt)
+}
+
+func subscribeMissingTableWithLimits(ctx context.Context, attemptTimeout, retryInterval time.Duration, maxAttempts int, attempt func(context.Context) error) error {
+	if maxAttempts <= 0 {
+		return fmt.Errorf("invalid subscription attempt limit: %d", maxAttempts)
+	}
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+	for attemptNumber := 1; ; attemptNumber++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Stop a slow attempt before the subscriber's 30-second internal
+		// timeout, which is reported as a generic internal error.
+		err := func() error {
+			attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+			defer cancel()
+			return attempt(attemptCtx)
+		}()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err == nil {
+			return fmt.Errorf("subscribed to a nonexistent table")
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil
+		}
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
+			!moerr.IsMoErrCode(err, moerr.ErrStreamClosed) &&
+			!moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+			!moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
+			return fmt.Errorf("unexpected subscription error: %w", err)
+		}
+		if attemptNumber == maxAttempts {
+			return fmt.Errorf("missing-table subscription after %d attempts: %w", maxAttempts, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for a missing-table response after %v: %w", err, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestSubscribeMissingTableRetry(t *testing.T) {
+	missing := moerr.NewNoSuchTableNoCtx("db", "missing")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"stream closed", moerr.NewStreamClosedNoCtx()},
+		{"backend closed", moerr.NewBackendClosedNoCtx()},
+		{"rpc timeout", moerr.NewRPCTimeoutNoCtx()},
+		{"inner canceled", context.Canceled},
+		{"inner deadline", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name+" then missing", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			attempts := 0
+			err := subscribeMissingTable(ctx, func(context.Context) error {
+				attempts++
+				if attempts == 1 {
+					return tc.err
+				}
+				return missing
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, attempts)
+		})
+	}
+	t.Run("attempt deadline then missing", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		attempts := 0
+		err := subscribeMissingTableWithLimits(ctx, 100*time.Millisecond, time.Millisecond, 3, func(attemptCtx context.Context) error {
+			attempts++
+			if attempts == 1 {
+				<-attemptCtx.Done()
+				return attemptCtx.Err()
+			}
+			require.NoError(t, attemptCtx.Err())
+			return missing
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, attempts)
+	})
+	t.Run("attempt limit", func(t *testing.T) {
+		attempts := 0
+		want := moerr.NewStreamClosedNoCtx()
+		err := subscribeMissingTableWithLimits(context.Background(), time.Second, time.Millisecond, 3, func(context.Context) error {
+			attempts++
+			return want
+		})
+		require.ErrorIs(t, err, want)
+		require.ErrorContains(t, err, "after 3 attempts")
+		require.Equal(t, 3, attempts)
+	})
+	t.Run("attempt context canceled on panic", func(t *testing.T) {
+		var attemptCtx context.Context
+		require.Panics(t, func() {
+			_ = subscribeMissingTable(context.Background(), func(ctx context.Context) error {
+				attemptCtx = ctx
+				panic("attempt failed")
+			})
+		})
+		require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+	})
+	t.Run("attempt context canceled on Goexit", func(t *testing.T) {
+		testCtx, testCancel := context.WithCancel(context.Background())
+		defer testCancel()
+		attempts := make(chan context.Context, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = subscribeMissingTable(testCtx, func(ctx context.Context) error {
+				attempts <- ctx
+				goruntime.Goexit()
+				return nil
+			})
+		}()
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			t.Fatal("attempt did not unwind after Goexit")
+		}
+		select {
+		case attemptCtx := <-attempts:
+			require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+		default:
+			t.Fatal("attempt was not invoked before Goexit")
+		}
+	})
+	t.Run("unexpected success", func(t *testing.T) {
+		err := subscribeMissingTable(context.Background(), func(context.Context) error { return nil })
+		require.ErrorContains(t, err, "subscribed to a nonexistent table")
+	})
+	t.Run("non-retryable error", func(t *testing.T) {
+		want := moerr.NewInternalErrorNoCtx("unexpected subscription failure")
+		attempts := 0
+		err := subscribeMissingTable(context.Background(), func(context.Context) error {
+			attempts++
+			return want
+		})
+		require.ErrorIs(t, err, want)
+		require.Equal(t, 1, attempts)
+	})
+	t.Run("cancel before attempt", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		attempts := 0
+		err := subscribeMissingTable(ctx, func(context.Context) error { attempts++; return missing })
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, attempts)
+	})
+	t.Run("cancel during retry", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		attempts := 0
+		err := subscribeMissingTable(ctx, func(context.Context) error {
+			attempts++
+			cancel()
+			return moerr.NewStreamClosedNoCtx()
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, attempts)
+	})
+}
+
 func Test_SubUnsubTable(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -1612,7 +1791,47 @@ func Test_SubUnsubTable(t *testing.T) {
 		inValidTableID   = rel.GetTableID(ctx) + 1
 		inValidTableName = "invalid_table"
 	)
-	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
+	for range 2 {
+		err := subscribeMissingTable(ctx, func(ctx context.Context) error {
+			return disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName)
+		})
+		require.NoError(t, err)
+		state := disttaeEngine.Engine.PushClient().GetState()
+		require.NotContains(t, state.SubTables, inValidTableID, "a missing-table response must clear its subscription")
+		require.Contains(t, state.SubTables, rel.GetTableID(ctx))
+		require.Equal(t, disttae.Subscribed, state.SubTables[rel.GetTableID(ctx)].SubState)
+	}
+	require.NoError(t, disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName))
+
+	t.Run("retry_pending_subscription", func(t *testing.T) {
+		pc := disttaeEngine.Engine.PushClient()
+		const syntheticID = ^uint64(0)
+		require.NotContains(t, pc.GetState().SubTables, syntheticID)
+		pc.SetSubscribeState(rel.GetDBID(ctx), syntheticID, disttae.Subscribing)
+		retryCtx, retryCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer retryCancel()
+		attempts := 0
+		err := subscribeMissingTableWithLimits(retryCtx, 100*time.Millisecond, time.Millisecond, 3, func(attemptCtx context.Context) error {
+			attempts++
+			if attempts == 2 {
+				state := pc.GetState()
+				require.Contains(t, state.SubTables, syntheticID)
+				require.Equal(t, disttae.Subscribing, state.SubTables[syntheticID].SubState)
+				pc.SetSubscribeState(rel.GetDBID(ctx), syntheticID, disttae.SubRspTableNotExist)
+			}
+			err := disttaeEngine.Engine.TryToSubscribeTable(attemptCtx, uint64(accountId), rel.GetDBID(ctx), syntheticID, databaseName, inValidTableName)
+			if attempts == 1 {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			}
+			return err
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, attempts)
+		state := pc.GetState()
+		require.NotContains(t, state.SubTables, syntheticID)
+		require.Contains(t, state.SubTables, rel.GetTableID(ctx))
+		require.Equal(t, disttae.Subscribed, state.SubTables[rel.GetTableID(ctx)].SubState)
+	})
 }
 
 func TestDeleteTupleInTupleList(t *testing.T) {

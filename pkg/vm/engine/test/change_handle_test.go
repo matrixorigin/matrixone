@@ -457,6 +457,7 @@ func TestChangesHandle3(t *testing.T) {
 	schema.Name = tableName
 	rowCount := changesHandleTestRowCount()
 	bat := catalog2.MockBatch(schema, rowCount)
+	t.Cleanup(bat.Close)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -1179,6 +1180,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	schema.Name = tableName
 	rowCount := changesHandleTestRowCount()
 	bat := catalog2.MockBatch(schema, rowCount)
+	t.Cleanup(bat.Close)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -1491,6 +1493,7 @@ func TestChangesHandle7(t *testing.T) {
 	schema := catalog2.MockSchemaAll(20, -1)
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 8192)
+	t.Cleanup(bat.Close)
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()

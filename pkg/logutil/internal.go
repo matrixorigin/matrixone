@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -37,6 +38,22 @@ func SetupMOLogger(conf *LogConfig) {
 	}
 	replaceGlobalLogger(logger)
 	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
+}
+
+// quietTestDebugEncoder preserves encoding and trace reporting while omitting
+// DEBUG entries from the console sink of selected test scopes.
+type quietTestDebugEncoder struct{ zapcore.Encoder }
+
+func (e quietTestDebugEncoder) Clone() zapcore.Encoder {
+	return quietTestDebugEncoder{Encoder: e.Encoder.Clone()}
+}
+
+func (e quietTestDebugEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
+	encoded, err := e.Encoder.EncodeEntry(entry, fields)
+	if err == nil && entry.Level == zapcore.DebugLevel {
+		encoded.Reset()
+	}
+	return encoded, err
 }
 
 var loggerTestScopeMu sync.Mutex
@@ -69,6 +86,18 @@ func storeLoggerTestState(state loggerTestState) {
 // reports false if it observes different config/logger identities; it does not
 // promise to detect misuse racing with the restore itself.
 func SetupMOLoggerForTest(conf *LogConfig) (restore func() bool) {
+	return setupMOLoggerForTest(conf, false)
+}
+
+// SetupMOLoggerForTestWithoutDebugConsole omits DEBUG console output when the
+// temporary configuration enables DEBUG, while keeping guards and trace
+// reporting enabled. If the caller's logger was already DEBUG-enabled, console
+// output remains unchanged. The SetupMOLoggerForTest ownership contract applies.
+func SetupMOLoggerForTestWithoutDebugConsole(conf *LogConfig) (restore func() bool) {
+	return setupMOLoggerForTest(conf, true)
+}
+
+func setupMOLoggerForTest(conf *LogConfig, quietDebug bool) (restore func() bool) {
 	if conf == nil || (conf.Filename != "" && conf.Filename != "console") {
 		panic("logutil: test logger scope requires console output")
 	}
@@ -76,24 +105,51 @@ func SetupMOLoggerForTest(conf *LogConfig) (restore func() bool) {
 		panic("logutil: overlapping test logger scopes")
 	}
 	previous := loadLoggerTestState()
-	returned := false
+	returned, published := false, false
 	defer func() {
 		if !returned {
 			if restore != nil {
 				restore()
 			} else {
-				storeLoggerTestState(previous)
+				if published {
+					storeLoggerTestState(previous)
+				}
 				loggerTestScopeMu.Unlock()
 			}
 		}
 	}()
 
+	// A custom core can reconfigure the global logger, panic, or call Goexit
+	// from Enabled. Query before publishing our config and never overwrite a
+	// newer owner if that callback changes the logger state.
+	quietConsole := quietDebug
+	if quietDebug {
+		for _, old := range []*zap.Logger{previous.logger, previous.skip, previous.err} {
+			enabled := old.Core().Enabled(zapcore.DebugLevel)
+			if loadLoggerTestState() != previous {
+				panic("logutil: logger reconfigured during test scope setup")
+			}
+			if enabled {
+				quietConsole = false
+				break
+			}
+		}
+	}
+
 	// Keep SetupMOLogger's installation sequence, but record ownership before
 	// logging: a reporter callback can itself reconfigure the global logger.
+	published = true
 	setGlobalLogConfig(conf)
-	logger, err := initMOLogger(conf)
-	if err != nil {
-		panic(err)
+	var logger *zap.Logger
+	if quietConsole {
+		encoder := quietTestDebugEncoder{Encoder: conf.getEncoder()}
+		logger = GetLoggerWithOptions(conf.GetLevel(), encoder, conf.getSyncer(), conf.getOptions()...)
+	} else {
+		var err error
+		logger, err = initMOLogger(conf)
+		if err != nil {
+			panic(err)
+		}
 	}
 	replaceGlobalLogger(logger)
 	installed := loadLoggerTestState()
