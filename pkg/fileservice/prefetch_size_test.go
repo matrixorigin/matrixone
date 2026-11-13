@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"testing"
 
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,4 +226,22 @@ func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {
 	require.Equal(t, data[200<<10:200<<10+10], readRangeOf(t, fs, ExactRead, 200<<10, 10))
 	require.Equal(t, int64(10), storage.bytes.Load())
 	require.True(t, fs.prefetcher.isQueued("object"), "the column ranges stay queued")
+}
+
+// A column prefetch whose range read fails caches nothing and counts as failed, not
+// downloaded.
+func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
+	storage := &failingRangeStorage{ObjectStorage: fs.storage}
+	storage.fail.Store(true)
+	fs.storage = storage
+	downloaded := promtestutil.ToFloat64(metric.FSPrefetchDownloadedCounter)
+	failed := promtestutil.ToFloat64(metric.FSPrefetchFailedCounter)
+	fs.prefetchObject(context.Background(), ObjectPrefetch{
+		FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}},
+	})
+	require.Equal(t, downloaded, promtestutil.ToFloat64(metric.FSPrefetchDownloadedCounter))
+	require.Equal(t, failed+1, promtestutil.ToFloat64(metric.FSPrefetchFailedCounter))
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 100, 10)
+	require.False(t, cached)
 }

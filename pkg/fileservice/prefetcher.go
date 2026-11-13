@@ -457,7 +457,12 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 			return s.storage.Read(ctx, key, &start, &end)
 		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
-		if s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open) {
+		if ok, err := s.diskCache.readRanges(ctx, path.File, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
+			if err != nil {
+				metric.FSPrefetchFailedCounter.Inc()
+				logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))
+				return
+			}
 			metric.FSPrefetchDownloadedCounter.Inc()
 			return
 		}

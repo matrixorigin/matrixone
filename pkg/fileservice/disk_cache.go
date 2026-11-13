@@ -94,6 +94,9 @@ type DiskCache struct {
 	// beforeIndexLoadedDirs is a test-only phase barrier before the entry directories found
 	// by the load are indexed.
 	beforeIndexLoadedDirs func()
+	// beforeLoadFile is a test-only phase barrier before a file found by the load is
+	// indexed.
+	beforeLoadFile func(diskPath string)
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
@@ -298,6 +301,32 @@ func newDiskCache(
 	return ret, nil
 }
 
+// loadFile indexes the cache file at diskPath found at startup, unless its object was
+// deleted since the cache was created: the delete may have missed a file not yet
+// indexed, so the file is removed instead. As for the publication of an entry, a delete
+// counted later finds the file indexed.
+func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileInfo) {
+	objectPath := diskPath
+	if !isFullFileCachePath(diskPath) {
+		key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size())
+		if ok {
+			dir, name := filepath.Split(key)
+			objectPath = filepath.Join(dir, "full"+name)
+		}
+	}
+	if d.beforeLoadFile != nil {
+		d.beforeLoadFile(diskPath)
+	}
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if d.deletes.since(objectPath, 0) {
+		_ = os.Remove(diskPath)
+		return
+	}
+	d.cache.SetOldest(ctx, diskPath, struct{}{}, int64(fileSize(info)))
+}
+
 func (d *DiskCache) loadCache(ctx context.Context) {
 	t0 := time.Now()
 
@@ -345,8 +374,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 					if err != nil {
 						continue // ignore
 					}
-
-					d.cache.SetOldest(ctx, work.Path, struct{}{}, int64(fileSize(info)))
+					d.loadFile(ctx, work.Path, info)
 				}
 			}
 		}()
