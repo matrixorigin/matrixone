@@ -131,9 +131,9 @@ func (s *lazyCatalogCNState) getAccountReadyTS(accountID uint32) (timestamp.Time
 	return e.readyTS, true
 }
 
-// beginCatchingUp transitions the account to catching_up and returns a new seq.
+// beginCatchingUp publishes the attempt and its reconnect waiter atomically.
 // The caller should only call this under singleflight protection.
-func (s *lazyCatalogCNState) beginCatchingUp(accountID uint32) uint64 {
+func (s *lazyCatalogCNState) beginCatchingUp(accountID uint32) (uint64, chan *logtail.ActivateAccountForCatalogResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,7 +145,9 @@ func (s *lazyCatalogCNState) beginCatchingUp(accountID uint32) uint64 {
 	s.accounts[accountID] = &accountCatalogEntry{state: accountCatchingUp}
 	s.pendingSeq[accountID] = seq
 	s.accountDCA[accountID] = nil
-	return seq
+	response := make(chan *logtail.ActivateAccountForCatalogResponse, 1)
+	s.pendingActivationResponses[activationResponseKey{accountID: accountID, seq: seq}] = response
+	return seq, response
 }
 
 // getOrCreateEntry returns the existing entry or creates and stores a new one.
@@ -288,20 +290,6 @@ func (s *lazyCatalogCNState) resetAllStates() {
 		default:
 		}
 	}
-}
-
-// registerPendingResponse creates a buffered channel for delivering the
-// activation response from the receive loop to the ActivateTenantCatalog
-// caller.
-func (s *lazyCatalogCNState) registerPendingResponse(
-	accountID uint32,
-	seq uint64,
-) chan *logtail.ActivateAccountForCatalogResponse {
-	ch := make(chan *logtail.ActivateAccountForCatalogResponse, 1)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pendingActivationResponses[activationResponseKey{accountID: accountID, seq: seq}] = ch
-	return ch
 }
 
 func (s *lazyCatalogCNState) hasPendingActivationResponse(accountID uint32, seq uint64) bool {

@@ -117,11 +117,17 @@ response apply 失败进入现有接收错误/重连路径；已失效 seq 的 r
 CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >= readyTS[X]
 ```
 
-回退时 `loadTableFromStorage` → `execReadSql` → 扫描 `PartitionState`（subscribe-time 快照）。安全性：
-- `mo_catalog` 数据库短路（`engine.go:369`），不查 cache。
-- 系统表强制 `accountId=0`（`txn_database.go:107-113`），sys 始终 ready。
-- login 路径在任何 tenant SQL 前激活；后台升级有版本守卫。
-- **注意**：subscribe 后 TN push 按 account 过滤，inactive account 的 `PartitionState` 不含后续增量。
+回退时 `loadTableFromStorage` → `execReadSql` → catalog reader。共享 push
+`PartitionState` 缺少冷租户的后续 row delta，不能作为任意 sys catalog SQL 的完整数据源。
+reader 保留已有订阅、pending logtail 和 snapshot coverage 检查；普通 sys SQL 以及未就绪
+租户的 catalog 读取，复用 TN `OpGetLogTail`，按事务 snapshot TS 获取完整 checkpoint + delta。
+结果仅属于本次 reader，不写回共享 push partition，不发布 cache ready，也不添加 wanted account。
+CN 仅额外保留三张表的固定 bootstrap 基线；其 COW fork 在 engine 锁内串行，RPC/I/O 在锁外。
+历史 snapshot 仍走原有 checkpoint coverage 路径；同事务写入仍由 workspace 合并。
+
+只有 startup/reconnect/activation 在完整 tail 已落地后的、限定 account 的 replay 可以跳过
+这个读取回退；普通 SQL 不得借用 replay 标记。系统表的物理 `accountId=0` 不代表调用方
+具有完整 catalog，判断使用实际 caller account。
 
 ---
 
@@ -138,8 +144,9 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 | `clone.go:257,378` | CLONE TABLE/DATABASE |
 
 `SHOW ACCOUNTS` 先从 sys catalog 枚举账号，再激活结果中的租户并重新查询库表数量，
-避免将冷租户的缺失增量当作零。全量查询会加载所有返回账号的 catalog；这是精确统计
-所需的按需加载，不保证该操作之后仍保持只加载少量租户。
+避免将冷租户的缺失增量当作零。全量查询会加载所有返回账号的 catalog，不保证操作之后
+仍保持只加载少量租户。默认 StorageUsage 定时执行全量 `SHOW ACCOUNTS` 会触发该行为；
+该后台任务的收益与代价仍需单独决策，本次正确性修复不改变其激活策略。
 
 ---
 
@@ -164,7 +171,7 @@ CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >=
 Resource owners and bounds:
 
 - TN owns at most `PullWorkerPoolSize` pull tokens; request capacity equals the activation worker count and completed phase-1 capacity is 64. Each admitted activation has three catalog pulls, not a goroutine per waiting request. Source/filter batches transfer through phase-1, merger and session response cleanup exactly once, including rejection and shutdown.
-- CN deduplicates one in-flight activation per account. Its pending response and DCA belong to that attempt and are released on success, failure or reset; waits observe cancellation and TN collection has a finite timeout. Reconnect retries are capped at four with 500ms/1s/2s/4s backoff. Recent diagnostic history is capped at 128 events.
+- CN deduplicates one in-flight activation per account. Its seq, catching-up state and pending-response waiter publish under one lock, so reset cannot miss a late-registered waiter. Its pending response and DCA belong to that attempt and are released on success, failure or reset; waits observe cancellation and TN collection has a finite timeout. Reconnect retries are capped at four with 500ms/1s/2s/4s backoff. Recent diagnostic history is capped at 128 events.
 - Ready/wanted account identifiers remain until CN restart, and the TN active set until session destruction. Capacity is therefore proportional to distinct accounts served during that lifetime, not just currently connected sessions. Table-definition memory follows the existing catalog GC. This design is not an eviction policy or a guarantee that RSS stays below a fixed value.
 - Replay cost is proportional to selected tenants' metadata plus shared checkpoint I/O. A cold activation can still scan large `mo_columns` history; filtering after pull does not remove TN collection cost. Preserve bounded column-batch replay and validate high-DDL pressure separately from functional UT/BVT.
 - Authentication/privilege checks remain authoritative. An internal activation populates metadata but grants no SQL privilege. Remote pipelines, publication/snapshot reads, restore/clone and quota admission must activate before tenant name lookup. Debug status endpoints inherit the existing administrative deployment boundary and must not be exposed as tenant APIs.
