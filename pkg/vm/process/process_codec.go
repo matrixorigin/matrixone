@@ -168,6 +168,13 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, moerr.NewInvalidInputNoCtxf("invalid fixed time zone offset %d", offset)
 			}
 			zoneName = ""
+			// Older CNs ignore FixedOffsetPresent/Seconds and decode TimeZone.
+			// Keep the legacy binary offset during mixed-version rolling upgrades.
+			var err error
+			timeBytes, err = time.Time{}.In(loc).MarshalBinary()
+			if err != nil {
+				return procInfo, err
+			}
 		} else {
 			offset = 0
 			var err error
