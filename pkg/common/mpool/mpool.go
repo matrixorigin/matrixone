@@ -427,6 +427,7 @@ type MPool struct {
 	// pool has published on-heap pointers into. It only narrows destroy-time
 	// diagnostics; the pointer registry remains authoritative.
 	onHeapShardHints [(numPtrShards + 63) / 64]atomic.Uint64
+	allocated        *allocationCounter
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -558,6 +559,7 @@ func (mp *MPool) deallocateAllPtrs() {
 				lease.release(uint64(sz))
 			}
 		}
+		releaseAllocated(hdr.poolId, int64(hdr.allocSz))
 	}
 	mp.ptrs = nil
 	mp.leases = nil
@@ -657,6 +659,8 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 
 	mp.stats.Init()
 	mp.ptrs = make(map[unsafe.Pointer]memHdr)
+	mp.allocated = new(allocationCounter)
+	allocationCounters.Store(id, mp.allocated)
 	globalPools.Store(id, &mp)
 	return &mp, nil
 }
@@ -889,6 +893,10 @@ func DeleteMPool(mp *MPool) {
 	// logutil.Infof("destroy mpool %s, cap %d, stats\n%s", mp.tag, mp.cap, mp.Report())
 	mp.destroy()
 	globalPools.Delete(mp.id)
+	mp.allocated.deleted.Store(true)
+	if mp.allocated.bytes.Load() == 0 {
+		allocationCounters.Delete(mp.id)
+	}
 }
 
 var nextPool int64
@@ -896,6 +904,41 @@ var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalOnHeapStats OnHeapOwnershipStats
 var globalPools sync.Map
+
+// Allocation ownership includes Go buffers as well as native buffers. Keep the
+// small counter alive after DeleteMPool when a consumer still owns a buffer.
+// The public MPoolStats intentionally continue to describe native allocations.
+type allocationCounter struct {
+	bytes   atomic.Int64
+	deleted atomic.Bool
+}
+
+var allocationCounters sync.Map // pool id -> *allocationCounter
+
+func releaseAllocated(poolID int64, sz int64) {
+	if value, ok := allocationCounters.Load(poolID); ok {
+		value.(*allocationCounter).release(poolID, sz)
+	}
+}
+
+func (counter *allocationCounter) release(poolID, sz int64) {
+	remaining := counter.bytes.Add(-sz)
+	if remaining < 0 {
+		panic("mpool allocation ownership underflow")
+	}
+	if remaining == 0 && counter.deleted.Load() {
+		allocationCounters.Delete(poolID)
+	}
+}
+
+// AllocatedBytes returns the current capacity owned by this pool, including
+// both Go and native allocations. A transferred buffer stays charged until Free.
+func (mp *MPool) AllocatedBytes() int64 {
+	if mp == nil || mp.allocated == nil {
+		return 0
+	}
+	return mp.allocated.bytes.Load()
+}
 
 // Sharded pointer map to reduce lock contention
 const numPtrShards = 128
@@ -1117,6 +1160,7 @@ func (mp *MPool) alloc(
 		}
 		return nil, err
 	}
+	mp.allocated.bytes.Add(sz)
 	if !offHeap {
 		globalOnHeapStats.recordAlloc(sz)
 		if mp.details != nil {
@@ -1220,6 +1264,7 @@ func (mp *MPool) allocAccounted(
 		return nil, err
 	}
 	published = true
+	mp.allocated.bytes.Add(sz)
 	mp.recordResourcePeak(mp.resource.recordAlloc(sz))
 	if mp.details != nil {
 		mp.details.recordAlloc(detailk, sz)
@@ -1281,10 +1326,12 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 			owner.resource.crossPoolFree.Add(1)
 			owner.freePtrInternal(detailk, ptr, hdr, lease)
 		}
+		releaseAllocated(hdr.poolId, int64(hdr.allocSz))
 		return
 	}
 
 	mp.freePtrInternal(detailk, ptr, hdr, lease)
+	mp.allocated.release(mp.id, int64(hdr.allocSz))
 }
 
 func (mp *MPool) freePtrInternal(
@@ -1526,30 +1573,30 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 			"mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
 	}
 
+	// Retire address-keyed state before realloc can release the address to
+	// another allocator thread. Failure leaves old live and restores its state.
+	var removedLease allocationLease
+	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
+	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.account != nil {
+		panic(moerr.NewInternalErrorNoCtx("allocation metadata changed during realloc"))
+	}
+	oldProfile := profileDetach(uintptr(oldptr))
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
+		profileRestore(uintptr(oldptr), oldProfile)
+		if restoreErr := mp.recordPtrHdr(oldptr, hdr); restoreErr != nil {
+			panic(restoreErr)
+		}
 		mp.stats.RecordFree(mp.tag, int64(sz))
 		globalStats.RecordFree("global", int64(sz))
 		return nil, moerr.NewMPoolCapacityNoCtxf(
 			"physical allocator rejected realloc to %d bytes: %v", sz, err)
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	var removedLease allocationLease
-	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
-	if !removed || removedHdr != hdr {
-		panic(moerr.NewInternalErrorNoCtx(
-			"allocation metadata changed during realloc",
-		))
-	}
-	if removedHdr.isAccounted() || removedLease.account != nil {
-		panic(moerr.NewInternalErrorNoCtx(
-			"unaccounted realloc removed an account lease",
-		))
-	}
 	newHdr := memHdr{
 		poolId:  hdr.poolId,
 		allocSz: int32(sz),
@@ -1559,7 +1606,10 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
 		panic(err)
 	}
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	if value, ok := allocationCounters.Load(hdr.poolId); ok {
+		value.(*allocationCounter).bytes.Add(int64(sz) - int64(oldSize))
+	}
+	profileRecordRealloc(3, oldProfile, uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	mp.resource.recordFree(int64(oldSize))
@@ -1924,4 +1974,17 @@ func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
 		newcap = maxCapacity
 	}
 	return newcap, true
+}
+
+// GrowthAllocation returns the complete replacement allocation made by Grow.
+// Existing capacity remains live until replacement succeeds.
+func GrowthAllocation(oldCap, requiredSize int64) int64 {
+	if requiredSize <= oldCap {
+		return 0
+	}
+	size, ok := GrowCapacity(oldCap, requiredSize)
+	if !ok {
+		return math.MaxInt64
+	}
+	return size
 }
