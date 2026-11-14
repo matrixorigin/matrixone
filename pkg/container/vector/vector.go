@@ -3905,10 +3905,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					v.area = append(v.area, w.area...)
 				} else {
-					v.area, err = v.growArea2(mp, w.area, baseOff+len(w.area))
+					area, err := v.growArea2(mp, w.area, baseOff+len(w.area))
 					if err != nil {
 						return err
 					}
+					v.area = area
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.
@@ -5393,7 +5394,13 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			w.areaDisjoint = false
 		}
 		w.length = end - start
-		w.data = nil
+		if w.cantFreeData {
+			w.data = nil
+			w.cantFreeData = false
+		} else {
+			// Keep owned capacity available for reuse and eventual Free.
+			w.data = w.data[:0]
+		}
 		return nil
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
