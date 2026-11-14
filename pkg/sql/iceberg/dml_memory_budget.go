@@ -17,7 +17,6 @@ package iceberg
 import (
 	"context"
 	"math"
-	"strconv"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,17 +38,17 @@ func newDMLMemoryBudget(limit, initial int64) *dmlMemoryBudget {
 }
 
 func (b *dmlMemoryBudget) reserve(ctx context.Context, bytes int64) error {
+	return api.ToMOErr(ctx, b.reserveRaw(bytes))
+}
+
+func (b *dmlMemoryBudget) reserveRaw(bytes int64) error {
 	if b == nil || bytes <= 0 {
 		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.limit > 0 && (bytes > b.limit-b.used) {
-		return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg DML memory limit exceeded", map[string]string{
-			"used_bytes":      strconv.FormatInt(b.used, 10),
-			"requested_bytes": strconv.FormatInt(bytes, 10),
-			"limit_bytes":     strconv.FormatInt(b.limit, 10),
-		}))
+		return api.NewDMLMemoryLimitError(b.used, bytes, b.limit, api.MemoryReservation)
 	}
 	b.used = saturatingDMLAdd(b.used, bytes)
 	return nil
@@ -86,6 +85,18 @@ func (b *dmlMemoryBudget) usedBytes() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.used
+}
+
+func (b *dmlMemoryBudget) availableMemory() (int64, bool) {
+	if b == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.limit <= 0 {
+		return 0, false
+	}
+	return max(0, b.limit-b.used), true
 }
 
 // retainedDMLBatchBytes deliberately over-counts vector and slice headers. The

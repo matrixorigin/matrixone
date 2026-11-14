@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	icebergwrite "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
@@ -517,4 +518,57 @@ type fakeDMLMetricsReporter struct {
 func (r *fakeDMLMetricsReporter) ReportMetrics(ctx context.Context, req api.MetricsReportRequest) error {
 	r.reports = append(r.reports, req)
 	return r.err
+}
+
+func TestCommitWorkflowRecordsMaterializeBudgetFailure(t *testing.T) {
+	stream, err := (NativePlanner{}).PlanUpdate(context.Background(), UpdateRequest{
+		Base: testBase(), Mode: TableModeMergeOnRead,
+		Targets:          []UpdateTarget{{DeleteTarget: DeleteTarget{DataFile: dataFile("s3://warehouse/orders/data-1.parquet"), MatchedRows: 2, EqualityFieldIDs: []int{1}, PredicateStable: true, EqualityDeleteFile: deleteFile("s3://warehouse/orders/delete-1.parquet")}}},
+		AppendedDataFile: []api.DataFile{dataFile("s3://warehouse/orders/replacement-1.parquet")},
+	})
+	require.NoError(t, err)
+	audit := &fakeDMLAuditRecorder{}
+	committer := &fakeDMLCommitter{}
+	_, err = (CommitWorkflow{ManifestWriter: &fakeManifestObjectWriter{}, Committer: committer, AuditRecorder: audit}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
+		Catalog: api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}}, Stream: *stream,
+		SnapshotID: 99, SequenceNumber: 12, DataManifestPath: "s3://warehouse/orders/metadata/data.avro", DeleteManifestPath: "s3://warehouse/orders/metadata/delete.avro", ManifestListPath: "s3://warehouse/orders/metadata/list.avro", TableLocation: "s3://warehouse/orders", MaxMemoryBytes: 1,
+	}, 2))
+	require.Error(t, err)
+	require.True(t, api.IsMemoryLimit(err))
+	require.Empty(t, committer.requests)
+	require.Len(t, audit.audits, 1)
+	require.Equal(t, string(api.ErrPlanningLimitExceeded), audit.audits[0].ErrorCategory)
+}
+
+func TestManifestEncoderBudgetContext(t *testing.T) {
+	entries := []api.ManifestEntry{}
+	manifests := []api.ManifestFile{}
+	for _, tc := range []struct {
+		name    string
+		scratch int64
+		encode  func(*manifestMaterializeBudget) error
+	}{
+		{"manifest", metadata.ManifestEntriesMemoryWeight(0, entries), func(b *manifestMaterializeBudget) error {
+			_, err := b.encodeManifest(entries, metadata.ManifestWriteOptions{FormatVersion: 2, Schema: api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}}, Content: api.ManifestContentData})
+			return err
+		}},
+		{"list", metadata.ManifestListMemoryWeight(0, manifests), func(b *manifestMaterializeBudget) error {
+			_, err := b.encodeManifestList(manifests, metadata.ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 1})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &manifestMaterializeBudget{used: 10, limit: 10 + tc.scratch + 1}
+			err := tc.encode(b)
+			var e *api.MemoryLimitError
+			require.ErrorAs(t, err, &e)
+			require.True(t, e.DML)
+			require.Equal(t, b.limit, e.Limit)
+			require.NotNil(t, e.Encoder)
+			require.EqualValues(t, 1, e.Encoder.Limit)
+			require.Equal(t, int64(10)+tc.scratch+e.Encoder.Used, e.Used)
+			require.Equal(t, e.Encoder.Requested, e.Requested)
+			require.Positive(t, e.Requested)
+		})
+	}
 }

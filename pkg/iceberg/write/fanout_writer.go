@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -38,6 +39,10 @@ const (
 
 type DataFileOutputFactory interface {
 	CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error)
+}
+
+type DataFileMemoryAvailability interface {
+	AvailableMemory() (remaining int64, limited bool)
 }
 
 type DataFileOutputFactoryFunc func(ctx context.Context, location string) (io.WriteCloser, error)
@@ -72,6 +77,9 @@ type FanoutParquetDataWriter struct {
 	seq     int64
 	useSeq  uint64
 	closed  bool
+	// Sum of ApproxSize across active writers, saturated at MaxInt64. Only
+	// this fanout owner mutates its writers; pressure checks can read it in O(1).
+	activeSize int64
 }
 
 type activeDataFileWriter struct {
@@ -123,6 +131,9 @@ func (w *FanoutParquetDataWriter) WriteBatch(ctx context.Context, attrs []string
 		return err
 	}
 	for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
+		if err := w.relieveMemoryPressure(ctx); err != nil {
+			return err
+		}
 		partition, err := partitionForBatchRow(ctx, w.cfg.Schema, w.cfg.PartitionSpec, fieldLookup, attrs, bat, rowIdx, w.cfg.TimeZone)
 		if err != nil {
 			return err
@@ -132,13 +143,19 @@ func (w *FanoutParquetDataWriter) WriteBatch(ctx context.Context, attrs []string
 		if err != nil {
 			return err
 		}
-		if err := active.writer.WriteRows(ctx, attrs, bat, []int{rowIdx}); err != nil {
+		before := active.writer.ApproxSize()
+		err = active.writer.WriteRows(ctx, attrs, bat, []int{rowIdx})
+		w.activeSize = saturatingWriterAdd(w.activeSize, active.writer.ApproxSize()-before)
+		if err != nil {
 			return err
 		}
 		if active.writer.ApproxSize() >= w.cfg.TargetFileSizeBytes {
 			if err := w.closeActive(ctx, key); err != nil {
 				return err
 			}
+		}
+		if err := w.relieveMemoryPressure(ctx); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -186,6 +203,7 @@ func (w *FanoutParquetDataWriter) Abort(ctx context.Context) error {
 		}
 		delete(w.active, key)
 	}
+	w.activeSize = 0
 	w.closed = true
 	return firstErr
 }
@@ -257,6 +275,7 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 	active := &activeDataFileWriter{location: location, sink: sink, writer: writer}
 	w.touch(active)
 	w.active[key] = active
+	w.activeSize = saturatingWriterAdd(w.activeSize, writer.ApproxSize())
 	return active, nil
 }
 
@@ -265,19 +284,53 @@ func (w *FanoutParquetDataWriter) touch(active *activeDataFileWriter) {
 	active.lastUsed = w.useSeq
 }
 
-func (w *FanoutParquetDataWriter) closeLeastRecentlyUsed(ctx context.Context) error {
+func (w *FanoutParquetDataWriter) leastRecentlyUsed(nonempty bool) (string, bool) {
 	var oldestKey string
 	var oldestUse uint64
+	found := false
 	for key, active := range w.active {
-		if oldestKey == "" || active.lastUsed < oldestUse || active.lastUsed == oldestUse && key < oldestKey {
-			oldestKey = key
-			oldestUse = active.lastUsed
+		if nonempty && active.writer.rows == 0 {
+			continue
+		}
+		if !found || active.lastUsed < oldestUse || active.lastUsed == oldestUse && key < oldestKey {
+			oldestKey, oldestUse, found = key, active.lastUsed, true
 		}
 	}
-	if oldestKey == "" {
+	return oldestKey, found
+}
+
+func (w *FanoutParquetDataWriter) closeLeastRecentlyUsed(ctx context.Context) error {
+	key, found := w.leastRecentlyUsed(false)
+	if !found {
 		return nil
 	}
-	return w.closeActive(ctx, oldestKey)
+	return w.closeActive(ctx, key)
+}
+
+func (w *FanoutParquetDataWriter) relieveMemoryPressure(ctx context.Context) error {
+	availability, ok := w.factory.(DataFileMemoryAvailability)
+	if !ok {
+		return nil
+	}
+	for {
+		remaining, limited := availability.AvailableMemory()
+		if !limited {
+			return nil
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		if w.activeSize < remaining/4 {
+			return nil
+		}
+		key, found := w.leastRecentlyUsed(true)
+		if !found {
+			return nil
+		}
+		if err := w.closeActive(ctx, key); err != nil {
+			return err
+		}
+	}
 }
 
 func abortDataFileSink(sink io.WriteCloser, location string) error {
@@ -298,16 +351,30 @@ func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) e
 	if active == nil {
 		return nil
 	}
+	size := active.writer.ApproxSize()
 	file, writerErr := active.writer.Close(ctx)
-	closeErr := active.sink.Close()
 	delete(w.active, key)
-	if writerErr != nil || closeErr != nil {
-		w.orphans = append(w.orphans, active.location)
-		var wrappedCloseErr error
-		if closeErr != nil {
-			wrappedCloseErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
+	if w.activeSize == math.MaxInt64 {
+		// Subtraction cannot recover a saturated sum. Recompute only on this
+		// exceptional removal path, never on the per-row pressure check.
+		w.activeSize = 0
+		for _, remaining := range w.active {
+			w.activeSize = saturatingWriterAdd(w.activeSize, remaining.writer.ApproxSize())
 		}
-		return errors.Join(writerErr, wrappedCloseErr)
+	} else {
+		w.activeSize -= size
+	}
+	if writerErr != nil {
+		cleanupErr := abortDataFileSink(active.sink, active.location)
+		if _, canAbort := active.sink.(DataFileOutputAborter); !canAbort || cleanupErr != nil {
+			w.orphans = append(w.orphans, active.location)
+		}
+		return errors.Join(writerErr, cleanupErr)
+	}
+	closeErr := active.sink.Close()
+	if closeErr != nil {
+		w.orphans = append(w.orphans, active.location)
+		return api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
 	}
 	if file.RecordCount > 0 {
 		w.files = append(w.files, file)

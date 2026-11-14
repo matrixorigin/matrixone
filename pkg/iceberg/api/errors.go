@@ -115,6 +115,9 @@ func ErrorCategory(err error) string {
 	if err == nil {
 		return ""
 	}
+	if IsMemoryLimit(err) {
+		return string(ErrPlanningLimitExceeded)
+	}
 	var icebergErr *IcebergError
 	if stderrors.As(err, &icebergErr) && icebergErr.Code != "" {
 		return string(icebergErr.Code)
@@ -125,6 +128,10 @@ func ErrorCategory(err error) string {
 func ToMOErr(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	var memoryErr *MemoryLimitError
+	if stderrors.As(err, &memoryErr) && memoryErr != nil {
+		return moerr.NewInvalidState(ctx, memoryErr.Error())
 	}
 	var mo *moerr.Error
 	if stderrors.As(err, &mo) {

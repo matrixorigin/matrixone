@@ -17,6 +17,8 @@ package api
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -136,5 +138,73 @@ func TestErrorCategory(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMemoryLimitAcrossWrappers(t *testing.T) {
+	budget := NewDMLMemoryLimitError(12, 9, 20, MemoryReservation)
+	secret := moerr.NewInternalError(context.Background(), "secret-url-token")
+	wrapped := WrapError(ErrObjectIO, "secret-url-token", nil, errors.Join(categoryTestWrapper{budget}, secret, moerr.NewInternalError(context.Background(), "secret-url-token")))
+	for _, err := range []error{budget, wrapped, categoryTestWrapper{wrapped}} {
+		if got := ErrorCategory(err); got != string(ErrPlanningLimitExceeded) {
+			t.Fatalf("category %s", got)
+		}
+		converted := ToMOErr(context.Background(), err)
+		if !moerr.IsMoErrCode(converted, moerr.ErrInvalidState) {
+			t.Fatalf("expected concrete invalid state, got %T: %v", converted, converted)
+		}
+		for _, part := range []string{"used_bytes=12", "requested_bytes=9", "limit_bytes=20", "iceberg.write.dml_max_memory", "dml-max-memory"} {
+			if !strings.Contains(converted.Error(), part) {
+				t.Fatalf("missing %q: %v", part, converted)
+			}
+		}
+		if strings.Contains(converted.Error(), "secret-url-token") {
+			t.Fatalf("secret leaked: %v", converted)
+		}
+	}
+	ordinary := moerr.NewInternalError(context.Background(), "ordinary")
+	if ToMOErr(context.Background(), ordinary) != ordinary {
+		t.Fatal("ordinary moerr identity changed")
+	}
+	if IsMemoryLimit(moerr.NewInternalError(context.Background(), "iceberg.write.dml_max_memory limit")) {
+		t.Fatal("text must not be classified as budget error")
+	}
+}
+
+func TestMemoryLimitEncoderContext(t *testing.T) {
+	ordinary := NewError(ErrObjectIO, "ordinary", nil)
+	dml := NewDMLMemoryLimitError(8, 3, 10, MemoryReservation)
+	for _, err := range []error{nil, ordinary, dml} {
+		if got := DMLMemoryEncoderError(err, 2, 3, 10); got != err {
+			t.Fatalf("non-encoder error identity changed: %v -> %v", err, got)
+		}
+	}
+	for _, tc := range []struct {
+		phase MemoryPhase
+		name  string
+	}{
+		{MemoryReservation, "reservation"}, {MemoryInitialAdmission, "initial-admission"},
+		{MemoryEncoderOutput, "encoder-output"}, {MemoryEncoderGrowth, "encoder-growth"},
+		{MemoryPhase(255), "reservation"},
+	} {
+		t.Run(tc.name+"_"+strconv.Itoa(int(tc.phase)), func(t *testing.T) {
+			encoder := NewEncoderMemoryLimitError(4, 5, 6, tc.phase)
+			if strings.Contains(encoder.Error(), "dml-max-memory") {
+				t.Fatal("local encoder error must not claim a DML configuration")
+			}
+			converted := DMLMemoryEncoderError(categoryTestWrapper{encoder}, 2, 3, 10)
+			for _, part := range []string{"used_bytes=9", "requested_bytes=5", "limit_bytes=10", "phase=" + tc.name, "encoder_used_bytes=4", "encoder_requested_bytes=5", "encoder_limit_bytes=6", "encoder_phase=" + tc.name, "dml-max-memory"} {
+				if !strings.Contains(converted.Error(), part) {
+					t.Fatalf("missing %q: %v", part, converted)
+				}
+			}
+		})
+	}
+	for _, tc := range []struct{ a, b, want int64 }{
+		{2, 3, 5}, {math.MaxInt64, 1, math.MaxInt64}, {-1, 1, math.MaxInt64}, {1, -1, math.MaxInt64},
+	} {
+		if got := memoryAdd(tc.a, tc.b); got != tc.want {
+			t.Fatalf("memoryAdd(%d, %d) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
