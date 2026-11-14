@@ -20,9 +20,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,12 +49,48 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 1)
 	bound := MakePlan2Int64ConstExprWithType(100)
 	between := bind("between", col, bound, MakePlan2Int64ConstExprWithType(150))
+	inList := func(items ...*planpb.Expr) *planpb.Expr {
+		return bind("in", col, &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_List{
+			List: &planpb.ExprList{List: items},
+		}})
+	}
+	in := inList(bound, MakePlan2Int64ConstExprWithType(150))
+	null := &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	inVector := func(values []int64) *planpb.Expr {
+		v := vector.NewVec(types.T_int64.ToType())
+		defer v.Free(mp)
+		require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
+		data, err := v.MarshalBinary()
+		require.NoError(t, err)
+		return MakeInExpr(ctx, col, int32(len(values)), data, false)
+	}
 	for _, tc := range []struct {
 		name                               string
 		expr                               *planpb.Expr
 		hints                              *OptimizerHints
 		missing, statsErr, partition, want bool
 	}{
+		{name: "in list full overlap", expr: in, want: true},
+		{name: "in vector", expr: inVector([]int64{100, 150}), want: true},
+		{name: "in empty vector", expr: inVector(nil), want: true},
+		{name: "in missing stats", expr: in, missing: true, want: true},
+		{name: "in stats error", expr: in, statsErr: true, want: true},
+		{name: "in disabled", expr: in, hints: &OptimizerHints{blockFilter: 2}},
+		{name: "in missing disabled", expr: in, missing: true, hints: &OptimizerHints{blockFilter: 2}},
+		{name: "in parameter list", expr: inList(bound, &planpb.Expr{Typ: col.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}), want: true},
+		{name: "in nullable list", expr: inList(null, bound), want: true},
+		{name: "in all null", expr: inList(null), want: true},
+		{name: "in correlated list", expr: inList(bound, GetColExpr(col.Typ, 1, 0))},
+		{name: "in volatile list", expr: inList(bind("rand"), bound)},
+		{name: "in volatile forced", expr: inList(bind("rand"), bound), hints: &OptimizerHints{blockFilter: 1}},
+		{name: "in computed column", expr: bind("in", bind("+", col, bound), DeepCopyExpr(in.GetF().Args[1]))},
+		{name: "not in", expr: bind("not", DeepCopyExpr(in))},
+		{name: "in partition keeps old admission", expr: in, partition: true},
 		{name: "full overlap", expr: between, want: true},
 		{name: "default hint", expr: between, hints: &OptimizerHints{}, want: true},
 		{name: "unrelated hint", expr: between, hints: &OptimizerHints{execType: 2}, want: true},
@@ -116,6 +155,51 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 				}
 				require.Same(t, filter, node.FilterList[0])
 			}
+		})
+	}
+}
+
+// 通过真实解析/绑定路径证明常量 IN 的列表和折叠向量都能到达块过滤。
+func TestPlanNonPrimaryInBlockFilters(t *testing.T) {
+	for _, tc := range []struct {
+		sql            string
+		scans, filters int
+	}{
+		{"select n_name from nation where n_name in ('2024.12', '2025.12')", 1, 1},
+		{"select n_name from nation where n_name in (null, '2025.12', '2024.12', '2025.12')", 1, 1},
+		{"select n_regionkey from nation where n_regionkey in (1, 3)", 1, 1},
+		{"select n_name from nation where n_name in (select n_name from nation2)", 2, 0},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			mock := NewMockCompilerContext(false)
+			// 通用 mock 以 map 遍历序号分配 ID，可能落入系统表保留 ID。
+			mock.tables["nation"].TblId = 42001
+			mock.tables["nation2"].TblId = 42002
+			ctx := &zoneMapStatsTestCompilerContext{MockCompilerContext: mock, stats: &statsinfo.StatsInfo{
+				TableCnt: 60000, BlockNumber: 9,
+				ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"n_name": {Overlap: 1}, "n_regionkey": {Overlap: 1}},
+			}}
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			scans, inFilters := 0, 0
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_TABLE_SCAN {
+					continue
+				}
+				scans++
+				for _, filter := range node.BlockFilterList {
+					if filter.GetF().GetFunc().GetObjName() == "in" {
+						inFilters++
+						require.NotNil(t, filter.GetF().Args[0].GetCol())
+						require.True(t, isRuntimeConstExpr(filter.GetF().Args[1]))
+					}
+				}
+			}
+			require.Equal(t, tc.scans, scans)
+			require.Equal(t, tc.filters, inFilters, "只有稳定常量列表可下推；子查询 IN 不在该准入范围")
 		})
 	}
 }
