@@ -1524,7 +1524,11 @@ func initExecuteStmtParamWithResolverInSession(
 			change = true
 		}
 	}
-	rebuildEveryExecute := !planReuse(false, executionPlan, preparedLogicalPlan).reusable
+	// The direct-user exception is a binding-time decision. A procedure can
+	// execute its caller's retained handle in a background session, so its
+	// cached logical plan must not cross that execution-scope boundary.
+	rebuildEveryExecute := !planReuse(false, executionPlan, preparedLogicalPlan).reusable ||
+		prepareStmt.directIndexReadAdmitted && executionSes.IsBackgroundSession()
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
 		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,
 		prepareStmt.Ts, validateSubscriptions, rebuildEveryExecute)
@@ -1625,6 +1629,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// rollout gate also forces a current-transaction plan until every lock owner
 	// understands the plan-generation snapshot wire contract.
 	if needRebuild {
+		execCtx.directIndexReadAdmitted = false
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
 		if err != nil {
 			return nil, nil, nil, "", false, err
@@ -1656,6 +1661,7 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.directIndexReadAdmitted = execCtx.directIndexReadAdmitted
 		rebuildCommitted = true
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.jsonComparisonParamPositions =

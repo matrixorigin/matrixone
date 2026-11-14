@@ -801,6 +801,7 @@ func (tcc *TxnCompilerContext) checkUserRelationIndexAccess(requested, physical 
 	if (catalog.RequiresPrivilegedRelationAccess(requested, def.TableType, def.FeatureFlag) ||
 		catalog.RequiresPrivilegedRelationAccess(physical, def.TableType, def.FeatureFlag)) &&
 		tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
+		tcc.execCtx.directIndexReadAdmitted = true
 		return nil
 	}
 	return checkResolvedIndexRelation(tcc.execCtx, requested, physical, def.TableType, def.FeatureFlag)

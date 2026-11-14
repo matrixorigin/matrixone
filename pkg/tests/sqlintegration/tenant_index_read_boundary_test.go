@@ -93,16 +93,34 @@ func TestTenantAdminIndexReadBoundary(t *testing.T) {
 		require.Equal(t, before, after)
 		require.NoError(t, active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))
 		require.Equal(t, before, after)
-
-		_, err = active.ExecContext(ctx, "set role index_reader_role")
+		// A procedure must not inherit the direct-user admission captured by a
+		// prepared handle on its caller's connection.
+		_, err = active.ExecContext(ctx, "create procedure index_boundary.p_retained_index_read() 'begin execute index_read_sql; end'")
 		require.NoError(t, err)
-		require.NoError(t, active.QueryRowContext(ctx, "select count(*) from index_boundary.t").Scan(&after))
-		require.Equal(t, 2, after)
+		_, err = active.ExecContext(ctx, "create procedure index_boundary.p_fresh_index_read() 'begin prepare fresh_index_read from ''select count(*) from "+target+"''; execute fresh_index_read; deallocate prepare fresh_index_read; end'")
+		require.NoError(t, err)
+		_, err = active.ExecContext(ctx, "create procedure index_boundary.p_base_read() 'begin select count(*) from index_boundary.t; end'")
+		require.NoError(t, err)
 		assertIndexReadDenied := func(err error) {
 			var denied *mysql.MySQLError
 			require.True(t, errors.As(err, &denied))
 			require.EqualValues(t, 20101, denied.Number)
 		}
+		assertProcedureIndexReadDenied := func(label string, err error) {
+			// CALL wraps the underlying privilege error as an internal SQL error.
+			require.ErrorContains(t, err, "do not have privilege to execute the statement", label)
+		}
+		assertProcedureIndexReadDenied("fresh binding", active.QueryRowContext(ctx, "call index_boundary.p_fresh_index_read()").Scan(&after))
+		assertProcedureIndexReadDenied("retained plan", active.QueryRowContext(ctx, "call index_boundary.p_retained_index_read()").Scan(&after))
+		require.NoError(t, active.QueryRowContext(ctx, "call index_boundary.p_base_read()").Scan(&after))
+		require.Equal(t, 2, after)
+		require.NoError(t, active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))
+		require.Equal(t, before, after)
+
+		_, err = active.ExecContext(ctx, "set role index_reader_role")
+		require.NoError(t, err)
+		require.NoError(t, active.QueryRowContext(ctx, "select count(*) from index_boundary.t").Scan(&after))
+		require.Equal(t, 2, after)
 		assertIndexReadDenied(active.QueryRowContext(ctx, "select count(*) from "+target).Scan(&after))
 		assertIndexReadDenied(retained.QueryRowContext(ctx).Scan(&after))
 		assertIndexReadDenied(active.QueryRowContext(ctx, "execute index_read_sql").Scan(&after))

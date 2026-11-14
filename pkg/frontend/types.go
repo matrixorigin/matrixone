@@ -302,6 +302,9 @@ type PrepareStmt struct {
 	proc                      *process.Process
 	remapDb                   map[string]string
 	defaultDatabase           string
+	// A direct tenant-admin read of a physical index was admitted while this
+	// plan was bound. A caller-owned procedure must rebind before using it.
+	directIndexReadAdmitted bool
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -1191,6 +1194,9 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// Set only when binding uses the direct-user physical-index read exception.
+	// PREPARE captures this in its handle, while EXECUTE refreshes it on rebind.
+	directIndexReadAdmitted bool
 	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
 	// deferred an unqualified multi-source UPDATE verdict because no catalog
 	// transaction existed yet for owner resolution. executeStmtWithWorkspace
