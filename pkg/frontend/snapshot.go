@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -912,6 +913,24 @@ func shouldInvalidateTimestampSnapshotBindings(
 	return true, nil
 }
 
+// activateAccountCatalogIfNeeded ensures the lazy catalog for the given
+// account is activated before internal SQL reads that account's catalog.
+// Without this, logtail entries for the target account's catalog tables
+// would be delayed and invisible to background SQL sessions.
+func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
+	if accountID == 0 {
+		return nil // sys account is always activated
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		return nil
+	}
+	if activator, ok := txnHandler.GetStorage().(engine.TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, accountID)
+	}
+	return nil
+}
+
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
@@ -1003,6 +1022,17 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
+	}
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, toAccountId); err != nil {
+		return
+	}
+
+	if restoreAccount != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, restoreAccount); err != nil {
+			return
+		}
 	}
 
 	if stmt.Level == tree.RESTORELEVELTABLE {
@@ -3977,6 +4007,24 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 		return err
 	}
 	ctx = ownershipCtx
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(toAccountId)); err != nil {
+		return
+	}
+
+	// Activate the source (from) account's catalog so restore queries
+	// (SHOW DATABASES, SHOW TABLES, CLONE TABLE, etc.) can discover the
+	// from-account's databases and tables in the partition state.
+	// If TN checkpoint has compacted the dropped account's data, the
+	// activation will return empty data — the restore will find no
+	// databases/tables and effectively do nothing for that account.
+	// The downstream FK and table-resolution code handles that gracefully.
+	if uint64(fromAccount) != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(fromAccount)); err != nil {
+			return
+		}
+	}
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {

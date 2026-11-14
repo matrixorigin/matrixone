@@ -64,6 +64,36 @@ type barrierTimestampWaiter struct {
 	get func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
+func TestActivationResponseDoesNotDeliverFailedTail(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 1)},
+	}
+	c := &e.pClient
+	c.lazyCatalog = newLazyCatalogCNState()
+	c.lazyCatalog.enable()
+	seq, response := c.lazyCatalog.beginCatchingUp(10)
+	table := api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID, DbName: catalog.MO_CATALOG, TbName: catalog.MO_TABLES}
+	part := e.GetOrCreateLatestPart(t.Context(), 0, table.DbId, table.TbId)
+	require.NoError(t, part.Lock(t.Context()))
+	defer part.Unlock()
+	cancel()
+	ts := timestamp.Timestamp{PhysicalTime: 100}
+	err := c.handleActivationResponse(ctx, e, &logtail.ActivateAccountForCatalogResponse{
+		AccountId: 10, Seq: seq, TargetTs: &ts,
+		Tails: []logtail.TableLogtail{{Table: &table, Ts: &ts}},
+	}, time.Now())
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case <-response:
+		t.Fatal("a failed partition apply must not admit catalog replay")
+	default:
+	}
+	require.False(t, c.CanServeAccount(10, ts))
+}
+
 func TestReconnectHandlerConcurrentUpdate(t *testing.T) {
 	var c PushClient
 	var calls atomic.Int64
@@ -270,6 +300,7 @@ func TestBlockInfoSlice(t *testing.T) {
 
 func TestDca(t *testing.T) {
 	pClient := &PushClient{}
+	pClient.dcaReset()
 
 	signalCnt := 0
 	assert.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
@@ -278,6 +309,23 @@ func TestDca(t *testing.T) {
 	assert.Equal(t, 1, signalCnt)
 	assert.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
 
+}
+
+func TestDcaConfirmAndApplyDrainsNewClosuresBeforeReplay(t *testing.T) {
+	pClient := &PushClient{}
+	pClient.dcaReset()
+
+	order := make([]int, 0, 2)
+	assert.True(t, pClient.dcaTryDelay(false, func() {
+		order = append(order, 1)
+		assert.True(t, pClient.dcaTryDelay(false, func() {
+			order = append(order, 2)
+		}))
+	}))
+
+	pClient.dcaConfirmAndApply()
+	assert.Equal(t, []int{1, 2}, order)
+	assert.False(t, pClient.dcaTryDelay(false, func() {}))
 }
 
 type testHAKeeperClient struct {
@@ -3614,6 +3662,22 @@ func TestPushClientCloseCancelsTimestampWait(t *testing.T) {
 		ctx := c.start(context.Background())
 		result := make(chan error, 1)
 		require.True(t, c.runOwned(func() { result <- c.waitTimestamp(ctx) }))
+		synctest.Wait()
+		require.NoError(t, c.Close())
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
+}
+
+func TestPushClientCloseCancelsTenantActivationWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{lazyCatalog: newLazyCatalogCNState()}
+		c.start(context.Background())
+		c.lazyCatalog.enable()
+		c.lazyCatalog.inflightActivations.Store(uint32(10), &inflightActivation{done: make(chan struct{})})
+		result := make(chan error, 1)
+		require.True(t, c.runOwned(func() {
+			result <- c.ActivateTenantCatalog(context.Background(), nil, 10)
+		}))
 		synctest.Wait()
 		require.NoError(t, c.Close())
 		require.ErrorIs(t, <-result, context.Canceled)

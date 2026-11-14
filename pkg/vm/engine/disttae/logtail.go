@@ -37,6 +37,7 @@ func consumeEntry(
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 	isSub bool,
+	skipCatalogCache bool,
 	keys ...*readutil.ClusterKeyDescriptor,
 ) error {
 	// for test only.
@@ -59,7 +60,7 @@ func consumeEntry(
 	}
 
 	// Maintain catalog identities and prepared-plan metadata generations.
-	if (!catalog.IsSystemTable(e.TableId) &&
+	if (!catalog.IsLazyCatalogTableID(e.TableId) &&
 		!isPreparedMetadataTable(e.DatabaseName, e.TableName)) ||
 		logtailreplay.IsMetaEntry(e.TableName) ||
 		e.EntryType == api.Entry_DataObject ||
@@ -67,11 +68,31 @@ func consumeEntry(
 		return nil
 	}
 
+	// Activation response data should only populate PartitionState; the
+	// catalog cache is built later by replayCatalogCacheAt. Skip all
+	// catalog-cache operations (both global DCA and per-account DCA).
+	if skipCatalogCache {
+		return nil
+	}
+
 	if engine.PushClient().dcaTryDelay(isSub, func() { applyToCatalogCache(cache, e) }) {
 		return nil
 	}
 
-	applyToCatalogCache(cache, e)
+	lc := engine.PushClient().lazyCatalog
+	if lc != nil {
+		accountID, shouldDelay, err := lc.shouldDelayCatalogCacheApplyEntry(*e)
+		if err != nil {
+			return err
+		}
+		if shouldDelay && lc.delayAccountCacheApply(accountID, func() { applyToCatalogCache(cache, e) }) {
+			return nil
+		}
+	}
+
+	engine.PushClient().applyCatalogCacheChange(func() {
+		applyToCatalogCache(cache, e)
+	})
 	return nil
 }
 

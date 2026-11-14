@@ -250,7 +250,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
-			"FIND_TABLE deleteTableError",
+			"catalog-load deleteTableError",
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
@@ -278,7 +278,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	if len(rowids) != len(colPKs) {
 		logutil.Error(
-			"FIND_TABLE deleteTableError",
+			"catalog-load deleteTableError",
 			zap.String("bat", stringifySlice(rowids, func(a any) string {
 				r := a.(types.Rowid)
 				return r.ShortStringEx()
@@ -614,7 +614,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
-			logutil.Info("FIND_TABLE slow loadTableFromStorage",
+			logutil.Info("catalog-load slow loadTableFromStorage",
 				zap.Duration("cost", time.Since(now)),
 				zap.String("table", name),
 				zap.Uint32("accountID", accountID),
@@ -640,7 +640,10 @@ func (db *txnDatabase) loadTableFromStorage(
 			return
 		}
 		if row := res.Batches[0].RowCount(); row != 1 {
-			panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: table result row cnt: %v, sql : %s", row, tblSql))
+			if row != 0 {
+				err = moerr.NewInternalErrorf(ctx, "catalog table lookup returned %d rows: %s", row, tblSql)
+			}
+			return
 		}
 		bat := res.Batches[0]
 
@@ -664,7 +667,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		defer res.Close()
 		if len(res.Batches) == 0 {
-			err = moerr.NewParseErrorf(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
+			err = moerr.NewParseErrorf(ctx, "catalog-load columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
 			return
 		}
 		bat := res.Batches[0]
@@ -679,14 +682,16 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		cache.ParseColumnsBatchAnd(bat, func(m map[cache.TableItemKey]cache.Columns) {
 			if len(m) != 1 {
-				panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: columns touch %d tables", len(m)))
+				err = moerr.NewInternalErrorf(ctx, "catalog column lookup returned %d table definitions for %s", len(m), name)
+				tableitem = nil
+				return
 			}
 			for _, v := range m {
 				cache.InitTableItemWithColumns(tableitem, v)
 			}
 		})
 	}
-	return tableitem, nil
+	return tableitem, err
 }
 
 func (db *txnDatabase) getTableItem(
@@ -703,33 +708,51 @@ func (db *txnDatabase) getTableItem(
 	}
 	var err error
 	c := engine.GetLatestCatalogCache()
-	if ok := c.GetTable(&item); !ok {
+	if ok := c.GetTable(&item); ok {
+		// Guard against a transient catalog-cache window: push logtail
+		// delivers mo_tables and mo_columns entries separately, each
+		// applied under a distinct catalogCacheMu acquisition.
+		// InsertTable creates a BTree item with nil Defs; InsertColumns
+		// later replaces it with a fully-populated copy (COW).  Between
+		// the two, a concurrent GetTable reader can observe the
+		// intermediate item whose Defs is nil.  Fall through to
+		// loadTableFromStorage so callers never see a column-less
+		// table definition.
+		if item.Defs != nil {
+			return &item, nil
+		}
+		logutil.Warn("catalog-load catalog-cache item has no column defs, falling through to storage",
+			zap.String("table", name),
+			zap.Uint32("accountID", accountID),
+			zap.Uint64("tableID", item.Id),
+		)
+	}
+	if item.Id == 0 && defines.IsTempTableName(name) {
 		// A session-owned definition may have committed after this data snapshot.
 		// Only the schema is made visible; txn row/object timestamps stay unchanged.
-		if defines.IsTempTableName(name) {
-			latest := cache.TableItem{
-				Name: name, DatabaseId: db.databaseId, DatabaseName: db.databaseName,
-				AccountId: accountID, Ts: types.MaxTs().ToTimestamp(),
-			}
-			if c.GetTable(&latest) && isSessionTemporaryCatalogItem(
-				c, &latest, accountID, db.databaseId, db.databaseName,
-			) {
-				return &latest, nil
-			}
+		latest := cache.TableItem{
+			Name: name, DatabaseId: db.databaseId, DatabaseName: db.databaseName,
+			AccountId: accountID, Ts: types.MaxTs().ToTimestamp(),
 		}
-		var tableitem *cache.TableItem
-		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
-			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
-			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
-				return nil, err
-			}
+		if c.GetTable(&latest) && isSessionTemporaryCatalogItem(
+			c, &latest, accountID, db.databaseId, db.databaseName,
+		) {
+			return &latest, nil
 		}
-		if tableitem == nil {
-			return nil, nil
-		}
-		return tableitem, nil
 	}
-	return &item, nil
+	var tableitem *cache.TableItem
+	if item.Id != 0 && item.Defs == nil ||
+		!c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
+		!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
+		logutil.Info("catalog-load loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
+		if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
+			return nil, err
+		}
+	}
+	if tableitem == nil {
+		return nil, nil
+	}
+	return tableitem, nil
 }
 
 // syncLogicalIdIndexInsert synchronizes the logical_id index table for INSERT/UPDATE operations

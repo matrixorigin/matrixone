@@ -1532,6 +1532,14 @@ type LogtailReadBarrier interface {
 	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
 }
 
+// TenantCatalogActivator is an optional interface for engines that support
+// lazy per-account catalog loading. If the engine implements this interface,
+// tenant-context execution must activate the catalog before resolving names,
+// including remote pipelines that do not authenticate a local session.
+type TenantCatalogActivator interface {
+	ActivateTenantCatalog(ctx context.Context, accountID uint32) error
+}
+
 // CatalogCacheGCer is an optional interface for engines that support
 // on-demand GC of the in-memory catalog cache.
 type CatalogCacheGCer interface {

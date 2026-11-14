@@ -153,6 +153,93 @@ func TestSubscriptionPullCancelsWhenSessionCloses(t *testing.T) {
 	require.Equal(t, TableNotFound, session.Unregister(id))
 }
 
+func TestActivationPullCancelsWhenSessionCloses(t *testing.T) {
+	for _, phase := range []string{"phase1", "phase2"} {
+		t.Run(phase, func(t *testing.T) {
+			entered := make(chan struct{}, len(lazyCatalogTableIDs))
+			var released atomic.Int32
+			server := newUnitLogtailServerWithStart(t, &controlledLogtailer{
+				tableFn: func(ctx context.Context, _ api.TableID, _, _ timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+					entered <- struct{}{}
+					<-ctx.Done()
+					return logtail.TableLogtail{}, func() { released.Add(1) }, ctx.Err()
+				},
+			}, false)
+			session := newCatalogTestSession(t)
+			session.lazyCatalog.configure([]uint32{0})
+			require.True(t, session.beginLazyCatalogActivation(10, 1))
+			act := catalogActivation{accountID: 10, seq: 1, session: session, timeout: time.Hour}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				if phase == "phase1" {
+					server.pullActivationPhase1(server.rootCtx, act)
+				} else {
+					server.sendActivation(server.rootCtx, &catalogActivationPhase1{activation: act})
+				}
+			}()
+			expectedPulls := 1
+			if phase == "phase1" {
+				expectedPulls = len(lazyCatalogTableIDs)
+			}
+			for range expectedPulls {
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("activation pull did not start")
+				}
+			}
+			session.cancelFunc()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("session close did not cancel activation")
+			}
+			require.EqualValues(t, expectedPulls, released.Load())
+			require.Empty(t, server.pullWorkerPool)
+			require.Empty(t, server.activationTailChan)
+			require.False(t, session.abortLazyCatalogActivation(10, 1))
+			server.pendingSessionErrors.Lock()
+			err := server.pendingSessionErrors.items[session]
+			server.pendingSessionErrors.Unlock()
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
+func TestActivationPullFailureNotifiesSession(t *testing.T) {
+	for _, phase := range []string{"phase1", "phase2"} {
+		t.Run(phase, func(t *testing.T) {
+			var released atomic.Int32
+			wantErr := moerr.NewInternalErrorNoCtx("activation pull failed")
+			server := newUnitLogtailServerWithStart(t, &controlledLogtailer{
+				tableFn: func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+					return logtail.TableLogtail{}, func() { released.Add(1) }, wantErr
+				},
+			}, false)
+			session := newCatalogTestSession(t)
+			session.lazyCatalog.configure([]uint32{0})
+			require.True(t, session.beginLazyCatalogActivation(10, 1))
+			act := catalogActivation{accountID: 10, seq: 1, session: session, timeout: time.Second}
+			expectedPulls := 1
+			if phase == "phase1" {
+				expectedPulls = len(lazyCatalogTableIDs)
+				server.pullActivationPhase1(server.rootCtx, act)
+			} else {
+				server.sendActivation(server.rootCtx, &catalogActivationPhase1{activation: act})
+			}
+			require.EqualValues(t, expectedPulls, released.Load())
+			require.Empty(t, server.pullWorkerPool)
+			require.Empty(t, server.activationTailChan)
+			require.False(t, session.abortLazyCatalogActivation(10, 1))
+			server.pendingSessionErrors.Lock()
+			err := server.pendingSessionErrors.items[session]
+			server.pendingSessionErrors.Unlock()
+			require.ErrorIs(t, err, wantErr)
+		})
+	}
+}
+
 // A slow catalog pull can outlive the CN's subscription attempt. Reconnecting
 // creates a new transport while the old pull still owns a TN worker slot.
 // The controlled collector stands in for the oversized-logtail flush wait;
@@ -1008,6 +1095,33 @@ func TestCompleteSubscriptionDoesNotWaitForFullSessionQueue(t *testing.T) {
 		"failed response hand-off must roll back the subscription generation")
 	require.ErrorIs(t, transport.ctx.Err(), context.Canceled,
 		"a congested session must be closed so it can rebuild from a snapshot")
+}
+
+func TestActivationResponseDoesNotWaitForFullSessionQueue(t *testing.T) {
+	session, transport := newTransportProbeTestSession(t, timestamp.Timestamp{}, timestamp.Timestamp{})
+	session.poisonTime = time.Hour
+	session.sendChan <- message{response: session.responses.Acquire()}
+	t.Cleanup(func() {
+		queued := <-session.sendChan
+		session.responses.Release(queued.response)
+	})
+	var released atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- session.SendActivateAccountForCatalogResponse(t.Context(),
+			logtail.ActivateAccountForCatalogResponse{AccountId: 10, Seq: 1},
+			func() { released.Add(1) })
+	}()
+	select {
+	case err := <-done:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+	case <-time.After(500 * time.Millisecond):
+		session.cancelFunc()
+		<-done
+		t.Fatal("activation blocked the shared sender on a full session queue")
+	}
+	require.Equal(t, int32(1), released.Load())
+	require.ErrorIs(t, transport.ctx.Err(), context.Canceled)
 }
 
 func TestCongestedSubscriptionDoesNotBlockHealthyIncrementalProgress(t *testing.T) {

@@ -3,6 +3,7 @@
 -- @desc: #32463 repeated schema rewrites do not amplify catalog properties
 -- @label:bvt
 
+drop snapshot if exists alter_catalog_before_flush;
 drop database if exists alter_table_catalog_properties;
 create database alter_table_catalog_properties;
 use alter_table_catalog_properties;
@@ -41,5 +42,20 @@ insert into events values (2,1,'duplicate unique',101);
 insert into events values (2,999,'missing parent',102);
 delete from parents where id = 1;
 select id, parent_id, payload, u from events order by id;
+
+-- A snapshot pinned before catalog flush must not resurrect old table/column
+-- versions when its logtail is reconstructed from persisted appendable objects.
+create snapshot alter_catalog_before_flush for cluster;
+select count(*) as table_versions from mo_catalog.mo_tables{snapshot='alter_catalog_before_flush'}
+    where account_id = 0 and reldatabase = 'alter_table_catalog_properties' and relname = 'events';
+select count(*) as id_columns from mo_catalog.mo_columns{snapshot='alter_catalog_before_flush'}
+    where account_id = 0 and att_database = 'alter_table_catalog_properties' and att_relname = 'events' and attname = 'id';
+set @catalog_flush_result = mo_ctl('dn', 'flush', 'mo_catalog.mo_tables');
+set @catalog_flush_result = mo_ctl('dn', 'flush', 'mo_catalog.mo_columns');
+select count(*) as table_versions from mo_catalog.mo_tables{snapshot='alter_catalog_before_flush'}
+    where account_id = 0 and reldatabase = 'alter_table_catalog_properties' and relname = 'events';
+select count(*) as id_columns from mo_catalog.mo_columns{snapshot='alter_catalog_before_flush'}
+    where account_id = 0 and att_database = 'alter_table_catalog_properties' and att_relname = 'events' and attname = 'id';
+drop snapshot alter_catalog_before_flush;
 
 drop database alter_table_catalog_properties;

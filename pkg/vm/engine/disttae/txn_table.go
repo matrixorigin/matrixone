@@ -1381,7 +1381,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 
 	// get the table's snapshot
 	if rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
+		if part, err = tbl.getPartitionState(ctx, rangesParam.BlockFilters...); err != nil {
 			return
 		}
 	}
@@ -1399,7 +1399,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}
 
 	if part == nil {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
+		if part, err = tbl.getPartitionState(ctx, rangesParam.BlockFilters...); err != nil {
 			return
 		}
 	}
@@ -2760,7 +2760,7 @@ func (tbl *txnTable) BuildReaders(
 	// relData maybe is nil, indicate that only read data from memory.
 	// When relData is non-nil but DataCnt()==0, caller explicitly requests no blocks (e.g. StarCount optimization: only relation.StarCount() is used, no scan).
 	if relData == nil {
-		part, err := tbl.getPartitionState(ctx)
+		part, err := tbl.getPartitionState(ctx, expr)
 		if err != nil {
 			return nil, err
 		}
@@ -2878,13 +2878,19 @@ func (tbl *txnTable) getLatestPartitionState(ctx context.Context) (*logtailrepla
 		tbl.tableId, ps, pending, tbl.db.op.SnapshotTS())
 }
 
-func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+func (tbl *txnTable) getPartitionState(ctx context.Context, filters ...*plan.Expr) (ps *logtailreplay.PartitionState, err error) {
 	var ready bool
 	ps, ready, err = tbl.getLatestPartitionState(ctx)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil, err
 	}
 	if ready {
+		if tbl.needsAuthoritativeCatalogRead(ctx) {
+			if scoped := tbl.readyCatalogSnapshot(ctx, filters); scoped != nil {
+				return scoped, nil
+			}
+			return tbl.readCatalogSnapshot(ctx)
+		}
 		return ps, nil
 	}
 

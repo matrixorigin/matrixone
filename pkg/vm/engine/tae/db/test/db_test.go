@@ -5044,9 +5044,136 @@ func TestCollectInsert(t *testing.T) {
 	batches[schema.Version].Close()
 }
 
-func TestAppendnode(t *testing.T) {
+// Historical logtail windows must preserve both inserts and deletes when
+// their appendable objects are flushed after the requested snapshot.
+func TestCollectChangesAfterFlush(t *testing.T) {
 	ctx := context.Background()
 
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(ctx, "flush-for-scan-range")
+	worker.Start()
+	defer worker.Stop()
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 20
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 12)
+	defer bat.Close()
+	bats := bat.Split(4)
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	txn1, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[1]))
+	assert.NoError(t, txn1.Commit(ctx))
+	p1 := txn1.GetPrepareTS()
+
+	txn2, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[2]))
+	assert.NoError(t, txn2.Commit(ctx))
+	p2 := txn2.GetPrepareTS()
+
+	txn3, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[3]))
+	assert.NoError(t, txn3.Commit(ctx))
+	p3 := txn3.GetPrepareTS()
+
+	deleteTSs := make([]types.TS, 3)
+	for row := range deleteTSs {
+		txn, deleteRel := tae.GetRelation()
+		require.NoError(t, deleteRel.DeleteByFilter(ctx,
+			handle.NewEQFilter(bat.Vecs[0].Get(row))))
+		require.NoError(t, txn.Commit(ctx))
+		deleteTSs[row] = txn.GetCommitTS()
+	}
+
+	readTxn, rel := tae.GetRelation()
+	defer readTxn.Rollback(ctx)
+	objEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+	require.True(t, objEntry.IsAppendable(), "expected appendable object before flush")
+	tombstone := testutil.GetOneTombstoneMeta(rel)
+	tombstoneSchema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema(true)
+	checkDeletes := func(name string, start, end types.TS, first, count int) {
+		t.Helper()
+		batches := make(map[uint32]*containers.BatchWithVersion)
+		defer func() {
+			for _, batch := range batches {
+				batch.Close()
+			}
+		}()
+		require.NoError(t, tables.RangeScanInMemoryByObject(
+			ctx, tombstone, batches, start, end, common.DefaultAllocator))
+		changes := batches[tombstoneSchema.Version]
+		if count == 0 {
+			require.Nil(t, changes, name)
+			return
+		}
+		require.NotNil(t, changes, name)
+		wire := logtail.TombstoneChangeToLogtailBatch(changes)
+		require.Equal(t, count, wire.Length(), name)
+		for row := range count {
+			offset := uint32(first + row)
+			require.Equal(t, types.NewRowIDWithObjectIDBlkNumAndRowID(*objEntry.ID(), 0, offset), wire.Vecs[0].Get(row), name)
+			require.Equal(t, deleteTSs[first+row], wire.Vecs[1].Get(row), name)
+			require.Equal(t, bat.Vecs[0].Get(first+row), wire.Vecs[2].Get(row), name)
+			require.Equal(t, types.NewRowIDWithObjectIDBlkNumAndRowID(*tombstone.ID(), 0, offset), wire.Vecs[3].Get(row), name)
+		}
+	}
+	checkDeletes("before flush", types.TS{}, deleteTSs[2], 0, 3)
+
+	flushTxn, _ := tae.GetRelation()
+	task, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, flushTxn,
+		[]*catalog.ObjectEntry{objEntry},
+		[]*catalog.ObjectEntry{tombstone},
+		tae.DB.Runtime,
+	)
+	assert.NoError(t, err)
+	worker.SendOp(task)
+	assert.NoError(t, task.WaitDone(ctx))
+	assert.NoError(t, flushTxn.Commit(ctx))
+
+	flushedEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(objEntry.ID(), false)
+	assert.NoError(t, err)
+	require.True(t, flushedEntry.IsAppendable(),
+		"flushed aobj should still be marked appendable")
+	deleteAt := flushedEntry.GetDeleteAt()
+	require.False(t, (&deleteAt).IsEmpty(),
+		"flushed aobj should carry a non-empty DeleteAt")
+	tombstone, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(tombstone.ID(), true)
+	require.NoError(t, err)
+	checkDeletes("after flush [0,d1]", types.TS{}, deleteTSs[0], 0, 1)
+	checkDeletes("after flush [d1,d2]", deleteTSs[0], deleteTSs[1], 0, 2)
+	checkDeletes("after flush (d1,d3]", deleteTSs[0].Next(), deleteTSs[2], 1, 2)
+	checkDeletes("after flush empty", deleteTSs[2].Next(), flushTxn.GetStartTS(), 0, 0)
+
+	check := func(name string, start, end types.TS, expectedRows int) {
+		t.Helper()
+		batches := make(map[uint32]*containers.BatchWithVersion)
+		err := tables.RangeScanInMemoryByObject(
+			ctx, flushedEntry, batches, start, end, common.DefaultAllocator,
+		)
+		assert.NoErrorf(t, err, "%s: scan error", name)
+		bwv := batches[schema.Version]
+		require.NotNilf(t, bwv, "%s: expected batch at schema version %d", name, schema.Version)
+		for _, vec := range bwv.Vecs {
+			assert.Equalf(t, expectedRows, vec.Length(),
+				"%s: unexpected row count for attrs=%v", name, bwv.Attrs)
+		}
+		bwv.Close()
+	}
+
+	check("[0,p1]", types.TS{}, p1, 6)
+	check("[0,p2]", types.TS{}, p2, 9)
+	check("(p1,p2]", p1.Next(), p2, 3)
+	check("(p1,p3]", p1.Next(), p3, 6)
+}
+
+func TestAppendnode(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()

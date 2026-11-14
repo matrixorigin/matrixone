@@ -1,0 +1,112 @@
+# Lazy Catalog Flow
+
+## 关键规则
+
+1. **subscribe/activation 保留共享 checkpoint 和 object metadata**：row-level data 才按 account 过滤；不提供 per-account PartitionState 或硬内存隔离。
+2. **`PartitionState` 只保存全局基线**：object/metadata 全局推进；row-level delta 按 account 过滤。
+3. **account ready 点是 `replayTS`，不是 `targetTS`**。
+4. **activation 期间 push 仍推进 `PartitionState`**：cache apply 进 `accountDCA`，replay 后 drain。
+5. **delete 也按 account 过滤**：统一按 `cpkey` 解出 account。
+6. **push 与 pull 粒度不同**：push 的有效 summary 可整条 keep/drop；无 summary 的混合 batch 按 account 拆分后发送。pull batch 按行过滤。
+
+---
+
+## Flow 1：首次 startup
+
+1. CN `subSysTables()` 发送 `lazy_catalog=true, initial_active_accounts=[0]`。
+2. TN 返回：共享 `CkpLocation`、object/metadata + sys account row-level delta。
+3. CN 应用到 `PartitionState`，走 `waitTimestamp()` / `replayCatalogCache()`（仅 sys account）。
+4. Flush global DCA → `sys.readyTS = startupReplayTS` → `sys.state = ready`。
+
+结果：`PartitionState` 包含全局基线 + sys delta；`CatalogCache` 只有 sys。
+
+---
+
+## Flow 2：运行中新增 account X
+
+**A. 触发**：`AuthenticateUser` → `tenant.SetTenantID(X)` 后 → `ActivateTenantCatalog(ctx, X)`。
+
+**B. CN 侧**：
+1. X 已 ready → 返回。
+2. Inflight dedup（sync.Map leader/waiter） → 同锁发布 `catching_up`、`accountDCA`、`seq` 和 response waiter → 发送 request。reset 无法落在 seq 发布和 waiter 注册之间。
+
+**C. TN 侧**：
+1. Phase1 worker 从 0 拉三表历史 delta（**立即过滤**），入 `activationTailChan`。
+2. Sender 串行完成 phase2（`phase1To → targetTS`），合并，发送 response。
+3. Response 入 FIFO 后才将 X 加入 `activeCatalogAccounts`。
+
+**D. CN 落地**：
+1. Apply tails → `PartitionState`。
+2. `WaitLogTailAppliedAt(targetTS)` → `replayTS`。
+3. `replayCatalogCacheAt(..., [X])` → 校验 seq → drain `accountDCA[X]` → 再校验 seq → `readyTS` → `ready`。tail apply/replay 失败或 seq 被 reset 时不得发布 ready。
+
+**E. 期间 push**：`PartitionState` 正常更新；X 的 cache apply 进 `accountDCA`。
+
+---
+
+## Flow 3：steady state
+
+- TN publish：object/metadata 全局推进；row-level delta 只对 `sys ∪ activeCatalogAccounts` 放行。
+- CN：ready account 正常更新 PS + cache。
+- `CanServeAccount(X, ts)` = `globalCanServe(ts) && readyTS[X] exists && ts >= readyTS[X]`。
+
+---
+
+## Flow 4：reconnect
+
+1. CN 保存 `wantedAccounts`（断线前已 ready）。
+2. Reconnect `subSysTables()`：`initial_active_accounts = wantedAccounts ∪ {0}`。
+3. TN 返回 sys + wanted 的 row-level delta。
+4. CN 走 startup 骨架 → `reconnectReplayTS` → replay sys + wanted → 批量 `ready`。
+5. 重连前的 activation 即使已收到 response，也不能凭旧 seq 将新连接的 account 标记 ready。
+
+---
+
+## Flow 5：存储回退（account 未激活）
+
+当 `CanServeAccount(X) == false` 时，engine 退回 `loadTableFromStorage()`：
+
+1. `Engine.Database("mo_catalog")` 短路（`engine.go:369`），不查 cache。
+2. `relation("mo_tables")` 强制 `accountId=0`（`txn_database.go:107`），sys 始终 ready。
+3. `execReadSql(SELECT ... FROM mo_tables WHERE account_id=X)` 进入 catalog reader。
+4. 普通 sys SQL 或 caller account 未就绪时，在现有订阅与 snapshot coverage 检查后，
+   通过 TN `OpGetLogTail` 按事务 snapshot TS 读取完整 checkpoint + delta。
+5. 从固定 bootstrap 基线 fork reader 私有 `PartitionState`，不写回共享 PS，不激活冷租户。
+
+**数据新鲜度**：不能用缺少冷租户增量的共享 push PS 回答普通 SQL。
+**边界**：已就绪 tenant 仍使用本地 PS；已接收完整 tail 的内部 account replay 跳过回退；
+历史 snapshot 沿用已有 checkpoint coverage 路径，同事务写入由 workspace 合并。
+
+---
+
+## Flow 6：activation 被 reconnect 打断
+
+1. `doActivateTenantCatalog` 等待 `respCh` → reconnect → `resetAllStates()` 发送 nil。
+2. Sentinel `errActivationInterruptedByReconnect` → 回退 `catching_up → inactive`。
+3. `ActivateTenantCatalog` 指数退避重试（500ms/1s/2s/4s，最多 4 次）。
+4. 所有 goroutine 独立重试，sync.Map 自动选举新 leader。
+
+---
+
+## Flow 7：consumeEntry DCA 路由
+
+```
+entry 到达
+  ├─ PartitionState 无条件更新
+  ├─ 非 lazy catalog table → return
+  ├─ Global DCA buffering? → 缓冲（startup/reconnect）
+  ├─ Account catching_up? → accountDCA[X]
+  └─ 直接 apply
+```
+
+---
+
+## 一句话版
+
+| 场景 | 流程 |
+|------|------|
+| startup | PS → startupReplayTS → sys replay → sys ready |
+| 新增 account | PS 补到 targetTS → replayTS → replay → drain DCA → ready |
+| reconnect | wanted ∪ {0} → reconnectReplayTS → 批量 replay → 批量 ready |
+| 存储回退 | CanServe=false → mo_catalog 短路 + accountId=0 → 读 PS 快照 |
+| reconnect 打断 | nil response → sentinel → 退避重试 → 新 leader |

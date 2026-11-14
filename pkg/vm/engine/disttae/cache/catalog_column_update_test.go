@@ -133,7 +133,10 @@ func TestColumnOnlyUpdatePreservesPublishedSchema(t *testing.T) {
 	cc.setTableItem(next, true)
 	cols[0].Comment = "DDL change"
 	cc.InsertColumns(columnUpdateBatch(t, cols, 300))
-	require.Equal(t, "DDL change", next.TableDef.Cols[0].Comment)
+	require.Nil(t, next.TableDef, "column replay must not mutate a published item")
+	require.True(t, cc.GetTable(lookup))
+	require.NotNil(t, lookup.TableDef)
+	require.Equal(t, "DDL change", lookup.TableDef.Cols[0].Comment)
 	require.True(t, proto.Equal(before, item.TableDef))
 	require.Zero(t, misses.Load())
 }

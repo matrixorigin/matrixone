@@ -102,7 +102,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 	calls := 0
 	exec := executor.NewMemExecutor(func(query string) (executor.Result, error) {
 		calls++
-		if query == catalog.MoColumnsBatchQuery {
+		if query == catalog.BuildMoColumnsBatchQuery([]uint32{0}) {
 			require.NoError(t, dispatchUpdateResponse(ctx, e, response, routines, time.Now()))
 			q := &cache.TableItem{AccountId: 7, DatabaseId: 80, Name: "delayed_table", Ts: to}
 			require.False(t, e.GetLatestCatalogCache().GetTable(q), "delta must still be delayed inside replay")

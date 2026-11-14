@@ -296,6 +296,9 @@ type Engine struct {
 	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
+	// Immutable bootstrap rows only; authoritative catalog reads fork these
+	// without retaining a full, unfiltered catalog in the push partitions.
+	catalogReadBase map[uint64]*logtailreplay.PartitionState
 
 	//snapshot partitions manager
 	snapshotMgr *SnapshotManager

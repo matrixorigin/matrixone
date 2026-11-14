@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"bytes"
 	"cmp"
 	"slices"
 	"strings"
@@ -632,6 +633,9 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
 		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
+			if !bytes.Equal(item.CPKey, pk) {
+				return false
+			}
 			newItem := &TableItem{
 				deleted:    true,
 				Id:         item.Id,
@@ -655,6 +659,9 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
 		cc.databases.cpkeyIndex.Ascend(&DatabaseItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *DatabaseItem) bool {
+			if !bytes.Equal(item.CPKey, pk) {
+				return false
+			}
 			newItem := &DatabaseItem{
 				deleted:   true,
 				Id:        item.Id,
@@ -847,7 +854,18 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				)
 				continue
 			}
-			InitTableItemWithColumns(item, cols)
+			// Copy-on-write: create a new item and populate its columns
+			// instead of mutating the existing BTree item in-place.  This
+			// eliminates the data race where a concurrent GetTable reader
+			// (holding only the BTree read lock, not catalogCacheMu) could
+			// observe a partially-written Defs slice during in-place
+			// mutation.  After Set, readers atomically see either the old
+			// item (nil Defs) or the new item (full Defs).
+			newItem := new(TableItem)
+			*newItem = *item
+			InitTableItemWithColumns(newItem, cols)
+			cc.tables.data.Set(newItem)
+			cc.tables.cpkeyIndex.Set(newItem)
 		}
 	})
 }

@@ -3617,8 +3617,9 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
 	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
 
-	//step2 : check user exists or not in general tenant.
-	//step3 : get the password of the user
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(tenantID)); err != nil {
+		return nil, err
+	}
 
 	ses.timestampMap[TSCheckUserStart] = time.Now()
 	tenantCtx := defines.AttachAccountId(ctx, uint32(tenantID))

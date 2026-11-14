@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -755,6 +756,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		defer registrations.cleanup()
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
+		if runErr = runCompile.activateRemoteTenantCatalog(); runErr != nil {
+			return runErr
+		}
+
 		// running pipeline.
 		if runErr = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); runErr != nil {
 			return runErr
@@ -1169,6 +1174,23 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 		message.AcceptedBatchCreditBytes = bytes
 	}
 	return message, nil
+}
+
+func (c *Compile) activateRemoteTenantCatalog() error {
+	activator, ok := c.e.(engine.TenantCatalogActivator)
+	if !ok {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	// Sys catalog replay bootstraps the engine and may itself send pipelines.
+	if accountID == catalog.System_Account {
+		return nil
+	}
+	// Remote operators can resolve names without authenticating a local session.
+	return activator.ActivateTenantCatalog(c.proc.Ctx, accountID)
 }
 
 // newCompile make and return a new compile to run a pipeline.

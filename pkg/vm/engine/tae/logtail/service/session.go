@@ -341,6 +341,7 @@ type Session struct {
 	// have been written successfully and is therefore safe to advertise in a
 	// transport heartbeat.
 	sentThrough timestamp.Timestamp
+	lazyCatalog lazyCatalogFilterState
 
 	deletedAt time.Time
 	sendMu    struct {
@@ -649,6 +650,8 @@ func (ss *Session) ListSubscribedTable() []TableID {
 
 // FilterLogtail selects logtail for expected tables.
 func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
+	// This is the original generic subscription filter used by normal publish flow.
+	// It intentionally does not know anything about lazy catalog account filtering.
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
@@ -824,6 +827,23 @@ func (ss *Session) CompleteUnsubscription(
 		atomic.AddInt32(&ss.active, -1)
 	}
 	return ss.SendUnsubscriptionResponse(sendCtx, table)
+}
+
+func (ss *Session) SendActivateAccountForCatalogResponse(
+	sendCtx context.Context,
+	activate logtail.ActivateAccountForCatalogResponse,
+	closeCB func(),
+) error {
+	ss.logger.Info(
+		"send activate account for catalog response",
+		zap.Uint32("account-id", activate.AccountId),
+		zap.Uint64("seq", activate.Seq),
+	)
+
+	resp := ss.responses.Acquire()
+	resp.closeCB = closeCB
+	resp.Response = newActivateAccountForCatalogResponse(activate)
+	return ss.sendResponse(sendCtx, resp, false)
 }
 
 // SendUpdateResponse sends publishment response.
@@ -1070,6 +1090,14 @@ func newUpdateResponse(
 			To:          &to,
 			LogtailList: tails,
 		},
+	}
+}
+
+func newActivateAccountForCatalogResponse(
+	activate logtail.ActivateAccountForCatalogResponse,
+) *logtail.LogtailResponse_ActivateAccountForCatalogResponse {
+	return &logtail.LogtailResponse_ActivateAccountForCatalogResponse{
+		ActivateAccountForCatalogResponse: &activate,
 	}
 }
 
