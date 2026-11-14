@@ -404,6 +404,49 @@ var (
 			Help:      "Total bytes read from object storage by reads that did not wait for the download of their object",
 		})
 
+	// FSPrefetchReadCounter counts the reads that download whole objects themselves: no
+	// prefetch had the object, or a prefetch worker took it and had not started its
+	// download.
+	FSPrefetchReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_read_total",
+			Help:      "Reads of whole objects by what they found of the object's prefetch",
+		}, []string{"state"})
+	FSPrefetchReadOwnDownloadCounter = FSPrefetchReadCounter.WithLabelValues("own")
+	FSPrefetchReadOwnRunningCounter  = FSPrefetchReadCounter.WithLabelValues("own_running")
+
+	// FSPrefetchObjectCounter counts the object prefetches by what became of them: queued;
+	// merged into one queued; skipped as cached or downloading; downloaded; failed;
+	// missed, as a read reached the object first and read its
+	// ranges; ended, as the reads they were for ended; dropped, as the queue was full.
+	FSPrefetchObjectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_object_total",
+			Help:      "Object prefetches by what became of them",
+		}, []string{"result"})
+	FSPrefetchQueuedCounter     = FSPrefetchObjectCounter.WithLabelValues("queued")
+	FSPrefetchMergedCounter     = FSPrefetchObjectCounter.WithLabelValues("merged")
+	FSPrefetchCachedCounter     = FSPrefetchObjectCounter.WithLabelValues("cached")
+	FSPrefetchDownloadedCounter = FSPrefetchObjectCounter.WithLabelValues("downloaded")
+	FSPrefetchFailedCounter     = FSPrefetchObjectCounter.WithLabelValues("failed")
+	FSPrefetchMissedCounter     = FSPrefetchObjectCounter.WithLabelValues("missed")
+	FSPrefetchEndedCounter      = FSPrefetchObjectCounter.WithLabelValues("ended")
+	FSPrefetchDroppedCounter    = FSPrefetchObjectCounter.WithLabelValues("dropped")
+
+	// FSDiskCacheDownloadSkippedCounter counts the whole-object downloads not started
+	// because the most downloads allowed were in flight.
+	FSDiskCacheDownloadSkippedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_download_skipped_total",
+			Help:      "Whole-object downloads not started because the most downloads allowed were in flight",
+		})
+
 	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
 	// dropped when the bounded asynchronous queue cannot admit more work.
 	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(

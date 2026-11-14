@@ -431,12 +431,14 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return err
 }
 
-// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads: the
+// planner's read policy, and an index-file object read for an IVF-Flat entries table.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
-	if node.GetNarrowScan() {
-		return fileservice.NarrowRead
+	policy := fileservice.Policy(node.GetReadPolicy())
+	if node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		policy |= fileservice.IndexFileObject
 	}
-	return 0
+	return policy
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
@@ -1249,6 +1251,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
+	}
+	// The block pruning reads, of object metadata and bloom filters, take the scan's
+	// read policy too.
+	if policy := scanReadPolicy(s.DataSource.node); policy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|policy)
 	}
 
 	if s.NodeInfo.CNCNT == 1 {

@@ -1706,3 +1706,89 @@ func TestDiskCacheCacheHitDoesNotClaimWriteRecovery(t *testing.T) {
 	}))
 	require.False(t, cache.writeFailures.failed.Load())
 }
+
+// A delete of an object while the load has found a range file of it, but not yet indexed
+// it, removes the file: reads after the delete never get its bytes.
+func TestDiskCacheLoadDropsRangeFileOfObjectDeletedMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	cache := newLifecycleTestDiskCache(t)
+	entry := IOEntry{Offset: 100, Size: 4}
+	rangePath := cache.pathForIOEntry("obj", entry)
+	require.NoError(t, os.MkdirAll(filepath.Dir(rangePath), 0o755))
+	require.NoError(t, os.WriteFile(rangePath, []byte{0x11, 0x11, 0x11, 0x11}, 0o644))
+
+	reached, release := make(chan struct{}), make(chan struct{})
+	cache.beforeLoadFile = func(diskPath string) {
+		if diskPath == rangePath {
+			close(reached)
+			<-release
+		}
+	}
+	loadDone := make(chan struct{})
+	go func() {
+		cache.loadCache(ctx)
+		close(loadDone)
+	}()
+	select {
+	case <-reached:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the load did not reach the range file")
+	}
+	require.NoError(t, cache.DeletePaths(ctx, []string{"obj"}))
+	close(release)
+	<-loadDone
+
+	require.False(t, cache.cache.Contains(rangePath))
+	require.Empty(t, cache.ranges.of(cache.rangeObjectKey("obj")))
+	_, err := os.Stat(rangePath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// A read of a range file the load has found but not yet indexed, after a delete of its
+// object, neither gets the file's bytes nor indexes the file.
+func TestDiskCacheReadSkipsUnloadedRangeFileOfDeletedObject(t *testing.T) {
+	ctx := context.Background()
+	cache := newLifecycleTestDiskCache(t)
+	entry := IOEntry{Offset: 100, Size: 4}
+	rangePath := cache.pathForIOEntry("obj", entry)
+	require.NoError(t, os.MkdirAll(filepath.Dir(rangePath), 0o755))
+	require.NoError(t, os.WriteFile(rangePath, []byte{0x11, 0x11, 0x11, 0x11}, 0o644))
+
+	reached, release := make(chan struct{}), make(chan struct{})
+	cache.beforeLoadFile = func(diskPath string) {
+		if diskPath == rangePath {
+			close(reached)
+			<-release
+		}
+	}
+	loadDone := make(chan struct{})
+	go func() {
+		cache.loadCache(ctx)
+		close(loadDone)
+	}()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-loadDone
+	}()
+	select {
+	case <-reached:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the load did not reach the range file")
+	}
+	require.NoError(t, cache.DeletePaths(ctx, []string{"obj"}))
+
+	vector := &IOVector{FilePath: "obj", Entries: []IOEntry{entry}}
+	require.NoError(t, cache.Read(ctx, vector))
+	require.False(t, vector.Entries[0].done)
+	require.False(t, cache.cache.Contains(rangePath))
+	require.Empty(t, cache.ranges.of(cache.rangeObjectKey("obj")))
+
+	close(release)
+	<-loadDone
+	_, err := os.Stat(rangePath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
