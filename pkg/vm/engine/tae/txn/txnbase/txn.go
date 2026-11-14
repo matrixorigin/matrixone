@@ -240,7 +240,6 @@ func (txn *Txn) DoneWithErr(err error, _ bool) {
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
-	logutil.Debugf("Prepare Commite %X", txn.ID)
 	if txn.PrepareCommitFn != nil {
 		err = txn.PrepareCommitFn(txn)
 		return
