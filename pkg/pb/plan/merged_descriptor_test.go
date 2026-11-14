@@ -25,14 +25,18 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21},
 		"Type":             {"numeric_attributes": 14},
+		"Function":         {"routine_call": 6},
+		"Node":             {"dedup_key_exprs": 95, "mark_existence_only": 96, "narrow_scan": 97},
+		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
+		"Query":            {"correlation": 19, "integer_precision": 20, "execution_dependent_access": 22, "select_lock_references": 21, "local_runtime_filter_domains": 23, "enum_set_result_types": 24, "routine_dependencies": 25},
 		"Expr":             {"candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
-		"ColDef":           {"result_column_kind": 23},
+		"ColDef":           {"result_column_kind": 23, "integer_result_presentation": 24, "enum_set_result_type": 25},
+		"LockTarget":       {"no_wait": 18, "skip_locked": 19},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
@@ -57,6 +61,39 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	require.Empty(t, want, "missing merged message descriptors")
 }
 
+func TestMergedQueryMetadataRoundTrip(t *testing.T) {
+	original := validIntegerPrecisionQuery()
+	original.ExecutionDependentAccess = true
+	original.EnumSetResultTypes = []Type{{Id: 66, Enumvalues: "red,blue"}}
+	original.LocalRuntimeFilterDomains = []*LocalRuntimeFilterDomain{{
+		SourceScanNodeId: 1, SourceColumnName: "id", KeyType: 23,
+		Targets: []*LocalRuntimeFilterTarget{{ScanNodeId: 2, ColumnName: "parent_id", ProbeNdv: 10}},
+	}}
+	original.SelectLockReferences = []*SelectLockReference{{
+		ObjectRef: &ObjectRef{SchemaName: "db", ObjName: "locked"},
+		ViewPath:  []*ViewStep{{DatabaseName: "db", ViewName: "v"}},
+	}}
+	original.RoutineDependencies = []*RoutinePlanDependency{{
+		FunctionRef: &FunctionRef{FunctionId: 3, Revision: 7},
+		Language:    "SQL", NamespaceFingerprint: "namespace",
+	}}
+	original.Nodes = append(original.Nodes, &Node{
+		NodeType: Node_TABLE_SCAN, NodeId: int32(len(original.Nodes)), NarrowScan: true,
+	})
+	encoded, err := original.Marshal()
+	require.NoError(t, err)
+	require.Len(t, encoded, original.ProtoSize())
+	var decoded Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, original.IntegerPrecision, decoded.IntegerPrecision)
+	require.True(t, decoded.ExecutionDependentAccess)
+	require.Equal(t, original.LocalRuntimeFilterDomains, decoded.LocalRuntimeFilterDomains)
+	require.Equal(t, original.SelectLockReferences, decoded.SelectLockReferences)
+	require.Equal(t, original.EnumSetResultTypes, decoded.EnumSetResultTypes)
+	require.Equal(t, original.RoutineDependencies, decoded.RoutineDependencies)
+	require.Equal(t, original.Nodes, decoded.Nodes)
+}
+
 func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 	for _, kind := range []ResultColumnKind{
 		ResultColumnKind_RESULT_COLUMN_KIND_UNKNOWN,
@@ -69,6 +106,7 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 				CtasExecutionProtocolVersion: 83,
 				TableDef: &TableDef{Cols: []*ColDef{{
 					Name: "flag", ResultColumnKind: kind,
+					EnumSetResultType: &Type{Id: 66, Enumvalues: "red,blue"},
 				}}},
 			}
 			encoded, err := original.Marshal()
@@ -79,6 +117,7 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 			require.Equal(t, original.CtasExecutionProtocolVersion, decoded.CtasExecutionProtocolVersion)
 			require.Len(t, decoded.GetTableDef().GetCols(), 1)
 			require.Equal(t, kind, decoded.TableDef.Cols[0].ResultColumnKind)
+			require.Equal(t, original.TableDef.Cols[0].EnumSetResultType, decoded.TableDef.Cols[0].EnumSetResultType)
 		})
 	}
 }

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-var tenantUpgEntries = []versions.UpgradeEntry{
+var tenantUpgEntries = append([]versions.UpgradeEntry{
 	routineSQLModeColumn("mo_user_defined_function", "database_collation"),
 	routineSQLModeColumn(catalog.MO_STORED_PROCEDURE, "body"),
 	addForeignKeyMetadataColumn("referenced_index_name", "varchar(5000) not null default ''", "on_update"),
@@ -52,7 +52,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeDatabaseDefaultsColumns(),
 	versions.InformationSchemaTablesUpgradeEntry(),
-}
+}, routineUpgEntries...)
 
 func upgradeDatabaseDefaultsColumns() versions.UpgradeEntry {
 	entry := versions.InformationSchemaColumnsUpgradeEntry()

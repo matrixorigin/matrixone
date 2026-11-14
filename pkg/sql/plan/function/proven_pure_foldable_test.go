@@ -24,12 +24,11 @@ import (
 // TestGetFunctionIsProvenPureFoldableByIdRejectsEveryInternalClass pins the
 // class half of the guarded-fold admission. Function classes are bit
 // flags, and a registry row may combine plan.Function_INTERNAL with other
-// flags: python_user_defined_function is INTERNAL|STRICT and its overloads
+// flags: mo_is_legacy_temporary_table is INTERNAL|STRICT and its overloads
 // carry neither the volatile nor the real-time-related flag, so the
 // exclusion must test the INTERNAL bit, never compare the whole class
 // word: a combined registration that slips through would let the
-// publication binding probe's guarded fold execute the internal machinery -
-// for the python UDF builtin, right into UdfService.Run.
+// publication binding probe's guarded fold execute internal machinery.
 func TestGetFunctionIsProvenPureFoldableByIdRejectsEveryInternalClass(t *testing.T) {
 	internalRegistrations := 0
 	combinedInternalRegistrations := 0
@@ -64,19 +63,31 @@ func TestGetFunctionIsProvenPureFoldableByIdRejectsEveryInternalClass(t *testing
 			"curated pure builtin %q carries the internal-machinery class bit", name)
 	}
 
-	// The finding's own example: the python UDF machinery is registered with
-	// a combined class and no volatile flag, so the class bit (together
-	// with pure-set membership) keeps the guarded fold away from the UDF
-	// service.
+	// Keep a combined-class witness whose overload flags alone do not
+	// exclude folding. The internal bit and curated membership are separate
+	// admission gates.
+	combinedFid, exists := getFunctionIdByNameWithoutErr("mo_is_legacy_temporary_table")
+	require.True(t, exists)
+	combined := allSupportedFunctions[combinedFid]
+	require.True(t, combined.testFlag(plan.Function_INTERNAL))
+	require.NotEqual(t, plan.Function_INTERNAL, combined.class)
+	require.NotEmpty(t, combined.Overloads)
+	for ovIndex, ov := range combined.Overloads {
+		require.False(t, ov.CannotFold())
+		require.False(t, ov.IsRealTimeRelated())
+		require.False(t, GetFunctionIsProvenPureFoldableById(encodeOverloadID(combinedFid, int32(ovIndex))))
+	}
+
+	// Python user code must never execute during planning. Its volatile
+	// overload protects ordinary folding as well as the guarded probe.
 	pythonUdfFid, exists := getFunctionIdByNameWithoutErr("python_user_defined_function")
 	require.True(t, exists, "python_user_defined_function is a registered builtin")
 	require.True(t, allSupportedFunctions[pythonUdfFid].testFlag(plan.Function_INTERNAL),
 		"the python UDF machinery carries the INTERNAL flag")
-	require.NotEqual(t, plan.Function_INTERNAL, allSupportedFunctions[pythonUdfFid].class,
-		"the python UDF machinery combines INTERNAL with other class flags")
 	for ovIndex := range allSupportedFunctions[pythonUdfFid].Overloads {
-		require.False(t, allSupportedFunctions[pythonUdfFid].Overloads[ovIndex].CannotFold(),
-			"python UDF overload %d carries no volatile flag, so only the class bit excludes it", ovIndex)
+		require.True(t, allSupportedFunctions[pythonUdfFid].Overloads[ovIndex].CannotFold(),
+			"python UDF overload %d must not execute during constant folding", ovIndex)
+		require.False(t, GetFunctionIsProvenPureFoldableById(encodeOverloadID(pythonUdfFid, int32(ovIndex))))
 	}
 }
 

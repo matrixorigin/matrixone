@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,13 +228,20 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+		// Keep the competing rows ahead of the real catalog as new handlers
+		// are appended, without changing the 9/10 lexical-order counterexample.
+		current := cn.RawService().(cnservice.Service).GetBootstrapService().GetFinalVersion()
+		major, err := strconv.Atoi(strings.SplitN(current, ".", 2)[0])
+		require.NoError(t, err)
+		prefix := fmt.Sprintf("%d.0.", major+1)
+		olderVersion, readyVersion, pendingVersion := prefix+"9", prefix+"10", prefix+"11"
 		ctx := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
 		rollback := errors.New("rollback test catalog versions")
 		err = exec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
 			for _, statement := range []string{
-				"insert into mo_catalog.mo_version values ('4.1.9', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
-				"insert into mo_catalog.mo_version values ('4.1.10', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
-				"insert into mo_catalog.mo_version values ('4.1.10', 2, 2, '2098-01-01 00:00:00', '2098-01-01 00:00:00')",
+				fmt.Sprintf("insert into mo_catalog.mo_version values ('%s', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')", olderVersion),
+				fmt.Sprintf("insert into mo_catalog.mo_version values ('%s', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')", readyVersion),
+				fmt.Sprintf("insert into mo_catalog.mo_version values ('%s', 2, 2, '2098-01-01 00:00:00', '2098-01-01 00:00:00')", readyVersion),
 			} {
 				result, err := tx.Exec(statement, executor.StatementOption{})
 				if err != nil {
@@ -245,9 +253,9 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.1.10", latest.Version)
+			require.Equal(t, readyVersion, latest.Version)
 			require.Equal(t, uint32(2), latest.VersionOffset)
-			result, err := tx.Exec("insert into mo_catalog.mo_version values ('4.1.11', 1, 0, '2097-01-01 00:00:00', '2097-01-01 00:00:00')", executor.StatementOption{})
+			result, err := tx.Exec(fmt.Sprintf("insert into mo_catalog.mo_version values ('%s', 1, 0, '2097-01-01 00:00:00', '2097-01-01 00:00:00')", pendingVersion), executor.StatementOption{})
 			if err != nil {
 				return err
 			}
@@ -256,12 +264,12 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.1.11", latest.Version)
+			require.Equal(t, pendingVersion, latest.Version)
 			ready, err := versions.MustGetLatestReadyVersion(tx)
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.1.10", ready)
+			require.Equal(t, readyVersion, ready)
 			return rollback
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(0).WithWaitCommittedLogApplied())
 		require.ErrorIs(t, err, rollback)
