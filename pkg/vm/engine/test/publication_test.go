@@ -1137,6 +1137,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 }
 
 func TestExecuteIterationWithIndex(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (
@@ -2987,6 +2988,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 }
 
 func TestCCPRAlterTable(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
 
 	var (

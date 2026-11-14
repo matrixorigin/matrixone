@@ -402,13 +402,6 @@ func (e *Engine) Database(
 	name string,
 	op client.TxnOperator,
 ) (engine.Database, error) {
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug(
-			"Transaction.Database",
-			zap.String("txn", op.Txn().DebugString()),
-			zap.String("name", name),
-		)
-	})
 
 	txn, err := txnIsValid(op)
 	if err != nil {
