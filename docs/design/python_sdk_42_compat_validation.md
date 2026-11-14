@@ -41,6 +41,35 @@ the range error is checked with an initialized Stage cache. Host and path forms,
 all four public Datalink consumers, and the original failing input retain error
 coverage.
 
+## Observable 4.2 behavior and compatibility
+
+This is a set of bug fixes, not a promise of byte-for-byte compatibility for
+all historical output or identical behavior on previously mishandled inputs.
+Existing valid schema-display strings such as `INT(32)`, `VARCHAR(20)`,
+`DECIMAL(10,2)`, and the system-view `FLOAT(0)`/`DOUBLE(0)` are retained. The
+previously malformed `BOOL(0)`, `BIGINT UNSIGNED(64)`, `DATE(0)` and `TEXT(0)`
+forms are corrected. A scaled `FLOAT(5,2)` also retains its scale instead of the
+old `FLOAT(5)` display. Clients comparing those corrected strings literally can
+observe a change; storage OIDs and signed-integer `DATA_TYPE` stay unchanged.
+Standard SQLAlchemy view reflection of uppercase legacy strings remains the
+separate issue [#32746](https://github.com/matrixorigin/matrixone/issues/32746).
+
+`CREATE STAGE ... ENABLE=false` now creates a disabled Stage, whereas the old
+implementation silently created an enabled one. Workloads relying on that old
+behavior must change their SQL or explicitly enable the Stage. New CREATE/ALTER
+credential input with duplicate keys, a comma in a value, or a comma/equal sign
+in a key is rejected because the existing catalog representation cannot safely
+encode it; previously it was accepted. Existing valid host-form Stage URIs remain
+accepted. The protocol status now reflects the active `NO_BACKSLASH_ESCAPES`
+mode, which can change client escaping in that mode. View descriptions can also
+expose preserved ENUM/SET provenance where the old implementation lost it.
+
+New database branches use the existing `mo_database.dat_type` field to persist
+their identity. This is a new persisted value, although it adds no catalog
+column. Upgrade uses the existing shutdown-only boundary: older binaries must not
+be started on data written by the updated binary. The physical upgrade proof and
+limits are described below.
+
 ## Ownership, concurrency and restore boundaries
 
 Branch DELETE owns one pessimistic transaction and the existing mo_database
@@ -70,7 +99,9 @@ retaining corrections for BOOL, invalid unsigned spellings, scaled floats and
 other malformed or unfaithful types. The executable bool.test
 also checks an exact legacy INT(32) comparison. No planner/explain query, table
 count, row count, statistics or expected data result is reduced. Test-script
-discovery includes .sql and .test.
+discovery includes .sql and .test. The later audit explicitly included two
+binary-classified `.result` files: it restored only type-only differences with
+byte-preserving comparisons and retained unrelated malformed-type corrections.
 
 Four new branch identity headers use 4.2's dat_type width (-1), rather than main's
 32. Sequence-only source coverage retains 4.2's existing clone filter, which
@@ -138,7 +169,14 @@ SQLAlchemy can reflect a view: the original positive view assertions are retaine
 in the reproduction linked from [#32746](https://github.com/matrixorigin/matrixone/issues/32746),
 and the unmodified earlier suite had two passes and two view failures.
 
-After the three tester cases completed, the isolated service required a forced
+The subsequent system-view follow-up reproduced the old `FLOAT(0)` and
+`DOUBLE(0)` values against the actual `mo_cache` and
+`system.sql_statement_hotspot` views. On the corrected CPU-only build, the two
+previously failing DDL cases, two system-view cases and the BOOL/metadata case
+passed 368/368 real tester comparisons with no failures or ignored statements.
+The complete affected function package passed normal and race runs again.
+
+After the three earlier tester cases completed, the isolated service required a forced
 stop after a 30-second shutdown wait; the cause is not established. A subsequent
 restart and minimal view reproduction shut down normally. Test results above
 were observed before shutdown and do not certify shutdown behavior.
