@@ -148,3 +148,67 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	require.Zero(t, f.bytes)
 	require.Empty(t, f.m)
 }
+
+// suffixGateStorage holds the reads from offset from until release is closed.
+type suffixGateStorage struct {
+	ObjectStorage
+	from    int64
+	held    atomic.Int64
+	release chan struct{}
+}
+
+func (h *suffixGateStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	if min != nil && *min >= h.from {
+		h.held.Add(1)
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return h.ObjectStorage.Read(ctx, key, min, max)
+}
+
+// A MemoryPrefetchObject whose read ended stays counted while a read that copies from it
+// waits for another of its ranges, and stops being counted once that read returns.
+func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	storage := &suffixGateStorage{ObjectStorage: fs.storage, from: 2 * unit, release: make(chan struct{})}
+	fs.storage = storage
+	f := &fs.diskCache.prefetchObjects
+	bytes := func() int64 {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.bytes
+	}
+	memoryObjects := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		n := 0
+		for _, objects := range f.m {
+			for _, o := range objects {
+				if _, ok := o.(*memoryPrefetchObject); ok {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: 100, Size: 10}, {Offset: 2*unit + 100, Size: 10}}}
+	done := make(chan error, 1)
+	go func() { done <- fs.Read(context.Background(), vec) }()
+	require.Eventually(t, func() bool { return storage.held.Load() == 1 && memoryObjects() == 1 },
+		10*time.Second, time.Millisecond, "the first range's object ended; the second waits")
+	require.Equal(t, 2*flightBufSize(unit), bytes(), "the ended object's buffer is still held by the read")
+
+	close(storage.release)
+	require.NoError(t, <-done)
+	require.Equal(t, data[100:110], vec.Entries[0].Data)
+	require.Equal(t, data[2*unit+100:2*unit+110], vec.Entries[1].Data)
+	vec.Release()
+	f.reads.Wait()
+	require.Zero(t, bytes())
+}

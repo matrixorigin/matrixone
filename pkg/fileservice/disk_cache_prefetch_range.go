@@ -300,10 +300,8 @@ func (d *DiskCache) prefetchRead(
 		}
 		// Past the bytes of the runs under way, the read waits for runs to end, then
 		// looks again at what is cached or being read.
-		for _, fl := range held {
-			fl.release()
-		}
-		held = held[:0]
+		released := held
+		held = nil
 		for i := range blocks {
 			if blocks[i].state == blockInFlight {
 				blocks[i].state, blocks[i].object = blockMissing, nil
@@ -314,6 +312,9 @@ func (d *DiskCache) prefetchRead(
 		}
 		freed := f.freed
 		f.mu.Unlock()
+		for _, fl := range released {
+			fl.release()
+		}
 		select {
 		case <-freed:
 		case <-ctx.Done():
@@ -710,8 +711,11 @@ type memoryPrefetchObject struct {
 	// readDeletes marks the range's cache entry; see IOEntry.readDeletes.
 	readDeletes uint64
 	// refs counts the holders of buf: the flight until it is forgotten, and each read
-	// copying from it. The last release keeps buf for reuse.
+	// copying from it. The last release keeps buf for reuse and frees its charge.
 	refs int
+	// owner holds the charge of buf, charge bytes, until the last release.
+	owner  *prefetchObjects
+	charge int64
 	// skipCache leaves the range read out of the disk cache.
 	skipCache bool
 	// readErr is the error the flight failed to read its range with.
@@ -730,14 +734,19 @@ func (f *memoryPrefetchObject) hold() {
 	f.mu.Unlock()
 }
 
+// release drops a hold. The caller does not hold the owner's lock.
 func (f *memoryPrefetchObject) release() {
 	f.mu.Lock()
 	f.refs--
+	last := f.refs == 0
 	var buf []byte
-	if f.refs == 0 {
+	if last {
 		buf, f.buf = f.buf, nil
 	}
 	f.mu.Unlock()
+	if last && f.owner != nil {
+		f.owner.uncharge(f.charge)
+	}
 	putFlightBuf(buf)
 }
 
@@ -802,8 +811,9 @@ func (f *prefetchObjects) openLocked() (context.Context, bool) {
 // The flight outlives the read that starts it, not the cache or a delete of the object.
 func (d *DiskCache) startFlightLocked(ctx context.Context, diskPath string, start, end int64, now time.Time) *memoryPrefetchObject {
 	f := &d.prefetchObjects
-	f.bytes += flightBufSize(end - start)
 	fl := newMemoryPrefetchObject(start, end, now)
+	fl.owner, fl.charge = f, flightBufSize(end-start)
+	f.bytes += fl.charge
 	fl.readDeletes = d.readDeletes()
 	fl.ctx, fl.cancelRead = context.WithCancel(context.WithoutCancel(ctx))
 	f.registerLocked(diskPath, fl)
@@ -949,8 +959,8 @@ func (f *memoryPrefetchObject) waitFor(ctx context.Context, end int64) ([]byte, 
 type prefetchObjects struct {
 	mu sync.Mutex
 	m  map[string][]prefetchObject
-	// bytes is the size of the buffers of the runs under way; freed, when set, is closed
-	// once it shrinks.
+	// bytes is the size of the buffers of the runs under way or still held by reads;
+	// freed, when set, is closed once it shrinks.
 	bytes  int64
 	freed  chan struct{}
 	closed bool
@@ -1017,17 +1027,25 @@ func (d *DiskCache) fastestPrefetch(diskPath string, lo, hi int64) (time.Duratio
 	return 0, false
 }
 
-// endPrefetch finishes a flight the caller started and forgets it.
+// endPrefetch finishes a flight the caller started and forgets it. Its buffer stays
+// charged until its last hold is released.
 func (d *DiskCache) endPrefetch(diskPath string, fl *memoryPrefetchObject) {
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	f.forgetLocked(diskPath, fl)
-	f.bytes -= flightBufSize(fl.end - fl.start)
+	f.mu.Unlock()
+	fl.finish()
+	close(fl.endedCh)
+}
+
+// uncharge frees the charge of a released buffer of bytes and wakes the reads waiting
+// for room.
+func (f *prefetchObjects) uncharge(bytes int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bytes -= bytes
 	if f.freed != nil {
 		close(f.freed)
 		f.freed = nil
 	}
-	f.mu.Unlock()
-	fl.finish()
-	close(fl.endedCh)
 }
