@@ -43,7 +43,7 @@ async def test_csv_options_are_preserved(asynchronous, stage, sep, quotechar, en
     if inspect.isawaitable(output):
         output = await output
     separator = "''''" if sep == "'" else f"'{sep}'"
-    expected = f"{query} INTO OUTFILE '{path}' FORMAT 'csv' fields terminated by {separator}"
+    expected = f"{query}\nINTO OUTFILE '{path}' FORMAT 'csv' fields terminated by {separator}"
     if quotechar:
         expected += f" enclosed by {enclosure}"
     assert output is result
@@ -84,7 +84,7 @@ async def test_export_path_is_one_string_token(asynchronous, stage, format):
     if inspect.isawaitable(output):
         await output
     path = ('stage://archive/' if stage else '/tmp/') + filename
-    expected = "SELECT 1 INTO OUTFILE '" + path.replace("'", "''") + "'"
+    expected = "SELECT 1\nINTO OUTFILE '" + path.replace("'", "''") + "'"
     expected += " FORMAT 'csv' fields terminated by ','" if format == 'csv' else " FORMAT 'jsonline'"
     execute.assert_called_once_with(expected)
 
@@ -105,7 +105,7 @@ async def test_csv_line_terminator_is_one_string_token(asynchronous, stage):
     if inspect.isawaitable(output):
         await output
     execute.assert_called_once_with(
-        f"SELECT 1 INTO OUTFILE '{path}' FORMAT 'csv' fields terminated by ',' lines terminated by '''\n'"
+        f"SELECT 1\nINTO OUTFILE '{path}' FORMAT 'csv' fields terminated by ',' lines terminated by '''\n'"
     )
 
 
@@ -138,5 +138,5 @@ async def test_csv_format_is_explicit_even_with_non_csv_suffix(asynchronous, suf
     if inspect.isawaitable(result):
         await result
     execute.assert_called_once_with(
-        "SELECT 1 INTO OUTFILE '/tmp/output." + suffix + "' FORMAT 'csv' fields terminated by ','"
+        "SELECT 1\nINTO OUTFILE '/tmp/output." + suffix + "' FORMAT 'csv' fields terminated by ','"
     )

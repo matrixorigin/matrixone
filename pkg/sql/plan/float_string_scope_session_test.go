@@ -67,6 +67,8 @@ func legacyFloatScopeTable(t *testing.T, sql string, precision int32, creationZo
 }
 
 func TestLegacyFloatOpaqueSessionWitnesses(t *testing.T) {
+	// The non-parallel parent owns protocol settings through every child cleanup.
+	floatCatalogCompiler(t)
 	const division = "cast(1 as decimal(10,0))/cast(7 as decimal(10,0))"
 	berlin, err := time.LoadLocation("Europe/Berlin")
 	require.NoError(t, err)
@@ -91,6 +93,7 @@ func TestLegacyFloatOpaqueSessionWitnesses(t *testing.T) {
 		{"named_rules", "double", "cast(concat(from_unixtime(1704067200),from_unixtime(1719792000)," + division + ") as char(100))", "2024-01-01 01:00:002024-07-01 02:00:00", 30, berlin, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			compiler, source := legacyFloatScopeTable(t, "create table t(a "+tc.input+",g varchar(200) default(concat(a,"+tc.expression+")))", tc.precision, tc.zone)
 			if tc.sameZone {
 				compiler.GetProcess().GetSessionInfo().TimeZone = tc.zone
@@ -148,6 +151,8 @@ func TestLegacyFloatOpaqueSessionWitnesses(t *testing.T) {
 }
 
 func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
+	// The non-parallel parent owns protocol settings through every child cleanup.
+	floatCatalogCompiler(t)
 	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
 	const full = "-0.0000000000000012345678901234568"
 	for _, mixed := range []bool{false, true} {
@@ -156,6 +161,7 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 			name = "distinct_origins_and_creation_settings"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
 			wantH := full + "1970-01-01 08:01:000.1429"
 			if mixed {
@@ -220,8 +226,8 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 	}
 }
 
-// Separate roots let the existing race-test process sharder distribute these
-// expensive cases without parallelizing fixtures that share runtime globals.
+// Keep the existing roots for the race-test process sharder. Each sequential
+// root owns the protocol scope while its independent session witnesses run.
 func TestLegacyFloatAlteredSessionWitnessesPart0(t *testing.T) {
 	testLegacyFloatAlteredSessionWitnesses(t, 0)
 }
@@ -236,6 +242,8 @@ func TestLegacyFloatAlteredSessionWitnessesPart3(t *testing.T) {
 }
 
 func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
+	// Keep the shared protocol scope alive until all parallel witnesses finish.
+	floatCatalogCompiler(t)
 	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
 	type alteredSessionWitness struct {
 		name, suffix, altered string
@@ -276,6 +284,7 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// DUMP and raw-source budget proofs cover the distinct session and
 			// origin boundaries and precision zero. Every precision still
 			// exercises migration, LOAD, and its exact result.
