@@ -150,9 +150,20 @@ def _unsupported_ddl(tokens):
         size = len(tokens)
         next_open, fields = [size] * (size + 1), []
         closing, stack, field = {}, [], 0
+        async_options, gojieba_options = {}, {}
         involved, indexed = [0] * (size + 1), [0] * (size + 1)
         for index, token in enumerate(tokens):
             fields.append(field)
+            # Nonreserved ASYNC can name a column, index or parser. Options
+            # must follow the column list and belong to this index's field.
+            if words[index] == 'ASYNC' and words[max(0, index - 2) : index] != ['WITH', 'PARSER']:
+                async_options[field] = index
+            if (
+                words[index : index + 2] == ['WITH', 'PARSER']
+                and index + 2 < size
+                and tokens[index + 2][1].upper() == 'GOJIEBA'
+            ):
+                gojieba_options[field] = index
             if token == ('symbol', '('):
                 stack.append((index, field))
                 field = index + 1
@@ -163,6 +174,7 @@ def _unsupported_ddl(tokens):
                 field = index + 1
         for index in range(size - 1, -1, -1):
             next_open[index] = index if tokens[index] == ('symbol', '(') else next_open[index + 1]
+        async_parser = False
         for index, word in enumerate(words):
             if word != 'FULLTEXT':
                 continue
@@ -172,6 +184,9 @@ def _unsupported_ddl(tokens):
                 for mask in (involved, indexed):
                     mask[start + 1] += 1
                     mask[end] -= 1
+                field = fields[index]
+                if async_options.get(field, -1) > end and gojieba_options.get(field, -1) > end:
+                    async_parser = True
         # Unrelated quoted columns remain supported. Inspect only the indexed
         # columns, table and primary key used by the server's generated SQL.
         for index, word in enumerate(words):
@@ -196,10 +211,7 @@ def _unsupported_ddl(tokens):
                 (used and '`' in value) or (column and value.lower() in ('order', 'fulltext1'))
             ):
                 return 'fulltext_identifiers'
-        if 'ASYNC' in words and any(
-            words[i : i + 2] == ['WITH', 'PARSER'] and tokens[i + 2][1].upper() == 'GOJIEBA'
-            for i in range(len(words) - 2)
-        ):
+        if async_parser:
             return 'async_fulltext_parser'
     for index, word in enumerate(words[:-1]):
         if word in ('VECF4', 'VECF8') and tokens[index + 1] == ('symbol', '('):

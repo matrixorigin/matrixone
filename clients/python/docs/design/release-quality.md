@@ -28,7 +28,8 @@ build/release identity. Do not guess an unpublished minimum fixed version.
 | SET member case in source tables | Restore the original native catalog domain on the same connection, scoped by current account and the server's table-name case rules. Preserve SET options, binding and result processing. Do not lowercase domain values. |
 | View ENUM/SET provenance | Preserve actual native VARCHAR metadata when the old view already lost its domain. If metadata cannot construct a usable type, raise an actionable metadata error. Declare types from the known source model explicitly, or recreate the view on a fixed release; the SDK cannot invent lost provenance. |
 | Arrow-input upload | Use checked Parquet staging after the exact native Arrow-format rejection. All public upload value/transaction/streaming/cancellation/cleanup assertions still execute. Native Arrow LOAD remains unsupported. |
-| Special FULLTEXT identifiers and ASYNC gojieba | Reject the known unsafe definition before dispatch with the release, feature and advice. Keep ordinary FULLTEXT and ASYNC indexing supported. Explicitly choose ordinary identifiers or synchronous parsing only if those meet the application's needs; otherwise upgrade to a release containing #32723. An unrelated quoted column is permitted. |
+| TLS negotiation | Original 4.2.8 has a native buffered-handshake defect: an independent SSLRequest/ClientHello coalescing control times out before authentication. A later SDK sweep also recorded intermittent TLS EOF setup errors; their exact relationship to that defect is not established. Use a server containing the native TLS fix in #32723. The SDK does not silently disable TLS, relax verification or turn connection errors into passing functional tests. |
+| Special FULLTEXT identifiers and ASYNC gojieba | Reject the known unsafe definition before dispatch with the release, feature and advice. Keep ordinary FULLTEXT and ASYNC indexing supported. Explicitly choose ordinary identifiers or synchronous parsing only if those meet the application's needs; otherwise upgrade to a release containing #32723. An unrelated quoted column is permitted. Only ASYNC and gojieba options of the same index select the parser limitation; a column/index named `async` and options of separate indexes do not. |
 | Apostrophe Stage names/values | Reject unsafe catalog serialization before dispatch, including bound values. Percent-encode URI path characters where appropriate; quoted credentials/comments require a fixed server. No input is removed or changed silently. |
 | CREATE STAGE with enable=False | Reject before creation: the release ignores the option. Explicit CREATE-enabled followed by ALTER-disabled is usable only when an initially enabled Stage is acceptable; otherwise a fixed release is required. |
 | VECF4/VECF8 | Explain that the requested precision is unavailable. Choose supported precision explicitly. These storage types are outside the #32723 bug-fix backport. |
@@ -253,25 +254,37 @@ BVT evidence; this is not a claim of an identical current-head candidate binary.
 
 | Target / selection | Terminal result |
 |---|---|
-| Original official v4.2.8, final SDK | Online 1298/1298; analytics 340/340; zero failures, errors or skips. Equivalent results and explicit limitation contracts are distinguished as above. |
+| Original official v4.2.8 | Earlier complete online 1298/1298 and analytics 340/340, zero failures/errors/skips. After the option-scope correction, a full online sweep completes with 1292 passes and six TLS setup errors, zero assertion failures/skips. Those six original cases subsequently pass once on the same TLS configuration; that does not erase the failed sweep or qualify TLS reliability. |
 | Main `71390fb3c16` | Full online 1298/1298 and analytics 340/340, zero failures/errors/skips. Final-source SQLAlchemy 2.1 consumer renewal: 12/12. |
 | Fixed 4.2 service `ec0e3ad8af2` | Full online 1298/1298 and analytics 340/340, zero failures/errors/skips. Final-source consumer renewal: 5/5. |
 | Release with SQLAlchemy 1.4 | Final-source actual-service checks: 102/102, including changed metadata, Stage, FULLTEXT, numeric and upload surfaces. |
-| Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | Complete offline suites: 3421, 3417, 3425; all pass, zero skips. |
-| Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | Complete offline suites: 3421, 3417; all pass, zero skips. |
-| Python 3.11 / SQLAlchemy 2.1.8 | Complete offline suite: 3425; all pass, zero skips. |
-| Python 3.12 / SQLAlchemy 2.0.57; exact PyMySQL 1.2.3 floor tuple | Complete offline suites: 3417 each; all pass, zero skips. |
+| Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | Complete offline suites: 3431, 3427, 3435; all pass, zero skips. |
+| Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | Complete offline suites: 3431, 3427; all pass, zero skips. |
+| Python 3.11 / SQLAlchemy 2.1.8 | Complete offline suite: 3435; all pass, zero skips. |
+| Python 3.12 / SQLAlchemy 2.0.57; exact PyMySQL 1.2.3 floor tuple | Complete offline suites: 3427 each; all pass, zero skips. |
 | Python 3.8 / SQLAlchemy 1.4; Python 3.9 / SQLAlchemy 2.0 | Final installed wheel, no Arrow: imports/portable query compilation and 139 runtime checks each pass, zero skips. |
 | Packaging and CI selection | Wheel/sdist build and Twine checks pass; all 63 runtime modules byte-match source. All 50 CI scope contracts pass. Collection partitions 1638 scenarios into 207 required and 1431 extended, with no omissions or duplicates. Black on 18 changed Python files, fatal Flake8 and diff checks pass. |
 
-The full main/candidate sweeps precede the final transaction-neutral listener
-amendment. That amendment changes only the official-4.2.8 branch after its
-unchanged physical-banner guard, plus release-specific Stage error assertions
-and offline regressions. Main/candidate do not select that branch. Their full
-sweep evidence is reused with the final-source consumer renewals above; this is
-not a second full sweep of the final source. The release suites and all eight
-offline profiles were rerun completely on the final Python source, without
-source drift. The final wheel/core checks use that same source.
+The full main/candidate sweeps precede the transaction-neutral listener
+amendment and the focused FULLTEXT option-scope correction. Both change only
+the official-4.2.8 branch after its unchanged physical-banner guard, plus
+release-specific assertions and offline regressions. Main/candidate do not
+select that branch. Their full sweep evidence is reused with the actual
+consumer renewals above; this is not a second full sweep of the final source.
+The release online suite and all eight offline profiles were rerun
+completely, without source drift, with their distinct results above. The failed
+full online sweep remains failed; focused renewal is not reported as a second
+passing full sweep. Independent native handshake failure remains reproducible.
+Analytics 340/340 is retained from the full
+transaction-neutral run: the later fix only narrows FULLTEXT option matching;
+analytics has no FULLTEXT queries and those paths are unchanged.
+
+The option-scope correction adds ten lexical boundary controls, bringing the
+focused suite to 68 passes on each of SQLAlchemy 1.4/2.0/2.1. Independent native
+and SDK calls on original 4.2.8 both create/search synchronous gojieba indexes
+when a column or index is named `async`; the old SDK listener wrongly refused
+all three controls. The persistent online alternative retains its original
+Chinese search data and additionally exercises these legal identifiers.
 
 Server sweeps use Python 3.12.16, SQLAlchemy 2.0.43, PyMySQL 1.2.4 and aiomysql
 0.3.2. The offline dependency matrix is separate from full online qualification.

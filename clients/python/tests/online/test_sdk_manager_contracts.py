@@ -405,11 +405,13 @@ async def test_async_fulltext_special_identifiers_catch_up(client, record_proper
             # Explicitly exercise the documented alternative, retaining the
             # original Chinese parser data without claiming ASYNC support.
             client.execute(
-                f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
-                'FULLTEXT ft_idx(body) WITH PARSER gojieba)'
+                f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, async INT, body TEXT, '
+                'FULLTEXT async(body) WITH PARSER gojieba)'
             )
-            client.execute(f"INSERT INTO {parser_table} VALUES (1, '苹果香蕉')")
-            assert client.execute(f"SELECT id FROM {parser_table} WHERE MATCH(body) AGAINST('苹果香蕉')").rows == [(1,)]
+            client.execute(f"INSERT INTO {parser_table} VALUES (1, 7, '苹果香蕉')")
+            assert client.execute(
+                f"SELECT id, async FROM {parser_table} WHERE MATCH(body) AGAINST('苹果香蕉')"
+            ).rows == [(1, 7)]
             return
         client.execute(
             f'CREATE TABLE {table} ({key} BIGINT PRIMARY KEY, {body} TEXT, '
