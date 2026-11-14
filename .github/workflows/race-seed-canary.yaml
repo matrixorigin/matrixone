@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'ruh-readonly']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,70 @@ permissions:
   contents: read
 
 jobs:
+  ruh-s3-readonly:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'ruh-readonly'
+    environment: ci
+    runs-on: cs-ruh-large-7c14g
+    timeout-minutes: 5
+    steps:
+      - name: Probe dedicated S3 prefix without writes
+        env:
+          TEST_S3FS_CS: ${{ secrets.CS_S3_RUH_CONFIG }}
+          PROBE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, hashlib, hmac, os, socket, sys, time, urllib.error, urllib.parse, urllib.request
+          try:
+              cfg = dict(part.split('=', 1) for part in os.environ['TEST_S3FS_CS'].split(',') if '=' in part)
+              parsed = urllib.parse.urlsplit(cfg['endpoint'])
+              if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.path not in ('', '/'):
+                  raise ValueError('invalid endpoint shape')
+              port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+              start = time.monotonic()
+              socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+              print(f'DNS succeeded in {time.monotonic()-start:.2f}s', flush=True)
+              start = time.monotonic()
+              with socket.create_connection((parsed.hostname, port), timeout=10): pass
+              print(f'TCP succeeded in {time.monotonic()-start:.2f}s', flush=True)
+              region = cfg.get('region') or 'us-east-1'
+              path = '/' + urllib.parse.quote(cfg['bucket'], safe='-_.~')
+              query = urllib.parse.urlencode(sorted({'list-type':'2', 'max-keys':'1', 'prefix':'ci-ut/probe-' + os.environ['PROBE_RUN_ID'] + '/'}.items()), quote_via=urllib.parse.quote, safe='-_.~')
+              def sign(key, msg): return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+              def one_request():
+                  now = datetime.datetime.now(datetime.timezone.utc)
+                  stamp, date = now.strftime('%Y%m%dT%H%M%SZ'), now.strftime('%Y%m%d')
+                  payload = hashlib.sha256(b'').hexdigest()
+                  names = 'host;x-amz-content-sha256;x-amz-date'
+                  headers = f'host:{parsed.netloc}\nx-amz-content-sha256:{payload}\nx-amz-date:{stamp}\n'
+                  request = f'GET\n{path}\n{query}\n{headers}\n{names}\n{payload}'
+                  scope = f'{date}/{region}/s3/aws4_request'
+                  message = f'AWS4-HMAC-SHA256\n{stamp}\n{scope}\n{hashlib.sha256(request.encode()).hexdigest()}'
+                  key = sign(sign(sign(sign(('AWS4' + cfg['key-secret']).encode(), date), region), 's3'), 'aws4_request')
+                  signature = hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
+                  auth = f"AWS4-HMAC-SHA256 Credential={cfg['key-id']}/{scope}, SignedHeaders={names}, Signature={signature}"
+                  url = f'{parsed.scheme}://{parsed.netloc}{path}?{query}'
+                  req = urllib.request.Request(url, headers={'Authorization':auth, 'x-amz-date':stamp, 'x-amz-content-sha256':payload})
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return response.status
+              failures = 0
+              for i in range(3):
+                  start = time.monotonic()
+                  try:
+                      status = one_request()
+                      print(f'prefix-list sample {i+1}: HTTP {status}, {time.monotonic()-start:.2f}s', flush=True)
+                  except urllib.error.HTTPError as e:
+                      failures += 1
+                      print(f'prefix-list sample {i+1}: HTTP {e.code}, {time.monotonic()-start:.2f}s', flush=True)
+                  except Exception as e:
+                      failures += 1
+                      print(f'prefix-list sample {i+1}: {type(e).__name__}, {time.monotonic()-start:.2f}s', flush=True)
+                  if i < 2: time.sleep(2)
+              sys.exit(1 if failures else 0)
+          except Exception as e:
+              print(f'probe setup failed: {type(e).__name__}', flush=True)
+              sys.exit(1)
+          PY
   cs-s3-three-group:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'three-group' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
