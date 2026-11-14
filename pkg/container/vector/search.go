@@ -492,12 +492,15 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 					if ord == 0 {
 						val := subVals[i2]
 						runStart := i1
+						// The current row and needle are already known to match.
+						i1++
 						for i1 < n1 && bytes.Equal(varlenas[i1].GetByteSlice(area), val) {
 							i1++
 						}
 						for j := runStart; j < i1; j++ {
 							sels = append(sels, int64(j))
 						}
+						i2++
 						for i2 < n2 && bytes.Equal(subVals[i2], val) {
 							i2++
 						}

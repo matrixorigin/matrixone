@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +57,11 @@ func TestForceOrderPortPlans(t *testing.T) {
 		name, sql, index string
 		wantSort         bool
 	}{
+		{"unusable noncovering forced order", "select id,a,b from index_hint_t force index(idx_a) order by b,id limit 2", "", true},
+		{"nonindex filter cannot invent backfill", "select id,a,b from index_hint_t force index(idx_a) where b=1 order by b,id", "", true},
+		{"covering remains useful without matching order", "select id,a from index_hint_t force index(idx_a) order by id", "idx_a", true},
+		{"matching order keeps noncovering access", "select id,a,b from index_hint_t force index(idx_a) order by a,id limit 2", "idx_a", true},
+		{"forced range remains usable despite low selectivity", "select id,a,b from index_hint_t force index(idx_a) where a>=0 order by b,id", "idx_a", true},
 		{"bounded plain force", "select id,a,b from index_hint_t force index(idx_ab) where a=1 and b in (1,2) order by id", "idx_ab", true},
 		{"fixed prefix order scope", "select id,a,b from index_hint_t force index for order by(idx_ab) where a=1 order by b", "idx_ab", true},
 		{"ignored primary", "select id,a,b from index_hint_t force index(primary,idx_ab) ignore index(primary) where a=1 and b in (1,2) order by id", "idx_ab", true},
@@ -322,48 +329,32 @@ func TestForceJoinTruncatedKeyPrefix(t *testing.T) {
 	}
 }
 
-func TestForceJoinFallbackRequiresOrder(t *testing.T) {
-	for _, tc := range []struct {
-		name, order string
-		wantIndex   bool
+func TestForcedJoinAccessUsesSupportedPaths(t *testing.T) {
+	tests := []struct {
+		name, index, where, order string
+		want                      bool
 	}{
-		{name: "no order retains existing access"},
-		{name: "order retains plain force", order: " order by t.b,t.id", wantIndex: true},
-	} {
+		{"covering without order", "idx_ab", "t.b in (1,2,3)", "", true},
+		{"covering with order", "idx_ab", "t.b in (1,2,3)", " order by t.b,t.id", true},
+		{"unusable without order", "idx_a", "t.b in (1,2,3)", "", false},
+		{"unusable with order", "idx_a", "t.b in (1,2,3)", " order by t.b,t.id", false},
+		{"bounded static filter after JOIN lookup declines", "idx_a", "t.a=7 and t.b in (1,2,3)", " order by t.b,t.id", true},
+	}
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			addIndexHintChoiceTableForTest(mock)
-			p, err := runOneStmt(mock, t, `select t.id,t.a,t.b from (values row(7),row(8)) k(a)
-				join index_hint_t t force index(idx_ab) on t.a=k.a where t.b in (1,2,3)`+tc.order)
+			p, err := runOneStmt(mock, t, "select t.id,t.a,t.b from (values row(7),row(8)) k(a) join index_hint_t t force index("+tc.index+") on t.a=k.a where "+tc.where+tc.order)
 			require.NoError(t, err)
 			indexes := reachableIndexScanNames(p.GetQuery())
-			if tc.wantIndex {
-				require.Contains(t, indexes, "idx_ab")
+			if tc.want {
+				require.Contains(t, indexes, tc.index)
 			} else {
-				require.NotContains(t, indexes, "idx_ab")
+				require.NotContains(t, indexes, tc.index)
 			}
 		})
 	}
 }
-
-func TestForceJoinOrderRequirementResetsPerPass(t *testing.T) {
-	builder, joinID, scanID, table := makeIndexHintJoinBuilder(t)
-	require.NoError(t, builder.recordIndexHints(scanID, table, []*tree.IndexHint{{
-		HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"idx_a"},
-	}}))
-	scan := builder.qry.Nodes[scanID]
-	order := GetColExpr(table.Cols[1].Typ, scan.BindingTags[0], 1)
-	sortID := builder.appendNode(&planpb.Node{
-		NodeType: planpb.Node_SORT, Children: []int32{joinID}, OrderBy: []*planpb.OrderBySpec{{Expr: order}},
-	}, builder.ctxByNode[joinID])
-	_, err := builder.applyForceIndexHints(sortID, nil, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.NoError(t, err)
-	require.True(t, builder.scanNeedsForcedOrderJoinAccess(scanID))
-	_, err = builder.applyForceIndexHints(joinID, nil, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.NoError(t, err)
-	require.False(t, builder.scanNeedsForcedOrderJoinAccess(scanID))
-}
-
 func TestPlainForceCoveringOrderKeepsReaderLimit(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -407,6 +398,204 @@ func TestPlainForceAndOrderScopeUseAllowedIndex(t *testing.T) {
 			p, err := runOneStmt(mock, t, query)
 			require.NoError(t, err)
 			require.Equal(t, []string{"idx_ab"}, reachableIndexScanNames(p.GetQuery()))
+		})
+	}
+}
+
+type backfillTopStatsContext struct {
+	*MockCompilerContext
+	rows float64
+}
+
+func (c *backfillTopStatsContext) Stats(_ *ObjectRef, _ *Snapshot) (*statsinfo.StatsInfo, error) {
+	if c.rows == 0 {
+		return nil, nil
+	}
+	return &statsinfo.StatsInfo{
+		TableCnt: c.rows, BlockNumber: 128,
+		NdvMap: map[string]float64{"id": c.rows, "a": 1000, "b": 1000,
+			catalog.IndexTableIndexColName: c.rows, catalog.IndexTablePrimaryColName: c.rows},
+	}, nil
+}
+
+func TestRegularIndexBackfillTop(t *testing.T) {
+	tests := []struct {
+		name, sql string
+		want      uint64
+	}{
+		{"prefix", "where a=1 order by b,id limit 2", 2},
+		{"descending", "where a=1 order by b desc,id desc limit 2", 2},
+		{"mixed", "where a=1 order by b asc,id desc limit 2", 2},
+		{"offset", "where a=1 order by b,id limit 2 offset 3", 5},
+		{"mapped residual", "where a=1 and mod(b,2)=0 order by b,id limit 2", 2},
+		{"unmapped residual", "where a=1 and mod(payload,2)=0 order by b,id limit 2", 0},
+		{"incomplete order", "where a=1 order by b limit 2", 0},
+		{"unmapped order", "where a=1 order by payload,id limit 2", 0},
+		{"volatile residual", "where a=1 and rand()>0.5 order by b,id limit 2", 0},
+		{"unlimited", "where a=1 order by b,id", 0},
+		{"bound overflow", "where a=1 order by b,id limit 18446744073709551615 offset 1", 0},
+		{"unknown cardinality", "where a=1 order by b,id limit 2", 0},
+		{"small input", "where a=1 order by b,id limit 2", 0},
+		{"large candidate budget", "where a=1 order by b,id limit 2000", 0},
+		{"wide order key", "where a=1 order by b,id limit 2", 0},
+		{"wide filter key", "where a='key' order by b,id limit 2", 0},
+		{"repeated order key", "where a=1 order by b desc,b asc,id limit 2", 0},
+		{"volatile projection", "where a=1 order by b,id limit 2", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			table.Cols = append(table.Cols, &planpb.ColDef{ColId: 4, Name: "payload", OriginName: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}, Default: &planpb.Default{NullAbility: true}})
+			table.Name2ColIndex["payload"] = 4
+			ctx := &backfillTopStatsContext{MockCompilerContext: &mock.ctxt, rows: 1000000}
+			selectList := "id,a,b,payload"
+			switch tc.name {
+			case "unknown cardinality":
+				ctx.rows = 0
+			case "small input":
+				ctx.rows = 1
+			case "large candidate budget":
+				ctx.rows = 2000
+			case "wide order key":
+				table.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+			case "wide filter key":
+				table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+			case "volatile projection":
+				selectList += ",rand()"
+			}
+			stmts, err := mysql.Parse(ctx.GetContext(), "select "+selectList+" from index_hint_t force index(idx_ab) "+tc.sql, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			var bound uint64
+			var joins int
+			seen := map[int32]bool{}
+			var walk func(int32)
+			walk = func(id int32) {
+				if seen[id] {
+					return
+				}
+				seen[id] = true
+				n := q.Nodes[id]
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_INDEX {
+					joins++
+					var inspect func(int32)
+					inspect = func(s int32) {
+						v := q.Nodes[s]
+						if v.NodeType == planpb.Node_SORT {
+							x, ok := getLiteralUint64(v.Limit)
+							require.True(t, ok)
+							require.Nil(t, v.Offset)
+							bound = x
+						}
+						for _, c := range v.Children {
+							inspect(c)
+						}
+					}
+					inspect(n.Children[1])
+				}
+				for _, c := range n.Children {
+					walk(c)
+				}
+			}
+			for _, root := range q.Steps {
+				walk(root)
+			}
+			if tc.name == "mapped residual" {
+				calls := 0
+				var countModulo func(*planpb.Expr)
+				countModulo = func(expr *planpb.Expr) {
+					if f := expr.GetF(); f != nil {
+						if f.Func.ObjName == "mod" || f.Func.ObjName == "%" {
+							calls++
+						}
+						for _, arg := range f.Args {
+							countModulo(arg)
+						}
+					}
+				}
+				for id := range seen {
+					if n := q.Nodes[id]; n.IndexScanInfo.IsIndexScan {
+						for _, filter := range n.FilterList {
+							countModulo(filter)
+						}
+					}
+				}
+				require.LessOrEqual(t, calls, 1, "an index-side SQL predicate must not be evaluated twice")
+			}
+			require.GreaterOrEqual(t, joins, 1, "the control must exercise real index backfill")
+			require.Equal(t, tc.want, bound)
+		})
+	}
+}
+
+func TestRegularIndexBackfillTopRequiresPrivateAccess(t *testing.T) {
+	for _, shared := range []string{"orphan only", "base", "index", "join"} {
+		t.Run(shared, func(t *testing.T) {
+			builder, _, scanID, table := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			scan.Stats = &planpb.Stats{TableCnt: 1000000, Outcnt: 1000000, Selectivity: 1}
+			var def *planpb.IndexDef
+			for _, idx := range table.Indexes {
+				if usableRegularHintIndex(idx) && !idx.Unique {
+					def = idx
+					break
+				}
+			}
+			require.NotNil(t, def)
+			// The reused JOIN fixture stores VARCHAR PKs by default. This
+			// table declares an INT PK, so use matching index metadata.
+			mock := builder.compCtx.(*fullTextJoinMockCompilerContext)
+			mock.tables[def.IndexTableName].Cols[1].Typ = table.Cols[table.Name2ColIndex[table.Pkey.PkeyColName]].Typ
+			access, indexID, err := builder.buildHintedIndexBackfillJoin(def, scan)
+			require.NoError(t, err)
+			require.NotEqual(t, int32(-1), access)
+			ctx := builder.ctxByNode[scanID]
+			tag := scan.BindingTags[0]
+			pkPos := table.Name2ColIndex[table.Pkey.PkeyColName]
+			aPos := table.Name2ColIndex["a"]
+			sortID := builder.appendNode(&planpb.Node{
+				NodeType: planpb.Node_SORT, Children: []int32{access},
+				OrderBy: []*planpb.OrderBySpec{
+					{Expr: GetColExpr(table.Cols[aPos].Typ, tag, aPos)},
+					{Expr: GetColExpr(table.Cols[pkPos].Typ, tag, pkPos)},
+				},
+				Limit: MakePlan2Uint64ConstExprWithType(2),
+			}, ctx)
+			projectID := builder.appendNode(&planpb.Node{
+				NodeType: planpb.Node_PROJECT, Children: []int32{sortID},
+				BindingTags: []int32{builder.genNewBindTag()},
+				ProjectList: []*planpb.Expr{GetColExpr(table.Cols[pkPos].Typ, tag, pkPos)},
+			}, ctx)
+			builder.qry.Steps = []int32{projectID}
+			var other int32
+			switch shared {
+			case "base":
+				other = scanID
+			case "index":
+				other = indexID
+			case "join":
+				other = access
+			}
+			if shared != "orphan only" {
+				extra := builder.appendNode(&planpb.Node{
+					NodeType: planpb.Node_PROJECT, Children: []int32{other},
+					BindingTags: []int32{builder.genNewBindTag()},
+				}, ctx)
+				builder.qry.Steps = append(builder.qry.Steps, extra)
+			}
+			before := len(builder.qry.Nodes)
+			builder.pushRegularIndexBackfillTop(builder.qry.Nodes[projectID], map[[2]int32]int{})
+			build := builder.qry.Nodes[builder.qry.Nodes[access].Children[1]]
+			if shared == "orphan only" {
+				require.Equal(t, planpb.Node_SORT, build.NodeType)
+			} else {
+				require.Equal(t, indexID, build.NodeId, "another consumer must retain the complete scan")
+				require.Len(t, builder.qry.Nodes, before, "decline must not publish partial nodes")
+			}
 		})
 	}
 }

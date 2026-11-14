@@ -104,8 +104,8 @@ explain select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order b
 select uq.id,uq.b from u join uq force index(ux_ab) on uq.a=u.id order by uq.id;
 select uq.id,uq.b from u join uq ignore index(ux_ab) on uq.a=u.id order by uq.id;
 
--- Persisted prefix-index keys are truncated, while JOIN inputs are full values.
--- The full JOIN condition remains authoritative after broad index backfill.
+-- A truncated leading key cannot provide exact JOIN lookup. An unrelated
+-- ORDER must not invent full index backfill; retain the full JOIN predicate.
 create table prefix_j (id int primary key, a varchar(20), b int, payload int, key ix_join_pref(a(4),b));
 create table prefix_u (a varchar(20) primary key);
 insert into prefix_j values (1,'abcdef',1,10),(2,'abcdxy',2,20),(3,'wxyz12',3,30);
@@ -115,7 +115,7 @@ select mo_ctl('dn','flush','force_index_order.prefix_j');
 select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
 where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_join_pref');
 -- @separator:table
--- @regex("Index Table Scan.*ix_join_pref",true)
+-- @regex("Index Table Scan.*ix_join_pref",false)
 -- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix",false)
 explain select j.id,j.a,j.payload from prefix_j j force index(ix_join_pref)
 join prefix_u u on j.a=u.a order by j.payload,j.id;
@@ -160,9 +160,9 @@ insert into top_probe values (1,1,30),(2,1,10),(3,2,20),(4,2,40);
 -- @regex("Index Table Scan.*ix_top",true)
 -- @regex("MsgTopValue",true)
 -- @regex("Index Reader Param",false)
-explain select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
-select id,payload from top_probe force index(ix_top) order by payload,id limit 2;
-select id,payload from top_probe ignore index(ix_top) order by payload,id limit 2;
+explain select id,payload from top_probe force index(ix_top) where a>=1 order by payload,id limit 2;
+select id,payload from top_probe force index(ix_top) where a>=1 order by payload,id limit 2;
+select id,payload from top_probe ignore index(ix_top) where a>=1 order by payload,id limit 2;
 
 -- A NULL can be the first SQL value even when the block's non-NULL zonemap
 -- lies beyond the current TopValue. Both indexed and base scans must retain it.
@@ -183,18 +183,18 @@ where relname in (select index_table_name from mo_catalog.mo_indexes where name=
 -- @separator:table
 -- @regex("Index Table Scan.*ix_null_top",true)
 -- @regex("MsgTopValue",true)
-explain select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
-select id,payload from nullable_top force index(ix_null_top) order by payload limit 1;
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload limit 1;
+select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload limit 1;
 -- @separator:table
 -- @regex("MsgTopValue",true)
-explain select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
-select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+explain select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
 select id,payload from nullable_top where payload is null;
 
 -- A bound may arrive from transaction-local rows before persisted NULL blocks.
 begin;
 insert into nullable_top values (6,6,-30);
-select id,payload from nullable_top ignore index(ix_null_top) order by payload limit 1;
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload limit 1;
 rollback;
 
 -- With NULLS LAST, a NULL heap root must not become a numeric bound.
@@ -202,16 +202,16 @@ rollback;
 -- @separator:table
 -- @regex("Index Table Scan.*ix_null_top",true)
 -- @regex("MsgTopValue",true)
-explain select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
-select id,payload from nullable_top force index(ix_null_top) order by payload desc,id desc limit 2;
-select id,payload from nullable_top ignore index(ix_null_top) order by payload desc,id desc limit 2;
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
+select id,payload from nullable_top force index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 order by payload desc,id desc limit 2;
 
 -- Equal first keys across blocks remain candidates for the second key.
 -- @separator:table
 -- @regex("MsgTopValue",true)
-explain select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
-select id,payload from nullable_top force index(ix_null_top) where id<>5 order by payload,id desc limit 2;
-select id,payload from nullable_top ignore index(ix_null_top) where id<>5 order by payload,id desc limit 2;
+explain select id,payload from nullable_top force index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
+select id,payload from nullable_top force index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
+select id,payload from nullable_top ignore index(ix_null_top) where a>=1 and id<>5 order by payload,id desc limit 2;
 
 -- An old block may not contain a column added after it was flushed.
 create table nullable_evo (id int primary key);
@@ -252,10 +252,10 @@ set @lo=1, @hi=2;
 execute force_index_range using @a,@lo,@hi;
 deallocate prepare force_index_range;
 
--- A coerced JOIN key retains plain FORCE with ORDER through the existing
--- broad index fallback. Out-of-range and NULL values keep SQL JOIN semantics.
+-- A coerced JOIN key cannot provide binary index lookup. Plain FORCE must
+-- retain base access; out-of-range and NULL values keep SQL JOIN semantics.
 -- @separator:table
--- @regex("Index Table Scan.*ix_ab",true)
+-- @regex("Index Table Scan.*ix_ab",false)
 explain select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
 join t force index(ix_ab) on t.a=k.a order by t.id;
 select t.id,t.a,t.b,t.payload from (values row(cast(1 as signed)),row(cast(2147483648 as signed)),row(cast(null as signed))) k(a)
@@ -304,5 +304,56 @@ select pk1,pk2,payload from issue32665 force index(ix_issue32665_ab)
 where a=1 and b in ('alpha','beta') order by payload;
 select pk1,pk2,payload from issue32665 ignore index(ix_issue32665_ab)
 where a=1 and b in ('alpha','beta') order by payload;
+
+-- The index-side logical Top must keep NULL/ties/OFFSET before backfill.
+create table bounded_top (id int primary key, a int not null, b int, payload int, key ix_bounded(a,b));
+insert into bounded_top values (1,1,null,90),(2,1,null,80),(3,1,1,70),(4,1,1,60),(5,1,2,50),(6,1,2,40),(7,1,3,30),(8,1,3,20),(9,1,4,10),(10,1,4,0),(11,1,5,-10),(12,1,5,-20);
+select mo_ctl('dn','flush','force_index_order.bounded_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_bounded');
+-- @separator:table
+-- @regex("approx_count_distinct",true)
+analyze table bounded_top;
+-- @separator:table
+-- @regex("Index Table Scan.*ix_bounded",true)
+-- @regex("Limit: 3(?![0-9])",true)
+-- @regex("Index Reader Param",false)
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
+-- An unmapped residual must retain all candidates until the base filter.
+select id,payload from bounded_top force index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
+-- A mapped residual is checked exactly before the index-side Top.
+-- @separator:table
+-- @regex("Index Table Scan.*ix_bounded",true)
+-- @regex("Limit: 3(?![0-9])",true)
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
+
+-- Workspace changes participate before the index-side Top; rollback restores it.
+begin;
+insert into bounded_top values (0,1,null,999);
+update bounded_top set b=9,payload=42 where id=2;
+delete from bounded_top where id=1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+rollback;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+-- A reused Top plan must rebind scalar values, including NULL.
+prepare bounded_param from 'select id,payload+? as v from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1';
+set @p=0;
+execute bounded_param using @p;
+set @p=null;
+execute bounded_param using @p;
+set @p=1;
+execute bounded_param using @p;
+deallocate prepare bounded_param;
 
 drop database force_index_order;
