@@ -73,17 +73,21 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
-	buf           *batch.Batch
-	expandBuf     *batch.Batch
-	projExecutors []colexec.ExpressionExecutor
-	expandOwned   []*vector.Vector
-	nextSet       int
-	hasInput      bool
-	inputSeen     bool
-	childDone     bool
+	dictionaryInputs   colexec.DictionaryInputFrame
+	dictionaryBoundary vm.DictionaryOutputState
+	outputAllocation   *vector.AllocationAccountSelection
+	buf                *batch.Batch
+	expandBuf          *batch.Batch
+	projExecutors      []colexec.ExpressionExecutor
+	expandOwned        []*vector.Vector
+	nextSet            int
+	hasInput           bool
+	inputSeen          bool
+	childDone          bool
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
@@ -99,9 +103,13 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 		projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
 	}
 	projection.maxAllocSize = 0
+	if projection.ctr.outputAllocation != nil {
+		projection.Free(proc, pipelineFailed, err)
+	}
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
+	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {

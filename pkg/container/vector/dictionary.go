@@ -70,7 +70,7 @@ func (d *dictionaryVector) Release() {
 func (*dictionaryVector) Bytes() []byte { return nil }
 
 func (d *dictionaryVector) AccountedBytes() int64 {
-	if d == nil {
+	if d == nil || d.refs.Load() < 0 {
 		return 0
 	}
 	return d.base.RetainedBytes() + d.rows.RetainedBytes()
@@ -108,6 +108,14 @@ func (v *Vector) requirePhysical() {
 // and mapping. It retains both incoming handles; callers keep their references.
 // No engine producer calls this API until the consumer migration is complete.
 func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return NewDictionaryVectorReuse(base, rows, mp, account, nil)
+}
+
+// NewDictionaryVectorReuse consumes an exclusively owned, empty compatible
+// header from spare only when construction reaches header allocation. On error
+// consumed headers are cleaned; unconsumed slots remain owned by the caller.
+func NewDictionaryVectorReuse(base *DictionaryBase, rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if mp == nil || !base.Retain() {
 		return nil, moerr.NewInvalidInputNoCtx("dictionary base is unavailable")
 	}
@@ -123,7 +131,7 @@ func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPo
 		(rows.Length() > 0 && !dictionaryAccountsMatch(rows.storage.allocationAccount, account)) {
 		return nil, mpool.ErrAllocationAccountMismatch
 	}
-	return newDictionaryHeader(base, rows, base.vec, rows.storageFixed(), mp, account)
+	return newDictionaryHeaderReuse(base, rows, base.vec, rows.storageFixed(), mp, account, spare)
 }
 
 func dictionaryAccountsMatch(left, right *AllocationAccountSelection) bool {
@@ -137,14 +145,27 @@ func (s *RowSelection) storageFixed() []int64 {
 	return MustFixedColNoTypeCheck[int64](s.storage)
 }
 
-func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+func newDictionaryHeaderReuse(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if metadata.typ.TypeSize() <= 0 || len(logical) > math.MaxInt/metadata.typ.TypeSize() ||
 		base.RetainedBytes() > int64(math.MaxInt)-mapping.RetainedBytes() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary representation size")
 	}
-	result, err := NewOffHeapVecWithTypeAndAllocation(metadata.typ, account)
-	if err != nil {
-		return nil, err
+	var result *Vector
+	if spare != nil && *spare != nil {
+		candidate := *spare
+		if candidate.offHeap && candidate.class == FLAT && candidate.length == 0 && cap(candidate.data) == 0 && cap(candidate.area) == 0 && !candidate.HasBorrowedBacking() && AllocationAccountSelectionsEqual(candidate.allocationAccount, account) {
+			result = candidate
+			*spare = nil
+			result.typ = metadata.typ
+		}
+	}
+	if result == nil {
+		var err error
+		result, err = NewOffHeapVecWithTypeAndAllocation(metadata.typ, account)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := copyDictionaryMetadata(result, metadata, logical, mp); err != nil {
 		result.Free(mp)
@@ -167,7 +188,7 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 		return nil, moerr.NewInvalidStateNoCtx("dictionary selection was released")
 	}
 	area := 0
-	if metadata.typ.IsVarlen() && !base.vec.IsConstNull() {
+	if metadata.typ.IsVarlen() && len(base.vec.area) > 0 && !base.vec.IsConstNull() {
 		for row, index := range mapping.storageFixed()[:len(logical)] {
 			if result.IsNull(uint64(row)) {
 				continue
@@ -203,6 +224,13 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 // It never retains a chain of dictionary headers. Metadata follows the current
 // logical header, independently of the physical row used for its payload.
 func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return v.SelectDictionaryReuse(rows, mp, account, nil)
+}
+
+// SelectDictionaryReuse composes rows with the same ownership contract as
+// NewDictionaryVectorReuse, retaining exactly one immutable base.
+func (v *Vector) SelectDictionaryReuse(rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if v == nil || mp == nil || !rows.Retain() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary composition")
 	}
@@ -233,17 +261,25 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 			return nil, err
 		}
 		defer base.Release()
-		return NewDictionaryVector(base, rows, mp, account)
+		return NewDictionaryVectorReuse(base, rows, mp, account, spare)
 	}
 	if !dictionaryAccountsMatch(v.allocationAccount, account) {
 		return nil, mpool.ErrAllocationAccountMismatch
 	}
 	logical := rows.storageFixed()
 	if len(logical) == 0 {
-		return newDictionaryHeader(v.dictionaryState().base, rows, v, nil, mp, account)
+		return newDictionaryHeaderReuse(v.dictionaryState().base, rows, v, nil, mp, account, spare)
 	}
-	// The intermediate mapping is an accounted vector, never an unbounded
-	// Go-heap copy. Transfer its immutable storage into a selection lease.
+	mapping, err := composeDictionaryRows(v.dictionaryState().rows, logical, mp, account)
+	if err != nil {
+		return nil, err
+	}
+	defer mapping.Release()
+	return newDictionaryHeaderReuse(v.dictionaryState().base, mapping, v, logical, mp, account, spare)
+}
+
+// composeDictionaryRows owns one accounted map per distinct input mapping.
+func composeDictionaryRows(source *RowSelection, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection) (*RowSelection, error) {
 	composed, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), account)
 	if err != nil {
 		return nil, err
@@ -254,7 +290,7 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	}
 	composed.length = len(logical)
 	indices := MustFixedColNoTypeCheck[int64](composed)
-	old := v.dictionaryState().rows.storageFixed()
+	old := source.storageFixed()
 	monotonic := true
 	for i, row := range logical {
 		indices[i] = old[row]
@@ -267,9 +303,8 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 		composed.Free(mp)
 		return nil, err
 	}
-	mapping := &RowSelection{lease: lease, storage: composed, domain: v.dictionaryState().rows.domain, monotonic: monotonic}
-	defer mapping.Release()
-	return newDictionaryHeader(v.dictionaryState().base, mapping, v, logical, mp, account)
+	mapping := &RowSelection{lease: lease, storage: composed, domain: source.domain, monotonic: monotonic}
+	return mapping, nil
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {
@@ -293,12 +328,20 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 		}
 	}
 	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, false)
-	for i, row := range rows {
-		if source.IsNull(uint64(row)) {
-			dst.nsp.Add(uint64(i))
+	if source.IsConstNull() {
+		nulls.AddRange(&dst.nsp, 0, uint64(len(rows)))
+	} else if !source.IsConst() && source.HasNull() {
+		for i, row := range rows {
+			if source.nsp.Contains(uint64(row)) {
+				dst.nsp.Add(uint64(i))
+			}
 		}
-		if source.gsp.Contains(uint64(row)) {
-			dst.gsp.Add(uint64(i))
+	}
+	if source.HasGrouping() {
+		for i, row := range rows {
+			if source.gsp.Contains(uint64(row)) {
+				dst.gsp.Add(uint64(i))
+			}
 		}
 	}
 	if err := propagatePrepareParamKindsSelection(dst, source, 0, rows, mp); err != nil {
@@ -407,6 +450,30 @@ func ResolveVarlenaReadView(v *Vector) VarlenaReadView {
 	return VarlenaReadView{FixedReadView: ResolveFixedReadView[types.Varlena](v), Area: base.area}
 }
 
+// FixedBytesReadView exposes immutable physical-width value bytes to key
+// codecs. Selection maps logical rows; constant payload uses byte offset zero.
+// Its borrowed slices have the same lifetime as FixedReadView.
+type FixedBytesReadView struct {
+	Values    []byte
+	Selection []int64
+	Width     int
+	Constant  bool
+}
+
+func ResolveFixedBytesReadView(v *Vector) FixedBytesReadView {
+	if !v.typ.IsFixedLen() {
+		panic(moerr.NewInvalidInputNoCtx("fixed byte read view requires fixed-width input"))
+	}
+	base := v
+	var selection []int64
+	if v.IsDictionary() {
+		backing := v.dictionaryState()
+		base = backing.base.vec
+		selection = backing.rows.storageFixed()[:v.length]
+	}
+	return FixedBytesReadView{Values: base.data, Selection: selection, Width: v.typ.TypeSize(), Constant: base.IsConst()}
+}
+
 // EnsureFlat materializes only the selected logical rows. No physical getter
 // allocates implicitly. Failure leaves the original representation intact.
 func (v *Vector) EnsureFlat(mp *mpool.MPool) error {
@@ -498,4 +565,13 @@ func (v *Vector) materializeDictionaryWithBuilder(mp *mpool.MPool, account *Allo
 		}
 	}
 	return flat, nil
+}
+
+// TryResolveFixedReadView declines conversions which require the existing
+// parameter wrapper rather than a physical typed slice.
+func TryResolveFixedReadView[T any](v *Vector) (FixedReadView[T], bool) {
+	if v == nil || !typeCompatible[T](v.typ) {
+		return FixedReadView[T]{}, false
+	}
+	return ResolveFixedReadView[T](v), true
 }

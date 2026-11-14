@@ -53,7 +53,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(projection.ctr.projExecutors) == 0 {
-		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, projection.ProjectList, projection.ctr.outputAllocation)
 
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
@@ -73,6 +73,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 }
 
 func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error) {
+	projection.ctr.dictionaryBoundary.BeginCall()
 	analyzer := projection.OpAnalyzer
 	if projection.GroupingSetCount > 0 && projection.ctr.hasInput {
 		return projection.emitGroupingSet(proc)
@@ -104,6 +105,15 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
+	if bat.HasDictionary() {
+		projection.ctr.dictionaryInputs.Begin(bat, projection.ctr.outputAllocation, proc.Mp())
+		projection.ctr.dictionaryInputs.Bind(projection.ctr.projExecutors)
+		defer func() {
+			projection.ctr.dictionaryInputs.Observe(projection.OpAnalyzer)
+			projection.ctr.dictionaryInputs.End()
+		}()
+	}
+
 	for i := range projection.ctr.projExecutors {
 		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, nil)
 		if err != nil {

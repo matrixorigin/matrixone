@@ -133,12 +133,17 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		// storage. Floats still need canonicalization, and NULL/const inputs
 		// still use the generic codec below.
 		if vec.GetType().TypeSize() == 8 && vec.GetType().Oid != types.T_float64 &&
-			!vec.IsConst() && !vec.GetNulls().Any() {
+			!vec.IsConst() && !vec.IsDictionary() && !vec.GetNulls().Any() {
 			copy(types.EncodeSlice(itr.keys[:count]), vec.GetData()[start*8:(start+count)*8])
 			return
 		}
 	}
 	for _, vec := range vecs {
+		if vec.IsDictionary() {
+			itr.fillDictionaryKey(vec, start, count)
+			continue
+		}
+
 		switch vec.GetType().TypeSize() {
 		case 1:
 			fillKeys[uint8](itr, vec, 1, start, count)
@@ -681,4 +686,91 @@ func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 
 func (m *IntHashMap) FillGroupHashes(dst []uint64) []uint64 {
 	return m.hashMap.FillGroupHashes(dst)
+}
+
+// fillDictionaryKey writes selected values into existing iterator-owned H8
+// scratch, preserving the ordinary typed equality codec and NULL domain.
+func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, count int) {
+	typ := *vec.GetType()
+	// typeswitch:partial only float32/64 require key canonicalization; low-precision float storage is already canonical.
+	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() {
+		fixed := vector.ResolveFixedBytesReadView(vec)
+		if !fixed.Constant {
+			switch fixed.Width {
+			case 1:
+				fillSelectedFixedKeys[uint8](itr, fixed, 1, start, count)
+				return
+			case 2:
+				fillSelectedFixedKeys[uint16](itr, fixed, 2, start, count)
+				return
+			case 4:
+				fillSelectedFixedKeys[uint32](itr, fixed, 4, start, count)
+				return
+			case 8:
+				fillSelectedFixedKeys[uint64](itr, fixed, 8, start, count)
+				return
+			}
+		}
+	}
+
+	var strings vector.VarlenaReadView
+	var fixed vector.FixedBytesReadView
+	if typ.IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	} else {
+		fixed = vector.ResolveFixedBytesReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		key := types.EncodeSlice(itr.keys[i : i+1])
+		offset := int(itr.keyOffs[i])
+		if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				key[offset] = 1
+				itr.keyOffs[i]++
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		if itr.mp.hasNull {
+			key[offset] = 0
+			offset++
+		}
+		if typ.IsVarlen() {
+			physical := int(strings.Selection[row])
+			if strings.Constant {
+				physical = 0
+			}
+			value := strings.Values[physical].GetByteSlice(strings.Area)
+			if typ.Oid == types.T_char && !itr.mp.legacyCharPadding {
+				value = keycodec.CanonicalCharValue(value)
+			}
+			copy(key[offset:], value)
+			itr.keyOffs[i] = uint32(offset + len(value))
+		} else {
+			encoded := keycodec.AppendCanonicalValue(key[:offset], typ, dictionaryFixedBytes(fixed, row))
+			itr.keyOffs[i] = uint32(len(encoded))
+		}
+	}
+}
+
+// fillSelectedFixedKeys is reached only from selected key dispatch. Keep its
+// mapping/view locals outside the original flat fillKeys frame.
+func fillSelectedFixedKeys[T types.FixedSizeT](itr *intHashMapIterator, view vector.FixedBytesReadView, size uint32, start, n int) {
+	keys, keyOffs := itr.keys, itr.keyOffs
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/int(size)*int(size)])
+	selected := view.Selection[start : start+n]
+	if !itr.mp.hasNull {
+		for i, row := range selected {
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = values[row]
+		}
+		uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+	} else {
+		for i, row := range selected {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = values[row]
+		}
+		uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
+	}
 }

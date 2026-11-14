@@ -150,6 +150,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
+	shuffle.ctr.dictionaryBoundary.BeginReusableCall()
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}
@@ -854,6 +855,9 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 }
 
 func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if bat.Vecs[ap.ShuffleColIdx].IsDictionary() {
+		return ap.shuffleDictionaryKey(bat, proc)
+	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
 		return ap.routeSingleBucket(bat, 0, proc)
@@ -888,62 +892,105 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		signed = true
-		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
-		firstValueSigned = groupByCol[0]
-		if groupByVec.IsConst() {
-			lastValueSigned = firstValueSigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[int64](groupByVec)
+			firstValueSigned = int64(first)
+			lastValueSigned = int64(last)
 		} else {
-			lastValueSigned = groupByCol[groupByVec.Length()-1]
+			groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
+			firstValueSigned = groupByCol[0]
+			if groupByVec.IsConst() {
+				lastValueSigned = firstValueSigned
+			} else {
+				lastValueSigned = groupByCol[groupByVec.Length()-1]
+			}
 		}
 	case types.T_int32:
 		signed = true
-		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
-		firstValueSigned = int64(groupByCol[0])
-		if groupByVec.IsConst() {
-			lastValueSigned = firstValueSigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[int32](groupByVec)
+			firstValueSigned = int64(first)
+			lastValueSigned = int64(last)
 		} else {
-			lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
+			groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
+			firstValueSigned = int64(groupByCol[0])
+			if groupByVec.IsConst() {
+				lastValueSigned = firstValueSigned
+			} else {
+				lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
+			}
 		}
 	case types.T_int16:
 		signed = true
-		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
-		firstValueSigned = int64(groupByCol[0])
-		if groupByVec.IsConst() {
-			lastValueSigned = firstValueSigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[int16](groupByVec)
+			firstValueSigned = int64(first)
+			lastValueSigned = int64(last)
 		} else {
-			lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
+			groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
+			firstValueSigned = int64(groupByCol[0])
+			if groupByVec.IsConst() {
+				lastValueSigned = firstValueSigned
+			} else {
+				lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
+			}
 		}
 	case types.T_uint64:
-		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
-		firstValueUnsigned = groupByCol[0]
-		if groupByVec.IsConst() {
-			lastValueUnsigned = firstValueUnsigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[uint64](groupByVec)
+			firstValueUnsigned = uint64(first)
+			lastValueUnsigned = uint64(last)
 		} else {
-			lastValueUnsigned = groupByCol[groupByVec.Length()-1]
+			groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
+			firstValueUnsigned = groupByCol[0]
+			if groupByVec.IsConst() {
+				lastValueUnsigned = firstValueUnsigned
+			} else {
+				lastValueUnsigned = groupByCol[groupByVec.Length()-1]
+			}
 		}
 	case types.T_uint32:
-		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
-		firstValueUnsigned = uint64(groupByCol[0])
-		if groupByVec.IsConst() {
-			lastValueUnsigned = firstValueUnsigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[uint32](groupByVec)
+			firstValueUnsigned = uint64(first)
+			lastValueUnsigned = uint64(last)
 		} else {
-			lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
+			groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
+			firstValueUnsigned = uint64(groupByCol[0])
+			if groupByVec.IsConst() {
+				lastValueUnsigned = firstValueUnsigned
+			} else {
+				lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
+			}
 		}
 	case types.T_uint16:
-		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
-		firstValueUnsigned = uint64(groupByCol[0])
-		if groupByVec.IsConst() {
-			lastValueUnsigned = firstValueUnsigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[uint16](groupByVec)
+			firstValueUnsigned = uint64(first)
+			lastValueUnsigned = uint64(last)
 		} else {
-			lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
+			groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
+			firstValueUnsigned = uint64(groupByCol[0])
+			if groupByVec.IsConst() {
+				lastValueUnsigned = firstValueUnsigned
+			} else {
+				lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
+			}
 		}
 	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
-		if groupByVec.IsConst() {
-			lastValueUnsigned = firstValueUnsigned
+		if groupByVec.IsDictionary() {
+			first, last := dictionaryRangeEndpoints[types.Varlena](groupByVec)
+			view := vector.ResolveVarlenaReadView(groupByVec)
+			firstValueUnsigned = plan2.VarlenaToUint64(&first, view.Area)
+			lastValueUnsigned = plan2.VarlenaToUint64(&last, view.Area)
 		} else {
-			lastValueUnsigned = plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
+			groupByCol, area := vector.MustVarlenaRawData(groupByVec)
+			firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
+			if groupByVec.IsConst() {
+				lastValueUnsigned = firstValueUnsigned
+			} else {
+				lastValueUnsigned = plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
+			}
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
@@ -1260,6 +1307,14 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 }
 
 func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if key := bat.Vecs[ap.ShuffleColIdx]; key.IsDictionary() {
+		if key.GetSorted() && key.Length() > 0 && !key.HasNull() {
+			if same, bucket := allBatchInOneRange(ap, bat); same {
+				return ap.routeSingleBucket(bat, int32(bucket), proc)
+			}
+		}
+		return ap.shuffleDictionaryKey(bat, proc)
+	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)

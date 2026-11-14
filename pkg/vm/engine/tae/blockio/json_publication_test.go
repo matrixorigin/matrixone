@@ -121,42 +121,69 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
 	info := stats.ConstructBlockInfo(0)
-	for _, earlyColumn := range []int{0, 1} {
-		func() {
-			output := batch.NewWithSize(2)
-			output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-			defer output.Clean(mp)
-			publication := objectio.NewJSONReadSet([]int{0})
-			defer publication.Close()
-			publication.BindColumns([]uint16{0, 1})
-			readCtx := objectio.WithJSONReadSet(ctx, publication)
-			source := &blockReadTestDataSource{deleted: []uint64{0}}
-			cached := containers.NewVectors(2)
-			defer cached.Free(mp)
-			filter := &engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-				require.Equal(t, 2, bat.RowCount())
-				for _, column := range loaded {
-					if err := bat.Vecs[column].Shrink([]int64{1}, false, mp); err != nil {
-						return engine.ReaderFilterResult{}, err
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	defer func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	}()
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	require.NoError(t, err)
+	for _, selectedOwned := range []bool{false, true} {
+		for _, earlyColumn := range []int{0, 1} {
+			func() {
+				output := batch.NewOffHeapWithSize(2)
+				output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+				output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+				defer output.Clean(mp)
+				if selectedOwned {
+					require.NoError(t, output.SetAllocationAccount(allocation))
+				}
+				publication := objectio.NewJSONReadSet([]int{0})
+				defer publication.Close()
+				publication.BindColumns([]uint16{0, 1})
+				readCtx := objectio.WithJSONReadSet(ctx, publication)
+				source := &blockReadTestDataSource{deleted: []uint64{0}}
+				if selectedOwned {
+					source.deleted = nil
+				}
+				cached := containers.NewVectors(2)
+				defer cached.Free(mp)
+				filter := &engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, 2, bat.RowCount())
+					for _, column := range loaded {
+						if err := bat.Vecs[column].Shrink([]int64{1}, false, mp); err != nil {
+							return engine.ReaderFilterResult{}, err
+						}
+					}
+					bat.SetRowCount(1)
+					return engine.ReaderFilterResult{Sels: []int64{1}}, nil
+				}}
+				if selectedOwned {
+					filter.OutputAllocation = allocation
+					filter.ColumnUses = []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}
+					filter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+						require.Equal(t, 3, bat.RowCount())
+						return engine.ReaderFilterResult{Sels: []int64{2}}, nil
 					}
 				}
-				bat.SetRowCount(1)
-				return engine.ReaderFilterResult{Sels: []int64{1}}, nil
-			}}
-			require.NoError(t, blockDataReadWithFilter(readCtx, &info, source, []uint16{0, 1}, []types.Type{typ, types.T_bool.ToType()}, -1, types.TS{}, nil, 0, output, cached, mp, fs, []int{earlyColumn}, filter, nil, nil))
-			version := publication.Readers()[0]
-			require.NotNil(t, version)
-			require.Equal(t, 1, version.Length())
-			path, err := types.ParseStringToPath("$.keep")
-			require.NoError(t, err)
-			result, err := version.Query(0, &path)
-			require.NoError(t, err)
-			text, err := result.Text()
-			result.Close()
-			require.NoError(t, err)
-			require.Equal(t, "3", text.Text)
-			text.Close()
-		}()
+				require.NoError(t, blockDataReadWithFilter(readCtx, &info, source, []uint16{0, 1}, []types.Type{typ, types.T_bool.ToType()}, -1, types.TS{}, nil, 0, output, cached, mp, fs, []int{earlyColumn}, filter, nil, nil))
+				version := publication.Readers()[0]
+				require.NotNil(t, version)
+				require.Equal(t, 1, version.Length())
+				path, err := types.ParseStringToPath("$.keep")
+				require.NoError(t, err)
+				result, err := version.Query(0, &path)
+				require.NoError(t, err)
+				text, err := result.Text()
+				result.Close()
+				require.NoError(t, err)
+				require.Equal(t, "3", text.Text)
+				text.Close()
+			}()
+		}
 	}
 }

@@ -16,8 +16,10 @@ package objectio
 
 import (
 	"bytes"
+	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -146,4 +148,147 @@ func TestCopyCachedVectorAllReadonlySmallControls(t *testing.T) {
 			}
 		})
 	}
+}
+
+type retainedDictionaryCacheProbe struct {
+	*validatedVectorBytesProbe
+	refs     atomic.Int32
+	released atomic.Int32
+}
+
+func (d *retainedDictionaryCacheProbe) Retain() { d.refs.Add(1) }
+func (d *retainedDictionaryCacheProbe) Release() {
+	if d.refs.Add(-1) == 0 {
+		d.released.Add(1)
+	}
+}
+
+func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	long := bytes.Repeat([]byte{'x'}, 64)
+	require.NoError(t, vector.AppendBytes(source, long, false, mp))
+	require.NoError(t, vector.AppendBytes(source, []byte("small"), false, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	data, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	probe := &retainedDictionaryCacheProbe{validatedVectorBytesProbe: &validatedVectorBytesProbe{backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()}}
+	probe.refs.Store(1)
+	destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { destination.Free(mp) })
+	admitted, err := TryBorrowCachedVector(destination, probe, mp)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.False(t, destination.IsDictionary())
+	require.True(t, destination.HasBorrowedBacking())
+	require.Zero(t, probe.bytesCalls.Load())
+	visible := destination.GetBytesAt(0)
+	position := bytes.Index(probe.backing, long)
+	require.GreaterOrEqual(t, position, 0)
+	require.Same(t, &probe.backing[position], &visible[0], "payload must remain cache-backed")
+	probe.Release()
+	require.Zero(t, probe.released.Load())
+	require.Equal(t, long, destination.GetBytesAt(0))
+	before := bytes.Clone(probe.backing)
+	require.NoError(t, destination.EnsureWritable(mp))
+	require.NoError(t, vector.SetBytesAt(destination, 0, []byte("changed"), mp))
+	require.Equal(t, before, probe.backing)
+	require.Equal(t, int32(1), probe.released.Load())
+}
+
+func TestRetainedCachedVectorPinRefusal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'p'}, 128), false, mp))
+	data, err := validateVectorCacheData(fileservice.NewBytes(marshalLegacyTestColumn(t, source)))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(16)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	require.NoError(t, err)
+	for _, transient := range []bool{false, true} {
+		func() {
+			selection := allocation
+			var transientBytes uint64
+			if transient {
+				selection = vector.JSONReaderAllocationSelection(nil, func(size uint64) (func(), error) {
+					transientBytes += size
+					return func() { transientBytes -= size }, nil
+				})
+				defer func() { require.Zero(t, transientBytes) }()
+			}
+			destination, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
+			require.NoError(t, err)
+			defer destination.Free(mp)
+			admitted, err := TryBorrowCachedVector(destination, data, mp)
+			require.NoError(t, err)
+			require.False(t, admitted)
+			require.Zero(t, destination.Length())
+			require.False(t, destination.IsDictionary())
+
+			if transient {
+				require.NoError(t, CopyCachedVectorAll(destination, data, mp))
+				require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
+				require.False(t, destination.HasBorrowedBacking())
+				require.Positive(t, transientBytes)
+			}
+		}()
+	}
+}
+
+func TestCachedColumnScopePinsOnlyForCallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	payload := bytes.Repeat([]byte{'q'}, 64)
+	require.NoError(t, vector.AppendBytes(source, payload, false, mp))
+	data, err := validateVectorCacheData(fileservice.NewBytes(marshalLegacyTestColumn(t, source)))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	probe := &retainedDictionaryCacheProbe{validatedVectorBytesProbe: &validatedVectorBytesProbe{backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()}}
+	probe.refs.Store(1)
+	output := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { output.Free(mp) })
+	scope := &CachedColumnScope{}
+	entries := []fileservice.IOEntry{{CachedData: probe}}
+	failure := moerr.NewInvalidInputNoCtx("injected scoped consumer failure")
+	err = scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.True(t, marked[0])
+		require.Equal(t, vector.LegacyAlias, inputs[0].DataBackingKind())
+		require.Equal(t, int32(1), probe.refs.Load(), "the existing pinned read owns cache lifetime")
+		position := bytes.Index(probe.backing, payload)
+		require.GreaterOrEqual(t, position, 0)
+		require.Same(t, &probe.backing[position], &inputs[0].GetBytesAt(0)[0])
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, scope.inputs[0])
+	require.Zero(t, scope.views[0].Length())
+	require.False(t, scope.marked[0])
+	header := &scope.views[0]
+	err = scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.True(t, marked[0])
+		require.Same(t, header, inputs[0])
+		return output.Union(inputs[0], []int64{0}, mp)
+	})
+	require.NoError(t, err)
+	require.Zero(t, probe.bytesCalls.Load())
+	probe.Release()
+	require.Equal(t, int32(1), probe.released.Load())
+	require.Equal(t, payload, output.GetBytesAt(0), "owned output survives the end of its cache pin")
+	require.False(t, output.HasBorrowedBacking())
 }

@@ -3924,6 +3924,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
+	if v.dataLease != nil || v.areaLease != nil {
+		v.ReclaimDictionaryWorkspace()
+	}
 	v.releaseBorrowedBacking()
 	// Constant NULLs have logical rows without a payload allocation.
 	v.length = 0
@@ -5670,7 +5673,7 @@ func (v *Vector) preExtendSelectedBatch(
 	// The preflight proof cannot retain an aliased source for publication.
 	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
 	// after the caller has committed its surrounding state transition.
-	if v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
+	if v == w && w.IsDictionary() || v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
 		return mpool.ErrAllocationAccountInvalid
 	}
 
@@ -5684,6 +5687,16 @@ func (v *Vector) preExtendSelectedBatch(
 	selectedAreaBytes := 0
 	var values []types.Varlena
 	varlen := w.GetType().IsVarlen() && !w.IsConstNull()
+	if varlen && w.IsDictionary() {
+		var err error
+		selectedAreaBytes, err = dictionarySelectedAreaBytes(w, offset, flags)
+		if err != nil {
+			return err
+		}
+		// The generic flag proof/count remains below; payload sizing has used
+		// the immutable selected view instead of a physical descriptor slice.
+		varlen = false
+	}
 	if varlen {
 		ToSliceNoTypeCheck(w, &values)
 	}
@@ -6198,7 +6211,7 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 	})
 }
 
-// Shrink use to shrink vectors, sels must be guaranteed to be ordered
+// Shrink compacts a vector. For nonconstant vectors, sels must be ordered.
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 	if v.IsDictionary() {
 		if err := v.EnsureFlat(mp); err != nil {
@@ -6206,7 +6219,6 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 	}
 
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
 	oldSources := v.stringSources
 	oldLength := v.length
@@ -6222,6 +6234,7 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 		return nil
 	}
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	needsWrite := len(sels) > 0
 	if v.cantFreeData && needsWrite {
 		needsWrite = false
@@ -7063,7 +7076,11 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		v.clearBinaryStringAt(int(vi))
 		return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 	}
-	if v.typ.IsFixedLen() {
+	if w.IsDictionary() {
+		if err := v.copyDictionaryPayload(w, vi, wi, mp); err != nil {
+			return err
+		}
+	} else if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
 		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], w.data[wi*int64(sz):(wi+1)*int64(sz)])
 	} else {
@@ -7105,6 +7122,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if w.IsDictionary() {
+			return v.UnionBatch(w, 0, w.length, nil, mp)
+		}
+
 		// A Window retains the area lease but may alias our owned descriptors.
 		if v.dataAliases(w) {
 			return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
@@ -8523,6 +8544,9 @@ func (v *Vector) hasPlainFixedMetadata() bool {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return v.unionDictionaryOne(w, sel, mp)
+	}
 	if v.dataAliases(w) {
 		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
 			return v.UnionOne(source, 0, mp)
@@ -8672,6 +8696,13 @@ func appendSelectedGrouping[T int32 | int64](
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return v.unionDictionaryMulti(w, sel, cnt, mp)
+	}
+	return v.unionMultiFlat(w, sel, cnt, mp)
+}
+
+func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -8836,6 +8867,10 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		return unionDictionaryRows(v, w, sels, mp)
+	}
+
 	if len(sels) == 0 {
 		return nil
 	}
@@ -8943,22 +8978,34 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
 		total := 0
 		hasNull := !w.GetNulls().EmptyByFlag()
-		for _, sel := range sels {
-			if hasNull && w.nsp.Contains(uint64(sel)) {
-				continue
+		// With both areas empty, valid non-NULL descriptors are either inline
+		// or empty non-inline values at offset zero. Neither needs area growth
+		// or rebasing, so copy them directly without a separate sizing pass.
+		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0 &&
+			!types.IsUnicodeCollation(v.typ.Charset)
+		if !emptyAreas {
+			for _, sel := range sels {
+				if hasNull && w.nsp.Contains(uint64(sel)) {
+					continue
+				}
+				if !wCol[sel].IsSmall() {
+					_, l := wCol[sel].OffsetLen()
+					total += int(l)
+				}
 			}
-			if !wCol[sel].IsSmall() {
-				_, l := wCol[sel].OffsetLen()
-				total += int(l)
+			if err = pregrowVarlenaArea(v, total, mp); err != nil {
+				return err
 			}
-		}
-		if err = pregrowVarlenaArea(v, total, mp); err != nil {
-			return err
 		}
 		// Reuse the area sizing pass to select an inline-copy batch. The small
 		// check still handles non-inline zero-length descriptors correctly.
 		// Mixed/area payloads and Unicode admission keep the original loops.
-		if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+		if emptyAreas {
+			target := vCol[oldLen : oldLen+len(sels)]
+			for i, sel := range sels {
+				target[i] = wCol[sel]
+			}
+		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
@@ -9101,6 +9148,13 @@ func (v *Vector) unionBatch(
 	preflightRowCount int,
 	preflighted bool,
 ) error {
+	if w.IsDictionary() {
+		return v.admitDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+	}
+	return v.unionBatchFlat(w, offset, cnt, flags, stringSourceOverrides, mp, selectedAreaBytes, preflightRowCount, preflighted)
+}
+
+func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8, stringSourceOverrides []types.StringSource, mp *mpool.MPool, selectedAreaBytes, preflightRowCount int, preflighted bool) error {
 	areaWasDisjoint := v.areaDisjoint
 	if selectedAreaBytes < 0 {
 		return mpool.ErrAllocationAccountInvalid
@@ -11407,15 +11461,26 @@ func (v *Vector) window(
 	selection *AllocationAccountSelection,
 	logicalRows bool,
 ) (*Vector, error) {
+	return v.windowReuse(start, end, mp, selection, logicalRows, nil)
+}
+
+func (v *Vector) windowReuse(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, logicalRows bool, slot *DictionaryVectorSlot) (*Vector, error) {
 	if v.IsDictionary() {
 		return nil, moerr.NewInvalidStateNoCtx("dictionary windows require an accounted logical selection or explicit materialization")
 	}
 	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
-	w := NewVec(v.typ)
+	w := slot.take()
+	if w == nil {
+		w = new(Vector)
+	}
+	return v.windowInto(start, end, mp, selection, w)
+}
+
+func (v *Vector) windowInto(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, w *Vector) (*Vector, error) {
+	*w = Vector{typ: v.typ, areaDisjoint: true, offHeap: selection != nil}
 	if selection != nil {
-		w.offHeap = true
 		if err := w.SetAllocationAccount(selection); err != nil {
 			return nil, err
 		}
@@ -13727,4 +13792,30 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+}
+
+// copyDictionaryPayload runs after the caller's ordinary validation/admission.
+// Only payload coordinates become physical; NULL/grouping and provenance stay
+// with the caller's logical row. Flat callers keep their original address flow.
+func (v *Vector) copyDictionaryPayload(w *Vector, target, logical int64, mp *mpool.MPool) error {
+	base, physical := w.dictionaryPhysicalRow(int(logical))
+	if v.typ.IsVarlen() {
+		var dst, src []types.Varlena
+		ToSliceNoTypeCheck(v, &dst)
+		ToSliceNoTypeCheck(base, &src)
+		return BuildVarlenaFromVarlena(v, &dst[target], &src[physical], &base.area, mp)
+	}
+	switch width := v.typ.TypeSize(); width {
+	case 8:
+		*(*uint64)(unsafe.Pointer(&v.data[target*8])) = *(*uint64)(unsafe.Pointer(&base.data[physical*8]))
+	case 4:
+		*(*uint32)(unsafe.Pointer(&v.data[target*4])) = *(*uint32)(unsafe.Pointer(&base.data[physical*4]))
+	case 2:
+		*(*uint16)(unsafe.Pointer(&v.data[target*2])) = *(*uint16)(unsafe.Pointer(&base.data[physical*2]))
+	case 1:
+		v.data[target] = base.data[physical]
+	default:
+		copy(v.data[int(target)*width:(int(target)+1)*width], base.data[physical*width:(physical+1)*width])
+	}
+	return nil
 }

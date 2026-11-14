@@ -2386,7 +2386,7 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
 		return err
 	}
-	values := vector.MustFixedColNoTypeCheck[T](vectors[0])
+	values, selection, indirect := fixedAggregateInput[T](vectors[0])
 	if hasDefaultFixedMinMaxMetadata(vectors[0]) {
 		// Ordinary fixed values cannot create a provenance sidecar when every
 		// touched destination is ordinary too. Validate the same active/standby
@@ -2403,7 +2403,7 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 			if vectors[0].IsNull(uint64(physicalRow)) {
 				continue
 			}
-			_ = values[physicalRow]
+			_ = fixedAggregateValueAt(values, selection, indirect, physicalRow)
 			_, y, state, err := exec.validatePreflightTarget(group)
 			if err != nil {
 				return err
@@ -2431,7 +2431,7 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 			var zero T
 			return zero, vector.PrepareParamNone, false, nil
 		}
-		return values[physicalRow],
+		return fixedAggregateValueAt(values, selection, indirect, physicalRow),
 			vectors[0].GetPrepareParamKindAt(physicalRow), true, nil
 	}
 	if err := exec.preflightFixedStringSources(groups, candidate,

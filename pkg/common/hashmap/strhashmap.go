@@ -126,6 +126,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if withDomain {
 			prefix = 1
 		}
+		if vec.IsDictionary() {
+			if err := itr.prepareDictionaryKeySizes(vec, start, count, prefix, withDomain); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if vec.IsGrouping() {
 			for i := 0; i < count; i++ {
 				if err := add(i, 1); err != nil {
@@ -383,6 +390,11 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		return
 	}
 	for _, vec := range vecs {
+		if vec.IsDictionary() {
+			itr.fillDictionaryKeys(vec, start, count)
+			continue
+		}
+
 		if isFlatCharStringHashKey(vec) {
 			fillFlatCharStringHashKey(itr, vec, count, start)
 			continue
@@ -458,7 +470,7 @@ func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, sta
 		typ := vec.GetType()
 		// typeswitch:partial bf16/float16/float8/float4 zeros are stored as +0 (CanonicalLowPrecFloat), so their bytes are the key
 		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
-			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			vec.IsConst() || vec.IsDictionary() || vec.HasGrouping() || vec.GetNulls().Any() {
 			return false
 		}
 		width := typ.TypeSize()
@@ -1425,4 +1437,140 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 
 func (m *StrHashMap) FillGroupHashes(dst []uint64) []uint64 {
 	return m.hashMap.FillGroupHashes(dst)
+}
+
+// fillDictionaryKeys uses the common equality codec and the existing key frame.
+// Admission/sizing has already reserved each complete key before this pass.
+func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, count int) {
+	typ := *vec.GetType()
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	// typeswitch:partial only float32/64 require key canonicalization; low-precision float storage is already canonical.
+	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() && !vec.HasGrouping() {
+		fixed := vector.ResolveFixedBytesReadView(vec)
+		if !fixed.Constant {
+			switch fixed.Width {
+			case 1:
+				fillSelectedStrKeys[uint8](itr, fixed, start, count, withDomain)
+				return
+			case 2:
+				fillSelectedStrKeys[uint16](itr, fixed, start, count, withDomain)
+				return
+			case 4:
+				fillSelectedStrKeys[uint32](itr, fixed, start, count, withDomain)
+				return
+			case 8:
+				fillSelectedStrKeys[uint64](itr, fixed, start, count, withDomain)
+				return
+			case 12:
+				fillSelectedStrKeys[[12]byte](itr, fixed, start, count, withDomain)
+				return
+			case 16:
+				fillSelectedStrKeys[[16]byte](itr, fixed, start, count, withDomain)
+				return
+			case 20:
+				fillSelectedStrKeys[[20]byte](itr, fixed, start, count, withDomain)
+				return
+			case 24:
+				fillSelectedStrKeys[[24]byte](itr, fixed, start, count, withDomain)
+				return
+			case 32:
+				fillSelectedStrKeys[[32]byte](itr, fixed, start, count, withDomain)
+				return
+			}
+		}
+	}
+
+	var strings vector.VarlenaReadView
+	var fixed vector.FixedBytesReadView
+	if typ.IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	} else {
+		fixed = vector.ResolveFixedBytesReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			itr.keys[i] = append(itr.keys[i], 2)
+			continue
+		}
+		if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], 1)
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		key := itr.keys[i]
+		if withDomain {
+			key = append(key, 0)
+		}
+		if typ.IsVarlen() {
+			physical := int(strings.Selection[row])
+			if strings.Constant {
+				physical = 0
+			}
+			value := strings.Values[physical].GetByteSlice(strings.Area)
+			prefix := len(key)
+			key = append(key, 0, 0, 0, 0)
+			key = keycodec.AppendCanonicalValue(key, typ, value)
+			length := uint32(len(key) - prefix - 4)
+			copy(key[prefix:prefix+4], util.UnsafeToBytes(&length))
+		} else {
+			key = keycodec.AppendCanonicalValue(key, typ, dictionaryFixedBytes(fixed, row))
+		}
+		itr.keys[i] = key
+	}
+}
+
+func fillSelectedStrKeys[T any](itr *strHashmapIterator, view vector.FixedBytesReadView, start, count int, withDomain bool) {
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/view.Width*view.Width])
+	selected := view.Selection[start : start+count]
+	if !withDomain {
+		for i, row := range selected {
+			itr.keys[i] = append(itr.keys[i], types.EncodeSlice(values[row:row+1])...)
+		}
+	} else {
+		for i, row := range selected {
+			key := append(itr.keys[i], 0)
+			itr.keys[i] = append(key, types.EncodeSlice(values[row:row+1])...)
+		}
+	}
+}
+
+// prepareDictionaryKeySizes uses the existing iterator sizing frame. It does
+// not capture the flat add closure or allocate another row-size vector.
+func (itr *strHashmapIterator) prepareDictionaryKeySizes(vec *vector.Vector, start, count, prefix int, withDomain bool) error {
+	const maxInt = int(^uint(0) >> 1)
+	var strings vector.VarlenaReadView
+	if vec.GetType().IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		size := 0
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			size = 1
+		} else if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				size = 1
+			}
+		} else {
+			if vec.GetType().IsFixedLen() {
+				size = prefix + vec.GetType().TypeSize()
+			} else {
+				physical := int(strings.Selection[row])
+				if strings.Constant {
+					physical = 0
+				}
+				value := strings.Values[physical].GetByteSlice(strings.Area)
+				size = prefix + 4 + keycodec.CanonicalValueSize(*vec.GetType(), value)
+			}
+		}
+		if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		itr.zValues[i] += int64(size)
+	}
+	return nil
 }
