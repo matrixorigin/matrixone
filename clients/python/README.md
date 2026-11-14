@@ -778,7 +778,8 @@ if client.check_version_compatibility('3.0.0', '>='):
 ## MatrixOne Version Support
 
 The SDK targets published releases; main is validated separately. On official
-4.2.8 it uses equivalent SQL and metadata adaptation where possible, including
+4.2.8 and 4.2.8-hotfix-20261114 it uses equivalent SQL and metadata adaptation
+where possible, including
 numeric/dollar aliases, BOOL/view reflection, SET member case and Arrow-input
 uploads through Parquet. Adopt an existing engine with `Client.from_engine()`
 to enable SDK reflection behavior.
@@ -792,6 +793,17 @@ schema/branch/Parquet operations. See the
 [release compatibility map](docs/design/release-quality.md#maintaining-version-contracts)
 for exact boundaries and explicit alternatives. A passing SDK compatibility
 suite does not imply support for every native feature.
+
+Released 4.2.8 servers also need the buffered TLS handshake repair
+[#32748](https://github.com/matrixorigin/matrixone/pull/32748). The SDK retains
+required TLS and certificate/hostname checks; it reports conditional repair
+advice on known pre-authentication TLS EOF/timeouts, without reconnecting.
+The 20261114 Linux ZIP omits gojieba dictionaries; install that release's matching
+`dict/` beside `mo-service` (or configure `MO_JIEBA_DICT_DIR`) and restart affected
+CNs. Packaging repair: [CI #478](https://github.com/matrixorigin/CI/pull/478).
+The SDK preserves the native missing-dictionary error with installation advice.
+Hotfix version detection compares the base semantic version; compatibility
+profiles and test qualification still use the complete banner and git revision.
 
 Version parsing recognizes these formats; a parsed version alone does not prove
 feature availability:

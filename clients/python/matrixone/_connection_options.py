@@ -6,6 +6,7 @@
 import json
 import math
 import ssl
+import socket
 
 import pymysql
 from pymysql.constants import CLIENT
@@ -127,7 +128,24 @@ def tls_options(params):
     return {}
 
 
-class TLSRequiredConnection(pymysql.connections.Connection):
+class TLSConnection(pymysql.connections.Connection):
+    """Retain driver TLS behavior while identifying known pre-auth failures."""
+
+    def _request_authentication(self):
+        try:
+            return super()._request_authentication()
+        except (ssl.SSLEOFError, TimeoutError, socket.timeout) as error:
+            from ._release_compat import release_for_banner
+
+            version = release_for_banner(getattr(self, 'server_version', None))
+            # PyMySQL marks _secure immediately after TLS wrapping succeeds.
+            # Reuse that owner instead of duplicating authentication framing.
+            if version and self.ssl and self.server_capabilities & CLIENT.SSL and not self._secure:
+                error._matrixone_tls_release = version
+            raise
+
+
+class TLSRequiredConnection(TLSConnection):
     """Fail before authentication when a peer cannot negotiate required TLS.
 
     Older supported PyMySQL versions otherwise silently fall back to plaintext.
@@ -137,8 +155,27 @@ class TLSRequiredConnection(pymysql.connections.Connection):
     def _request_authentication(self):
         if not self.server_capabilities & CLIENT.SSL:
             raise pymysql.err.OperationalError(2026, 'TLS is required but the server does not advertise TLS')
+        if not self.ssl:
+            raise pymysql.err.OperationalError(2026, 'TLS is required but TLS negotiation was disabled')
         return super()._request_authentication()
 
 
-def connect_required_tls(dialect, record, args, params):
-    return TLSRequiredConnection(*args, **params)
+def connect_tls(dialect, record, args, params, *, required=False):
+    if params.get('ssl_disabled'):
+        if required:
+            raise pymysql.err.OperationalError(2026, 'TLS is required but TLS negotiation was disabled')
+        return dialect.connect(*args, **params)
+    try:
+        return (TLSRequiredConnection if required else TLSConnection)(*args, **params)
+    except pymysql.err.OperationalError as error:
+        original = getattr(error, 'original_exception', None)
+        version = getattr(original, '_matrixone_tls_release', None)
+        if version and len(error.args) >= 2:
+            advice = (
+                ' TLS negotiation failed before authentication on MatrixOne v'
+                + version
+                + '. Check whether the server contains the buffered TLS handshake fix (#29996). '
+                'TLS settings and certificate verification are retained.'
+            )
+            error.args = (error.args[0], str(error.args[1]) + advice, *error.args[2:])
+        raise

@@ -43,7 +43,19 @@ def mysql_engine(connection_params):
 
 @pytest.mark.online
 def test_describe_view_reflection_without_boolean_aliases(mysql_engine, connection_params, record_property):
-    """The three scalar types from #30045 must reflect without a BOOL workaround."""
+    """Keep the native scalar control separate from SDK-owned reflection."""
+
+    def assert_columns(columns):
+        assert [column['name'] for column in columns] == ['i', 's', 'a']
+        assert isinstance(columns[0]['type'], sa.Integer)
+        assert isinstance(columns[1]['type'], sa.String)
+        assert columns[1]['type'].length == 8
+        assert isinstance(columns[2]['type'], sa.Numeric)
+        assert (columns[2]['type'].precision, columns[2]['type'].scale) == (24, 6)
+        assert all(column['nullable'] for column in columns)
+        assert all(column['default'] is None for column in columns)
+        assert not any(isinstance(column['type'], sa.types.NullType) for column in columns)
+
     database = connection_params[4]
     suffix = uuid.uuid4().hex
     source, view = [f'describe_reflection_{kind}_{suffix}' for kind in ('source', 'view')]
@@ -52,33 +64,35 @@ def test_describe_view_reflection_without_boolean_aliases(mysql_engine, connecti
         with mysql_engine.begin() as conn:
             conn.exec_driver_sql(f'CREATE TABLE `{source}` (i INT, s VARCHAR(8), a DECIMAL(24,6))')
             conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT * FROM `{source}`')
-        if release_428(mysql_engine):
-            # Plain MySQL is a native control; SDK adoption is the supported
-            # compatibility entry and preserves the actual engine/pool owner.
-            with warnings.catch_warnings(record=True) as native_warnings:
-                warnings.simplefilter('always', sa.exc.SAWarning)
-                with pytest.raises(TypeError, match='NullType'):
-                    sa.inspect(mysql_engine).get_columns(view, schema=database)
-            assert native_warnings
-            Client.from_engine(mysql_engine)
-            record_property(
-                'matrixone.feature.standard_mysql_view_reflection', 'equivalent-implementation:SDK-adopted-dialect'
-            )
+        # Native MySQL dialects cannot parse valid uppercase DESCRIBE types
+        # on some 4.2 builds (#32746). Verify that exact control, then exercise
+        # the SDK adoption contract on every source/release without global fixes.
+        with warnings.catch_warnings(record=True) as native_warnings:
+            warnings.simplefilter('always', sa.exc.SAWarning)
+            assert_columns(sa.inspect(mysql_engine).get_columns(source, schema=database))
+            try:
+                native_view = sa.inspect(mysql_engine).get_columns(view, schema=database)
+            except TypeError as error:
+                assert 'NullType' in str(error) and native_warnings
+                with mysql_engine.connect() as conn:
+                    rows = conn.exec_driver_sql(f'DESCRIBE `{view}`').all()
+                assert {row[0]: row[1] for row in rows} == {'i': 'INT(32)', 's': 'VARCHAR(8)', 'a': 'DECIMAL(24,6)'}
+                record_property(
+                    'matrixone.feature.standard_mysql_view_reflection',
+                    'equivalent-implementation:SDK-adopted-dialect;native-uppercase-control',
+                )
+            else:
+                assert_columns(native_view)
+                assert not native_warnings
+                record_property('matrixone.feature.standard_mysql_view_reflection', 'supported')
+        Client.from_engine(mysql_engine)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', sa.exc.SAWarning)
             inspector = sa.inspect(mysql_engine)
             assert view in inspector.get_view_names(schema=database)
             for name in (source, view):
                 columns = inspector.get_columns(name, schema=database)
-                assert [column['name'] for column in columns] == ['i', 's', 'a']
-                assert isinstance(columns[0]['type'], sa.Integer)
-                assert isinstance(columns[1]['type'], sa.String)
-                assert columns[1]['type'].length == 8
-                assert isinstance(columns[2]['type'], sa.Numeric)
-                assert (columns[2]['type'].precision, columns[2]['type'].scale) == (24, 6)
-                assert all(column['nullable'] for column in columns)
-                assert all(column['default'] is None for column in columns)
-                assert not any(isinstance(column['type'], sa.types.NullType) for column in columns)
+                assert_columns(columns)
         assert not [warning for warning in caught if issubclass(warning.category, sa.exc.SAWarning)]
     finally:
         with mysql_engine.begin() as conn:
@@ -112,8 +126,7 @@ def test_boolean_metadata_reflection(mysql_engine, connection_params, record_pro
                 f"CAST('Up' AS VARCHAR(20)) AS label FROM `{source}`"
             )
 
-        if legacy:
-            Client.from_engine(engine)
+        Client.from_engine(engine)
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', sa.exc.SAWarning)
@@ -224,8 +237,7 @@ def test_enum_set_show_create_replay(mysql_engine, connection_params, sql_mode, 
     # backslashes in ENUM domains, and MO does not advertise the NBE bind flag.
     engine = mysql_engine
     legacy = release_428(engine)
-    if legacy:
-        Client.from_engine(engine)
+    Client.from_engine(engine)
     database = connection_params[4]
     source = 'enum_replay_' + uuid.uuid4().hex
     clone = source + '_clone'
@@ -357,8 +369,7 @@ def test_sdk_set_reflection_uses_current_account_catalog(mysql_engine, connectio
 def test_empty_enum_metadata_replay(mysql_engine, connection_params, record_property):
     engine = mysql_engine
     legacy = release_428(engine)
-    if legacy:
-        Client.from_engine(engine)
+    Client.from_engine(engine)
     database = connection_params[4]
     source = 'empty_enum_' + uuid.uuid4().hex
     clone, view = source + '_clone', source + '_view'

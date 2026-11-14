@@ -171,10 +171,8 @@ def install_guard(dbapi_connection):
 
 def configure_engine(engine, option, required_tls=False):
     asynchronous = engine.dialect.driver == 'aiomysql'
-    if option is not None and not required_tls and not asynchronous:
-        return
     from sqlalchemy import event
-    from ._connection_options import connect_required_tls
+    from ._connection_options import connect_tls
 
     def connect(dialect, record, args, kwargs):
         if asynchronous and option is not True:
@@ -199,7 +197,9 @@ def configure_engine(engine, option, required_tls=False):
 
             return AsyncAdapt_aiomysql_connection(dialect.dbapi, await_only(establish()))
         connection = (
-            connect_required_tls(dialect, record, args, kwargs) if required_tls else dialect.connect(*args, **kwargs)
+            dialect.connect(*args, **kwargs)
+            if asynchronous
+            else connect_tls(dialect, record, args, kwargs, required=required_tls)
         )
         if option is None:
             install_guard(connection)

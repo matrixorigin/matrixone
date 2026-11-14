@@ -621,7 +621,16 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
   }
   assert.match(offline, /- name: Run required offline contracts without skips\n        run: python scripts\/run_contracts\.py --output offline-contracts/);
-  assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
+  assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$MO_SDK_TARGET" --output online-contracts/);
+  const targetExpression = sections.online.match(/^      MO_SDK_TARGET: \$\{\{ (.*) \}\}$/m)[1];
+  for (const [server, version, expected] of [
+    ['4.2.8', '', '4.2.8'],
+    ['4.2.8', '4.2.8-hotfix-20261114', '4.2.8-hotfix-20261114'],
+    ['current-source', '4.2.8-hotfix-20261114', 'current-source'],
+  ]) assert.equal(runInNewContext(targetExpression, {
+    matrix: { server }, vars: { MO_SDK_EXPECT_VERSION: version },
+  }), expected);
+  assert.doesNotMatch(sections.online, /SDK_SERVER_TARGET:/);
   const contractRunner = readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8');
   const requiredSelection = contractRunner.match(/^FULL_SELECTION = \[([\s\S]*?)^\]/m);
   assert.ok(requiredSelection, 'the required server selection must be explicit');

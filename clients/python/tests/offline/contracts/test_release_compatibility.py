@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import QueuePool
 
-from matrixone._release_compat import _before_cursor_execute, _handle_error, _official_release
+from matrixone._release_compat import _before_cursor_execute, _handle_error, _qualified_release
 from matrixone.exceptions import QueryError
 
 
@@ -36,7 +36,16 @@ def test_only_qualified_physical_identity_selects_profile(banner):
     sql = 'CREATE TABLE t(id INT, v VECF8(4))'
     assert _before_cursor_execute(c, None, sql, (), None, False) == (sql, ())
     c.connection.driver_connection.server_version = '8.0.30-MatrixOne-v4.2.8'
-    assert _official_release(c)
+    assert _qualified_release(c)
+
+
+@pytest.mark.parametrize('version', ['4.2.8-hotfix-20261114', '4.2.8-hotfix'])
+def test_qualified_hotfix_keeps_its_exact_identity_in_diagnostic(version):
+    c = connection('8.0.30-MatrixOne-v' + version)
+    with pytest.raises(QueryError) as rejected:
+        _before_cursor_execute(c, None, 'CREATE TABLE t(v VECF4(4))', (), None, False)
+    assert rejected.value.backend_version == version
+    assert 'MatrixOne v' + version + ' compatibility:' in str(rejected.value)
 
 
 @pytest.mark.parametrize(
@@ -202,6 +211,12 @@ def test_numeric_portability_preserves_data_parameters_and_noncode(sql, expected
             'schema_serialization',
         ),
         ('LOAD DATA INFILE', 20301, 'invalid input: parquet value +Inf overflows FLOAT', 'parquet_float32_infinity'),
+        (
+            'INSERT INTO t VALUES(1)',
+            20101,
+            'internal error: jieba dictionary not available: jieba.dict.utf8: stat jieba.dict.utf8: no such file or directory',
+            'jieba_dictionary',
+        ),
     ],
 )
 def test_native_rejection_keeps_real_source_and_actionable_hint(sql, code, message, feature):
@@ -224,6 +239,8 @@ def test_native_rejection_keeps_real_source_and_actionable_hint(sql, code, messa
         (2013, 'connection lost'),
         (1105, 'unrelated syntax error'),
         (20301, 'invalid input: parquet value 1e99 overflows FLOAT'),
+        (20101, 'internal error: unrelated dictionary failure'),
+        (2013, 'internal error: jieba dictionary not available: jieba.dict.utf8'),
     ],
 )
 def test_other_native_failures_are_never_qualified_as_release_limitations(code, message):
@@ -244,7 +261,7 @@ def test_engine_local_rejection_has_no_catalog_effect_and_pool_is_reusable(monke
     engine = create_engine('sqlite://', poolclass=QueuePool, pool_size=1, max_overflow=0)
     _release_compat.install_release_compatibility(engine)
     _release_compat.install_release_compatibility(engine)
-    monkeypatch.setattr(_release_compat, '_official_release', lambda conn: True)
+    monkeypatch.setattr(_release_compat, '_release_version', lambda conn: '4.2.8')
     try:
         with pytest.raises(QueryError, match='VECF8'):
             with engine.connect() as conn:

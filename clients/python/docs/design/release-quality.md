@@ -12,23 +12,33 @@ possible, give a specific actionable SDK error and verify its effects. Do not
 silently change ASYNC to sync, rename columns, widen types, retry writes or
 replace branch deletion with DROP. A generic native error is not compatibility.
 
-The current qualified release profile is official **v4.2.8**, revision
+Qualified release profiles include official **v4.2.8**, revision
 `10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`, immutable image
-`matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`.
+`matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`,
+and official **v4.2.8-hotfix-20261114**, revision
+`c66030006fcc30f3f987be34c5981ab5c1d5bdf0`. The latter Linux/x86_64 ZIP has
+SHA-256 `2c309a2112c83b969eb6ed362ab5af53de3ef9f52f138043ca7b7569402a5616`.
+Both immutable releases retain the native TLS defect described below.
+The maintained `v4.2.8-hotfix` source branch has a separate release-family
+profile and mandatory test revision pin; its fixed candidate is not a published
+release image. Use its real branch identity, including the initial `v`, when
+building with `MO_VERSION=v4.2.8-hotfix` so the server retains the complete name.
 Runtime decisions read the **selected physical connection's handshake**;
 `MO_SDK_TARGET`, `MO_SDK_SOURCE_LINE` and caller version overrides are not runtime
-feature switches. Unknown/custom/source builds keep their own execution path
+feature switches. Other unknown/custom/source builds keep their own execution path
 and require qualification. A custom patched build should advertise a distinct
 build/release identity. Do not guess an unpublished minimum fixed version.
 
-| Surface on official 4.2.8 | SDK behavior and usable alternative |
+| Surface on qualified 4.2.8 release-family profiles | SDK behavior and usable alternative |
 |---|---|
 | Numeric tokens adjacent to dollar aliases | Insert token-separating whitespace on SDK-managed SQL. Preserve values, aliases, bound parameters and export bytes. `execute_driver` keeps its exact SQL; use `execute` or supply whitespace explicitly. |
 | BOOL, uppercase view types, DATE display width and unsigned modifiers | Adopt the SDK dialect with `Client.from_engine(engine)` or use an SDK-created engine. Normalize metadata spelling, preserving native types, dimensions, values and processors. Plain MySQL engines remain owned by SQLAlchemy. |
 | SET member case in source tables | Restore the original native catalog domain on the same connection, scoped by current account and the server's table-name case rules. Preserve SET options, binding and result processing. Do not lowercase domain values. |
 | View ENUM/SET provenance | Preserve actual native VARCHAR metadata when the old view already lost its domain. If metadata cannot construct a usable type, raise an actionable metadata error. Declare types from the known source model explicitly, or recreate the view on a fixed release; the SDK cannot invent lost provenance. |
 | Arrow-input upload | Use checked Parquet staging after the exact native Arrow-format rejection. All public upload value/transaction/streaming/cancellation/cleanup assertions still execute. Native Arrow LOAD remains unsupported. |
-| TLS negotiation | Original 4.2.8 has a native buffered-handshake defect: an independent SSLRequest/ClientHello coalescing control times out before authentication. A later SDK sweep also recorded intermittent TLS EOF setup errors; their exact relationship to that defect is not established. Use a server containing the native TLS fix in #32723. The SDK does not silently disable TLS, relax verification or turn connection errors into passing functional tests. |
+| TLS negotiation | The released frontend can lose buffered ClientHello bytes. The SDK preserves native EOF/timeout failures and adds conditional advice before authentication; it never retries, disables TLS or relaxes verification. The root repair is backported to the actual hotfix branch in [#32748](https://github.com/matrixorigin/matrixone/pull/32748). The 4.2-dev companion alone does not modify this release branch. A verified single-write protocol control passes on the fixed candidate. |
+| gojieba dictionaries | The published 20261114 Linux ZIP lacks runtime dictionaries. An exact native missing-dictionary error keeps its original errno/cause and gains installation advice. Install matching release dictionaries beside the binary or configure `MO_JIEBA_DICT_DIR`, then restart affected CNs. [CI #478](https://github.com/matrixorigin/CI/pull/478) repairs both Linux archives; no parser, input text or expected search value is substituted. |
+| Hotfix version detection | Parse the base X.Y.Z for ordinary version comparisons, retaining the full physical banner for compatibility decisions and exact test identity. A dated hotfix and a source candidate cannot qualify as each other. |
 | Special FULLTEXT identifiers and ASYNC gojieba | Reject the known unsafe definition before dispatch with the release, feature and advice. Keep ordinary FULLTEXT and ASYNC indexing supported. Explicitly choose ordinary identifiers or synchronous parsing only if those meet the application's needs; otherwise upgrade to a release containing #32723. An unrelated quoted column is permitted. Only ASYNC and gojieba options of the same index select the parser limitation; a column/index named `async` and options of separate indexes do not. |
 | Apostrophe Stage names/values | Reject unsafe catalog serialization before dispatch, including bound values. Percent-encode URI path characters where appropriate; quoted credentials/comments require a fixed server. No input is removed or changed silently. |
 | CREATE STAGE with enable=False | Reject before creation: the release ignores the option. Explicit CREATE-enabled followed by ALTER-disabled is usable only when an initially enabled Stage is acceptable; otherwise a fixed release is required. |
@@ -240,6 +250,46 @@ targets and runner count remain unchanged. Online workflow jobs require their
 configured disposable server; skipped jobs provide no online proof.
 
 ### Current validation round
+
+Latest main is frozen at `625865c470631f33da52793a2e2766d63e5a316e`, a fresh
+Go 1.27.1 build with binary SHA-256
+`214ef3bb7da119bf84afb353aef65e5eeab0cf018a3c17801c11d533fc9bed03`.
+The actual release-branch TLS candidate is [#32748](https://github.com/matrixorigin/matrixone/pull/32748),
+`dbd8358db6258b59d66d874a21801cbac0f43712` on published hotfix source
+`c66030006fc`, Go 1.26.4, full banner `8.0.30-MatrixOne-v4.2.8-hotfix`,
+binary SHA-256 `e16a080574bcc8a8ef7d3ddcaa990f0a86a45ce64a295023309f471261ae2688`.
+It contains the complete existing TLS fix, without the unrelated 4.2-dev
+capability backports. Its release-family compatibility tests therefore retain
+the released-server alternatives and precise limitations.
+
+| Target / selection | Terminal result |
+|---|---|
+| Latest main `625865c4706` | Complete online 1298/1298 and analytics 340/340; zero failures/errors/skips. The final hotfix parsing addition is renewed through all 12 online version tests. |
+| Fixed actual hotfix source `dbd8358db62` | Complete online 1298/1298 and analytics 340/340; zero failures/errors/skips. Required TLS, certificate/hostname rejection, metadata and unchanged Chinese parser positives remain active. |
+| Native TLS boundary | All nine TLS/disconnect roots pass normally and under race; complete frontend, gofmt, vet and scoped lint pass. An SDK-independent verified TLS 1.3 single-write SSLRequest/ClientHello control authenticates SELECT 1. |
+| Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | Complete offline: 3458, 3454, 3462; zero failures/errors/skips. |
+| Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | Complete offline: 3458, 3454; zero failures/errors/skips. |
+| Python 3.11 / SQLAlchemy 2.1.8 | Complete offline: 3462; zero failures/errors/skips. |
+| Python 3.12 / SQLAlchemy 2.0.57; exact PyMySQL 1.2.3 floor tuple | Complete offline: 3454 each; zero failures/errors/skips. |
+| Published hotfix dictionary installation | Original ZIP and binary hashes retained. Before installation, the exact native error gains SDK advice and the failed insert leaves zero rows. After installing the same c660300 source's dictionaries and restarting the owned service, the identical Chinese text/parser/query returns `(1, 7)`. This separate plaintext packaging probe does not qualify the published binary's TLS. |
+| Installed package / oldest supported Python | Wheel and sdist pass Twine; all 63 runtime modules byte-match source. Python 3.8/SQLAlchemy 1.4 and Python 3.9/SQLAlchemy 2.0 each pass 147 installed-wheel checks without Arrow, failures or skips, including TLS diagnostics and hotfix detection. |
+| CI contracts / collection | All 50 scope/routing contracts pass. Actual 1638 executed scenarios partition into 207 required and 1431 extended, without duplicates or omissions; the existing two online targets and runner count remain unchanged. |
+| Archive workflow | [CI #478](https://github.com/matrixorigin/CI/pull/478) executes both real Linux staging blocks and ZIP checks: six complete/fallback/old-release layout subcases and ten missing-file rejection subcases pass; actionlint passes. |
+
+The earlier full candidate sweep exposed eight version-detection failures:
+`-hotfix` was not recognized, leaving the SDK backend version unset. Those
+original assertions now pass after fixing the shared parser. The failed sweep
+is retained, alongside the earlier published-release TLS failures. No skip,
+expected generic error, retry, TLS downgrade or increased timeout turns them green.
+
+The final `socket.timeout` catch also covers Python 3.8/3.9, where it is distinct
+from built-in TimeoutError. On every full-matrix Python 3.10+ runtime it is the
+same class, preserving the recorded sweep semantics. Installed core and focused
+legacy-timeout tests are renewed separately. Native MySQL view metadata
+controls retain their exact uppercase-type failure; all original SDK reflection,
+value and replay assertions run through SDK adoption on every target.
+
+### Previous validation round
 
 Release: official v4.2.8 above. Main: frozen at
 `71390fb3c16f986b5cbe77e44ea0e5b7f5dbcff6`, fetched and merged in this round,

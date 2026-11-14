@@ -54,12 +54,16 @@ worker, cache or retry. The successful path uses the driver unchanged.
 
 Qualify published 4.2.8 and `4.2.8-hotfix-20261114` by their exact banner,
 revision and asset hash. The maintained source branch identifies itself as
-`v4.2.8-hotfix`; its release-family SQL compatibility profile is separate from
-4.2-dev and main. Source-candidate results must pin the real git revision and
+`v4.2.8-hotfix` (build with that initial `v` to retain the suffix); its
+release-family SQL compatibility profile is separate from 4.2-dev and main. Source-candidate results must pin the real git revision and
 be reported as candidate evidence, never as tests of an immutable published
 image. Test configuration cannot select runtime feature behavior.
 
 The published ZIP also omitted the dictionaries required by its tokenizer.
+The existing release error classifier adds installation advice only for the
+exact native missing-dictionary diagnostic and errno, retaining the original
+cause and unknown commit/acknowledgement status. The original Chinese search
+fixture must succeed once its matching server data is installed.
 Use the same release source's dictionary assets for validation and fix bundle
 packaging to include the standard sibling `dict` directory. Keep the original
 ZIP and binary hashes; do not describe an installed missing dependency as an

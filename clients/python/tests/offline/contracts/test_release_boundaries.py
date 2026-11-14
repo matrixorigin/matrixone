@@ -660,7 +660,7 @@ async def test_async_driver_adoption_keeps_owner_and_compiles_snapshots():
         await engine.dispose()
 
 
-@pytest.mark.parametrize('version', ['4.1.0', '4.1.6', '4.2.0', '4.2.6'])
+@pytest.mark.parametrize('version', ['4.1.0', '4.1.6', '4.2.0', '4.2.6', '4.2.8-hotfix-20261114'])
 def test_release_target_requires_exact_observed_identity(version):
     assert release_target(version) == version
     validate_server_identity('8.0.30-MatrixOne-v' + version, 'gitsha', version)
@@ -674,6 +674,11 @@ def test_source_identity_requires_revision_and_banner():
     validate_server_identity('8.0.30-MatrixOne-v20261026', 'abcdef', 'v20261026', 'abc')
     with pytest.raises(ValueError, match='Source identity'):
         validate_server_identity('8.0.30-MatrixOne-v20261026', 'abcdef', 'v20261026')
+
+
+def test_hotfix_cannot_be_reported_as_the_original_release():
+    with pytest.raises(ValueError, match='differs'):
+        validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix-20261114', 'c660300', '4.2.8')
 
 
 def test_full_server_contracts_require_explicit_disposable_opt_in(tmp_path):
@@ -1104,3 +1109,9 @@ def test_vector_ddl_missing_default_schema_fails_before_transport(mysql_transpor
     error = caught.value.orig if isinstance(caught.value, sa.exc.StatementError) else caught.value
     assert isinstance(error, sa.exc.CompileError)
     assert wire == []
+
+
+def test_source_release_branch_identity_cannot_match_a_dated_published_hotfix():
+    validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix', 'abcdef', '4.2.8-hotfix', 'abc')
+    with pytest.raises(ValueError, match='Source identity'):
+        validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix-20261114', 'abcdef', '4.2.8-hotfix', 'abc')
