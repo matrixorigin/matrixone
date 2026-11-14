@@ -777,7 +777,24 @@ if client.check_version_compatibility('3.0.0', '>='):
 
 ## MatrixOne Version Support
 
-The SDK automatically detects MatrixOne backend versions and handles compatibility:
+The SDK targets published releases; main is validated separately. On official
+4.2.8 it uses equivalent SQL and metadata adaptation where possible, including
+numeric/dollar aliases, BOOL/view reflection, SET member case and Arrow-input
+uploads through Parquet. Adopt an existing engine with `Client.from_engine()`
+to enable SDK reflection behavior.
+
+When equivalent behavior is unavailable, the SDK reports the affected release,
+feature and alternative. It does not silently rename identifiers, switch ASYNC
+to sync, widen FLOAT32 to FLOAT64 or replace branch deletion with DROP. Known
+limitations include special FULLTEXT identifiers/ASYNC parser combinations,
+quoted Stage values, disabled Stage creation, VECF4/VECF8 and some native
+schema/branch/Parquet operations. See the
+[release compatibility map](docs/design/release-quality.md#maintaining-version-contracts)
+for exact boundaries and explicit alternatives. A passing SDK compatibility
+suite does not imply support for every native feature.
+
+Version parsing recognizes these formats; a parsed version alone does not prove
+feature availability:
 
 - **Development Version**: `8.0.30-MatrixOne-v` → `999.0.0` (highest priority)
 - **Release Version**: `8.0.30-MatrixOne-v3.0.0` → `3.0.0`
@@ -786,7 +803,7 @@ The SDK automatically detects MatrixOne backend versions and handles compatibili
 ```python
 # Check if running development version
 if client.is_development_version():
-    print("Running development version - all features available")
+    print("Running a development build; qualify the capabilities you use")
 else:
     print(f"Running release version: {client.get_backend_version()}")
 ```

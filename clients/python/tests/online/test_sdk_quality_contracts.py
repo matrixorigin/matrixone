@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from tests.release_contracts import native_execute, release_428
 import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
@@ -57,13 +58,25 @@ async def test_export_numeric_dollar_alias_native_outcome(client, async_client, 
     native = f'SELECT 1.0$tag${alias}$tag$'
     exporter = client.export if kind == 'sync' else async_client.export
     try:
+        if release_428(client):
+            import pymysql
+
+            with pytest.raises(pymysql.MySQLError) as native_error:
+                native_execute(client, native)
+            assert native_error.value.args[0] == 20301 and 'does not exist' in str(native_error.value)
+            record_property(
+                'matrixone.feature.numeric_dollar_alias_export', 'equivalent-implementation:portable-whitespace'
+            )
+        else:
+            assert native_execute(client, native) == ((Decimal('1.0'),),)
         result = exporter.to_jsonl(server_path, native + ';')
         if inspect.isawaitable(result):
             await result
         # Native JSONLINE preserves DECIMAL values as lossless strings.
         assert client.execute(native).rows == [(Decimal('1.0'),)]
         assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{alias: '1.0'}]
-        record_property('matrixone.feature.numeric_dollar_alias_export', 'supported')
+        if not release_428(client):
+            record_property('matrixone.feature.numeric_dollar_alias_export', 'supported')
     finally:
         local_path.unlink(missing_ok=True)
 

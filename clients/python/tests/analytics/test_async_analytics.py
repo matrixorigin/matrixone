@@ -7,6 +7,7 @@ import os
 from decimal import Decimal
 
 import pytest
+from tests.release_contracts import assert_release_error, release_428
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from test_adversarial import hard_client, trial  # noqa: F401
@@ -287,11 +288,52 @@ async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_stage_release_status_alternative_is_explicit_and_usable(trial, async_client, kind, record_property):
+    import inspect
+    import uuid
+
+    async def resolve(value):
+        return await value if inspect.isawaitable(value) else value
+
+    client = trial.client if kind == 'sync' else async_client
+    name = 'sdk_status_' + uuid.uuid4().hex[:12]
+    source = trial.directory / 'ordinary.csv'
+    source.write_text('id,txt\n1,a\n2,b\n')
+    url = 'file://' + str(trial.directory) + '/'
+    owned = False
+    try:
+        if release_428(trial.client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(client.stage.create(name, url, enable=False))
+            assert_release_error(rejected.value, 'stage_create_disabled')
+            assert not trial.client.execute(
+                'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (name,)
+            ).rows
+            record_property(
+                'matrixone.feature.stage_create_disabled',
+                'unsupported-with-actionable-error;explicit-alter-alternative',
+            )
+        created = await resolve(client.stage.create(name, url, enable=True))
+        owned = True
+        assert created.status in ('in_use', 'enabled')
+        assert (await resolve(client.stage.alter(name, enable=False))).status == 'disabled'
+        assert (await resolve(client.stage.alter(name, enable=True))).status == 'enabled'
+        table = trial.table()
+        trial.client.execute('CREATE TABLE ' + table + '(id INT,txt VARCHAR(20))')
+        await resolve(client.load_data.read_csv_stage(name, source.name, table, skiprows=1))
+        assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [(1, 'a'), (2, 'b')]
+    finally:
+        if owned:
+            await resolve(client.stage.drop(name, if_exists=True))
+        assert not trial.client.execute('SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (name,)).rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
 @pytest.mark.parametrize('suffix', [" 'q' {space}", '/part', '%2F', 'ÉCOLE'])
 async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kind, suffix, record_property):
-    # Required behavior on every target. Official v4.2.8 fails until a new server
-    # release includes #32723; accepting QueryError would hide unrelated faults.
-    # See docs/design/release-quality.md#maintaining-version-contracts.
+    # A released-server limitation requires an exact SDK diagnostic before
+    # mutation; source builds still execute the complete positive scenario.
     import inspect
     import uuid
     from urllib.parse import quote
@@ -313,6 +355,22 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
     owned = False
     nested = False
     try:
+        if release_428(trial.client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(
+                    client.stage.create(
+                        name, url, credentials={'AWS_SECRET_KEY': credential}, comment=comment, enable=False
+                    )
+                )
+            assert_release_error(rejected.value, 'stage_literals')
+            assert not trial.client.execute(
+                'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (canonical,)
+            ).rows
+            assert trial.client.execute('SELECT 42').scalar() == 42
+            record_property(
+                'matrixone.feature.stage_literal_catalog_and_file_consumers', 'unsupported-with-actionable-error'
+            )
+            return
         try:
             await resolve(
                 client.stage.create(

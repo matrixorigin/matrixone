@@ -152,7 +152,7 @@ class Session(SQLAlchemySession):
             return self.connection().exec_driver_sql(
                 sql,
                 driver_parameters(params),
-                execution_options={'no_parameters': params is None},
+                execution_options={'no_parameters': params is None, '_matrixone_preserve_driver_sql': True},
             )
         except Exception as error:
             from .client import _classify_db_error
@@ -740,7 +740,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             return await connection.exec_driver_sql(
                 sql,
                 driver_parameters(params),
-                execution_options={'no_parameters': params is None},
+                execution_options={'no_parameters': params is None, '_matrixone_preserve_driver_sql': True},
             )
         except Exception as error:
             from .client import _classify_db_error

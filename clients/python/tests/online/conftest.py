@@ -21,10 +21,10 @@ This file ensures that fixtures are properly registered for online tests.
 """
 
 # Version maintenance: docs/design/release-quality.md#maintaining-version-contracts.
-# Required functional scenarios keep their positive assertions on every target.
-# Known v4.2.8 kernel failures require a fixed server release (#32723), rather
-# than release-specific passes. Optional unsupported types have their own exact
-# rejection controls; they do not certify positive feature support.
+# Released-server contracts require equivalent positive results or an exact SDK
+# diagnostic plus no-mutation/cleanup/alternative checks. Generic native errors
+# are not compatibility. Source builds retain full feature positives; unsupported
+# outcomes are reported separately from positive support.
 
 import pytest
 import pytest_asyncio

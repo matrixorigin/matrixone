@@ -1317,7 +1317,10 @@ class AsyncClient(BaseMatrixOneClient):
                             result = await conn.exec_driver_sql(
                                 escaped_sql,
                                 driver_parameters(params),
-                                execution_options={'no_parameters': params is None},
+                                execution_options={
+                                    'no_parameters': params is None,
+                                    '_matrixone_preserve_driver_sql': True,
+                                },
                             )
                         else:
                             result = await conn.exec_driver_sql(escaped_sql)

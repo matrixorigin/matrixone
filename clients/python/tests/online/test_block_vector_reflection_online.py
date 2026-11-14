@@ -9,6 +9,7 @@ import re
 from uuid import uuid4
 
 import pytest
+from tests.release_contracts import assert_release_error, native_execute, release_428
 import sqlalchemy as sa
 
 from matrixone.sqlalchemy_ext.vector_type import VectorType
@@ -37,11 +38,23 @@ def _block_vector_unavailable(client, kind):
 def _assert_native_type_unavailable(client, sql, table, kind, record_property):
     with pytest.raises(QueryError) as caught:
         client.execute(sql)
-    assert caught.value.errno == 1064 and 'syntax error' in str(caught.value).lower()
+    legacy = release_428(client)
+    if legacy:
+        import pymysql
+
+        assert_release_error(caught.value, kind)
+        with pytest.raises(pymysql.MySQLError) as native:
+            native_execute(client, sql)
+        assert native.value.args[0] == 1064 and 'syntax error' in str(native.value).lower()
+    else:
+        assert caught.value.errno == 1064 and 'syntax error' in str(caught.value).lower()
     assert client.execute(
         'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?', (table,)
     ).rows == [(0,)]
-    record_property('matrixone.feature.' + kind, 'native-type-unavailable:1064;positive-reflection-not-applicable')
+    record_property(
+        'matrixone.feature.' + kind,
+        'unsupported-with-actionable-error;native-type-unavailable:1064' if legacy else 'native-type-unavailable:1064',
+    )
 
 
 @pytest.mark.parametrize(

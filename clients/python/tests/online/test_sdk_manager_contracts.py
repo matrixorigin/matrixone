@@ -11,6 +11,7 @@ from pathlib import Path
 from decimal import Decimal
 
 import pytest
+from tests.release_contracts import assert_release_error, release_428
 import sqlalchemy as sa
 
 from matrixone import Client, SnapshotLevel
@@ -39,10 +40,20 @@ async def test_empty_database_branch_delete_native_contract(client, async_client
     try:
         client.execute(f'DATA BRANCH CREATE DATABASE {native} FROM {source}')
         await resolve(c.branch.create_database_branch(managed, source))
-        client.execute(str(delete_database_branch(native)))
-        await resolve(c.branch.delete_database_branch(managed))
-        expected = 0
-        record_property('matrixone.feature.empty_database_branch_delete', 'supported')
+        if release_428(client):
+            with pytest.raises(QueryError) as rejected:
+                client.execute(str(delete_database_branch(native)))
+            assert_release_error(rejected.value, 'branch_database_identity', 20101)
+            with pytest.raises(BranchError) as rejected:
+                await resolve(c.branch.delete_database_branch(managed))
+            assert_release_error(rejected.value, 'branch_database_identity', 20101)
+            expected = 1
+            record_property('matrixone.feature.empty_database_branch_delete', 'unsupported-with-actionable-error')
+        else:
+            client.execute(str(delete_database_branch(native)))
+            await resolve(c.branch.delete_database_branch(managed))
+            expected = 0
+            record_property('matrixone.feature.empty_database_branch_delete', 'supported')
         for target in (native, managed):
             assert (
                 client.execute(
@@ -333,6 +344,17 @@ async def test_fulltext_embedded_backtick_column(client, async_client, kind, rec
     client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, `tick``col` TEXT)')
     try:
         client.execute(f"INSERT INTO {table} VALUES (1, 'alpha beta'), (2, 'gamma')")
+        if release_428(client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(c.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)'))
+            assert_release_error(rejected.value, 'fulltext_identifiers')
+            assert client.execute(f'SELECT id, `tick``col` FROM {table} ORDER BY id').rows == [
+                (1, 'alpha beta'),
+                (2, 'gamma'),
+            ]
+            assert not [row for row in client.execute(f'SHOW INDEX FROM {table}').rows if row[2] == 'ft_idx']
+            record_property('matrixone.feature.fulltext_embedded_backtick', 'unsupported-with-actionable-error')
+            return
         client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
         predicate = boolean_match('tick`col').must('alpha').compile()
         assert (await resolve(c.execute(f'SELECT id FROM {table} WHERE {predicate}'))).rows == [(1,)]
@@ -357,9 +379,38 @@ async def test_async_fulltext_special_identifiers_catch_up(client, record_proper
     key, body, title = ('`key``id`', '`tick``col`', '`order`')
     record_property(
         'matrixone.feature.async_fulltext_quoted_identifiers',
-        'supported',
+        'unsupported-with-actionable-error' if release_428(client) else 'supported',
     )
     try:
+        if release_428(client):
+            for ddl, feature, target in [
+                (
+                    f'CREATE TABLE {table} ({key} BIGINT PRIMARY KEY, {body} TEXT, '
+                    f'{title} TEXT, FULLTEXT ft_idx ({body}, {title}) ASYNC)',
+                    'fulltext_identifiers',
+                    table,
+                ),
+                (
+                    f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
+                    'FULLTEXT ft_idx(body) WITH PARSER gojieba ASYNC)',
+                    'async_fulltext_parser',
+                    parser_table,
+                ),
+            ]:
+                with pytest.raises(QueryError) as rejected:
+                    client.execute(ddl)
+                assert_release_error(rejected.value, feature)
+                assert not client.execute('SHOW TABLES LIKE ?', (target,)).rows
+                record_property('matrixone.feature.' + feature, 'unsupported-with-actionable-error')
+            # Explicitly exercise the documented alternative, retaining the
+            # original Chinese parser data without claiming ASYNC support.
+            client.execute(
+                f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
+                'FULLTEXT ft_idx(body) WITH PARSER gojieba)'
+            )
+            client.execute(f"INSERT INTO {parser_table} VALUES (1, '苹果香蕉')")
+            assert client.execute(f"SELECT id FROM {parser_table} WHERE MATCH(body) AGAINST('苹果香蕉')").rows == [(1,)]
+            return
         client.execute(
             f'CREATE TABLE {table} ({key} BIGINT PRIMARY KEY, {body} TEXT, '
             f'{title} TEXT, FULLTEXT ft_idx ({body}, {title}) ASYNC)'

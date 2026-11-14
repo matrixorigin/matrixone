@@ -219,7 +219,9 @@ async def test_async_driver_tuple_with_collection_first_item_is_single_execution
     client = AsyncClient(logger=Mock(), sql_log_mode='off')
     client._engine = SimpleNamespace(begin=lambda: Begin())
     assert (await client.execute_driver(sql, params)).affected_rows == 1
-    connection.exec_driver_sql.assert_awaited_once_with(sql, [params], execution_options={'no_parameters': False})
+    connection.exec_driver_sql.assert_awaited_once_with(
+        sql, [params], execution_options={'no_parameters': False, '_matrixone_preserve_driver_sql': True}
+    )
 
 
 @pytest.mark.parametrize(

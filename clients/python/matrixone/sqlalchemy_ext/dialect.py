@@ -191,6 +191,9 @@ class MatrixOneDialect(MySQLDialect):
     def get_columns(self, connection, table_name, schema=None, **kw):
         """Get column information including vector types."""
         columns = super().get_columns(connection, table_name, schema, **kw)
+        from .._release_compat import restore_set_members
+
+        columns = restore_set_members(connection, columns, table_name, schema)
 
         # Process vector columns (case-insensitive)
         for column in columns:
@@ -202,6 +205,25 @@ class MatrixOneDialect(MySQLDialect):
                     column["type"] = self._create_vector_type("f64", column["type"])
 
         return columns
+
+    def _describe_table(self, connection, table, charset=None, full_name=None):
+        from .._release_compat import normalize_described_columns
+
+        rows = super()._describe_table(connection, table, charset=charset, full_name=full_name)
+        return normalize_described_columns(connection, rows)
+
+    def _show_create_table(self, connection, table, charset=None, full_name=None):
+        from .._release_compat import classify_release_error
+
+        try:
+            return super()._show_create_table(connection, table, charset=charset, full_name=full_name)
+        except sqlalchemy.exc.DBAPIError as error:
+            # MySQL reflection intentionally skips handle_error listeners.
+            # Keep the same release diagnostic at that driver-owned boundary.
+            classified = classify_release_error(connection, error.statement, error.orig, error)
+            if classified is not None:
+                raise classified from error
+            raise
 
     def _create_vector_type(self, precision: str, type_str: str):
         """Create appropriate vector type from string."""
@@ -402,6 +424,9 @@ def _prepare_compiler_statement(connection, statement, multiparams, params, exec
 
 
 def _install_compiler_contract(engine):
+    from .._release_compat import install_release_compatibility
+
+    install_release_compatibility(engine)
     # OptionEngine inherits its base engine's listeners. contains() avoids duplicate
     # registration on an exact engine; duplicate inherited calls are harmless.
     if not event.contains(engine, 'before_execute', _prepare_compiler_statement):

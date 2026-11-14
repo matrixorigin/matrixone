@@ -18,9 +18,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from tests.release_contracts import assert_release_error, release_428
 from sqlalchemy import event
 
 from matrixone import Client
+from matrixone.exceptions import QueryError
 from matrixone.analytics import _identifier
 
 pa = pytest.importorskip("pyarrow", minversion="18.0.0")
@@ -114,10 +116,23 @@ def test_decimal_extremes(trial, precision, scale):
 
 
 @pytest.mark.parametrize("dtype", [pa.float32(), pa.float64()], ids=str)
-def test_float_special_values(trial, dtype):
+def test_float_special_values(trial, dtype, record_property):
     values = [0.0, -0.0, 1.5, -1.5, math.inf, -math.inf, math.nan, None]
     data = pa.table({"v": pa.array(values, type=dtype)})
     name = trial.table()
+    if pa.types.is_float32(dtype) and release_428(trial.client):
+        with pytest.raises(QueryError) as rejected:
+            trial.analytics.upload_arrow(name, data, trial.directory, batch_size=1)
+        error = assert_release_error(rejected.value, 'parquet_float32_infinity', 20301)
+        assert error.committed is False and error.phase == 'load'
+        assert not trial.exists(name) and not list(trial.directory.glob('mo_py_arrow_*'))
+        assert trial.client._engine.pool.checkedout() == 0
+        # Widening is an explicit caller choice, retaining all special values.
+        data = data.cast(pa.schema([('v', pa.float64())]))
+        record_property(
+            'matrixone.feature.parquet_float32_infinity',
+            'unsupported-with-actionable-error;explicit-float64-alternative',
+        )
     trial.analytics.upload_arrow(name, data, trial.directory, batch_size=1)
     result = trial.rows(name, schema=data.schema)["v"].to_pylist()
     assert len(result) == len(values)
