@@ -1382,6 +1382,7 @@ func getTableStuff(
 		return
 	}
 	tblStuff.def.pkSeqnum = int(tarTblDef.Cols[tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName]].Seqnum)
+	tblStuff.def.pkIsSortKey = tblStuff.def.pkKind != fakeKind && tarTblDef.ClusterBy == nil
 	if tblStuff.def.pkKind == fakeKind {
 		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(tarTblDef)
 	}
@@ -3637,6 +3638,9 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	if pkFilter == nil {
 		return nil, "empty-mo-tables-cpkey-filter", nil
 	}
+	// mo_tables is sorted by this composite PK, unlike cluster-by data tables
+	// and rowid-sorted tombstone objects.
+	pkFilter.ObjectZMIsPK = true
 	pkFilter.ReplaySpec = &engine.PKReplaySpec{
 		Op:   function.EQUAL,
 		Keys: [][]byte{replayKey},

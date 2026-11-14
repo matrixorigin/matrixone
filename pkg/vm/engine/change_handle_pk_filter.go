@@ -44,6 +44,11 @@ type PKFilter struct {
 	// in the table schema, used for block-level ZoneMap access.
 	PrimarySeqnum int
 
+	// ObjectZMIsPK is true only when ObjectStats.SortKeyZoneMap describes the
+	// same user primary key encoded by Segments. Cluster-by keys and fake PKs
+	// cannot be compared with user-PK ranges even when their types match.
+	ObjectZMIsPK bool
+
 	// ReplaySpec carries an optional packed-PK predicate for in-memory row replay.
 	// When present, CollectChanges can use it to avoid scanning the whole
 	// partition-state row tree and instead iterate only the matching PK entries.
