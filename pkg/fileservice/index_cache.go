@@ -55,8 +55,8 @@ const (
 	DefaultIndexFileDiskCapacity = 8 << 30
 
 	// DefaultIndexFileIdleTTL is how long an index-file cache entry with no holds stays
-	// after its last use.
-	DefaultIndexFileIdleTTL = time.Hour
+	// after its last use; 0 turns idle collection off.
+	DefaultIndexFileIdleTTL time.Duration = 0
 
 	maxIndexFileGCInterval = 10 * time.Minute
 
@@ -468,12 +468,35 @@ func (c *IndexFileCache) CreateTempFile() (f *os.File, remove func(), err error)
 // Put publishes entry name with files. It returns false, with no error, when the entry
 // already exists or the cache could not be written; a source error is returned.
 func (c *IndexFileCache) Put(ctx context.Context, name string, files []IndexCacheFile) (bool, error) {
+	return c.put(ctx, name, 0, files)
+}
+
+// DeleteMark returns the mark of content read now, for PutUnlessDeleted.
+func (c *IndexFileCache) DeleteMark() uint64 {
+	return c.disk.readDeletes()
+}
+
+// PutUnlessDeleted is Put, except that it publishes nothing, and returns false, when entry
+// name was deleted after mark was taken.
+func (c *IndexFileCache) PutUnlessDeleted(ctx context.Context, name string, mark uint64, files []IndexCacheFile) (bool, error) {
+	return c.put(ctx, name, mark, files)
+}
+
+func (c *IndexFileCache) put(ctx context.Context, name string, mark uint64, files []IndexCacheFile) (bool, error) {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return false, err
 	}
 	if err := checkCacheDirFiles(files); err != nil {
 		return false, err
+	}
+	if mark > 0 {
+		stripe := c.disk.deletes.stripe(diskPath)
+		stripe.RLock()
+		defer stripe.RUnlock()
+		if c.disk.deletes.since(diskPath, mark-1) {
+			return false, nil
+		}
 	}
 	written, err := c.disk.putDir(ctx, diskPath, files)
 	if err != nil {
@@ -541,12 +564,14 @@ func (c *IndexFileCache) Hold(name string) (*IndexFileHold, error) {
 	return &IndexFileHold{release: func(used bool) { c.disk.releaseDir(diskPath, used) }}, nil
 }
 
-// Delete removes entry name at once, held or not; files already open stay readable.
+// Delete removes entry name at once, held or not; files already open stay readable. A
+// PutUnlessDeleted of content read before the delete publishes nothing.
 func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return err
 	}
+	c.disk.deletes.deleted(diskPath)
 	done, err := c.disk.startUpdateContext(ctx, diskPath)
 	if err != nil {
 		return err
