@@ -136,7 +136,25 @@ async def test_async_failed_probe_clears_engine(monkeypatch):
     engine.dispose.assert_awaited_once()
 
 
-def test_driver_receives_sync_timeout_and_charset(monkeypatch):
+def test_constructor_forwards_auto_commit_to_auto_connect(monkeypatch):
+    connect = Mock()
+    monkeypatch.setattr(Client, 'connect', connect)
+
+    Client(
+        host='localhost',
+        port=6001,
+        user='test',
+        password='synthetic',
+        database='test',
+        auto_commit=False,
+        logger=Mock(),
+    )
+
+    assert connect.call_args.kwargs['auto_commit'] is False
+
+
+@pytest.mark.parametrize('autocommit', [False, True])
+def test_driver_receives_sync_timeout_charset_and_autocommit(monkeypatch, autocommit):
     import matrixone.client as module
 
     client = Client(logger=Mock(), connection_timeout=12, query_timeout=7)
@@ -146,6 +164,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'user': 'test',
         'password': 'synthetic',
         'database': 'test',
+        'autocommit': autocommit,
         'connect_timeout': 12,
         'charset': 'utf8mb4',
         'ssl_mode': 'disabled',
@@ -157,6 +176,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
     monkeypatch.setattr(module, 'create_engine', factory)
     client._create_engine()
     assert factory.call_args.kwargs['connect_args'] == {
+        'autocommit': autocommit,
         'connect_timeout': 12,
         'read_timeout': 7,
         'write_timeout': 7,
@@ -167,7 +187,8 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
     }
 
 
-def test_async_driver_receives_connect_timeout(monkeypatch):
+@pytest.mark.parametrize('autocommit', [False, True])
+def test_async_driver_receives_connect_timeout_and_autocommit(monkeypatch, autocommit):
     import matrixone.async_client as module
 
     client = AsyncClient(logger=Mock(), connection_timeout=13)
@@ -177,6 +198,7 @@ def test_async_driver_receives_connect_timeout(monkeypatch):
         'user': 'test',
         'password': 'synthetic',
         'database': 'test',
+        'autocommit': autocommit,
         'connect_timeout': 13,
         'charset': 'utf8mb4',
     }
@@ -185,6 +207,7 @@ def test_async_driver_receives_connect_timeout(monkeypatch):
     engine = client._create_async_engine()
     try:
         assert factory.call_args.kwargs['connect_args']['connect_timeout'] == 13
+        assert factory.call_args.kwargs['connect_args']['autocommit'] is autocommit
     finally:
         import asyncio
 

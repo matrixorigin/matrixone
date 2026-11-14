@@ -440,6 +440,7 @@ class Client(BaseMatrixOneClient):
                 ssl_key=ssl_key,
                 account=account,
                 role=role,
+                auto_commit=auto_commit,
             )
 
     def get_capabilities(self, refresh=False):
@@ -773,6 +774,7 @@ class Client(BaseMatrixOneClient):
         from ._local_infile import connection_options, configure_engine
 
         connect_args = {
+            'autocommit': self._connection_params.get('autocommit', self.auto_commit),
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
