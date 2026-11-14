@@ -104,7 +104,9 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.session() as tx:
             # Test basic search within transaction
-            result = await tx.query("async_tx_docs").filter(boolean_match("title", "content").encourage("python")).execute()
+            result = (
+                await tx.query("async_tx_docs").filter(boolean_match("title", "content").encourage("python")).execute()
+            )
 
             assert result is not None
             rows = result.fetchall()
@@ -175,7 +177,8 @@ class TestAsyncTransactionSimpleQuery:
             # Test search with WHERE conditions within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
-                .filter(boolean_match("title", "content").encourage("programming"), "async_tx_docs.category = 'Programming'")
+                .filter(boolean_match("title", "content").encourage("programming"))
+                .filter("async_tx_docs.category = 'Programming'")
                 .execute()
             )
 
@@ -220,7 +223,8 @@ class TestAsyncTransactionSimpleQuery:
             # Test basic query functionality within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
-                .filter(boolean_match("title", "content").encourage("test"), "async_tx_docs.category = 'Testing'")
+                .filter(boolean_match("title", "content").encourage("test"))
+                .filter("async_tx_docs.category = 'Testing'")
                 .execute()
             )
 

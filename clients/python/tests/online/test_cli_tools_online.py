@@ -153,7 +153,7 @@ def test_table_regular_indexes(client):
             client.insert(
                 RegularIndexesTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "name": f"item_{i}",
                     "category": f"cat{i % 10}",
                     "status": i % 5,
@@ -195,7 +195,7 @@ def test_table_unique_indexes(client):
         for i in range(80):
             client.insert(
                 UniqueIndexesTable,
-                {"id": i, "email": f"user{i}@test.com", "username": f"user_{i}", "phone": f"1234567{i:04d}"},
+                {"id": i + 1, "email": f"user{i}@test.com", "username": f"user_{i}", "phone": f"1234567{i:04d}"},
             )
 
         # Flush table to ensure metadata is available
@@ -233,7 +233,7 @@ def test_table_mixed_indexes(client):
             client.insert(
                 MixedIndexesTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "email": f"user{i}@test.com",
                     "username": f"user{i}",
                     "category": f"cat{i % 5}",
@@ -277,7 +277,7 @@ def test_table_fulltext_index(client):
             client.insert(
                 FulltextIndexTable,
                 {
-                    "id": i,
+                    "id": i + 1,
                     "title": f"Article {i}",
                     "content": f"This is test content for article {i}. It contains various keywords and phrases.",
                 },
@@ -321,7 +321,7 @@ def test_table_ivf_index(client):
         for i in range(100):
             embedding = [random.random() for _ in range(128)]
             client.vector_ops.insert(
-                IVFIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "meta_info": f"metadata_{i}"}
+                IVFIndexTable, {"id": i + 1, "name": f"item_{i}", "embedding": embedding, "meta_info": f"metadata_{i}"}
             )
 
         # Flush table to ensure metadata is available
@@ -365,7 +365,8 @@ def test_table_hnsw_index(client):
         for i in range(50):
             embedding = [random.random() for _ in range(64)]
             client.vector_ops.insert(
-                HNSWIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "description": f"description_{i}"}
+                HNSWIndexTable,
+                {"id": i + 1, "name": f"item_{i}", "embedding": embedding, "description": f"description_{i}"},
             )
 
         # Flush table to ensure metadata is available
@@ -410,7 +411,9 @@ def test_table_with_tombstone(client):
 
         # Insert test data (100 rows) using SDK
         for i in range(100):
-            client.insert(TombstoneTable, {"id": i, "name": f"item_{i}", "value": i * 10, "category": f"cat{i % 10}"})
+            client.insert(
+                TombstoneTable, {"id": i + 1, "name": f"item_{i}", "value": i * 10, "category": f"cat{i % 10}"}
+            )
 
         # Flush table to ensure all data is written
         try:
@@ -419,12 +422,12 @@ def test_table_with_tombstone(client):
             pass
 
         # Delete some rows to create tombstone objects (delete first 20 rows)
-        client.query(TombstoneTable).filter(TombstoneTable.id < 20).delete()
+        client.query(TombstoneTable).filter(TombstoneTable.id <= 20).delete()
 
         # Update some rows to create more tombstone objects (rows 20-39, total 20 rows)
         from sqlalchemy import and_
 
-        client.query(TombstoneTable).filter(and_(TombstoneTable.id >= 20, TombstoneTable.id < 40)).update(
+        client.query(TombstoneTable).filter(and_(TombstoneTable.id > 20, TombstoneTable.id <= 40)).update(
             value=TombstoneTable.value + 1000
         ).execute()
 
@@ -558,9 +561,11 @@ class TestCLIUniqueIndexes:
             cli_instance.onecmd(f"verify_counts {test_table_unique_indexes}")
 
         output = f.getvalue()
-        assert "PASSED" in output or "80 rows" in output
-        # Should verify UNIQUE indexes
-        assert "__mo_index_unique_" in output or "uk_username" in output
+        assert "PASSED" in output
+        assert "80 rows" in output
+        # The public report uses logical key names and verifies each key's semantics.
+        for name in ('email', 'username', 'phone'):
+            assert f"{name}: 80 entries, expected 80" in output
 
     def test_show_table_stats_unique_all(self, cli_instance, test_table_unique_indexes):
         """Test show_table_stats -a on table with UNIQUE indexes"""
@@ -609,9 +614,10 @@ class TestCLIMixedIndexes:
             cli_instance.onecmd(f"verify_counts {test_table_mixed_indexes}")
 
         output = f.getvalue()
-        assert "PASSED" in output or "50 rows" in output
-        # Should verify both UNIQUE and regular indexes
-        assert "__mo_index_unique_" in output or "__mo_index_secondary_" in output
+        assert "PASSED" in output
+        assert "50 rows" in output
+        for name in ('email', 'username', 'code', 'idx_category', 'idx_status'):
+            assert f"{name}: 50 entries, expected 50" in output
 
     def test_show_all_indexes_includes_mixed(self, cli_instance, test_table_mixed_indexes):
         """Test that show_all_indexes includes table with mixed index types"""
@@ -667,7 +673,8 @@ class TestCLIFulltextIndex:
 
         output = f.getvalue()
         # Should list the table with fulltext index
-        assert test_table_fulltext_index in output or "Fulltext" in output
+        assert test_table_fulltext_index in output
+        assert "Fulltext" in output
 
     def test_show_table_stats_fulltext_all(self, cli_instance, test_table_fulltext_index):
         """Test show_table_stats -a on table with fulltext index"""
@@ -820,8 +827,11 @@ class TestCLITombstoneObjects:
         assert "Table Statistics" in output
         # Should show the table name and have some data
         assert test_table_with_tombstone in output
-        # Should have objects (main table should have 80 active rows after deletion)
-        assert "Objects:" in output or "80" in output
+        # metadata_scan reports physical rows before tombstones are applied.
+        # Check both physical components and the independent logical row count.
+        assert "Objects" in output and "Rows" in output
+        assert "tombstone" in output
+        assert cli_instance.client.execute(f"SELECT COUNT(*) FROM {test_table_with_tombstone}").scalar() == 80
 
     def test_show_table_stats_tombstone_detailed(self, cli_instance, test_table_with_tombstone):
         """Test show_table_stats -d -t for detailed tombstone view"""

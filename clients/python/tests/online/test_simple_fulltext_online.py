@@ -148,7 +148,9 @@ class TestSimpleFulltextOnline:
 
         # Create fulltext index
         try:
-            cls.client.execute("CREATE FULLTEXT INDEX ft_articles ON test_simple_fulltext_articles(title, content, tags)")
+            cls.client.execute(
+                "CREATE FULLTEXT INDEX ft_articles ON test_simple_fulltext_articles(title, content, tags)"
+            )
         except Exception as e:
             print(f"Fulltext index creation warning: {e}")
 
@@ -166,7 +168,7 @@ class TestSimpleFulltextOnline:
             Article.content,
             Article.category,
             Article.tags,
-            boolean_match("title", "content", "tags").encourage("python programming"),
+            boolean_match("title", "content", "tags").encourage("python", "programming"),
         ).execute()
 
         # Verify result structure
@@ -183,10 +185,14 @@ class TestSimpleFulltextOnline:
 
         # Verify base columns are correct
         for i, expected_col in enumerate(expected_base_columns):
-            assert results.columns[i] == expected_col, f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
+            assert (
+                results.columns[i] == expected_col
+            ), f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
 
         # Verify there's an additional MATCH column (for boolean_match)
-        assert len(results.columns) > len(expected_base_columns), "Should have additional MATCH column from boolean_match"
+        assert len(results.columns) > len(
+            expected_base_columns
+        ), "Should have additional MATCH column from boolean_match"
         match_column = results.columns[-1]
         assert "MATCH" in match_column, f"Last column should contain MATCH function, got: {match_column}"
 
@@ -200,7 +206,9 @@ class TestSimpleFulltextOnline:
             # Row can be tuple, list, or SQLAlchemy Row object
             assert hasattr(row, '__getitem__'), f"Row {i} should support indexing, got {type(row)}"
             assert hasattr(row, '__len__'), f"Row {i} should support len(), got {type(row)}"
-            assert len(row) == len(results.columns), f"Row {i} should have {len(results.columns)} columns, got {len(row)}"
+            assert len(row) == len(
+                results.columns
+            ), f"Row {i} should have {len(results.columns)} columns, got {len(row)}"
 
         # Verify content matches search criteria
         found_python = False
@@ -263,7 +271,7 @@ class TestSimpleFulltextOnline:
             Article.content,
             Article.category,
             Article.tags,
-            boolean_match("title", "content", "tags").encourage("machine learning").label("score"),
+            boolean_match("title", "content", "tags").encourage("machine", "learning").label("score"),
         ).execute()
 
         # Verify result structure
@@ -336,10 +344,8 @@ class TestSimpleFulltextOnline:
                 "test_simple_fulltext_articles.content",
                 "test_simple_fulltext_articles.tags",
             )
-            .filter(
-                boolean_match("title", "content", "tags").encourage("programming"),
-                "test_simple_fulltext_articles.category = 'Programming'",
-            )
+            .filter(boolean_match("title", "content", "tags").encourage("programming"))
+            .filter("test_simple_fulltext_articles.category = 'Programming'")
             .execute()
         )
 
@@ -354,7 +360,9 @@ class TestSimpleFulltextOnline:
             expected_columns
         ), f"Expected {len(expected_columns)} columns, got {len(results.columns)}"
         for i, expected_col in enumerate(expected_columns):
-            assert results.columns[i] == expected_col, f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
+            assert (
+                results.columns[i] == expected_col
+            ), f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
 
         # Verify we have results
         assert isinstance(results.rows, list), "Results.rows should be a list"
@@ -365,7 +373,9 @@ class TestSimpleFulltextOnline:
             # Row can be tuple, list, or SQLAlchemy Row object
             assert hasattr(row, '__getitem__'), f"Row {i} should support indexing, got {type(row)}"
             assert hasattr(row, '__len__'), f"Row {i} should support len(), got {type(row)}"
-            assert len(row) == len(expected_columns), f"Row {i} should have {len(expected_columns)} columns, got {len(row)}"
+            assert len(row) == len(
+                expected_columns
+            ), f"Row {i} should have {len(expected_columns)} columns, got {len(row)}"
 
         # Verify content matches search criteria (if we have results)
         if results.rows:
@@ -466,10 +476,8 @@ class TestSimpleFulltextOnline:
                 "test_simple_fulltext_articles.content",
                 "test_simple_fulltext_articles.tags",
             )
-            .filter(
-                boolean_match("title", "content", "tags").encourage("learning"),
-                "test_simple_fulltext_articles.category = 'AI'",
-            )
+            .filter(boolean_match("title", "content", "tags").encourage("learning"))
+            .filter("test_simple_fulltext_articles.category = 'AI'")
             .execute()
         )
 
@@ -480,10 +488,8 @@ class TestSimpleFulltextOnline:
                 "test_simple_fulltext_articles.content",
                 "test_simple_fulltext_articles.tags",
             )
-            .filter(
-                boolean_match("title", "content", "tags").encourage("programming"),
-                "test_simple_fulltext_articles.category = 'Programming'",
-            )
+            .filter(boolean_match("title", "content", "tags").encourage("programming"))
+            .filter("test_simple_fulltext_articles.category = 'Programming'")
             .execute()
         )
 
@@ -550,10 +556,8 @@ class TestSimpleFulltextOnline:
                 "test_simple_fulltext_articles.content",
                 "test_simple_fulltext_articles.tags",
             )
-            .filter(
-                boolean_match("title", "content", "tags").must("web").must_not("deprecated", "legacy"),
-                "test_simple_fulltext_articles.category = 'Programming'",
-            )
+            .filter(boolean_match("title", "content", "tags").must("web").must_not("deprecated", "legacy"))
+            .filter("test_simple_fulltext_articles.category = 'Programming'")
             .execute()
         )
 
@@ -568,7 +572,9 @@ class TestSimpleFulltextOnline:
             expected_columns
         ), f"Expected {len(expected_columns)} columns, got {len(results.columns)}"
         for i, expected_col in enumerate(expected_columns):
-            assert results.columns[i] == expected_col, f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
+            assert (
+                results.columns[i] == expected_col
+            ), f"Column {i} should be '{expected_col}', got '{results.columns[i]}'"
 
         # Verify we have results
         assert isinstance(results.rows, list), "Results.rows should be a list"
@@ -579,7 +585,9 @@ class TestSimpleFulltextOnline:
             # Row can be tuple, list, or SQLAlchemy Row object
             assert hasattr(row, '__getitem__'), f"Row {i} should support indexing, got {type(row)}"
             assert hasattr(row, '__len__'), f"Row {i} should support len(), got {type(row)}"
-            assert len(row) == len(expected_columns), f"Row {i} should have {len(expected_columns)} columns, got {len(row)}"
+            assert len(row) == len(
+                expected_columns
+            ), f"Row {i} should have {len(expected_columns)} columns, got {len(row)}"
 
         # Verify content matches complex boolean criteria (if we have results)
         if results.rows:
@@ -601,7 +609,9 @@ class TestSimpleFulltextOnline:
                 ), f"Row {i} should not contain 'deprecated'. Got: {combined_text[:100]}..."
 
                 # Must not have "legacy"
-                assert "legacy" not in combined_text, f"Row {i} should not contain 'legacy'. Got: {combined_text[:100]}..."
+                assert (
+                    "legacy" not in combined_text
+                ), f"Row {i} should not contain 'legacy'. Got: {combined_text[:100]}..."
 
                 # Category verification is handled by WHERE clause
 
@@ -612,7 +622,7 @@ class TestSimpleFulltextOnline:
                 "test_simple_fulltext_articles.title",
                 "test_simple_fulltext_articles.content",
                 "test_simple_fulltext_articles.tags",
-                boolean_match("title", "content", "tags").encourage("artificial intelligence").label("relevance"),
+                boolean_match("title", "content", "tags").encourage("artificial", "intelligence").label("relevance"),
             )
             .order_by("relevance ASC")
             .execute()

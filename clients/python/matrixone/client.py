@@ -440,6 +440,7 @@ class Client(BaseMatrixOneClient):
                 ssl_key=ssl_key,
                 account=account,
                 role=role,
+                auto_commit=self.auto_commit,
             )
 
     def get_capabilities(self, refresh=False):
@@ -467,7 +468,7 @@ class Client(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -524,17 +525,19 @@ class Client(BaseMatrixOneClient):
         from .capabilities import validate_overrides
 
         overrides = validate_overrides(capability_overrides)
-        from ._connection_options import positive_timeout
+        from ._connection_options import positive_timeout, resolve_auto_commit
 
         positive_timeout(self.query_timeout, 'query_timeout')
         timeout = self.connection_timeout if connection_timeout is None else connection_timeout
         positive_timeout(timeout, 'connection_timeout')
+        auto_commit = resolve_auto_commit(auto_commit, self.auto_commit)
         if ssl_mode not in ('disabled', 'preferred', 'required'):
             raise ValueError('ssl_mode must be disabled, preferred or required')
         if self._engine is not None:
             self.disconnect()
         self._reset_compatibility(overrides)
         self.connection_timeout = timeout
+        self.auto_commit = auto_commit
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
 
@@ -769,10 +772,11 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        from ._connection_options import tls_options
+        from ._connection_options import preserve_transactions_with_autocommit, tls_options
         from ._local_infile import connection_options, configure_engine
 
         connect_args = {
+            'autocommit': self._connection_params.get('autocommit', self.auto_commit),
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
@@ -811,6 +815,8 @@ class Client(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine)
+        if connect_args['autocommit']:
+            preserve_transactions_with_autocommit(engine)
 
         return engine
 
@@ -1360,7 +1366,11 @@ class Client(BaseMatrixOneClient):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 with self.session() as session:
                     # Suppress Session-level logging; Client logs below
-                    result = session.execute(sql_or_stmt, params, log_mode='off')
+                    from ._session_execution import deferred_literal_options
+
+                    result = session.execute(
+                        sql_or_stmt, params, log_mode='off', **deferred_literal_options(sql_or_stmt)
+                    )
 
                     # Convert SQLAlchemy result to ResultSet
                     if result_returns_rows(result):
@@ -1431,8 +1441,15 @@ class Client(BaseMatrixOneClient):
                         # Escape % to %% for pymysql's format string handling in exec_driver_sql
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
+                            from ._driver_execution import driver_parameters
+
                             result = conn.exec_driver_sql(
-                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                                escaped_sql,
+                                driver_parameters(params),
+                                execution_options={
+                                    'no_parameters': params is None,
+                                    '_matrixone_preserve_driver_sql': True,
+                                },
                             )
                         else:
                             result = conn.exec_driver_sql(escaped_sql)
@@ -2899,7 +2916,13 @@ class Session(SQLAlchemySession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
-            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            from ._driver_execution import driver_parameters
+
+            return self.connection().exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None, '_matrixone_preserve_driver_sql': True},
+            )
         except Exception as error:
             from .client import _classify_db_error
 
@@ -2954,12 +2977,12 @@ class Session(SQLAlchemySession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
@@ -2967,7 +2990,6 @@ class Session(SQLAlchemySession):
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -2987,13 +3009,17 @@ class Session(SQLAlchemySession):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
-                execution_time,
-                success=False,
-                log_mode=log_mode,
-            )
-            self.client.logger.log_error(e, context="Session query execution")
+            try:
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    success=False,
+                    log_mode=log_mode,
+                )
+                self.client.logger.log_error(e, context="Session query execution")
+            except Exception:
+                # A secondary logging failure cannot replace the database error.
+                pass
             classified = _classify_db_error(e, sql_or_stmt)
             if classified is e:
                 raise

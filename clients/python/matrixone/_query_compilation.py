@@ -361,6 +361,13 @@ def compile_predicate(condition, params=(), model=None, alias=None, **context):
     return render_fragment(str(condition), params)
 
 
+def render_limit_clause(limit, offset):
+    """Older MatrixOne/MySQL grammar requires LIMIT whenever OFFSET is present."""
+    if limit is None and offset is not None:
+        limit = 18446744073709551615  # MySQL's unlimited unsigned row count.
+    return f'LIMIT {limit}' if limit is not None else ''
+
+
 def conjoin_conditions(conditions):
     """Preserve OR/XOR grouping when chained predicates are combined with AND."""
     if len(conditions) > 1:

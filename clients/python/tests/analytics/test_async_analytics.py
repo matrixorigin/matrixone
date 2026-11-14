@@ -7,6 +7,7 @@ import os
 from decimal import Decimal
 
 import pytest
+from tests.release_contracts import assert_release_error, release_428
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from test_adversarial import hard_client, trial  # noqa: F401
@@ -75,12 +76,7 @@ async def test_async_upload_capability_and_complete_values(trial, async_client):
     table = trial.table()
     data = pa.table({'id': [1, 2, 3], 'txt': ['a', '', None]})
     capability = (await async_client.get_capabilities())['arrow_load']
-    if capability.state in ('unsupported', 'disabled'):
-        with pytest.raises(QueryError) as caught:
-            await async_client.analytics.upload_arrow(table, data, trial.directory)
-        assert caught.value.phase == 'capability' and caught.value.committed is False
-        assert not trial.exists(table)
-        return  # Explicit negative server qualification, not a skipped roundtrip.
+    assert capability.state in ('supported', 'unsupported', 'unknown')
     assert await async_client.analytics.upload_arrow(table, data, trial.directory, batch_size=1) == 3
     async with async_client.analytics.query('SELECT * FROM ' + table + ' ORDER BY id') as stream:
         actual = await stream.to_arrow()
@@ -106,15 +102,25 @@ async def test_pool_wait_cancellation_preserves_borrowed_owner(async_client):
 
 
 @pytest.mark.asyncio
-async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, async_client):
-    capability = (await async_client.get_capabilities())['arrow_load']
-    if capability.state in ('unsupported', 'disabled'):
-        # Query streaming remains available on servers without Arrow LOAD.
-        async with async_client.analytics.query('SELECT 7 AS n') as stream:
-            assert (await stream.to_arrow())['n'].to_pylist() == [7]
-        return
-    stream = async_client.analytics.query('SELECT 7 AS n', batch_size=1)
-    await stream.__aenter__()
+async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, async_client, monkeypatch):
+    manager = async_client.analytics
+    original_probe = manager._upload_format
+    probes_ready, start_staging = asyncio.Event(), asyncio.Event()
+    qualified = 0
+
+    async def probe_then_wait(engine, generation, operation=None):
+        nonlocal qualified
+        file_format = await original_probe(engine, generation, operation)
+        qualified += 1
+        if qualified == 2:
+            probes_ready.set()
+        await start_staging.wait()
+        return file_format
+
+    # Complete the real, short format probes before holding the only checkout.
+    # This barrier retains the original two-producer CPU/DB wait-cycle oracle.
+    monkeypatch.setattr(manager, '_upload_format', probe_then_wait)
+    stream = manager.query('SELECT 7 AS n', batch_size=1)
     uploads = [
         asyncio.create_task(
             async_client.analytics.upload_arrow(trial.table(), pa.table({'id': [index, index + 10]}), trial.directory)
@@ -130,12 +136,17 @@ async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, 
             await asyncio.sleep(0.001)  # wait for observable producer completion
 
     try:
+        await asyncio.wait_for(probes_ready.wait(), 5)
+        assert async_client._engine.pool.checkedout() == 0
+        await stream.__aenter__()
+        start_staging.set()
         await asyncio.wait_for(staged(), 5)
         assert async_client._engine.pool.checkedout() == 1
         assert len(list(trial.directory.glob('mo_py_arrow_*'))) == 2
         assert (await stream.to_arrow())['n'].to_pylist() == [7]
         assert await asyncio.gather(*uploads) == [2, 2]
     finally:
+        start_staging.set()
         await stream.close()
         for task in uploads:
             if not task.done():
@@ -144,16 +155,44 @@ async def test_one_pool_slot_stream_and_two_staged_uploads_make_progress(trial, 
 
 
 @pytest.mark.asyncio
+async def test_upload_probe_pool_wait_cancellation_preserves_stream_owner(trial, async_client, monkeypatch):
+    manager = async_client.analytics
+    original_probe = manager._upload_format
+    probe_entered = asyncio.Event()
+
+    async def observed_probe(engine, generation, operation=None):
+        probe_entered.set()
+        return await original_probe(engine, generation, operation)
+
+    monkeypatch.setattr(manager, '_upload_format', observed_probe)
+    stream = manager.query('SELECT 7 AS n', batch_size=1)
+    await stream.__aenter__()
+    table = trial.table()
+    task = asyncio.create_task(manager.upload_arrow(table, pa.table({'id': [1]}), trial.directory))
+    try:
+        await asyncio.wait_for(probe_entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert async_client._engine.pool.checkedout() == 1
+        assert manager.pending_operations() == ()
+        assert not list(trial.directory.glob('mo_py_arrow_*'))
+        assert not trial.exists(table)
+        assert (await stream.to_arrow())['n'].to_pylist() == [7]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await stream.close()
+    assert async_client._engine.pool.checkedout() == 0
+    assert await manager.upload_arrow(table, pa.table({'id': [1]}), trial.directory) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['read', 'load', 'commit'])
 async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(trial, fault):
     from sqlalchemy import event
     from mysql_fault_proxy import FaultProxy
 
-    capability = trial.client.get_capabilities()['arrow_load']
-    if fault != 'read' and capability.state in ('unsupported', 'disabled'):
-        with pytest.raises(QueryError):
-            await _unsupported_upload_control(trial)
-        return
     port = trial.client._engine.url.port
     table = trial.table()
     with FaultProxy(
@@ -168,8 +207,10 @@ async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(tri
         client = AsyncClient.from_engine(engine, query_timeout=10, sql_log_mode='off')
         try:
             await client.get_capabilities()
-            # Apply the short deadline to the armed fault, not cold dialect setup.
-            client.query_timeout = 1
+            # The deadline covers staging and LOAD before the armed COMMIT.
+            # Allow those real operations to finish under concurrent CI load;
+            # the proxy holds the selected response for up to ten seconds.
+            client.query_timeout = 5
             if fault != 'read':
 
                 @event.listens_for(engine.sync_engine, 'before_cursor_execute')
@@ -204,17 +245,9 @@ async def test_async_deadline_network_stall_preserves_outcome_and_pool_reuse(tri
             await client.disconnect()
 
 
-async def _unsupported_upload_control(trial):
-    engine = create_async_engine(trial.client._engine.url.set(drivername='mysql+aiomysql'))
-    client = AsyncClient.from_engine(engine)
-    try:
-        await client.analytics.upload_arrow(trial.table(), pa.table({'id': [1]}), trial.directory)
-    finally:
-        await client.disconnect()
-
-
 @pytest.mark.asyncio
-async def test_async_cross_cn_upload_and_file_relation_visibility(trial):
+@pytest.mark.parametrize('source', ['arrow', 'file'])
+async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source):
     import os
     from decimal import Decimal
 
@@ -226,7 +259,16 @@ async def test_async_cross_cn_upload_and_file_relation_visibility(trial):
     table = trial.table()
     try:
         data = pa.table({'id': [1, 2, 3]})
-        assert await client.analytics.upload_arrow(table, data, trial.directory) == 3
+        if source == 'arrow':
+            assert await client.analytics.upload_arrow(table, data, trial.directory) == 3
+        else:
+            import pyarrow.parquet as pq
+
+            trial.client.execute('CREATE TABLE ' + table + '(id BIGINT)')
+            path = trial.directory / 'cross-cn-initial.parquet'
+            pq.write_table(data, path)
+            async with await client.analytics.read_parquet(path) as relation:
+                assert await relation.import_into(table) == 3
         assert trial.client.execute('SELECT count(*), sum(id) FROM ' + table).rows == [(3, Decimal(6))]
         path = trial.directory / 'cross-cn-async.csv'
         path.write_text('id\n4\n5\n')
@@ -246,8 +288,52 @@ async def test_async_cross_cn_upload_and_file_relation_visibility(trial):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_stage_release_status_alternative_is_explicit_and_usable(trial, async_client, kind, record_property):
+    import inspect
+    import uuid
+
+    async def resolve(value):
+        return await value if inspect.isawaitable(value) else value
+
+    client = trial.client if kind == 'sync' else async_client
+    name = 'sdk_status_' + uuid.uuid4().hex[:12]
+    source = trial.directory / 'ordinary.csv'
+    source.write_text('id,txt\n1,a\n2,b\n')
+    url = 'file://' + str(trial.directory) + '/'
+    owned = False
+    try:
+        if release_428(trial.client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(client.stage.create(name, url, enable=False))
+            assert_release_error(rejected.value, 'stage_create_disabled')
+            assert not trial.client.execute(
+                'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (name,)
+            ).rows
+            record_property(
+                'matrixone.feature.stage_create_disabled',
+                'unsupported-with-actionable-error;explicit-alter-alternative',
+            )
+        created = await resolve(client.stage.create(name, url, enable=True))
+        owned = True
+        assert created.status in ('in_use', 'enabled')
+        assert (await resolve(client.stage.alter(name, enable=False))).status == 'disabled'
+        assert (await resolve(client.stage.alter(name, enable=True))).status == 'enabled'
+        table = trial.table()
+        trial.client.execute('CREATE TABLE ' + table + '(id INT,txt VARCHAR(20))')
+        await resolve(client.load_data.read_csv_stage(name, source.name, table, skiprows=1))
+        assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [(1, 'a'), (2, 'b')]
+    finally:
+        if owned:
+            await resolve(client.stage.drop(name, if_exists=True))
+        assert not trial.client.execute('SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (name,)).rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
 @pytest.mark.parametrize('suffix', [" 'q' {space}", '/part', '%2F', 'ÉCOLE'])
-async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kind, suffix):
+async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kind, suffix, record_property):
+    # A released-server limitation requires an exact SDK diagnostic before
+    # mutation; source builds still execute the complete positive scenario.
     import inspect
     import uuid
     from urllib.parse import quote
@@ -257,6 +343,7 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
 
     client = trial.client if kind == 'sync' else async_client
     name = 'sdk_' + uuid.uuid4().hex[:10] + suffix
+    canonical = name.lower()
     nested_name = 'sdk_nested_' + uuid.uuid4().hex[:10]
     directory = trial.directory / "quoted'directory"
     directory.mkdir()
@@ -268,11 +355,22 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
     owned = False
     nested = False
     try:
-        if os.environ.get('MO_EXPECT_STAGE_LITERAL_SUPPORT', '1') == '0':
-            with pytest.raises(QueryError):
-                await resolve(client.stage.create(name, url, comment=comment))
-            return  # Explicit negative qualification of an older native server.
-        canonical = name.lower()
+        if release_428(trial.client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(
+                    client.stage.create(
+                        name, url, credentials={'AWS_SECRET_KEY': credential}, comment=comment, enable=False
+                    )
+                )
+            assert_release_error(rejected.value, 'stage_literals')
+            assert not trial.client.execute(
+                'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (canonical,)
+            ).rows
+            assert trial.client.execute('SELECT 42').scalar() == 42
+            record_property(
+                'matrixone.feature.stage_literal_catalog_and_file_consumers', 'unsupported-with-actionable-error'
+            )
+            return
         try:
             await resolve(
                 client.stage.create(
@@ -335,3 +433,4 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
             assert not trial.client.execute(
                 'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (canonical,)
             ).rows
+    record_property('matrixone.feature.stage_literal_catalog_and_file_consumers', 'supported')

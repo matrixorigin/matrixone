@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from matrixone import Client
+from matrixone.exceptions import QueryError
 from matrixone.analytics import AnalyticsManager, _identifier, _sql_type, _validate_schema, _wire_schema
 
 pa = pytest.importorskip("pyarrow", minversion="18.0.0")
@@ -87,6 +88,32 @@ def analytics(client):
 def _query(analytics, sql, **kwargs):
     with analytics.query(sql, **kwargs) as result:
         return result.to_arrow()
+
+
+def test_native_arrow_load_outcome_preserves_table_and_pool(analytics, tmp_path, record_property):
+    import uuid
+
+    table = 'arrow_qualification_' + uuid.uuid4().hex[:12]
+    data = pa.table({'id': [1, 2]})
+    capability = analytics.client.get_capabilities()['arrow_load']
+    try:
+        if capability.state == 'unsupported':
+            native = (
+                "EXPLAIN LOAD DATA INFILE {'filepath'='/__sdk_arrow_native_control.arrow',"
+                "'format'='arrow'} INTO TABLE mo_catalog.mo_database"
+            )
+            with pytest.raises(QueryError) as native_error:
+                analytics.client.execute(native)
+            assert native_error.value.errno == 20300
+            record_property('matrixone.feature.native_arrow_upload', 'native-rejected:20300;upload=parquet')
+        else:
+            record_property('matrixone.feature.native_arrow_upload', 'supported')
+        assert analytics.upload_arrow(table, data, tmp_path) == 2
+        assert _query(analytics, 'SELECT id FROM ' + table + ' ORDER BY id').equals(data)
+        assert not list(tmp_path.glob('mo_py_arrow_*'))
+        assert analytics.engine.pool.checkedout() == 0
+    finally:
+        analytics.client.execute('DROP TABLE IF EXISTS ' + table)
 
 
 @pytest.mark.parametrize(
@@ -304,8 +331,12 @@ def test_upload_failures_atomic_and_cleanup(analytics, tmp_path):
 
 def test_early_close_and_bound_batch(analytics, tmp_path):
     data = pa.table({"id": range(20000), "text": ["x" * 50] * 20000})
+    path = tmp_path / 'stream.parquet'
+    pq.write_table(data, path)
     try:
-        analytics.upload_arrow("analytics_stream", data, tmp_path)
+        analytics.client.execute('CREATE TABLE analytics_stream(id BIGINT, text VARCHAR(50))')
+        with analytics.read_parquet(path) as relation:
+            assert relation.import_into('analytics_stream') == 20000
         with analytics.query("SELECT * FROM analytics_stream", batch_size=127) as stream:
             assert next(stream).num_rows == 127
         assert analytics.engine.pool.checkedout() == 0
@@ -320,7 +351,8 @@ def test_early_close_and_bound_batch(analytics, tmp_path):
         analytics.client.execute("DROP TABLE IF EXISTS analytics_stream")
 
 
-def test_file_import_and_timezone_pool_isolation(analytics, tmp_path):
+@pytest.mark.parametrize('write_format', ['arrow', 'file'])
+def test_file_import_and_timezone_pool_isolation(analytics, tmp_path, write_format):
     pq.write_table(pa.table({"id": [1, 2]}), tmp_path / "a.parquet")
     try:
         analytics.client.execute("CREATE TABLE analytics_import(id BIGINT)")
@@ -331,7 +363,14 @@ def test_file_import_and_timezone_pool_isolation(analytics, tmp_path):
             conn.exec_driver_sql("SET time_zone = '+08:00'")
             old_mode = conn.exec_driver_sql("SELECT @@sql_mode").scalar()
             old_pk_check = conn.exec_driver_sql("SELECT @@mo_pk_check_by_dn").scalar()
-        analytics.upload_arrow("analytics_tz", pa.table({"id": [1]}), tmp_path)
+        if write_format == 'arrow':
+            analytics.upload_arrow("analytics_tz", pa.table({"id": [1]}), tmp_path)
+        else:
+            analytics.client.execute('CREATE TABLE analytics_tz(id BIGINT)')
+            pq.write_table(pa.table({'id': [1]}), tmp_path / 'timezone.parquet')
+            with analytics.read_parquet(tmp_path / 'timezone.parquet') as relation:
+                assert relation.import_into('analytics_tz') == 1
+        assert _query(analytics, 'SELECT id FROM analytics_tz').to_pylist() == [{'id': 1}]
         with analytics.engine.begin() as conn:
             assert conn.exec_driver_sql("SELECT @@time_zone").scalar() == "+08:00"
         _query(analytics, "SELECT 1 AS n")
@@ -380,10 +419,17 @@ def test_dictionary_and_timezone_normalization(analytics, tmp_path):
 
 
 def test_protocol_time_duration_and_boolean(analytics):
-    table = _query(analytics, "SELECT CAST('-25:00:00' AS TIME) AS span, CAST(1 AS BOOL) AS ok")
-    # This CAST expression is advertised as TINYINT by the MySQL protocol.
-    assert table.schema.types == [pa.duration("us"), pa.int8()]
-    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": 1}]
+    from pymysql.constants import FIELD_TYPE
+
+    with analytics.query("SELECT CAST('-25:00:00' AS TIME) AS span, CAST(1 AS BOOL) AS ok") as stream:
+        # Releases advertise BOOL as TINYINT(1); source builds can advertise a
+        # wider TINYINT. Check against the native wire metadata, not row values.
+        wire = stream._cursor._result.fields[1]
+        assert wire.type_code == FIELD_TYPE.TINY and wire.length > 0
+        expected = pa.bool_() if wire.length == 1 else pa.int8()
+        table = stream.to_arrow()
+    assert table.schema.types == [pa.duration("us"), expected]
+    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": True if pa.types.is_boolean(expected) else 1}]
     explicit = _query(analytics, "SELECT CAST(1 AS BOOL) AS ok", schema=pa.schema([("ok", pa.bool_())]))
     assert explicit.to_pylist() == [{"ok": True}]
     with pytest.raises(ValueError, match="clock day"):

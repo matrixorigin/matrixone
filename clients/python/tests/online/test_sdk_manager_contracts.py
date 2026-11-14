@@ -11,6 +11,7 @@ from pathlib import Path
 from decimal import Decimal
 
 import pytest
+from tests.release_contracts import assert_release_error, release_428
 import sqlalchemy as sa
 
 from matrixone import Client, SnapshotLevel
@@ -26,6 +27,83 @@ async def resolve(value):
 
 def name(prefix):
     return prefix + uuid.uuid4().hex[:10]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_empty_database_branch_delete_native_contract(client, async_client, kind, record_property):
+    from matrixone.branch_builder import delete_database_branch
+
+    c = client if kind == 'sync' else async_client
+    source, native, managed = name('empty_src_'), name('empty_native_'), name('empty_sdk_')
+    client.execute('CREATE DATABASE ' + source)
+    try:
+        client.execute(f'DATA BRANCH CREATE DATABASE {native} FROM {source}')
+        await resolve(c.branch.create_database_branch(managed, source))
+        if release_428(client):
+            with pytest.raises(QueryError) as rejected:
+                client.execute(str(delete_database_branch(native)))
+            assert_release_error(rejected.value, 'branch_database_identity', 20101)
+            with pytest.raises(BranchError) as rejected:
+                await resolve(c.branch.delete_database_branch(managed))
+            assert_release_error(rejected.value, 'branch_database_identity', 20101)
+            expected = 1
+            record_property('matrixone.feature.empty_database_branch_delete', 'unsupported-with-actionable-error')
+        else:
+            client.execute(str(delete_database_branch(native)))
+            await resolve(c.branch.delete_database_branch(managed))
+            expected = 0
+            record_property('matrixone.feature.empty_database_branch_delete', 'supported')
+        for target in (native, managed):
+            assert (
+                client.execute(
+                    'SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?', (target,)
+                ).scalar()
+                == expected
+            )
+        assert (
+            client.execute('SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?', (source,)).scalar()
+            == 1
+        )
+    finally:
+        for database in (managed, native, source):
+            client.execute('DROP DATABASE IF EXISTS ' + database)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_clone_missing_database_preserves_absent_target(client, async_client, kind):
+    c = client if kind == 'sync' else async_client
+    target, missing = name('clone_target_'), name('clone_missing_')
+    try:
+        with pytest.raises(CloneError):
+            await resolve(c.clone.clone_database(target, missing))
+        assert (
+            client.execute('SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?', (target,)).scalar()
+            == 0
+        )
+        assert (await resolve(c.execute('SELECT 42'))).scalar() == 42
+    finally:
+        client.execute('DROP DATABASE IF EXISTS ' + target)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_clone_snapshot_retains_deleted_source_database(client, async_client, kind):
+    c = client if kind == 'sync' else async_client
+    source, target, snapshot = name('hist_src_'), name('hist_dst_'), name('hist_snap_')
+    client.execute('CREATE DATABASE ' + source)
+    try:
+        client.execute(f'CREATE TABLE {source}.t(id INT PRIMARY KEY)')
+        client.execute(f'INSERT INTO {source}.t VALUES(7)')
+        client.execute(f'CREATE SNAPSHOT {snapshot} FOR DATABASE {source}')
+        client.execute('DROP DATABASE ' + source)
+        await resolve(c.clone.clone_database(target, source, snapshot_name=snapshot))
+        assert client.execute(f'SELECT id FROM {target}.t').rows == [(7,)]
+    finally:
+        client.execute('DROP DATABASE IF EXISTS ' + target)
+        client.execute('DROP DATABASE IF EXISTS ' + source)
+        client.execute('DROP SNAPSHOT IF EXISTS ' + snapshot)
 
 
 @pytest.mark.asyncio
@@ -258,7 +336,7 @@ async def test_snapshot_restore_rolls_back_real_data(client, async_client, kind,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
-async def test_fulltext_embedded_backtick_column(client, async_client, kind):
+async def test_fulltext_embedded_backtick_column(client, async_client, kind, record_property):
     from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
 
     c = client if kind == 'sync' else async_client
@@ -266,14 +344,16 @@ async def test_fulltext_embedded_backtick_column(client, async_client, kind):
     client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, `tick``col` TEXT)')
     try:
         client.execute(f"INSERT INTO {table} VALUES (1, 'alpha beta'), (2, 'gamma')")
-        if os.environ.get('MO_SDK_TARGET') == '4.2.5':
-            # This release predates the server fix for generated identifier SQL.
-            with pytest.raises(QueryError, match='syntax error'):
-                client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
+        if release_428(client):
+            with pytest.raises(QueryError) as rejected:
+                await resolve(c.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)'))
+            assert_release_error(rejected.value, 'fulltext_identifiers')
             assert client.execute(f'SELECT id, `tick``col` FROM {table} ORDER BY id').rows == [
                 (1, 'alpha beta'),
                 (2, 'gamma'),
             ]
+            assert not [row for row in client.execute(f'SHOW INDEX FROM {table}').rows if row[2] == 'ft_idx']
+            record_property('matrixone.feature.fulltext_embedded_backtick', 'unsupported-with-actionable-error')
             return
         client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
         predicate = boolean_match('tick`col').must('alpha').compile()
@@ -293,25 +373,56 @@ async def test_fulltext_embedded_backtick_column(client, async_client, kind):
 
 
 @pytest.mark.asyncio
-async def test_async_fulltext_special_identifiers_catch_up(client):
+async def test_async_fulltext_special_identifiers_catch_up(client, record_property):
     table = name('ft_async_ident_')
     parser_table = name('ft_async_parser_')
+    key, body, title = ('`key``id`', '`tick``col`', '`order`')
+    record_property(
+        'matrixone.feature.async_fulltext_quoted_identifiers',
+        'unsupported-with-actionable-error' if release_428(client) else 'supported',
+    )
     try:
+        if release_428(client):
+            for ddl, feature, target in [
+                (
+                    f'CREATE TABLE {table} ({key} BIGINT PRIMARY KEY, {body} TEXT, '
+                    f'{title} TEXT, FULLTEXT ft_idx ({body}, {title}) ASYNC)',
+                    'fulltext_identifiers',
+                    table,
+                ),
+                (
+                    f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
+                    'FULLTEXT ft_idx(body) WITH PARSER gojieba ASYNC)',
+                    'async_fulltext_parser',
+                    parser_table,
+                ),
+            ]:
+                with pytest.raises(QueryError) as rejected:
+                    client.execute(ddl)
+                assert_release_error(rejected.value, feature)
+                assert not client.execute('SHOW TABLES LIKE ?', (target,)).rows
+                record_property('matrixone.feature.' + feature, 'unsupported-with-actionable-error')
+            # Explicitly exercise the documented alternative, retaining the
+            # original Chinese parser data without claiming ASYNC support.
+            client.execute(
+                f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, async INT, body TEXT, '
+                'FULLTEXT async(body) WITH PARSER gojieba)'
+            )
+            client.execute(f"INSERT INTO {parser_table} VALUES (1, 7, '苹果香蕉')")
+            assert client.execute(
+                f"SELECT id, async FROM {parser_table} WHERE MATCH(body) AGAINST('苹果香蕉')"
+            ).rows == [(1, 7)]
+            return
         client.execute(
-            f'CREATE TABLE {table} (`key``id` BIGINT PRIMARY KEY, `tick``col` TEXT, '
-            '`order` TEXT, FULLTEXT ft_idx (`tick``col`, `order`) ASYNC)'
+            f'CREATE TABLE {table} ({key} BIGINT PRIMARY KEY, {body} TEXT, '
+            f'{title} TEXT, FULLTEXT ft_idx ({body}, {title}) ASYNC)'
         )
         client.execute(f"INSERT INTO {table} VALUES (1, 'uniquestarttoken', 'reservedtoken')")
-        if os.environ.get('MO_SDK_TARGET') == '4.2.5':
-            # This release does not reliably catch up this index; check the
-            # underlying rows while the sync prerequisite is tested above.
-            assert client.execute(f'SELECT * FROM {table}').rows == [(1, 'uniquestarttoken', 'reservedtoken')]
-            return
 
         async def wait_for(token, expected):
-            predicate = f"MATCH(`tick``col`, `order`) AGAINST('{token}')"
+            predicate = f"MATCH({body}, {title}) AGAINST('{token}')"
             for _ in range(120):
-                rows = client.execute(f'SELECT `key``id` FROM {table} WHERE {predicate} ORDER BY `key``id`').rows
+                rows = client.execute(f'SELECT {key} FROM {table} WHERE {predicate} ORDER BY {key}').rows
                 if rows == expected:
                     return
                 await asyncio.sleep(0.5)
@@ -319,16 +430,20 @@ async def test_async_fulltext_special_identifiers_catch_up(client):
 
         await wait_for('uniquestarttoken', [(1,)])
         await wait_for('reservedtoken', [(1,)])
-        client.execute(f"UPDATE {table} SET `tick``col`='uniquenewtoken' WHERE `key``id`=1")
+        client.execute(f"UPDATE {table} SET {body}='uniquenewtoken' WHERE {key}=1")
         await wait_for('uniquenewtoken', [(1,)])
         await wait_for('uniquestarttoken', [])
-        client.execute(f'DELETE FROM {table} WHERE `key``id`=1')
+        client.execute(f'DELETE FROM {table} WHERE {key}=1')
         await wait_for('uniquenewtoken', [])
         assert client.execute(f'SELECT * FROM {table}').rows == []
 
         client.execute(
             f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
             'FULLTEXT ft_idx(body) WITH PARSER gojieba ASYNC)'
+        )
+        record_property(
+            'matrixone.feature.async_fulltext_parser',
+            'supported',
         )
         client.execute(f"INSERT INTO {parser_table} VALUES (1, '苹果香蕉')")
         for _ in range(120):

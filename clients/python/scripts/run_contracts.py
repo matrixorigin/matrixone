@@ -5,6 +5,11 @@ No credentials are written. Explicit server jobs fail on skips or wrong identity
 pytest's green status alone cannot certify an unconfigured integration target.
 """
 
+# Released servers are SDK compatibility targets. Require equivalent values or
+# an exact actionable SDK limitation with unchanged state/cleanup; a generic
+# native error is insufficient. Source builds separately retain full feature
+# positives. See docs/design/release-quality.md#maintaining-version-contracts.
+
 import argparse
 import hashlib
 import importlib.metadata
@@ -15,6 +20,8 @@ from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+
+RELEASE_ID = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-hotfix-[0-9]{8})?'
 
 FULL_SELECTION = [
     'tests/online/test_sdk_quality_contracts.py',
@@ -44,19 +51,25 @@ CORE_SELECTION = [
 
 
 def release_target(value):
-    if value == 'current-source' or re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', value):
+    if value == 'current-source' or re.fullmatch(RELEASE_ID, value):
         return value
     raise argparse.ArgumentTypeError('Expected an exact release (for example 4.1.6) or current-source')
 
 
 def validate_server_identity(version, revision, expected_version, expected_revision=None):
     """Compare actual release identities exactly; source banners need a revision."""
-    if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', expected_version):
-        match = re.search(r'(?:^|-)MatrixOne-v([0-9]+\.[0-9]+\.[0-9]+)(?:$|[-+])', version)
+    if re.fullmatch(RELEASE_ID, expected_version):
+        match = re.search(r'(?:^|-)MatrixOne-v(' + RELEASE_ID + r')(?:$|[+])', version)
         if match is None or match[1] != expected_version:
             raise ValueError('Observed MatrixOne release differs from the selected target')
-    elif not expected_revision or expected_version not in version:
-        raise ValueError('Source identity requires the expected banner and git revision')
+    else:
+        expected_banner = expected_version
+        if 'MatrixOne-' not in expected_version:
+            expected_banner = '8.0.30-MatrixOne-' + (
+                expected_version if expected_version.startswith('v') else 'v' + expected_version
+            )
+        if not expected_revision or version != expected_banner:
+            raise ValueError('Source identity requires the expected banner and git revision')
     if expected_revision and not revision.startswith(expected_revision):
         raise ValueError('Observed MatrixOne git revision differs from the selected target')
 

@@ -3,13 +3,17 @@
 
 import asyncio
 import ssl
+import socket
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+import pymysql
+from pymysql.constants import CLIENT
 
 from matrixone import Client
 from matrixone.async_client import AsyncClient
-from matrixone._connection_options import TLSRequiredConnection, tls_options
+from matrixone._connection_options import TLSRequiredConnection, connect_tls, tls_options
 from matrixone.exceptions import ConnectionError
 
 
@@ -35,6 +39,55 @@ def test_success_requires_authenticated_query(monkeypatch):
     assert client._connection_params['connect_timeout'] == 17
     assert client.connected()
     client.disconnect()
+
+
+def test_sync_auto_connect_forwards_disabled_auto_commit(monkeypatch):
+    connect = Mock()
+    monkeypatch.setattr(Client, 'connect', connect)
+    Client(
+        host='localhost',
+        port=6001,
+        user='test',
+        password='synthetic',
+        database='test',
+        auto_commit=False,
+        logger=Mock(),
+    )
+    assert connect.call_args.kwargs['auto_commit'] is False
+
+
+@pytest.mark.parametrize('initial', [False, True])
+@pytest.mark.parametrize('override', [None, False, True])
+def test_sync_connect_autocommit_resolution(monkeypatch, initial, override):
+    client = Client(logger=Mock(), auto_commit=initial)
+    monkeypatch.setattr(client, '_create_engine', lambda: MagicMock())
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+    client.connect(database='test', auto_commit=override, on_connect=[])
+    expected = initial if override is None else override
+    assert client.auto_commit is expected
+    assert client._connection_params['autocommit'] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('initial', [False, True])
+@pytest.mark.parametrize('override', [None, False, True])
+async def test_async_connect_autocommit_resolution(monkeypatch, initial, override):
+    connection = SimpleNamespace(exec_driver_sql=AsyncMock(), execute=AsyncMock())
+
+    class Context:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *args):
+            return None
+
+    engine = SimpleNamespace(begin=lambda: Context(), dispose=AsyncMock())
+    client = AsyncClient(logger=Mock(), auto_commit=initial)
+    monkeypatch.setattr(client, '_create_async_engine', lambda: engine)
+    await client.connect(database='test', auto_commit=override, on_connect=[])
+    expected = initial if override is None else override
+    assert client.auto_commit is expected
+    assert client._connection_params['autocommit'] is expected
 
 
 @pytest.mark.parametrize('mode', ['disabled', 'preferred', 'required'])
@@ -136,10 +189,11 @@ async def test_async_failed_probe_clears_engine(monkeypatch):
     engine.dispose.assert_awaited_once()
 
 
-def test_driver_receives_sync_timeout_and_charset(monkeypatch):
+@pytest.mark.parametrize('auto_commit', [False, True])
+def test_driver_receives_sync_timeout_and_charset(monkeypatch, auto_commit):
     import matrixone.client as module
 
-    client = Client(logger=Mock(), connection_timeout=12, query_timeout=7)
+    client = Client(logger=Mock(), connection_timeout=12, query_timeout=7, auto_commit=auto_commit)
     client._connection_params = {
         'host': 'localhost',
         'port': 6001,
@@ -157,6 +211,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
     monkeypatch.setattr(module, 'create_engine', factory)
     client._create_engine()
     assert factory.call_args.kwargs['connect_args'] == {
+        'autocommit': auto_commit,
         'connect_timeout': 12,
         'read_timeout': 7,
         'write_timeout': 7,
@@ -366,3 +421,127 @@ def test_create_table_execution_diagnostics_redact_password(monkeypatch):
     assert '***' in str(result.value)
     logged = client.logger.log_error.call_args.args[0]
     assert secret not in str(logged)
+
+
+@pytest.mark.parametrize(
+    'banner',
+    [
+        '8.0.30-MatrixOne-v4.2.8',
+        '8.0.30-MatrixOne-v4.2.8-hotfix-20261114',
+        '8.0.30-MatrixOne-v4.2.8-hotfix',
+    ],
+)
+@pytest.mark.parametrize('failure', ['eof', 'timeout'])
+def test_release_tls_diagnostic_preserves_driver_error_and_closes_once(monkeypatch, banner, failure):
+    error = (
+        ssl.SSLEOFError(8, 'synthetic handshake EOF')
+        if failure == 'eof'
+        else socket.timeout('synthetic handshake timeout')
+    )
+    _assert_tls_failure(monkeypatch, banner, error, diagnostic=True)
+
+
+@pytest.mark.parametrize(
+    'changes',
+    [
+        {'banner': '8.0.30-MatrixOne-v4.2'},
+        {'banner': '8.0.30-MatrixOne-v1.3.0'},
+        {'banner': '8.0.30-MatrixOne-v4.2.8+custom'},
+        {'capabilities': 0},
+        {'secure': True},
+        {'error': ssl.SSLCertVerificationError(1, 'synthetic hostname mismatch')},
+        {'error': ssl.SSLError(1, 'synthetic TLS protocol failure')},
+        {'error': pymysql.err.OperationalError(1045, 'synthetic denied authentication')},
+    ],
+)
+def test_other_connection_failures_keep_native_error_without_tls_advice(monkeypatch, changes):
+    options = dict(banner='8.0.30-MatrixOne-v4.2.8', error=ssl.SSLEOFError(8, 'synthetic EOF'))
+    options.update(changes)
+    _assert_tls_failure(monkeypatch, diagnostic=False, **options)
+
+
+def _assert_tls_failure(monkeypatch, banner, error, diagnostic, capabilities=CLIENT.SSL, secure=False):
+    # Exercise PyMySQL's real connect/error/cleanup owner; inject only the
+    # greeting and authentication I/O. Real TLS trust controls remain online.
+    sock = MagicMock()
+    factory = Mock(return_value=sock)
+    monkeypatch.setattr(pymysql.connections.socket, 'create_connection', factory)
+
+    def greeting(connection):
+        connection.server_version = banner
+        connection.server_capabilities = capabilities
+
+    def authenticate(connection):
+        connection._secure = secure
+        raise error
+
+    monkeypatch.setattr(pymysql.connections.Connection, '_get_server_information', greeting)
+    monkeypatch.setattr(pymysql.connections.Connection, '_request_authentication', authenticate)
+    dialect = Mock()
+    params = dict(
+        host='localhost',
+        user='test',
+        password='synthetic',
+        connect_timeout=3,
+        ssl=ssl.create_default_context(),
+    )
+    with pytest.raises(pymysql.err.OperationalError) as caught:
+        connect_tls(dialect, None, (), params)
+    result = caught.value
+    original = getattr(result, 'original_exception', result)
+    assert original is error
+    assert result.args[0] == (2003 if isinstance(error, OSError) else error.args[0])
+    assert ('buffered TLS handshake fix (#29996)' in str(result)) is diagnostic
+    assert ('TLS negotiation failed before authentication' in str(result)) is diagnostic
+    factory.assert_called_once()
+    sock.close.assert_called_once()
+    sock.makefile.return_value.close.assert_called_once()
+    dialect.connect.assert_not_called()
+
+
+def test_tcp_connect_failure_has_no_tls_release_advice(monkeypatch):
+    original = TimeoutError('synthetic TCP connect timeout')
+    factory = Mock(side_effect=original)
+    monkeypatch.setattr(pymysql.connections.socket, 'create_connection', factory)
+    with pytest.raises(pymysql.err.OperationalError) as caught:
+        connect_tls(Mock(), None, (), {'host': 'localhost', 'ssl': ssl.create_default_context()})
+    assert caught.value.original_exception is original
+    assert caught.value.args[0] == 2003
+    assert 'TLS negotiation failed' not in str(caught.value)
+    factory.assert_called_once()
+
+
+def test_disabled_tls_uses_dialect_creator_and_required_never_connects():
+    dialect = Mock()
+    params = {'ssl_disabled': True}
+    assert connect_tls(dialect, None, ('unchanged',), params) is dialect.connect.return_value
+    dialect.connect.assert_called_once_with('unchanged', **params)
+    dialect.reset_mock()
+    with pytest.raises(pymysql.err.OperationalError, match='TLS negotiation was disabled'):
+        connect_tls(dialect, None, (), params, required=True)
+    dialect.connect.assert_not_called()
+
+
+def test_required_tls_refuses_disabled_negotiation_before_authentication():
+    connection = TLSRequiredConnection.__new__(TLSRequiredConnection)
+    connection.server_capabilities = CLIENT.SSL
+    connection.ssl = False
+    with pytest.raises(pymysql.err.OperationalError, match='TLS negotiation was disabled'):
+        connection._request_authentication()
+
+
+@pytest.mark.parametrize(
+    'banner',
+    [
+        '8.0.30-MatrixOne-v4.2.8-hotfix',
+        '8.0.30-MatrixOne-v4.2.8-hotfix-20261114',
+    ],
+)
+def test_hotfix_detection_populates_client_version_without_git_fallback(monkeypatch, banner):
+    client = Client(logger=Mock())
+    execute = Mock(return_value=SimpleNamespace(rows=[(banner,)]))
+    monkeypatch.setattr(client, 'execute', execute)
+    client._detect_backend_version()
+    assert client.get_backend_version() == '4.2.8'
+    assert client.check_version_compatibility('4.2.8', '==')
+    execute.assert_called_once_with('SELECT version()')

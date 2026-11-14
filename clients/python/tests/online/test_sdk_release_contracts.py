@@ -9,6 +9,7 @@ import pymysql
 from matrixone import with_snapshot
 
 import pytest
+from tests.release_contracts import assert_release_error, native_execute, release_428
 import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base
 
@@ -140,27 +141,49 @@ async def test_stage_comment_native_outcome_is_preserved(client, async_client, k
     c = client if kind == 'sync' else async_client
     native, sdk = name('native_stage_'), name('sdk_stage_')
     try:
-        try:
-            await resolve(c.execute(f"CREATE STAGE {native} URL='file:///tmp/data' COMMENT='O''Reilly'"))
-        except QueryError as error:
-            # These releases reserialize the accepted comment into catalog SQL.
-            assert error.errno in (1064, 1105)
-            assert 'syntax error' in str(error).lower()
+        if release_428(client):
+            import pymysql
+
+            with pytest.raises(pymysql.MySQLError) as original:
+                native_execute(client, f"CREATE STAGE {native} URL='file:///tmp/data' COMMENT='O''Reilly'")
+            assert original.value.args[0] == 1105 and 'syntax error' in str(original.value).lower()
+            with pytest.raises(QueryError) as direct:
+                await resolve(c.execute(f"CREATE STAGE {native} URL='file:///tmp/data' COMMENT='O''Reilly'"))
+            assert_release_error(direct.value, 'stage_literals')
             with pytest.raises(QueryError) as raised:
                 await resolve(c.stage.create(sdk, 'file:///tmp/data', comment="O'Reilly"))
-            assert raised.value.errno == error.errno
-            assert raised.value.orig is raised.value.__cause__
+            assert_release_error(raised.value, 'stage_literals')
             assert (
                 client.execute(
                     'SELECT count(*) FROM mo_catalog.mo_stages WHERE stage_name IN (?,?)', (native, sdk)
                 ).scalar()
                 == 0
             )
-            record_property('matrixone.feature.stage_apostrophe_comment', 'native-limitation:' + str(error.errno))
+            record_property(
+                'matrixone.feature.stage_apostrophe_comment', 'unsupported-with-actionable-error;native-rejected:1105'
+            )
         else:
-            assert (await resolve(c.stage.get(native))).comment == "O'Reilly"
-            assert (await resolve(c.stage.create(sdk, 'file:///tmp/data', comment="O'Reilly"))).comment == "O'Reilly"
-            record_property('matrixone.feature.stage_apostrophe_comment', 'supported')
+            try:
+                await resolve(c.execute(f"CREATE STAGE {native} URL='file:///tmp/data' COMMENT='O''Reilly'"))
+            except QueryError as error:
+                assert error.errno in (1064, 1105) and 'syntax error' in str(error).lower()
+                with pytest.raises(QueryError) as raised:
+                    await resolve(c.stage.create(sdk, 'file:///tmp/data', comment="O'Reilly"))
+                assert raised.value.errno == error.errno
+                assert raised.value.orig is raised.value.__cause__
+                assert (
+                    client.execute(
+                        'SELECT count(*) FROM mo_catalog.mo_stages WHERE stage_name IN (?,?)', (native, sdk)
+                    ).scalar()
+                    == 0
+                )
+                record_property('matrixone.feature.stage_apostrophe_comment', 'native-limitation:' + str(error.errno))
+            else:
+                assert (await resolve(c.stage.get(native))).comment == "O'Reilly"
+                assert (
+                    await resolve(c.stage.create(sdk, 'file:///tmp/data', comment="O'Reilly"))
+                ).comment == "O'Reilly"
+                record_property('matrixone.feature.stage_apostrophe_comment', 'supported')
     finally:
         await resolve(c.stage.drop(native, if_exists=True))
         await resolve(c.stage.drop(sdk, if_exists=True))
@@ -549,17 +572,33 @@ async def test_clone_snapshot_convenience_single_connection_pool(client, server,
         client.execute('DROP TABLE ' + source)
 
 
-def test_fulltext_reserved_and_atomic_column_names(client):
+@pytest.mark.parametrize('first_column', ['order', 'fulltext1', 'body'])
+def test_fulltext_reserved_and_atomic_column_names(client, first_column, record_property):
     from matrixone.sqlalchemy_ext import boolean_match
 
     table = name('quoted_fulltext_')
     client.execute('SET experimental_fulltext_index=1')
-    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY, `order` TEXT, `fulltext2` TEXT)')
+    second_column = 'title' if first_column == 'body' else 'fulltext2'
+    quoted = f'`{first_column}`, `{second_column}`'
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY, `{first_column}` TEXT, `{second_column}` TEXT)')
     try:
         client.execute(f"INSERT INTO {table} VALUES(1,'alpha','alpha'),(2,'beta','beta')")
-        client.execute(f'CREATE FULLTEXT INDEX ft ON {table}(`order`,`fulltext2`)')
-        columns = [sa.Column('order'), sa.Column('fulltext2')]
-        quoted = '`order`, `fulltext2`'
+        ddl = f'CREATE FULLTEXT INDEX ft ON {table}({quoted})'
+        if first_column in ('order', 'fulltext1') and release_428(client):
+            with pytest.raises(QueryError) as rejected:
+                client.execute(ddl)
+            assert_release_error(rejected.value, 'fulltext_identifiers')
+            assert client.execute(f'SELECT id, {quoted} FROM {table} ORDER BY id').rows == [
+                (1, 'alpha', 'alpha'),
+                (2, 'beta', 'beta'),
+            ]
+            record_property(
+                'matrixone.feature.fulltext_' + first_column + '_column', 'unsupported-with-actionable-error'
+            )
+            return
+        client.execute(ddl)
+        record_property('matrixone.feature.fulltext_' + first_column + '_column', 'supported')
+        columns = [sa.Column(first_column), sa.Column(second_column)]
         expected = client.execute(
             f"SELECT id FROM {table} WHERE MATCH({quoted}) AGAINST('+alpha' IN BOOLEAN MODE)"
         ).rows
@@ -586,6 +625,13 @@ def test_fulltext_reserved_and_atomic_column_names(client):
         ]
         for sql in sqls:
             assert [row[0] for row in client.execute(sql).rows] == [1]
+        # OFFSET without a user LIMIT must remain portable to released grammar.
+        for sql in (
+            FulltextQueryBuilder().must('alpha').as_sql(table, columns, offset=1),
+            FulltextSearchBuilder(None).table(table).columns(columns).query('alpha').offset(1).explain(),
+            IndexSearch(table, columns).search('+alpha').set_mode('boolean mode').offset(1).build_sql(),
+        ):
+            assert client.execute(sql).rows == []
         mapped = sa.Table(table, sa.MetaData(), sa.Column('id'), *(sa.Column(column.name) for column in columns))
         statement = select(mapped.c.id).where(
             boolean_match(*[mapped.c[column.name] for column in columns]).must('alpha')

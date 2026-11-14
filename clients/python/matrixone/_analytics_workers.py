@@ -308,6 +308,8 @@ class StagingOperation:
         self._lock = threading.Lock()
         self._path = None
         self._producer = None
+        self._connection_cleanup = None
+        self._connection_cleanup_pending = False
         self._abandoned = False
         self._cleanup_queued = False
         self._cleanup_error = None
@@ -318,6 +320,22 @@ class StagingOperation:
             if self._path is not None:
                 raise RuntimeError('Staging operation already owns a file')
             self._path = path
+
+    def hold_connection_cleanup(self, future):
+        """Charge one probe close to this operation until it really exits."""
+        with self._lock:
+            if self._connection_cleanup is not None or self._cleanup_queued:
+                raise RuntimeError('Staging operation already owns connection cleanup')
+            self._connection_cleanup = future
+            self._connection_cleanup_pending = not future.done()
+        future.add_done_callback(self._connection_cleaned)
+
+    def _connection_cleaned(self, future):
+        with self._lock:
+            self._connection_cleanup_pending = False
+            abandoned = self._abandoned
+        if abandoned:
+            self.finish()
 
     async def prepare(self, function, *args):
         lease = None
@@ -353,7 +371,11 @@ class StagingOperation:
     def finish(self):
         with self._lock:
             self._abandoned = True
-            if self._cleanup_queued or (self._producer is not None and not self._producer.done()):
+            if (
+                self._cleanup_queued
+                or (self._producer is not None and not self._producer.done())
+                or self._connection_cleanup_pending
+            ):
                 return
             self._cleanup_queued = True
         self._owner._enqueue_unlink(self)
@@ -376,6 +398,7 @@ class StagingOperation:
                 'operation_id': self.id,
                 'path': self._path,
                 'worker_running': self._producer is not None and not self._producer.done(),
+                'connection_cleanup_pending': self._connection_cleanup_pending,
                 'cleanup_pending': self._cleanup_queued and not self._cleanup.done(),
                 'cleanup_failed': self._cleanup_error is not None,
             }

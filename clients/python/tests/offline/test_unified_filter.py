@@ -362,9 +362,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age > 25).offset(5)
         sql, params = query._build_sql()
 
-        expected_sql = (
-            'SELECT users.id, users.name, users.email, users.age, users.city FROM users WHERE users.age > 25 OFFSET 5'
-        )
+        expected_sql = 'SELECT users.id, users.name, users.email, users.age, users.city FROM users WHERE users.age > 25 LIMIT 18446744073709551615 OFFSET 5'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 

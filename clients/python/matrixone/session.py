@@ -147,7 +147,13 @@ class Session(SQLAlchemySession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
-            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            from ._driver_execution import driver_parameters
+
+            return self.connection().exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None, '_matrixone_preserve_driver_sql': True},
+            )
         except Exception as error:
             from .client import _classify_db_error
 
@@ -402,12 +408,12 @@ class Session(SQLAlchemySession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
@@ -415,7 +421,6 @@ class Session(SQLAlchemySession):
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -435,13 +440,17 @@ class Session(SQLAlchemySession):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
-                execution_time,
-                success=False,
-                log_mode=log_mode,
-            )
-            self.client.logger.log_error(e, context="Session query execution")
+            try:
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    success=False,
+                    log_mode=log_mode,
+                )
+                self.client.logger.log_error(e, context="Session query execution")
+            except Exception:
+                # A secondary logging failure cannot replace the database error.
+                pass
             from .client import _classify_db_error
 
             classified = _classify_db_error(e, sql_or_stmt)
@@ -725,8 +734,14 @@ class AsyncSession(SQLAlchemyAsyncSession):
         if not isinstance(sql, str):
             raise TypeError('execute_driver requires SQL text')
         try:
+            from ._driver_execution import driver_parameters
+
             connection = await self.connection()
-            return await connection.exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+            return await connection.exec_driver_sql(
+                sql,
+                driver_parameters(params),
+                execution_options={'no_parameters': params is None, '_matrixone_preserve_driver_sql': True},
+            )
         except Exception as error:
             from .client import _classify_db_error
 
@@ -759,12 +774,12 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
         log_mode = kwargs.pop('log_mode', None)
+        original_sql = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
@@ -774,7 +789,6 @@ class AsyncSession(SQLAlchemyAsyncSession):
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
-                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
             execution_time = time.time() - start_time
 
@@ -794,13 +808,17 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
-                execution_time,
-                success=False,
-                log_mode=log_mode,
-            )
-            self.client.logger.log_error(e, context="Async session query execution")
+            try:
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    success=False,
+                    log_mode=log_mode,
+                )
+                self.client.logger.log_error(e, context="Async session query execution")
+            except Exception:
+                # A secondary logging failure cannot replace the database error.
+                pass
             from .client import _classify_db_error
 
             classified = _classify_db_error(e, sql_or_stmt)

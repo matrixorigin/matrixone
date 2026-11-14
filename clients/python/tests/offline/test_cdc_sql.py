@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import List, Optional
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -21,6 +21,11 @@ from matrixone.cdc import (
     CDCWatermarkInfo,
     build_mysql_uri,
 )
+from matrixone.exceptions import QueryError
+
+
+def catalog_unavailable(table="mo_cdc_task"):
+    return QueryError(f"Object not found: mo_catalog.{table} does not exist", errno=1146)
 
 
 def test_build_mysql_uri() -> None:
@@ -292,43 +297,75 @@ class TestCDCManagerSQLGeneration:
         self.manager.show_task("task_x")
         assert self.mock_client.execute.call_args_list[-1][0][0] == "SHOW CDC TASK task_x"
 
-    def test_list_tasks_parses_rows(self) -> None:
-        tables_payload = json.dumps({"table": "test_db.*:sink_db.*"})
-        additional_payload = json.dumps({"MaxSqlLength": 8192})
-
+    def test_list_tasks_preserves_catalog_metadata(self, monkeypatch) -> None:
+        checkpoint = '{\n  "test_db.orders": 2025-11-06 10:30:00 +0000 UTC,\n}'
         mock_row = (
             "task-id-1",
             "cdc_task",
             "mysql://src",
             "mysql://sink",
             "mysql",
-            tables_payload,
-            None,
+            json.dumps({"table": "test_db.orders"}),
+            "db.*",
             None,
             None,
             "running",
-            "2025-11-06 10:30:00",
-            0,
+            checkpoint,
+            1,
             None,
             "2025-11-06 10:00:00",
-            additional_payload,
+            json.dumps({"Frequency": "1h"}),
         )
-
         self.mock_client.execute.return_value = Mock(rows=[mock_row])
         tasks = self.manager.list()
 
-        self.mock_client.execute.assert_called_with(
-            "SELECT task_id, task_name, source_uri, sink_uri, sink_type, tables, filters, "
-            "start_ts, end_ts, state, checkpoint, no_full, err_msg, task_create_time, additional_config "
-            "FROM mo_catalog.mo_cdc_task WHERE account_id = current_account_id()"
-        )
-
+        sql = self.mock_client.execute.call_args.args[0]
+        assert "FROM mo_catalog.mo_cdc_task" in sql
         assert len(tasks) == 1
         task = tasks[0]
         assert task.task_id == "task-id-1"
-        assert task.table_mapping == "test_db.*:sink_db.*"
-        assert task.additional_config == {"MaxSqlLength": 8192}
-        assert task.no_full is False
+        assert task.sink_type == "mysql"
+        assert task.checkpoint == checkpoint
+        assert task.table_mapping == "test_db.orders"
+        assert task.filters == "db.*"
+        assert task.created_time == "2025-11-06 10:00:00"
+        assert task.no_full is True
+        assert task.additional_config == {"Frequency": "1h"}
+
+        class FixedDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2025, 1, 2, 3, 24, 5, tzinfo=datetime.timezone.utc)
+
+        monkeypatch.setattr(
+            cdc_module,
+            "datetime",
+            SimpleNamespace(datetime=FixedDateTime, timezone=datetime.timezone, timedelta=datetime.timedelta),
+        )
+        watermark_row = (
+            "task-id-1",
+            "cdc_task",
+            "test_db",
+            "orders",
+            "2025-01-02T03:04:05+00:00",
+            None,
+        )
+        self.mock_client.execute.side_effect = [Mock(rows=[mock_row]), Mock(rows=[watermark_row])]
+        assert self.manager.list_late_table_watermarks() == []
+
+    @pytest.mark.parametrize("task_name", ["O'Reilly", "x' OR '1'='1", "a;b"])
+    def test_list_filters_exact_name_without_sql_interpolation(self, task_name) -> None:
+        rows = [
+            ("task-id-1", task_name, "src", "sink", "running", None, "{\n}", "snapshot"),
+            ("task-id-2", "unrelated", "src", "sink", "running", None, "{\n}", "snapshot"),
+        ]
+        self.mock_client.execute.side_effect = [catalog_unavailable(), Mock(rows=rows)]
+        assert [task.task_id for task in self.manager.list(task_name)] == ["task-id-1"]
+
+        calls = self.mock_client.execute.call_args_list
+        assert len(calls) == 2
+        assert f"task_name = '{task_name.replace(chr(39), chr(39) * 2)}'" in calls[0].args[0]
+        assert calls[1] == call("SHOW CDC ALL")
 
     def test_get_task_not_found(self) -> None:
         self.mock_client.execute.return_value = Mock(rows=[])
@@ -336,25 +373,37 @@ class TestCDCManagerSQLGeneration:
             self.manager.get("missing")
 
     def test_list_watermarks(self) -> None:
-        watermark_row = (
-            "task-id-1",
-            "cdc_task",
-            "test_db",
-            "orders",
-            "2025-11-06 10:30:00",
-            None,
+        checkpoint = (
+            '{\n'
+            '  "test_db.orders": 2025-11-06 10:30:00 +0000 UTC,\n'
+            '  "test_db.failed": 2025-11-06 10:20:00 +0000 UTC(Failed, error: sink unavailable),\n'
+            '}'
         )
-        self.mock_client.execute.return_value = Mock(rows=[watermark_row])
+        row = ("task-id-1", "cdc_task", "src", "sink", "running", None, checkpoint, "snapshot")
+        self.mock_client.execute.side_effect = [catalog_unavailable("mo_cdc_watermark"), Mock(rows=[row])]
         marks = self.manager.list_watermarks("cdc_task")
 
-        self.mock_client.execute.assert_called_with(
-            "SELECT w.task_id, t.task_name, w.db_name, w.table_name, w.watermark, w.err_msg "
-            "FROM mo_catalog.mo_cdc_watermark w JOIN mo_catalog.mo_cdc_task t ON w.task_id = t.task_id "
-            "WHERE w.account_id = current_account_id() AND t.task_name = 'cdc_task'"
-        )
+        assert self.mock_client.execute.call_args_list[-1] == call("SHOW CDC ALL")
+        assert [(mark.database, mark.table) for mark in marks] == [("test_db", "orders"), ("test_db", "failed")]
+        assert marks[0].watermark == "2025-11-06 10:30:00 +0000 UTC"
+        assert marks[0].err_msg is None
+        assert marks[1].err_msg == "sink unavailable"
 
-        assert len(marks) == 1
-        assert marks[0].table == "orders"
+    def test_list_watermarks_preserves_multiline_errors(self) -> None:
+        checkpoint = (
+            '{\n'
+            '  "test_db.failed": 2025-11-06 10:20:00 +0000 UTC(Failed, error: first line\n'
+            'second line),\n'
+            '  "test_db.orders": 2025-11-06 10:30:00 +0000 UTC,\n'
+            '}'
+        )
+        row = ("task-id-1", "cdc_task", "src", "sink", "running", None, checkpoint, "snapshot")
+        self.mock_client.execute.side_effect = [catalog_unavailable("mo_cdc_watermark"), Mock(rows=[row])]
+        marks = self.manager.list_watermarks("cdc_task")
+        assert [(mark.table, mark.err_msg) for mark in marks] == [
+            ("failed", "first line\nsecond line"),
+            ("orders", None),
+        ]
 
     def test_list_late_table_watermarks_parses_hlc_timestamp(self, monkeypatch) -> None:
         class FixedDateTime(datetime.datetime):
@@ -522,32 +571,33 @@ class TestAsyncCDCManagerSQLGeneration:
                 "task-id-2",
                 "async_task",
                 "mysql://src",
-                "mysql://sink",
-                "mysql",
-                json.dumps({"table": "db.table"}),
-                None,
-                None,
-                None,
+                json.dumps({"_": "mysql"}),
                 "paused",
-                None,
-                1,
                 "error",
-                "2025-11-06 11:00:00",
-                None,
+                '{\n  "db.table": 2025-11-06 11:00:00 +0000 UTC,\n}',
+                "2025-11-06 10:00:00",
             )
         ]
         mock_executor = Mock()
-        mock_executor.execute = AsyncMock()
-        mock_executor.execute.return_value = Mock(rows=rows)
+        mock_executor.execute = AsyncMock(
+            side_effect=[
+                catalog_unavailable(),
+                Mock(rows=rows),
+                catalog_unavailable("mo_cdc_watermark"),
+                Mock(rows=rows),
+            ]
+        )
         manager = AsyncCDCManager(client=None, executor=mock_executor)
 
         tasks = await manager.list()
+        watermarks = await manager.list_watermarks("async_task")
 
-        mock_executor.execute.assert_called_with(
-            "SELECT task_id, task_name, source_uri, sink_uri, sink_type, tables, filters, "
-            "start_ts, end_ts, state, checkpoint, no_full, err_msg, task_create_time, additional_config "
-            "FROM mo_catalog.mo_cdc_task WHERE account_id = current_account_id()"
-        )
-
-        assert tasks[0].no_full is True
+        calls = mock_executor.execute.call_args_list
+        assert calls[0].args[0].startswith("SELECT task_id")
+        assert calls[1] == call("SHOW CDC ALL")
+        assert calls[2].args[0].startswith("SELECT w.task_id")
+        assert calls[3] == call("SHOW CDC ALL")
+        assert tasks[0].sink_type == "mysql"
         assert tasks[0].err_msg == "error"
+        assert tasks[0].no_full is None
+        assert [(mark.database, mark.table) for mark in watermarks] == [("db", "table")]

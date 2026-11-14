@@ -31,8 +31,9 @@ import sys
 import os
 import warnings
 from unittest.mock import Mock, MagicMock, patch
-from sqlalchemy import Column, Integer, String, Text
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Float, Integer, String, Text, select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.orm import Session, declarative_base
 
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -234,7 +235,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
         """Test compatibility with MatrixOne test case syntax."""
         # Test case: Basic boolean with score
         expr = boolean_match("body", "title").must("fast").encourage("red").label("score")
-        sql = expr.compile()
+        sql = TestFulltextLabel.compile_projection(expr)
         self.assertIn("MATCH(`body`, `title`)", sql)
         self.assertIn("+fast", sql)
         self.assertIn("red", sql)
@@ -424,102 +425,87 @@ class TestFulltextEdgeCases(unittest.TestCase):
 
 
 class TestFulltextLabel(unittest.TestCase):
-    """Test FulltextFilter label functionality - from test_fulltext_label.py"""
+    """Labels remain native SQLAlchemy expressions in Core and ORM statements."""
 
-    def test_basic_boolean_label(self):
-        """Test basic boolean match with label."""
+    @staticmethod
+    def compile_projection(expr):
+        return str(select(expr).compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    def test_boolean_label(self):
+        """Boolean MATCH keeps its label inside a real SELECT."""
         expr = boolean_match("title", "content").must("python").label("score")
-        sql = expr.compile()
+        expected = "SELECT MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score"
+        self.assertEqual(self.compile_projection(expr), expected)
 
-        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score"
-        self.assertEqual(sql, expected)
-
-    def test_basic_natural_label(self):
-        """Test basic natural language match with label."""
+    def test_natural_label(self):
+        """Natural-language MATCH keeps its label inside a real SELECT."""
         expr = natural_match("title", "content", query="machine learning").label("relevance")
-        sql = expr.compile()
+        expected = "SELECT MATCH(`title`, `content`) AGAINST('machine learning') AS relevance"
+        self.assertEqual(self.compile_projection(expr), expected)
 
-        expected = "MATCH(`title`, `content`) AGAINST('machine learning') AS relevance"
-        self.assertEqual(sql, expected)
+    def test_phrase_and_wildcard_labels(self):
+        """Query quoting and labels compile independently."""
+        phrase = boolean_match("title", "content").must('"machine learning"').label("phrase_score")
+        wildcard = boolean_match("title", "content").must("python*").label("wildcard_score")
+        self.assertIn(
+            'AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score', self.compile_projection(phrase)
+        )
+        self.assertIn("AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score", self.compile_projection(wildcard))
 
-    def test_phrase_search_label(self):
-        """Test phrase search with label."""
-        expr = boolean_match("title", "content").must('"machine learning"').label("phrase_score")
-        sql = expr.compile()
+    def test_independent_labels(self):
+        """Two labels retain their own queries and names."""
+        python_score = boolean_match("title", "content").must("python").label("python_score")
+        java_score = boolean_match("title", "content").must("java").label("java_score")
+        self.assertIn("AGAINST('+python' IN BOOLEAN MODE) AS python_score", self.compile_projection(python_score))
+        self.assertIn("AGAINST('+java' IN BOOLEAN MODE) AS java_score", self.compile_projection(java_score))
 
-        expected = 'MATCH(`title`, `content`) AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score'
-        self.assertEqual(sql, expected)
+    def test_special_and_unicode_query_labels(self):
+        """Special and Unicode query text remains intact."""
+        cpp = boolean_match("title", "content").must("C++").label("cpp_score")
+        unicode_expr = natural_match("title", "content", query="机器学习").label("ml_score")
+        self.assertIn("AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score", self.compile_projection(cpp))
+        self.assertIn("AGAINST('机器学习') AS ml_score", self.compile_projection(unicode_expr))
 
-    def test_wildcard_search_label(self):
-        """Test wildcard search with label."""
-        expr = boolean_match("title", "content").must("python*").label("wildcard_score")
-        sql = expr.compile()
+    def test_identifier_quoting_and_float_type(self):
+        """Dialect quoting and numeric result typing are preserved."""
+        labels = [
+            ('python score', '`python score`'),
+            ('score_123', 'score_123'),
+            ('python_relevance_score', 'python_relevance_score'),
+            (
+                'very_long_label_name_for_fulltext_search_relevance_scoring',
+                'very_long_label_name_for_fulltext_search_relevance_scoring',
+            ),
+        ]
+        for name, rendered in labels:
+            with self.subTest(label=name):
+                expr = boolean_match("title", "content").must("python").label(name)
+                self.assertTrue(self.compile_projection(expr).endswith(' AS ' + rendered))
+                self.assertIsInstance(expr.type, Float)
 
-        expected = "MATCH(`title`, `content`) AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score"
-        self.assertEqual(sql, expected)
+    def test_standalone_compile_follows_native_sqlalchemy_contract(self):
+        """The legacy pseudo-label string is replaced by SQLAlchemy Compiled."""
+        from sqlalchemy.sql.compiler import Compiled
 
-    def test_multiple_labels(self):
-        """Test multiple labels on different expressions."""
-        expr1 = boolean_match("title", "content").must("python").label("python_score")
-        expr2 = boolean_match("title", "content").must("java").label("java_score")
+        expr = boolean_match("title", "content").must("python").label("score")
+        compiled = expr.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True})
+        self.assertIsInstance(compiled, Compiled)
+        self.assertEqual(str(compiled), "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE)")
+        self.assertTrue(self.compile_projection(expr).endswith(" AS score"))
 
-        sql1 = expr1.compile()
-        sql2 = expr2.compile()
+    def test_orm_coercion(self):
+        """ORM add_columns accepts the label without adapter-specific coercion."""
 
-        expected1 = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
-        expected2 = "MATCH(`title`, `content`) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
+        class Document(Base):
+            __tablename__ = "label_documents"
+            id = Column(Integer, primary_key=True)
 
-        self.assertEqual(sql1, expected1)
-        self.assertEqual(sql2, expected2)
-
-    def test_special_characters_label(self):
-        """Test special characters in query with label."""
-        expr = boolean_match("title", "content").must("C++").label("cpp_score")
-        sql = expr.compile()
-
-        expected = "MATCH(`title`, `content`) AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score"
-        self.assertEqual(sql, expected)
-
-    def test_unicode_label(self):
-        """Test unicode characters with label."""
-        expr = natural_match("title", "content", query="机器学习").label("ml_score")
-        sql = expr.compile()
-
-        expected = "MATCH(`title`, `content`) AGAINST('机器学习') AS ml_score"
-        self.assertEqual(sql, expected)
-
-    def test_numeric_label(self):
-        """Test numeric label name."""
-        expr = boolean_match("title", "content").must("python").label("score_123")
-        sql = expr.compile()
-
-        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score_123"
-        self.assertEqual(sql, expected)
-
-    def test_underscore_label(self):
-        """Test underscore in label name."""
-        expr = boolean_match("title", "content").must("python").label("python_relevance_score")
-        sql = expr.compile()
-
-        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_relevance_score"
-        self.assertEqual(sql, expected)
-
-    def test_long_label(self):
-        """Test long label name."""
-        long_label = "very_long_label_name_for_fulltext_search_relevance_scoring"
-        expr = boolean_match("title", "content").must("python").label(long_label)
-        sql = expr.compile()
-
-        expected = f"MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS {long_label}"
-        self.assertEqual(sql, expected)
-
-    def test_label_with_spaces(self):
-        """Test label name with spaces."""
-        expr = boolean_match("title", "content").must("python").label("python score")
-        sql = expr.compile()
-
-        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python score"
-        self.assertEqual(sql, expected)
+        score = boolean_match("title", "content").must("python").label("score")
+        with Session() as session:
+            statement = session.query(Document).add_columns(score).statement
+        compiled = str(statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+        self.assertIn("MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score", compiled)
+        self.assertIs(statement._raw_columns[1].type, score.type)
 
 
 class TestFulltextParserSupport(unittest.TestCase):
