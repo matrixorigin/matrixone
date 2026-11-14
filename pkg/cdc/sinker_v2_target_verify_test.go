@@ -525,6 +525,8 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 		{"valid year display width", []column{{"id", "int"}, {"v", "year(4)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
 		{"valid MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
 		{"different MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, nil, false, "column 2"},
+		{"valid MO bool alias", []column{{"id", "int"}, {"b", "tinyint(1)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
+		{"MO bool alias rejects plain tinyint source", []column{{"id", "int"}, {"b", "tinyint(1)"}}, nil, false, "column 2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -547,6 +549,12 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				def.Cols[1].Typ = plan.Type{Id: int32(types.T_year), Width: 4}
 			case "valid MO float scale", "different MO float scale":
 				def.Cols[1].Typ = plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}
+			case "valid MO bool alias":
+				def.Cols[1].Name = "b"
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_bool)}
+			case "MO bool alias rejects plain tinyint source":
+				def.Cols[1].Name = "b"
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_int8)}
 			}
 			if tc.unique {
 				def.Indexes = []*plan.IndexDef{{IndexName: "uk_v", Parts: []string{"v"}, Unique: true}}
@@ -571,7 +579,8 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(columnRows)
 			if len(tc.columns) == 2 && tc.columns[0].name == "id" &&
 				(tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" ||
-					tc.name == "valid year display width" || tc.name == "valid MO float scale") {
+					tc.name == "valid year display width" || tc.name == "valid MO float scale" ||
+					tc.name == "valid MO bool alias") {
 				indexRows := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"})
 				for _, idx := range tc.indexes {
 					indexRows.AddRow(idx.name, idx.nonUnique, idx.sequence, idx.column, idx.prefix)
@@ -652,7 +661,72 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	}
 
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
-	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+	// Issue #31749 flips the MO target contract: a current-generation MO
+	// target renders its physical-BOOL COLUMN_TYPE as the raw alias
+	// tinyint(1), so a native BOOL source verifies against it instead of
+	// raising a column-mismatch error. The alias boundary lives in
+	// TestCDCTargetMOPhysicalBoolAliasVerifiesOnlyBoolSources; this line
+	// keeps the sink-type pair honest.
+	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+}
+
+// Issue #31749: a current-generation MO target aliases its physical-BOOL
+// COLUMN_TYPE to the raw token tinyint(1), while a native MO integer target
+// never renders a display width (types.FormatSQLColumnType ignores integer
+// widths), so the exact raw token identifies a physical BOOL target alone.
+// It must be gated before the normalized want==got comparison, which strips
+// the display width and would otherwise admit every tinyint source as a
+// false positive; only a native BOOL source may sink into the alias. Legacy
+// MO 'boolean'/'bool' spellings keep the normalized path and MySQL keeps its
+// display-width-tolerant contract.
+func TestCDCTargetMOPhysicalBoolAliasVerifiesOnlyBoolSources(t *testing.T) {
+	for _, target := range []string{"tinyint(1)", "TinyInt(1)", " tinyint(1) "} {
+		require.True(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}), target)
+	}
+	// The T_int8 pair is the false positive this regression must close: the
+	// normalized forms of tinyint(1) and a T_int8 source collapse onto the
+	// same token, so the raw alias alone restores the BOOL-target distinction.
+	for _, wrong := range []plan.Type{
+		{Id: int32(types.T_int8)},
+		{Id: int32(types.T_int8), Width: 1},
+		{Id: int32(types.T_uint8)},
+		{Id: int32(types.T_int16)},
+		{Id: int32(types.T_uint64)},
+		{Id: int32(types.T_varchar)},
+		{Id: int32(types.T_decimal64)},
+	} {
+		require.False(t, cdcTargetColumnTypeMatches(
+			wrong, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}), "id %d width %d", wrong.Id, wrong.Width)
+	}
+	// The alias is fail-closed on non-alias spellings: a current-generation MO
+	// target never renders them, so mismatches keep the generic comparison
+	// instead of being folded into the BOOL alias.
+	for _, notAlias := range []string{"tinyint", "tinyint(2)", "tinyint ( 1 )"} {
+		require.False(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, notAlias, CDCSinkType_MO, sql.NullInt64{}), notAlias)
+	}
+	// Legacy MO spellings keep their normalized-path contract: a BOOL source
+	// binds them, an integer source does not.
+	for _, legacy := range []string{"BOOLEAN", "boolean", "BOOL", "BOOL(0)"} {
+		require.True(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_bool)}, legacy, CDCSinkType_MO, sql.NullInt64{}), legacy)
+		require.False(t, cdcTargetColumnTypeMatches(
+			plan.Type{Id: int32(types.T_int8)}, legacy, CDCSinkType_MO, sql.NullInt64{}), legacy)
+	}
+	// MySQL keeps its integer display-width tolerance: BOOL renders tinyint(1)
+	// and plain tinyint targets keep binding every integer source.
+	require.True(t, cdcTargetColumnTypeMatches(
+		plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
+	require.True(t, cdcTargetColumnTypeMatches(
+		plan.Type{Id: int32(types.T_int8)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
+	// Producer premise: the native MO integer formatter ignores declared
+	// display widths and the global BOOLEAN spelling is unchanged, so the raw
+	// alias can never collide with a native integer target's COLUMN_TYPE and
+	// the CDC source rendering still normalizes to bool.
+	require.Equal(t, "TINYINT", plan2.FormatColType(plan.Type{Id: int32(types.T_int8), Width: 1}))
+	require.Equal(t, "BOOLEAN", plan2.FormatColType(plan.Type{Id: int32(types.T_bool)}))
+	require.Equal(t, "bool", normalizeCDCTargetColumnType("BOOLEAN"))
 }
 
 func TestCDCTargetIdentityRetryContract(t *testing.T) {

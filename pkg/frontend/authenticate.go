@@ -3777,10 +3777,13 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
-		wasIndexAdmin := verifyAccountCanExecMoCtrl(account)
+		previousRoleID := account.GetDefaultRoleID()
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
-		if wasIndexAdmin != verifyAccountCanExecMoCtrl(account) {
+		// A prepared plan was bound under the previous active role. Rebuild it
+		// before reuse even when neither role has rewrite rules: object-level
+		// admission (including physical-index reads) depends on this role.
+		if previousRoleID != account.GetDefaultRoleID() {
 			ses.invalidateCachedPlans(true)
 		}
 		// then, reset secondary role to none
@@ -10177,6 +10180,18 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	arr, err := extractPrivilegeTipsFromPlan(sourcePlan)
 	if err != nil {
 		return false, stats, err
+	}
+	// A CTAS source over a saved query result carries no table-scan tips, and
+	// the CTAS follow-up INSERT ... SELECT runs through the internal executor,
+	// whose compile path does not re-verify result-query access. Apply the same
+	// saved-result source re-verification the direct SELECT path uses, so a
+	// role whose source SELECT privilege is missing or revoked cannot copy the
+	// saved result by CTAS. Plain sources have no result scans and return here
+	// with no extra cost.
+	resultStats, resultErr := checkResultQueryPrivilege(compilerContext.GetProcess(), sourcePlan, ctx, ses.GetService(), ses)
+	stats.Add(&resultStats)
+	if resultErr != nil {
+		return false, stats, resultErr
 	}
 	if len(arr) == 0 {
 		return true, stats, nil

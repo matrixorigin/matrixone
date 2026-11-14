@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
@@ -157,17 +158,17 @@ func TestIvfflatJoinBackScanIsNarrow(t *testing.T) {
 	builder, scanNode := rewriteIvfflatProjectingTitle(t, nil)
 	require.True(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"a projected column outside the index must be read back from the base table")
-	require.True(t, scanNode.NarrowScan)
+	require.True(t, readsColumnRanges(scanNode))
 }
 
 func TestIvfflatPreFilterJoinBackScanIsNarrow(t *testing.T) {
 	builder, scanNode := rewriteIvfflat(t, nil, true)
 	require.True(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"the pre-filtered candidates are joined back to the base table")
-	require.True(t, scanNode.NarrowScan)
+	require.True(t, readsColumnRanges(scanNode))
 	for _, n := range builder.qry.Nodes {
 		if n.NodeType == plan.Node_TABLE_SCAN && n != scanNode && n.TableDef.GetName() == "t1" {
-			require.False(t, n.NarrowScan, "the filter scan reads the whole base table")
+			require.False(t, readsColumnRanges(n), "the filter scan reads the whole base table")
 		}
 	}
 }
@@ -176,12 +177,18 @@ func TestIvfflatIndexOnlyBaseScanIsNotNarrow(t *testing.T) {
 	builder, scanNode := rewriteIvfflatProjectingTitle(t, []string{"title"})
 	require.False(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"an INCLUDE column is served by the index without reading the base table")
-	require.False(t, scanNode.NarrowScan)
+	require.False(t, readsColumnRanges(scanNode))
 }
 
-func TestDeepCopyNodeKeepsNarrowScan(t *testing.T) {
-	for _, v := range []bool{false, true} {
-		node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: v}
-		require.Equal(t, v, DeepCopyNode(node).NarrowScan)
-	}
+func TestDeepCopyNodeKeepsReadPolicy(t *testing.T) {
+	node := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
+	readColumnRanges(node)
+	require.Equal(t, node.ReadPolicy, DeepCopyNode(node).ReadPolicy)
+}
+
+// readsColumnRanges reports whether a scan prefetches only its columns and never
+// downloads whole objects.
+func readsColumnRanges(n *plan.Node) bool {
+	p := fileservice.Policy(n.ReadPolicy)
+	return p.Any(fileservice.ColumnPrefetch) && p.Any(fileservice.SkipFullFilePreloads)
 }

@@ -1833,6 +1833,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
+		if node.NodeType == plan.Node_TABLE_SCAN && readsSubsetOfColumns(originalCols, newTableDef.Cols) {
+			readColumnRanges(node)
+		}
 		node.TableDef = newTableDef
 
 		colMap := maps.Clone(internalRemapping.globalToLocal)

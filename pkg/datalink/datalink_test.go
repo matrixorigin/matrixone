@@ -177,3 +177,41 @@ func TestLogicalStageDatalink(t *testing.T) {
 		require.Equal(t, "bad", number.Num)
 	}
 }
+
+func TestStageDatalinkRequiresProcess(t *testing.T) {
+	consumers := []struct {
+		name string
+		run  func(*testing.T, string) error
+	}{
+		{name: "parse", run: func(t *testing.T, uri string) error {
+			path, bounds, err := ParseDatalink(uri, nil)
+			require.Empty(t, path)
+			require.Nil(t, bounds)
+			return err
+		}},
+		{name: "validate", run: func(_ *testing.T, uri string) error { return ValidateDatalink(uri, nil) }},
+		{name: "new", run: func(t *testing.T, uri string) error {
+			got, err := NewDatalink(uri, nil)
+			require.Zero(t, got)
+			return err
+		}},
+		{name: "new async", run: func(t *testing.T, uri string) error {
+			got, err := NewAsyncDatalink(uri, nil)
+			require.Zero(t, got)
+			return err
+		}},
+		{name: "validate async", run: func(_ *testing.T, uri string) error { return ValidateAsyncDatalinkSource(uri, nil) }},
+	}
+	for _, tc := range []struct{ name, uri string }{
+		{name: "path form", uri: "stage:///a/b/c/1.txt?size=c"},
+		{name: "host form", uri: "stage://a/b/c/1.txt?size=c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, consumer := range consumers {
+				t.Run(consumer.name, func(t *testing.T) {
+					require.ErrorContains(t, consumer.run(t, tc.uri), "stage catalog lookup requires an initialized process")
+				})
+			}
+		})
+	}
+}

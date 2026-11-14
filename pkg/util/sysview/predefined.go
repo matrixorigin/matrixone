@@ -482,6 +482,38 @@ func informationSchemaColumnsPhysicalIndexDDL() string {
 	return strings.Replace(ddl, subscriptionView, subscriptionView+" AND "+catalog.NonIndexRelationSQLPredicate("mt"), 1)
 }
 
+// informationSchemaColumnsBoolTinyIntOneColumnsTypeOver renders the
+// physical-BOOL COLUMN_TYPE as MySQL's tinyint(1) (issue #31749) on every one
+// of the four current branches: local mo_columns, derived mo_view_columns,
+// mo_subscription_columns and mo_subscription_view_columns all describe the
+// same physical BOOL value, and one left arm composes over the shared inner
+// projection each branch already carries. The native-BOOL predicate is the
+// two-argument mo_show_visible_bin mode-2 token the DATA_TYPE arm already
+// trusts, checked before the enumerated/mode-3 arm so no other type changes
+// rendering: DATA_TYPE keeps 'TINYINT', mode 3 keeps spelling bare physical
+// types, and the wire OID, SHOW CREATE/dump renderers and every frozen
+// historical template stay untouched (CDC gates the raw alias separately in
+// the target verifier). Ancient constructs only (upper, case, string
+// literals), so the persisted definition stays frozen-template safe; the
+// replacement wraps the shared inner projection without changing the
+// varchar(65535) header cast or the attributed-DECIMAL suffix of the local
+// branch.
+func informationSchemaColumnsBoolTinyIntOneColumnsTypeOver(base string) string {
+	const enumOrVisibleColumnType = "(case when length(mc.attr_enum) > 0 then " +
+		"mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end)"
+	return strings.ReplaceAll(base, enumOrVisibleColumnType,
+		"case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'tinyint(1)' else "+
+			enumOrVisibleColumnType+" end")
+}
+
+// informationSchemaColumnsWithBoolTinyIntOneDDL is the current identity
+// derivation: the physical-BOOL tinyint(1) COLUMN_TYPE left arm over the
+// merged physical-index-filtered template.
+func informationSchemaColumnsWithBoolTinyIntOneDDL() string {
+	return informationSchemaColumnsBoolTinyIntOneColumnsTypeOver(
+		informationSchemaColumnsPhysicalIndexDDL())
+}
+
 // The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
 // from its frozen V109 lineage: the pre-change current text is exactly the
 // V109 historical constructor with this arm layered into DATA_TYPE.
@@ -661,9 +693,8 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // binaries persisted as their current definition: the protocol-100
 // definition, the V110 MEDIUMINT template, its base-era NULL-selector
 // variant, the upstream 4.0.18 published identity, the pre-change identity
-// of the DEFAULT_GENERATED revision, and the current
-// (merged) definition. The historical protocol-109
-// definition is an input to the adapter, not a migration gate.
+// of the DEFAULT_GENERATED revision, and the current (merged) definition. The historical
+// protocol-109 definition is an input to the adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewDDL(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
@@ -915,7 +946,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL             = informationSchemaColumnsPhysicalIndexDDL()
+	InformationSchemaColumnsDDL             = informationSchemaColumnsWithBoolTinyIntOneDDL()
 	InformationSchemaColumnsLocalCurrentDDL = informationSchemaColumnsWithLocalPhysicalIndexFilter(InformationSchemaColumnsV41DDL)
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
