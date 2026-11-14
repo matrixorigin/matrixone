@@ -156,6 +156,82 @@ func TestCompileFilterExprComparisonOrientation(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprLegacyBoolZoneMap(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	// 复用真实对象布局，只注入摘要，避免手工构造不可能到达的元数据。
+	writer := ioutil.ConstructWriter(0, []uint16{0}, 0, false, false, fs)
+	func() {
+		input := batch.NewWithSize(1)
+		defer input.Clean(mp)
+		input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{false, true}, nil, mp))
+		input.SetRowCount(2)
+		_, err := writer.WriteBatch(input)
+		require.NoError(t, err)
+	}()
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	original, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	require.NoError(t, err)
+
+	for _, sorted := range []bool{false, true} {
+		for _, storedMax := range []bool{false, true} {
+			for _, bound := range []bool{false, true} {
+				t.Run(fmt.Sprintf("sorted=%v/stored=%v/bound=%v", sorted, storedMax, bound), func(t *testing.T) {
+					meta := append(objectio.ObjectMeta(nil), original...)
+					data := meta.MustDataMeta()
+					// false/false 可能来自旧的混合块；true/true 则可精确排除 false。
+					zm := index.BuildZM(types.T_bool, types.EncodeBool(&storedMax))
+					data.MustGetColumn(0).SetZoneMap(zm)
+					data.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(zm)
+					var objectStats objectio.ObjectStats
+					require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&objectStats, zm))
+					table := &plan.TableDef{
+						Name2ColIndex: map[string]int32{"v": 0},
+						Cols:          []*plan.ColDef{{Name: "v", Seqnum: 0, ClusterBy: sorted, Typ: plan.Type{Id: int32(types.T_bool)}}},
+					}
+					expr := MakeFunctionExprForTest("=", []*plan.Expr{
+						MakeColExprForTest(0, types.T_bool, "v"),
+						{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{
+							Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeBool(&bound)},
+						}},
+					})
+					fast, _, object, block, seek, can, _ := CompileFilterExpr(expr, table, nil)
+					require.True(t, can)
+					want := !storedMax || bound
+					keep, err := object(meta, nil)
+					require.NoError(t, err)
+					require.Equal(t, sorted || want, keep, "对象摘要")
+					stop, keep, err := block(0, data.GetBlockMeta(0), nil)
+					require.NoError(t, err)
+					require.Equal(t, want, keep, "块摘要")
+					if want {
+						require.False(t, stop)
+					}
+					if fast != nil {
+						keep, err := fast(&objectStats)
+						require.NoError(t, err)
+						require.Equal(t, want, keep, "排序键摘要")
+					}
+					if seek != nil && want {
+						require.Zero(t, seek(data), "不能跳过可能含 true 的旧块")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
