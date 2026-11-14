@@ -3174,7 +3174,13 @@ func createPrepareStmtInSession(
 	}
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
+	execCtx.directIndexReadAdmitted = false
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
+		// Quoted SQL PREPARE starts with PrepareString in the outer request,
+		// while authorization must inspect the parsed PrepareStmt being bound.
+		previousStmt := execCtx.stmt
+		execCtx.stmt = stmt
+		defer func() { execCtx.stmt = previousStmt }()
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})
@@ -3255,6 +3261,7 @@ func createPrepareStmtInSession(
 		divPrecisionIncrementSet: true,
 		remapDb:                  maps.Clone(execCtx.remapDb),
 		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
+		directIndexReadAdmitted:  execCtx.directIndexReadAdmitted,
 		tempTableVersion:         owner.GetTempTableVersion(),
 		ddlVersion:               owner.getDDLVersion(),
 		cloneSQL:                 cloneSQL,
