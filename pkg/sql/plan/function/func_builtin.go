@@ -323,12 +323,14 @@ func formatLegacyColumnType(typ types.Type) (string, bool) {
 	case types.T_float32:
 		// FLOAT(24) and wider is parsed as DOUBLE; keep the legacy spelling
 		// only when replay preserves FLOAT and there is no omitted scale.
-		if typ.Scale == -1 && typ.Width < 24 {
+		// System view expressions also represent unspecified precision and scale
+		// as (0, 0), so retain their existing FLOAT(0) metadata.
+		if (typ.Scale == -1 || (typ.Width == 0 && typ.Scale == 0)) && typ.Width < 24 {
 			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
 		}
 		return "", false
 	case types.T_float64:
-		if typ.Scale == -1 {
+		if typ.Scale == -1 || (typ.Width == 0 && typ.Scale == 0) {
 			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
 		}
 		return "", false
