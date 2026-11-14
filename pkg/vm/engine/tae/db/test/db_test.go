@@ -14359,17 +14359,34 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 	tae.ForceCheckpoint()
 
 	ickp := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	historyStart, historyEnd := ickp.GetStart(), ickp.GetEnd()
+	// Cross the table-ID writer's batch boundary without an arbitrary 100k-row
+	// fixture. Verify the actual persisted batches below, not just this count.
+	historicalRows := logtail.BatchRowCountThreshold + 17
 
 	locations, err := logtail.MockTableIDBatch(
 		ctx,
 		ickp.GetStart(),
 		ickp.GetEnd(),
 		64*2014*2014,
-		100000,
+		historicalRows,
 		common.CheckpointAllocator,
 		tae.Opts.Fs,
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	predecessor, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, tae.Opts.Fs)
+	require.NoError(t, err)
+	predecessorBatches := 0
+	for {
+		release, _, isEnd, err := predecessor.Read(ctx)
+		require.NoError(t, err)
+		if isEnd {
+			break
+		}
+		predecessorBatches++
+		release()
+	}
+	require.GreaterOrEqual(t, predecessorBatches, 2, "fixture must span persisted batches")
 	ickp.SetTableIDLocation(locations)
 	for i := 0; i < locations.Len(); i++ {
 		t.Log(locations.Get(i).String())
@@ -14381,8 +14398,20 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 		tableSchema.Name = fmt.Sprintf("table_%d", i)
 		testutil.CreateRelationAndAppend2(t, 0, tae.DB, "db", tableSchema, bats[0], i == 0)
 	}
+	txn, err := tae.DB.StartTxn(nil)
+	require.NoError(t, err)
+	database, err := txn.GetDatabase("db")
+	require.NoError(t, err)
+	userDBID := database.GetID()
+	userRows := make(map[uint64]int, tableCount)
+	for i := 0; i < tableCount; i++ {
+		relation, err := database.GetRelationByName(fmt.Sprintf("table_%d", i))
+		require.NoError(t, err)
+		userRows[relation.ID()] = 0
+	}
+	require.NoError(t, txn.Commit(ctx))
 
-	// This checkpoint merges the 100k historical table-ID fixture above. Keep
+	// This checkpoint merges the multi-batch historical table-ID fixture. Keep
 	// the timeout local to this stress case: the generic test helper uses 5s,
 	// which is shorter than this merge can take under race-enabled CI load.
 	checkpointCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -14394,18 +14423,60 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 
 	locations = ickp.GetTableIDLocation()
 	reader, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, tae.Opts.Fs)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	rowCount := 0
+	batchCount := 0
+	historicalIDs := make(map[uint64]int, historicalRows)
+	specialRows := 0
+	invalidHistoricalRows := 0
 	for {
 		release, bat, isEnd, err := reader.Read(ctx)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		if isEnd {
 			break
 		}
+		batchCount++
 		rowCount += bat.RowCount()
+		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
+		dbIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+		for i := 0; i < bat.RowCount(); i++ {
+			switch {
+			case tableIDs[i] == logtail.CKPTableIDBatch_SpecialTableID:
+				specialRows++
+			case dbIDs[i] == 3000:
+				historicalIDs[tableIDs[i]]++
+				if accounts[i] != 0 || starts[i] != historyStart || ends[i] != historyEnd {
+					invalidHistoricalRows++
+				}
+			case dbIDs[i] == userDBID:
+				if _, ok := userRows[tableIDs[i]]; ok {
+					userRows[tableIDs[i]]++
+				}
+			}
+		}
 		release()
 	}
-	assert.Equal(t, 100000+1+3+2, rowCount) // 100000 mock, 1 special, 3 mo_catalog tables, 2 user tables
+	require.GreaterOrEqual(t, batchCount, 2)
+	require.Equal(t, historicalRows+1+3+tableCount, rowCount) // history, special, catalog, user
+	require.Len(t, historicalIDs, historicalRows)
+	require.Zero(t, invalidHistoricalRows)
+	for i := 0; i < historicalRows; i++ {
+		if count := historicalIDs[uint64(1000+i)]; count != 1 {
+			t.Fatalf("historical table %d occurs %d times", i, count)
+		}
+	}
+	for tableID, count := range userRows {
+		require.Equal(t, 1, count, "user table %d", tableID)
+	}
+	require.Equal(t, 1, specialRows)
+	coveredStart, coveredEnd, known, err := logtail.ReadTableIDHistoryRange(ctx, locations, common.CheckpointAllocator, tae.Opts.Fs)
+	require.NoError(t, err)
+	require.True(t, known)
+	require.False(t, coveredStart.GT(&historyEnd))
+	require.False(t, coveredEnd.LT(&historyEnd))
 }
 
 func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
