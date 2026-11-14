@@ -765,6 +765,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, pla
 	}()
 	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
 	defer task.End()
+	if err = rejectSnapshotQualifiedWriteTarget(ctx, stmt); err != nil {
+		return nil, err
+	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		if stmt.IsPerform && selectHasExportParam(stmt) {

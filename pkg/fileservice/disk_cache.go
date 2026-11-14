@@ -338,6 +338,42 @@ func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileI
 	d.cache.SetOldest(ctx, diskPath, struct{}{}, int64(fileSize(info)))
 }
 
+// reindexRead indexes the cache file at diskPath that a read opened and the cache does
+// not hold. As in loadFile, a file of an object deleted since the cache was created is
+// neither read nor indexed: a delete during the load may have missed it. It reports
+// whether the file may be read.
+func (d *DiskCache) reindexRead(
+	ctx context.Context,
+	diskPath string,
+	objectPath string,
+	generation uint64,
+	file *os.File,
+) (readable bool, err error) {
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if d.deletes.since(objectPath, 0) {
+		return false, nil
+	}
+	LogEvent(ctx, str_disk_cache_file_stat_begin)
+	stat, err := file.Stat()
+	LogEvent(ctx, str_disk_cache_file_stat_end)
+	if err != nil {
+		return false, err
+	}
+	doneReindex, ok := d.tryStartReadReindex(diskPath, generation)
+	if !ok {
+		return true, nil
+	}
+	defer func() {
+		if doneErr := doneReindex(); err == nil {
+			err = doneErr
+		}
+	}()
+	d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+	return true, nil
+}
+
 func (d *DiskCache) loadCache(ctx context.Context) {
 	t0 := time.Now()
 
@@ -731,22 +767,12 @@ func (d *DiskCache) Read(
 
 		LogEvent(ctx, str_disk_cache_update_states_begin)
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
-			// set cache
-			LogEvent(ctx, str_disk_cache_file_stat_begin)
-			stat, err := file.Stat()
-			LogEvent(ctx, str_disk_cache_file_stat_end)
+			readable, err := d.reindexRead(ctx, diskPath, objectPath(), opened.generation, file)
 			if err != nil {
 				return err
 			}
-			if doneReindex, ok := d.tryStartReadReindex(diskPath, opened.generation); ok {
-				var reindexErr error
-				func() {
-					defer func() { reindexErr = doneReindex() }()
-					d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
-				}()
-				if reindexErr != nil {
-					return reindexErr
-				}
+			if !readable {
+				return nil
 			}
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)

@@ -64,8 +64,11 @@ function classify(files, expectedCount, forceFull = false) {
 async function resolveScope({ github, context, forceFull }) {
   const eventPR = context.payload.pull_request;
   if (!eventPR) throw new Error('Missing pull request');
+  const baseRef = eventPR.base?.ref;
+  if (typeof baseRef !== 'string' || !baseRef) throw new Error('Missing pull request base branch');
   const params = { ...context.repo, pull_number: eventPR.number };
-  const sameRevision = pr => pr.head.sha === eventPR.head.sha && pr.base.sha === eventPR.base.sha;
+  const sameRevision = pr => pr.head.sha === eventPR.head.sha &&
+    pr.base.sha === eventPR.base.sha && pr.base.ref === baseRef;
   const before = (await github.rest.pulls.get(params)).data;
   if (!sameRevision(before)) throw new Error('PR revision changed; use the newer CI run');
   let plan = { scope: 'full', sdk_required: true };
@@ -78,7 +81,12 @@ async function resolveScope({ github, context, forceFull }) {
   }
   const after = (await github.rest.pulls.get(params)).data;
   if (!sameRevision(after)) throw new Error('PR revision changed while classifying');
-  return plan;
+  // The SDK PR contract is maintained on main. SDK-only release edits retain
+  // full kernel CI instead of becoming a successful empty plan.
+  return baseRef === 'main' ? plan : {
+    scope: plan.scope === 'sdk' ? 'full' : plan.scope,
+    sdk_required: false,
+  };
 }
 
 function verifyResults(scope, needs) {
