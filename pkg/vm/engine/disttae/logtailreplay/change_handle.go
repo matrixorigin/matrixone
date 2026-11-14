@@ -2775,6 +2775,7 @@ type ChangeHandler struct {
 	// from an earlier generation than the requested range start.
 	isRecoveryMode      bool
 	preserveAllVersions bool
+	disableQuick        bool
 	tombstoneHandle     *baseHandle
 	dataHandle          *baseHandle
 	coarseMaxRow        int
@@ -3029,6 +3030,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions:      engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:             engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -3120,6 +3122,7 @@ func newChangesHandlerWithCheckpointEntries(
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err == nil {
@@ -3358,6 +3361,7 @@ func NewChangesHandler(
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -3413,6 +3417,9 @@ func (p *ChangeHandler) Close() error {
 	return nil
 }
 func (p *ChangeHandler) decideMode() {
+	if p.disableQuick {
+		return
+	}
 	if p.tombstoneHandle.IsEmpty() {
 		p.quick = true
 		return

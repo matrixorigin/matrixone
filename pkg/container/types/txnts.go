@@ -134,6 +134,7 @@ func (ts *TS) Next() TS {
 			return maxTS
 		} else {
 			p += 1
+			l = 0
 		}
 	} else {
 		l += 1

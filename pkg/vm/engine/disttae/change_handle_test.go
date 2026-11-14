@@ -221,6 +221,9 @@ func TestPartitionChangesHandlePreservesHistoryContext(t *testing.T) {
 	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(
 		(&PartitionChangesHandle{preserveAllVersions: true}).collectChangesContext(base),
 	))
+	require.True(t, engine.CollectChangesDisableQuickFromContext(
+		(&PartitionChangesHandle{disableQuick: true}).collectChangesContext(base),
+	))
 }
 
 // TestPartitionChangesHandlePreservesKeepTrailingDeletesContext pins the option

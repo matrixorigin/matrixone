@@ -68,6 +68,16 @@ func TestTSMarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, ts, ret)
 }
 
+func TestTSNextResetsLogicalAtPhysicalRollover(t *testing.T) {
+	before := BuildTS(29, math.MaxUint32)
+	after := BuildTS(30, 0)
+	require.Equal(t, after, before.Next())
+	require.Equal(t, before, after.Prev())
+
+	max := MaxTs()
+	require.Equal(t, max, max.Next())
+}
+
 func TestDecimal64MarshalAndUnmarshal(t *testing.T) {
 	d := Decimal64(100)
 	data, err := d.Marshal()
