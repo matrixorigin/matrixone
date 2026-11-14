@@ -242,14 +242,23 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 			}
 		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
-		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: ordinary plain INSERT (e.g. inserting into a system index table),
-		// and the degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// never fall back to the legacy ODKU operator. Three cases still fall
+		// back: ordinary plain INSERT (e.g. inserting into a system index table);
+		// the degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
-		// the prepared-statement parameters).
+		// the prepared-statement parameters); and INSERT IGNORE into a writable
+		// non-Iceberg external table (issue #32512). resolveSingleTable raises
+		// the external-table sentinel only for writable non-Iceberg targets
+		// (read-only targets fail with InvalidInput, Iceberg mappings with their
+		// own sentinel), and an ODKU list keeps external INSERT IGNORE on the
+		// modern rejection, so keying the sentinel admits exactly this one
+		// legacy-supported shape.
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			((len(stmt.GetOnDuplicateUpdate()) == 0 && !stmt.IsIgnore()) ||
-				err.Error() == noPkOnDupUpdateMsg) {
+				err.Error() == noPkOnDupUpdateMsg ||
+				(stmt.IsIgnore() &&
+					len(stmt.GetOnDuplicateUpdate()) == 0 &&
+					err.Error() == externalTableUnsupportedDMLMsg)) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
