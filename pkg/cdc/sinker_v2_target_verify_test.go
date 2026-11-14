@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	mysql "github.com/matrixorigin/mysql"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,6 +172,32 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				} else {
 					require.ErrorContains(t, got, tc.want)
 				}
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
+	t.Run("capability rejects missing InnoDB metadata as unsupported", func(t *testing.T) {
+		for _, willCreate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("willCreate=%t", willCreate), func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				if willCreate {
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT @@default_storage_engine")).WillReturnRows(
+						sqlmock.NewRows([]string{"engine"}).AddRow("InnoDB"))
+				}
+				metadataErr := &mysql.MySQLError{Number: moerr.ER_NO_SUCH_TABLE, Message: `table "innodb_tables" does not exist`}
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+					WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnError(metadataErr)
+				got := checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", willCreate)
+				require.True(t, moerr.IsMoErrCode(got, moerr.ErrNotSupported), "got %T: %v", got, got)
+				require.ErrorContains(t, got, "INNODB_TABLES")
+				require.ErrorContains(t, got, "1146")
+				require.False(t, (&TableChangeStream{}).determineRetryable(got))
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
@@ -329,6 +356,28 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
+	})
+
+	t.Run("MySQL guard rejects missing InnoDB metadata as unsupported", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0")).
+			WillReturnRows(sqlmock.NewRows([]string{"one"}))
+		metadataErr := &gomysql.MySQLError{Number: moerr.ER_NO_SUCH_TABLE, Message: `table "innodb_tables" does not exist`}
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+			WithArgs("db/t").WillReturnError(metadataErr)
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, got := guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrNotSupported), "got %T: %v", got, got)
+		require.ErrorContains(t, got, "INNODB_TABLES")
+		require.ErrorContains(t, got, "1146")
+		require.False(t, (&TableChangeStream{}).determineRetryable(got))
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("MySQL guard reports identity row scan and iteration errors", func(t *testing.T) {
@@ -494,6 +543,100 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, conn.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+func TestResolveTargetSinkType(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		sinkType    string
+		beginErr    error
+		probeErr    error
+		rollbackErr error
+		want        string
+		wantErr     string
+		retryable   bool
+	}{
+		{name: "MatrixOne guard capability", sinkType: CDCSinkType_MySQL, want: CDCSinkType_MO},
+		{name: "MySQL missing guard procedure", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST}, want: CDCSinkType_MySQL},
+		{name: "production driver missing guard procedure", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST}, want: CDCSinkType_MySQL},
+		{name: "MySQL no default database", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: moerr.ER_NO_DB_ERROR}, want: CDCSinkType_MySQL},
+		{name: "production driver no default database", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: moerr.ER_NO_DB_ERROR}, want: CDCSinkType_MySQL},
+		{name: "unexpected probe failure", sinkType: CDCSinkType_MySQL,
+			probeErr: &gomysql.MySQLError{Number: 1142, Message: "denied"}, wantErr: "1142"},
+		{name: "transient probe failure", sinkType: CDCSinkType_MySQL,
+			probeErr: &mysql.MySQLError{Number: 2013, Message: "lost connection"}, wantErr: "2013", retryable: true},
+		{name: "begin failure", sinkType: CDCSinkType_MySQL, beginErr: errors.New("begin failed"), wantErr: "begin failed"},
+		{name: "rollback failure", sinkType: CDCSinkType_MySQL, rollbackErr: errors.New("rollback failed"), wantErr: "rollback failed"},
+		{name: "explicit MatrixOne bypasses negotiation", sinkType: CDCSinkType_MO, want: CDCSinkType_MO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			if tc.sinkType == CDCSinkType_MySQL {
+				begin := mock.ExpectBegin()
+				if tc.beginErr != nil {
+					begin.WillReturnError(tc.beginErr)
+				} else {
+					probe := mock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()"))
+					if tc.probeErr != nil {
+						probe.WillReturnError(tc.probeErr)
+					} else {
+						probe.WillReturnResult(sqlmock.NewResult(0, 0))
+					}
+					rollback := mock.ExpectRollback()
+					if tc.rollbackErr != nil {
+						rollback.WillReturnError(tc.rollbackErr)
+					}
+				}
+			}
+			got, err := resolveTargetSinkType(ctx, conn, tc.sinkType)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Empty(t, got)
+				require.Equal(t, tc.retryable, IsRetryableConnectionError(err))
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestResolveTargetSinkTypeThroughOpenDbConn(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectPing()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()")).
+		WillReturnError(&gomysql.MySQLError{Number: moerr.ER_NO_DB_ERROR, Message: "No database selected"})
+	mock.ExpectRollback()
+	mock.ExpectClose()
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
+	})
+	defer stub.Reset()
+
+	got, err := ResolveTargetSinkType(ctx, UriInfo{
+		SinkTyp:  CDCSinkType_MySQL,
+		User:     "root",
+		Password: "password",
+		Ip:       "127.0.0.1",
+		Port:     3306,
+	}, "10s")
+	require.NoError(t, err)
+	require.Equal(t, CDCSinkType_MySQL, got)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestVerifyCDCTargetTableStructure(t *testing.T) {
