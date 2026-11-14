@@ -63,8 +63,7 @@ type Routine struct {
 	closeOnce sync.Once
 
 	inProcessRequest bool
-	// terminalRetired fences requests on a connection that the terminal TCP
-	// probe has retired. Unlike closing, it is not set by the FIN monitor.
+	// terminalRetired fences requests on a connection retired by the TCP probe.
 	terminalRetired  atomic.Bool
 	requestStartedAt atomic.Int64
 	closing          atomic.Bool
@@ -277,6 +276,35 @@ func (rt *Routine) beginClose() {
 	rt.mc.startClose()
 }
 
+// tryBeginCloseForRequest preserves the legacy close semantics without waiting
+// for a routine or lifecycle lock in the liveness monitor. A stale snapshot
+// must not apply a previous request's age to a later request.
+func (rt *Routine) tryBeginCloseForRequest(nowValue int64, minimum time.Duration) bool {
+	if !rt.mu.TryLock() {
+		return false
+	}
+	startedAt := rt.requestStartedAt.Load()
+	if rt.closing.Load() || !rt.inProcessRequest || startedAt == 0 || nowValue-startedAt < minimum.Nanoseconds() {
+		rt.mu.Unlock()
+		return false
+	}
+	cancelOperation, ok := rt.mc.tryStartClose()
+	if !ok {
+		rt.mu.Unlock()
+		return false
+	}
+	rt.closing.Store(true)
+	cancelRequest := rt.cancelRequestFunc
+	rt.mu.Unlock()
+	if cancelRequest != nil {
+		cancelRequest()
+	}
+	if cancelOperation != nil {
+		cancelOperation()
+	}
+	return true
+}
+
 // retireTerminalConnection seals request admission only when no migration or
 // reset operation is in progress. A busy routine or operation retains
 // ownership; the monitor can retry on its next pass. Cleanup remains with
@@ -285,7 +313,7 @@ func (rt *Routine) retireTerminalConnection() bool {
 	if !rt.mu.TryLock() {
 		return false
 	}
-	if rt.closing.Load() || !rt.mc.tryStartCloseWhenIdle() {
+	if rt.closing.Load() || !rt.inProcessRequest || !rt.mc.tryStartCloseWhenIdle() {
 		rt.mu.Unlock()
 		return false
 	}
