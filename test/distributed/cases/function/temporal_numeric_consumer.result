@@ -1,0 +1,189 @@
+drop database if exists temporal_numeric_consumer;
+create database temporal_numeric_consumer;
+use temporal_numeric_consumer;
+set time_zone = '+00:00';
+create table temporal_values (
+id int primary key,
+d date,
+dt datetime(6),
+tm time(6),
+ts timestamp(6)
+);
+insert into temporal_values values
+(1, '2024-01-01', '2024-01-01 10:00:00.000000', '01:02:03.000000', '2024-01-01 10:00:00.000000'),
+(2, '2024-02-29', '2024-02-29 23:59:59.499999', '-00:00:00.500000', '2024-02-29 23:59:59.499999'),
+(3, '2024-02-29', '2024-02-29 23:59:59.500000', '-12:00:00.500000', '2024-02-29 23:59:59.500000'),
+(4, null, null, null, null);
+select d & 3 as date_and,
+length(d & 3) as date_and_length,
+hex(d & 3) as date_and_hex,
+dt | 1 as datetime_or,
+length(dt | 1) as datetime_or_length,
+tm ^ 1 as time_xor,
+length(tm ^ 1) as time_xor_length,
+d << 1 as date_left,
+tm >> 1 as time_right
+from temporal_values where id = 1;
+➤ date_and[-5,64,0]  ¦  date_and_length[-5,64,0]  ¦  date_and_hex[12,16,0]  ¦  datetime_or[-5,64,0]  ¦  datetime_or_length[-5,64,0]  ¦  time_xor[-5,64,0]  ¦  time_xor_length[-5,64,0]  ¦  date_left[-5,64,0]  ¦  time_right[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  20240101100001  ¦  14  ¦  10202  ¦  5  ¦  40480202  ¦  5101
+select hex(date'2024-01-01' & 3) as literal_date_and,
+time'01:02:03' | 0 as literal_time_or,
+cast('2024-01-01 10:00:00' as datetime) | 1 as literal_datetime_or,
+date'2024-01-01' << 1 as literal_date_left;
+➤ literal_date_and[12,16,0]  ¦  literal_time_or[-5,64,0]  ¦  literal_datetime_or[-5,64,0]  ¦  literal_date_left[-5,64,0]  𝄀
+1  ¦  10203  ¦  20240101100001  ¦  40480202
+select id, d & 3 as date_and, 3 & d as date_and_reversed,
+dt | 1 as datetime_or, 1 | dt as datetime_or_reversed,
+tm ^ 0 as time_xor, d << 1 as date_left, tm >> 1 as time_right
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  date_and[-5,64,0]  ¦  date_and_reversed[-5,64,0]  ¦  datetime_or[-5,64,0]  ¦  datetime_or_reversed[-5,64,0]  ¦  time_xor[-5,64,0]  ¦  date_left[-5,64,0]  ¦  time_right[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  20240101100001  ¦  20240101100001  ¦  10203  ¦  40480202  ¦  5101  𝄀
+2  ¦  1  ¦  1  ¦  20240229235959  ¦  20240229235959  ¦  18446744073709551615  ¦  40480458  ¦  9223372036854775807  𝄀
+3  ¦  1  ¦  1  ¦  20240301000001  ¦  20240301000001  ¦  18446744073709431615  ¦  40480458  ¦  9223372036854715807  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id, bit_count(d) as date_bits,
+bit_count(dt) as datetime_bits,
+bit_count(tm) as time_bits,
+bit_count(ts) as timestamp_bits
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  date_bits[-5,64,0]  ¦  datetime_bits[-5,64,0]  ¦  time_bits[-5,64,0]  ¦  timestamp_bits[-5,64,0]  𝄀
+1  ¦  14  ¦  15  ¦  10  ¦  15  𝄀
+2  ¦  14  ¦  25  ¦  64  ¦  25  𝄀
+3  ¦  14  ¦  20  ¦  57  ¦  20  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select bit_count(date'2024-01-01') as literal_date_bits,
+bit_count(cast('2024-01-01 10:00:00' as datetime)) as literal_datetime_bits,
+bit_count(time'01:02:03') as literal_time_bits,
+bit_count(20240101) as numeric_control;
+➤ literal_date_bits[-5,64,0]  ¦  literal_datetime_bits[-5,64,0]  ¦  literal_time_bits[-5,64,0]  ¦  numeric_control[-5,64,0]  𝄀
+14  ¦  15  ¦  10  ¦  14
+select ts | 0 as timestamp_utc from temporal_values where id = 1;
+➤ timestamp_utc[-5,64,0]  𝄀
+20240101100000
+set time_zone = '+08:00';
+select ts | 0 as timestamp_utc_plus_eight, bit_count(ts) as timestamp_bits_utc_plus_eight
+from temporal_values where id = 1;
+➤ timestamp_utc_plus_eight[-5,64,0]  ¦  timestamp_bits_utc_plus_eight[-5,64,0]  𝄀
+20240101180000  ¦  13
+set time_zone = '+00:00';
+select id, sec_to_time(d) as date_seconds,
+sec_to_time(dt) as datetime_seconds,
+sec_to_time(tm) as time_seconds,
+sec_to_time(ts) as timestamp_seconds,
+cast(sec_to_time(tm) as char) as time_seconds_text
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  date_seconds[92,10,0]  ¦  datetime_seconds[92,17,0]  ¦  time_seconds[92,17,0]  ¦  timestamp_seconds[92,17,0]  ¦  time_seconds_text[12,65535,0]  𝄀
+1  ¦  838:59:59  ¦  838:59:59  ¦  02:50:03  ¦  838:59:59  ¦  02:50:03.000000  𝄀
+2  ¦  838:59:59  ¦  838:59:59  ¦  00:00:00.500000000  ¦  838:59:59  ¦  -00:00:00.500000  𝄀
+3  ¦  838:59:59  ¦  838:59:59  ¦  -33:20:00.500000000  ¦  838:59:59  ¦  -33:20:00.500000  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.0240101e+07'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.0240229e+07'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.0240229e+07'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02401011e+13'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02402292359595e+13'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02402292359595e+13'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02401011e+13'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02402292359595e+13'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02402292359595e+13'
+select sec_to_time(time'01:02:03') as literal_time_seconds,
+sec_to_time(10203) as numeric_control;
+➤ literal_time_seconds[92,10,0]  ¦  numeric_control[92,10,0]  𝄀
+02:50:03  ¦  02:50:03
+select sec_to_time(date'2024-01-01') as saturated_date_seconds;
+➤ saturated_date_seconds[92,10,0]  𝄀
+838:59:59
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.0240101e+07'
+select sec_to_time(cast('2024-01-01 10:00:00' as datetime)) as saturated_datetime_seconds;
+➤ saturated_datetime_seconds[92,10,0]  𝄀
+838:59:59
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2.02401011e+13'
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = '';
+create table temporal_zero (
+id int primary key,
+d date default 0,
+dt datetime(6) default 0,
+tm time(6) default 0
+);
+insert into temporal_zero (id) values (1);
+select d & 3 as date_and, dt | 0 as datetime_or, tm ^ 0 as time_xor,
+bit_count(d) as date_bits, bit_count(dt) as datetime_bits, bit_count(tm) as time_bits,
+sec_to_time(d) as date_seconds, sec_to_time(dt) as datetime_seconds, sec_to_time(tm) as time_seconds
+from temporal_zero;
+➤ date_and[-5,64,0]  ¦  datetime_or[-5,64,0]  ¦  time_xor[-5,64,0]  ¦  date_bits[-5,64,0]  ¦  datetime_bits[-5,64,0]  ¦  time_bits[-5,64,0]  ¦  date_seconds[92,10,0]  ¦  datetime_seconds[92,17,0]  ¦  time_seconds[92,17,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  00:00:00  ¦  00:00:00  ¦  00:00:00
+drop table temporal_zero;
+set sql_mode = @saved_sql_mode;
+prepare temporal_prepared from 'select d & ?, dt | ?, tm ^ ?, d << ?, bit_count(d), sec_to_time(tm) from temporal_values where id = 1';
+set @and_value = 3, @or_value = 1, @xor_value = 1, @shift_value = 1;
+execute temporal_prepared using @and_value, @or_value, @xor_value, @shift_value;
+➤ temporal_values.d & ?[-5,64,0]  ¦  temporal_values.dt | ?[-5,64,0]  ¦  temporal_values.tm ^ ?[-5,64,0]  ¦  temporal_values.d << ?[-5,64,0]  ¦  bit_count(temporal_values.d)[-5,64,0]  ¦  sec_to_time(temporal_values.tm)[92,17,0]  𝄀
+1  ¦  20240101100001  ¦  10202  ¦  40480202  ¦  14  ¦  02:50:03
+set @and_value = 1, @or_value = 0, @xor_value = 0, @shift_value = 2;
+execute temporal_prepared using @and_value, @or_value, @xor_value, @shift_value;
+➤ temporal_values.d & ?[-5,64,0]  ¦  temporal_values.dt | ?[-5,64,0]  ¦  temporal_values.tm ^ ?[-5,64,0]  ¦  temporal_values.d << ?[-5,64,0]  ¦  bit_count(temporal_values.d)[-5,64,0]  ¦  sec_to_time(temporal_values.tm)[92,17,0]  𝄀
+1  ¦  20240101100000  ¦  10203  ¦  80960404  ¦  14  ¦  02:50:03
+deallocate prepare temporal_prepared;
+prepare temporal_bit_count_prepared from 'select bit_count(?)';
+set @temporal_bit_count_value = '64';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+➤ bit_count(?)[-5,64,0]  𝄀
+7
+set @temporal_bit_count_value = 64;
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+➤ bit_count(?)[-5,64,0]  𝄀
+1
+set @temporal_bit_count_value = '2024-01-01';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+➤ bit_count(?)[-5,64,0]  𝄀
+7
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'
+set @temporal_bit_count_value = _binary '2024-01-01';
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+➤ bit_count(?)[-5,64,0]  𝄀
+7
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'
+set @temporal_bit_count_value = null;
+execute temporal_bit_count_prepared using @temporal_bit_count_value;
+➤ bit_count(?)[-5,64,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+deallocate prepare temporal_bit_count_prepared;
+select '2024-01-01' & 3 as text_and,
+bit_count('2024-01-01') as text_bits,
+sec_to_time('01:02:03') as text_seconds;
+➤ text_and[-5,64,0]  ¦  text_bits[-5,64,0]  ¦  text_seconds[92,17,0]  𝄀
+0  ¦  7  ¦  00:00:01
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2024-01-01'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '01:02:03'
+select hex(_binary X'0102' & _binary X'0003') as binary_and,
+hex(_binary X'0102' | _binary X'0003') as binary_or,
+hex(_binary X'0102' ^ _binary X'0003') as binary_xor,
+bit_count(_binary X'0102') as binary_bits;
+➤ binary_and[12,4,0]  ¦  binary_or[12,4,0]  ¦  binary_xor[12,4,0]  ¦  binary_bits[-5,64,0]  𝄀
+0002  ¦  0103  ¦  0101  ¦  2
+select hex(X'0102' & X'0003') as plain_hex_and,
+hex(X'0102' | X'0003') as plain_hex_or,
+hex(X'0102' ^ X'0003') as plain_hex_xor,
+bit_count(X'0102') as plain_hex_bits;
+➤ plain_hex_and[12,16,0]  ¦  plain_hex_or[12,16,0]  ¦  plain_hex_xor[12,16,0]  ¦  plain_hex_bits[-5,64,0]  𝄀
+2  ¦  103  ¦  101  ¦  2
+drop table temporal_values;
+drop database temporal_numeric_consumer;

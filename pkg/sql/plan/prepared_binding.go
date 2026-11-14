@@ -926,6 +926,31 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):
 			target = binding.NumericType
 		}
+		if name == "bit_count" && len(args) == 1 &&
+			(binding.Type.Oid == types.T_date || binding.Type.Oid == types.T_datetime ||
+				binding.Type.Oid == types.T_time || binding.Type.Oid == types.T_timestamp) {
+			// A remembered numeric target applies to later string executions.
+			// Native temporal values must reach bindIntegerFunctionArguments
+			// unchanged so their own rounding and calendar conversion win.
+			continue
+		}
+		if name == "bit_count" && len(args) == 1 && binding.Type.Oid.IsMySQLString() {
+			// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+			// other float-family members cannot be remembered numeric targets.
+			switch target.Oid {
+			case types.T_int64, types.T_uint64, types.T_float64, types.T_decimal256:
+				// A numeric latch changes later string executions to MySQL's
+				// numeric-prefix conversion. Generic CAST is strict and cannot
+				// represent that consumer-specific contract or its diagnostics.
+				converted, err := appendCastBeforeExprWithOverload(
+					ctx, source, makePlan2Type(&target), planfunction.PreparedBitCountCastOverload)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = converted
+				continue
+			}
+		}
 		if target.Oid != types.T_any {
 			var err error
 			args[i], err = makePlan2CastExpr(ctx, source, makePlan2Type(&target))

@@ -387,9 +387,9 @@ type PrepareStmt struct {
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
-	// temporalRuntimeParamPositions combines numeric-function and prepared
-	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
-	// COM_STMT_EXECUTE packet domain instead of generic text transport.
+	// temporalRuntimeParamPositions combines numeric-function, BIT_COUNT, and
+	// prepared GENERATE_SERIES endpoint positions. Only these markers retain a
+	// temporal COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
