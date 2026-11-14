@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'ruh-readonly']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -117,6 +117,21 @@ jobs:
               print(f'probe setup failed: {type(e).__name__}', flush=True)
               sys.exit(1)
           PY
+  cs-s3-three-group-shared:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'three-group-shared' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    concurrency:
+      group: cs-three-group-shared-coverage-canary
+      cancel-in-progress: false
+    uses: matrixorigin/CI/.github/workflows/coverage-cs-repair.yaml@e0770bead21f6cc8e0a5ff1114e864c479619883
+    with:
+      stack: mnl2
+      cache_seed: false
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      CS_S3_MTY_CONFIG: ${{ secrets.CS_S3_MTY_CONFIG }}
+      CS_S3_MNL2_CONFIG: ${{ secrets.CS_S3_MNL2_CONFIG }}
+      CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
+      CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   cs-s3-three-group:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'three-group' && !inputs.cs_s3_smoke && !inputs.cs_s3_probe && !inputs.cs_s3_adaptation_smoke && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     concurrency:
