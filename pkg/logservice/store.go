@@ -150,6 +150,7 @@ type store struct {
 	hakeeperCheckWakeup chan struct{}
 
 	bootstrapCheckDeadline time.Time
+	bootstrapCheckTerm     uint64
 	bootstrapMgr           *bootstrap.Manager
 	lastBootstrapLogTime   time.Time
 	bootstrapCommandsAdded func()
@@ -525,7 +526,15 @@ func (l *store) startReplicas(ctx context.Context) error {
 			}
 		}
 	}
-	zombies := l.checkZombieReplicas(ctx, checkShards)
+	// A durable retirement marker already decides startup. Avoid waiting on
+	// HAKeeper membership for a replica that must only be cleaned up.
+	checkable := make([]metadata.LogShard, 0, len(checkShards))
+	for _, shard := range checkShards {
+		if !shard.Retiring {
+			checkable = append(checkable, shard)
+		}
+	}
+	zombies := l.checkZombieReplicas(ctx, checkable)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -560,6 +569,11 @@ func (l *store) startReplicas(ctx context.Context) error {
 	l.mu.Unlock()
 
 	for _, rec := range shards {
+		if rec.Retiring {
+			// The durable retirement marker owns retry after a crash. Never
+			// start this replica again while its exports still need cleanup.
+			continue
+		}
 		if _, isZombie := zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; isZombie {
 			if _, isSuperseded := superseded[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; isSuperseded {
 				l.runtime.Logger().Warn("skip superseded HAKeeper replica during restart",
@@ -964,18 +978,27 @@ func (l *store) getOrExtendTNLease(ctx context.Context,
 	shardID uint64, tnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(tnID)
-	_, err := l.propose(ctx, session, cmd)
-	return err
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return err
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewNotLeaseHolder(ctx, binaryEnc.Uint64(result.Data))
+	}
+	return nil
 }
 
 func (l *store) truncateLog(ctx context.Context,
-	shardID uint64, index Lsn) error {
+	shardID uint64, index Lsn, tnID ...uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetTruncatedLsnCmd(index)
+	cmd := getSetTruncatedLsnCmd(index, tnID...)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		l.runtime.Logger().Error("propose truncate log cmd failed", zap.Error(err))
 		return err
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewNotLeaseHolder(ctx, binaryEnc.Uint64(result.Data))
 	}
 	if result.Value > 0 {
 		l.runtime.Logger().Error(fmt.Sprintf("shardID %d rejected truncate index %d at boundary %d", shardID, index, result.Value))
@@ -984,11 +1007,14 @@ func (l *store) truncateLog(ctx context.Context,
 	return nil
 }
 
-func (l *store) truncateWAL(ctx context.Context, shardID uint64, psn, checkpointedDSN Lsn) error {
+func (l *store) truncateWAL(ctx context.Context, shardID uint64, psn, checkpointedDSN Lsn, tnID ...uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
-	result, err := l.propose(ctx, session, getWALTruncateCmd(psn, checkpointedDSN))
+	result, err := l.propose(ctx, session, getWALTruncateCmd(psn, checkpointedDSN, tnID...))
 	if err != nil {
 		return err
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewNotLeaseHolder(ctx, binaryEnc.Uint64(result.Data))
 	}
 	if result.Value != 0 {
 		return moerr.NewInvalidTruncateLsn(ctx, shardID, result.Value)
@@ -1443,6 +1469,12 @@ func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error
 
 func (l *store) addScheduleCommands(ctx context.Context,
 	term uint64, cmds []pb.ScheduleCommand) error {
+	downTime := time.Now().UnixNano()
+	for i := range cmds {
+		if cmds[i].DeleteCNStore != nil {
+			cmds[i].DeleteCNStore.DownTime = downTime
+		}
+	}
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -1530,6 +1562,7 @@ func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) err
 	if _, ok := state.CNState.Stores[cnStore.StoreID]; !ok {
 		return nil
 	}
+	cnStore.DownTime = time.Now().UnixNano()
 	cmd := hakeeper.GetDeleteCNStoreCmd(cnStore)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
@@ -1690,12 +1723,18 @@ func isRaftInternalEntry(e raftpb.Entry) bool {
 }
 
 func (l *store) markEntries(ctx context.Context,
-	shardID uint64, entries []raftpb.Entry) ([]pb.LogRecord, error) {
+	entries []raftpb.Entry, entryState userEntryState) ([]pb.LogRecord, error) {
 	if len(entries) == 0 {
 		return []pb.LogRecord{}, nil
 	}
+	lease := entryState.lease
+	transition := 0
 	result := make([]pb.LogRecord, 0)
 	for _, e := range entries {
+		for transition < len(entryState.transitions) && entryState.transitions[transition].index < e.Index {
+			lease = entryState.transitions[transition].holder
+			transition++
+		}
 		if isRaftInternalEntry(e) {
 			// raft internal stuff
 			result = append(result, LogRecord{
@@ -1713,9 +1752,15 @@ func (l *store) markEntries(ctx context.Context,
 			continue
 		}
 		if isUserUpdate(cmd) {
+			recordType := pb.UserRecord
+			if lease != 0 && (parseLeaseHolderID(cmd) != lease ||
+				(lease == walRecoveryLeaseHolderID &&
+					(e.Index <= entryState.recoveryBaseLSN || e.Index > entryState.recoveryLastLSN))) {
+				recordType = pb.LeaseRejected
+			}
 			result = append(result, LogRecord{
 				Data: cmd,
-				Type: pb.UserRecord,
+				Type: recordType,
 				Lsn:  e.Index,
 			})
 		}
@@ -1756,7 +1801,20 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		if v.Completed() {
 			entries, logRange := v.RaftLogs()
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
-			results, err := l.markEntries(ctx, shardID, entries)
+			if len(entries) == 0 {
+				return []LogRecord{}, next, nil
+			}
+			stateValue, err := l.read(ctx, shardID, userEntryStateQuery{
+				first: entries[0].Index, last: entries[len(entries)-1].Index,
+			})
+			if err != nil {
+				return nil, 0, err
+			}
+			entryState := stateValue.(userEntryState)
+			if entries[0].Index <= entryState.truncatedLSN {
+				return nil, 0, dragonboat.ErrInvalidRange
+			}
+			results, err := l.markEntries(ctx, entries, entryState)
 			if err != nil {
 				l.runtime.Logger().Error("markEntries failed", zap.Error(err))
 				return nil, 0, err

@@ -576,7 +576,7 @@ func (s *Service) handleReadLsn(ctx context.Context, req pb.Request) (pb.Respons
 func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.truncateLog(ctx, r.ShardID, r.Lsn); err != nil {
+	if err := s.store.truncateLog(ctx, r.ShardID, r.Lsn, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -585,7 +585,7 @@ func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Respons
 func (s *Service) handleTruncateWAL(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.truncateWAL(ctx, r.ShardID, r.Lsn, r.CheckpointedDSN); err != nil {
+	if err := s.store.truncateWAL(ctx, r.ShardID, r.Lsn, r.CheckpointedDSN, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
