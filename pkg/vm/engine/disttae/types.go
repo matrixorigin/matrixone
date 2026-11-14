@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -52,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -262,6 +263,13 @@ func WithMoServerStateChecker(checker func() bool) EngineOptions {
 }
 
 type Engine struct {
+	unpublishedPending unpublishedPendingQueue
+	gcMu               sync.Mutex
+	gcProducers        int64
+	workspaceGCClosed  atomic.Bool
+	workspaceCloseOnce sync.Once
+	workspaceCloseErr  error
+
 	sync.RWMutex
 	service  string
 	mp       *mpool.MPool
@@ -346,11 +354,19 @@ func (e *Engine) SetService(svr string) {
 }
 
 func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
-	e.gcPool.Release()
+	e.gcMu.Lock()
+	if e.workspaceGCClosed.Load() {
+		e.gcMu.Unlock()
+		return
+	}
+	old := e.gcPool
 	e.gcPool = pool
+	e.gcMu.Unlock()
+	if old != nil {
+		old.Release()
+	}
 }
 
-// GetCCPRTxnCache returns the CCPR transaction cache
 func (e *Engine) GetCCPRTxnCache() *CCPRTxnCache {
 	return e.ccprTxnCache
 }
@@ -366,6 +382,23 @@ type statementTransferState struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	remoteHandoffMu    sync.RWMutex
+	remoteHandoffScope *ioutil.RemoteWorkspaceHandoffScope
+	// Guarded by the transaction mutex. Keep receipts until transaction end so
+	// delayed redeliveries cannot reinstall an already retired object.
+	remoteWorkspaceRecords        map[ioutil.RemoteWorkspaceHandoffID]remoteWorkspaceRecordReceipt
+	unpublishedDumpReservationsMu sync.Mutex
+	unpublishedDumpReservations   map[string]struct{}
+	recordedUnpublishedObjects    *txnRecordedUnpublished
+	pendingObjectCleanup          []pendingObjectCleanupItem
+	statementLifecycle            atomic.Int64
+
+	workspaceAllocationMu     sync.Mutex
+	workspaceGeneration       *process.HashBuildBudgetGeneration
+	workspaceAccount          *mpool.AllocationAccount
+	workspaceSelection        *vector.AllocationAccountSelection
+	workspaceAllocationClosed bool
+
 	sync.Mutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
@@ -446,6 +479,15 @@ type Transaction struct {
 	}
 
 	compactWorker *ants.Pool
+	// compactionUndo owns the pre-compaction entries until maintenance has
+	// either completed or restored them. Protected by Transaction.Mutex.
+	compactionUndo *workspaceCompactionUndo
+	// Replaced objects can outlive the workspace lock in readers holding copied
+	// object statistics. Keep their obligations until transaction SQL drains.
+	retiredCompactions []*workspaceCompactionUndo
+	// Dump-all may reorder entries only after pending compaction anchors are
+	// no longer needed for rollback.
+	compactionDeferredOrder bool
 
 	//the start time of first statement in a txn.
 	start time.Time
@@ -454,7 +496,15 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	pkCount              int
+	// Protected by txn.Mutex. A failed boundary advance must not make the
+	// subsequent statement rollback discard the preceding statement.
+	incrFailedBeforeBoundary bool
+	incrFailedAfterBoundary  bool
+	incrMaintenanceActive    bool
+	incrMaintenanceBoundary  bool
+	incrMaintenanceInvalid   bool
+	incrRollbackHandled      bool
+	pkCount                  int
 
 	adjustCount int
 
@@ -808,6 +858,10 @@ func (txn *Transaction) PPString() string {
 }
 
 func (txn *Transaction) StartStatement() {
+	txn.statementLifecycle.Add(1)
+	txn.Lock()
+	txn.incrRollbackHandled = false
+	txn.Unlock()
 	if txn.startStatementCalled {
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
@@ -824,7 +878,7 @@ func (txn *Transaction) EndStatement() {
 	txn.incrStatementCalled = false
 }
 
-func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) (retErr error) {
 	txn.op.EnterIncrStmt()
 	defer txn.op.ExitIncrStmt()
 	if !commit {
@@ -839,17 +893,86 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	if txn.incrMaintenanceActive {
+		return moerr.NewInvalidStateNoCtx("statement maintenance already active")
+	}
+	txn.incrMaintenanceActive = true
+	txn.incrMaintenanceBoundary = false
+	txn.incrMaintenanceInvalid = false
+	txn.incrRollbackHandled = false
+	boundaryAdvanced := false
+	completed := false
+	txn.incrFailedBeforeBoundary = false
+	txn.incrFailedAfterBoundary = false
+	defer func() {
+		defer func() { txn.incrMaintenanceActive = false }()
+		if txn.incrMaintenanceInvalid {
+			if retErr == nil {
+				retErr = context.Canceled
+			}
+			return
+		}
+		// A panic is not a successful maintenance boundary. Leave the panic
+		// untouched while restoring the prior workspace for frontend rollback.
+		if !completed && retErr == nil {
+			hadCompaction := txn.compactionUndo != nil
+			if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+				logutil.Errorf("workspace compaction restore during panic remains pending: %v", undoErr)
+			}
+			if !commit {
+				txn.incrFailedBeforeBoundary = !boundaryAdvanced
+				txn.incrFailedAfterBoundary = boundaryAdvanced && hadCompaction
+			}
+			return
+		}
+		if retErr == nil {
+			// Commit has another fallible tombstone-transfer stage after this
+			// method returns; keep its compaction undo live through that stage.
+			if commit && txn.compactionUndo != nil {
+				return
+			}
+			retErr = txn.finishCompactionLocked()
+			if retErr == nil {
+				txn.compactNilWorkspaceSlotsLocked()
+				return
+			}
+		}
+		hadCompaction := txn.compactionUndo != nil
+		if undoErr := txn.restoreCompactionLocked(); undoErr != nil {
+			retErr = errors.Join(retErr, undoErr)
+		}
+		if !commit {
+			txn.incrFailedBeforeBoundary = !boundaryAdvanced
+			txn.incrFailedAfterBoundary = boundaryAdvanced && hadCompaction
+		}
+	}()
+	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
+		return err
+	}
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
+	}
+	if txn.incrMaintenanceInvalid {
+		return context.Canceled
 	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
 	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
+	if txn.incrMaintenanceInvalid {
+		return context.Canceled
+	}
+	// Compaction journal anchors refer to the original slots through snapshot
+	// advancement and tombstone transfer, both of which can still fail.
+	if txn.compactionUndo == nil {
+		txn.compactNilWorkspaceSlotsLocked()
+	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
 	txn.statementID++
+	boundaryAdvanced = true
+	txn.incrMaintenanceBoundary = true
 
 	if txn.op.Txn().IsRCIsolation() {
 		if txn.transfer.lastTransferred.IsEmpty() {
@@ -867,10 +990,19 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		if err != nil {
 			return err
 		}
+		if txn.incrMaintenanceInvalid {
+			return context.Canceled
+		}
 
-		return txn.transferTombstonesByStatement(ctx, updated, commit)
+		if err := txn.transferTombstonesByStatement(ctx, updated, commit); err != nil {
+			return err
+		}
+		if txn.incrMaintenanceInvalid {
+			return context.Canceled
+		}
 	}
 
+	completed = true
 	return nil
 }
 
@@ -1033,81 +1165,6 @@ const (
 	cloneGCTxnRollback
 )
 
-func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
-	if txn.isCloneTxn {
-		names = readutil.RemoveIf(names, func(name string) bool {
-			txnID := txn.op.Txn().ID
-			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
-				return true
-			}
-			return scope == cloneGCIntermediate &&
-				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
-		})
-	}
-
-	if len(names) == 0 {
-		return nil
-	}
-
-	//getCaller := func(depth int) (str []string) {
-	//	pc := make([]uintptr, depth)
-	//	n := runtime.Callers(2, pc)
-	//	frames := runtime.CallersFrames(pc[:n])
-	//
-	//	i := 0
-	//	for {
-	//		frame, more := frames.Next()
-	//		funcName := filepath.Base(frame.Function)
-	//		str = append(str, funcName)
-	//		i++
-	//		if !more || i >= depth {
-	//			break
-	//		}
-	//	}
-	//	return
-	//}
-
-	logutil.Info("GC-WORKSPACE-FILES",
-		zap.Strings("names", names),
-		zap.String("txn-info", txn.op.Txn().DebugString()),
-		//zap.String("stack", strings.Join(getCaller(5), "<-")),
-	)
-
-	//gc the objects asynchronously.
-	//TODO:: to handle the failure when CN is down.
-	step := GCBatchOfFileCount
-	if len(names) > 0 && len(names) < step {
-		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
-			}
-		}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	for i := 0; i < len(names); i += step {
-		if i+step > len(names) {
-			step = len(names) - i
-		}
-		start := i
-		end := i + step
-		if err := txn.engine.gcPool.Submit(func() {
-			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
-			}
-		}); err != nil {
-			return err
-		}
-	}
-
-	return nil
-
-}
-
 func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
 	names := make([]string, 0, len(sl))
 
@@ -1195,6 +1252,38 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			)
 		})
 	}()
+	// IncrStatementID runs before the new SQL statement. If it failed before
+	// advancing the boundary, offsets[statementID-1] belongs to the preceding
+	// successful statement and must not be truncated or have its load files
+	// deleted. A later retry may advance the boundary normally.
+	txn.Lock()
+	if txn.incrRollbackHandled {
+		txn.Unlock()
+		return nil
+	}
+	maintenanceActive := txn.incrMaintenanceActive
+	if maintenanceActive {
+		txn.incrMaintenanceInvalid = true
+	}
+	hadCompaction := txn.compactionUndo != nil
+	if err := txn.restoreCompactionLocked(); err != nil {
+		txn.Unlock()
+		return err
+	}
+	if txn.incrFailedBeforeBoundary || (maintenanceActive && !txn.incrMaintenanceBoundary) {
+		txn.incrFailedBeforeBoundary = false
+		txn.incrStatementCalled = false
+		// Reservations may belong to an earlier still-running producer. The
+		// failed boundary cannot declare that producer quiescent; retain its
+		// ownership for normal handoff or transaction-terminal cleanup.
+		txn.incrRollbackHandled = true
+		txn.Unlock()
+		return nil
+	}
+	if maintenanceActive && hadCompaction {
+		txn.incrFailedAfterBoundary = true
+	}
+	txn.Unlock()
 	deletedLoadFiles, loadCleanupErr := txn.deleteLoadFiles(ctx, &txn.statementID)
 
 	txn.Lock()
@@ -1211,7 +1300,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		end := txn.offsets[txn.statementID]
 		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 		if !txn.isCCPRTxn {
-			if err := txn.GCObjsByIdxRange(end, len(txn.writes)-1); err != nil {
+			if err := txn.gcObjsByIdxRangeToOwner(end, len(txn.writes)-1, cloneGCIntermediate); err != nil {
 				panic("to gc objects generated by CN failed")
 			}
 		}
@@ -1248,11 +1337,22 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	}
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 	//rollback the deleted blocks for the current statement.
-	txn.deletedBlocks.clean()
+	failedBoundary := txn.incrFailedAfterBoundary
+	if !failedBoundary {
+		txn.deletedBlocks.clean()
+	}
+	txn.incrFailedAfterBoundary = false
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
+	txn.drainUnpublishedDumpReservationsLocked("statement rollback")
+	if err := txn.handoffPendingObjectCleanupLocked(true); err != nil {
+		return err
+	}
 	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
+	if (maintenanceActive || failedBoundary) && loadCleanupErr == nil {
+		txn.incrRollbackHandled = true
+	}
 	return loadCleanupErr
 }
 

@@ -49,6 +49,8 @@ func (deletion *Deletion) OpType() vm.OpType {
 	return vm.Deletion
 }
 
+func (deletion *Deletion) ProducesRemoteWorkspaceObjects() bool { return deletion.RemoteDelete }
+
 func (deletion *Deletion) Prepare(proc *process.Process) error {
 	if deletion.OpAnalyzer == nil {
 		deletion.OpAnalyzer = process.NewAnalyzer(deletion.GetIdx(), deletion.IsFirst, deletion.IsLast, "deletion")
@@ -117,6 +119,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 
 	result := vm.NewCallResult()
 	if deletion.ctr.state == vm.Eval {
+		var handoffNames []string
 		// ToDo: CNBlock Compaction
 		// blkId,delta_metaLoc,type
 		if deletion.ctr.resBat != nil {
@@ -156,6 +159,13 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			for _, bat := range bats {
 				data, area := vector.MustVarlenaRawData(bat.Vecs[0])
 				stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+				if colexec.WorkspaceHandoffEnabled(proc) {
+					names, namesErr := colexec.WorkspaceHandoffObjectNames(bat, 0)
+					if namesErr != nil {
+						return result, namesErr
+					}
+					handoffNames = append(handoffNames, names...)
+				}
 
 				if err = vector.AppendBytes(
 					deletion.ctr.resBat.GetVector(0),
@@ -191,6 +201,10 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 		deletion.ctr.resBat.Vecs[4], err = vector.NewConstFixed(
 			types.T_uint32.ToType(), deletion.ctr.deleted_length, deletion.ctr.resBat.RowCount(), proc.GetMPool())
 		if err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
+		if err = colexec.AttachWorkspaceHandoffScope(proc, deletion.ctr.resBat, handoffNames...); err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}

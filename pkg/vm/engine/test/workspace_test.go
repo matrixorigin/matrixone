@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -941,6 +942,7 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
+		testutil.WithFixedWorkspaceBudget(64<<20),
 		// force the commit-time dump of the delete entries
 		testutil.WithDisttaeEngineInsertEntryMaxCount(5),
 	)
@@ -1685,6 +1687,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
+		testutil.WithFixedWorkspaceBudget(64<<20),
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
@@ -2235,6 +2238,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
+			testutil.WithFixedWorkspaceBudget(64<<20),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 			testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
@@ -2505,63 +2509,73 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 }
 
 func TestGCFiles(t *testing.T) {
-	var (
-		err error
-	)
-
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
-
-	var (
-		pool  *ants.Pool
-		files = make([]objectio.ObjectStats, 3)
-	)
-
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x1})
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x2})
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x3})
-
 	op := p.StartCNTxn()
+	defer func() { require.NoError(t, op.Rollback(p.Ctx)) }()
 	txn := op.GetWorkspace().(*disttae.Transaction)
-
-	txn.GetProc()
-
-	for j := 0; j < 2; j++ {
-		if j == 1 {
-			pool, err = ants.NewPool(0, ants.WithNonblocking(true))
+	fs, err := colexec.GetSharedFSFromProc(txn.GetProc())
+	require.NoError(t, err)
+	for _, closedPool := range []bool{false, true} {
+		if closedPool {
+			pool, err := ants.NewPool(1, ants.WithNonblocking(true))
 			require.NoError(t, err)
 			p.D.Engine.ResetGCWorkerPool(pool)
 			pool.Release()
 		}
-
-		err = txn.GCObjsByStats(files...)
-		if j == 1 {
-			require.Error(t, err)
-		} else {
+		for _, byRange := range []bool{false, true} {
+			files := make([]objectio.ObjectStats, 3)
+			names := make([]string, 3)
+			start := int(txn.WriteOffset())
+			for i := range files {
+				oid := types.NewObjectid()
+				name := objectio.BuildObjectNameWithObjectID(&oid)
+				objectio.SetObjectStatsObjectName(&files[i], name)
+				objectio.SetObjectStatsBlkCnt(&files[i], 1)
+				objectio.SetObjectStatsRowCnt(&files[i], 1)
+				names[i] = name.String()
+				require.NoError(t, fs.Write(p.Ctx, fileservice.IOVector{FilePath: names[i], Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{byte(i + 1)}}}}))
+				bat := colexec.AllocCNS3ResultBat(false)
+				require.NoError(t, colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i]))
+				err := txn.WriteFile(disttae.INSERT, 0, 0, 0, "", "", names[i], bat, disttae.DNStore{})
+				bat.Clean(p.Mp)
+				require.NoError(t, err)
+			}
+			// Publish first. Reusing a name already handed to cleanup is unsafe because
+			// a retained or in-flight deletion could remove the newly published object.
+			if byRange {
+				err = txn.GCObjsByIdxRange(start, int(txn.WriteOffset())-1)
+			} else {
+				err = txn.GCObjsByStats(files...)
+			}
 			require.NoError(t, err)
-		}
-
-		for i := range files {
-			objectio.SetObjectStatsBlkCnt(&files[i], 1)
-			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false)
-			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
-			err = txn.WriteFile(
-				disttae.INSERT,
-				0, 0, 0,
-				"", "", "0x1",
-				bat, disttae.DNStore{},
-			)
-
-			require.NoError(t, err)
-			bat.Clean(p.Mp)
-		}
-
-		err = txn.GCObjsByIdxRange(0, len(files)-1)
-		if j == 1 {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
+			if closedPool {
+				queued, live, inFlight := p.D.Engine.InspectUnpublishedPendingForTest()
+				require.ElementsMatch(t, names, queued, "rejected pool submission retains every obligation")
+				require.Zero(t, live)
+				require.Zero(t, inFlight)
+				for i, name := range names {
+					entry, statErr := fs.StatFile(p.Ctx, name)
+					require.NoError(t, statErr)
+					require.EqualValues(t, 1, entry.Size)
+					bat := colexec.AllocCNS3ResultBat(false)
+					require.NoError(t, colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i]))
+					recordErr := txn.WriteFile(disttae.INSERT, 0, 0, 0, "", "", name, bat, disttae.DNStore{})
+					bat.Clean(p.Mp)
+					require.ErrorContains(t, recordErr, "object cleanup already owns this name")
+				}
+			}
+			// A successful explicit drain is an independent deletion oracle, even when
+			// the background pool is closed; no obligation is discarded to report PASS.
+			require.NoError(t, p.D.Engine.DrainUnpublishedPendingForTest(p.Ctx))
+			for _, name := range names {
+				_, statErr := fs.StatFile(p.Ctx, name)
+				require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "object %s must be deleted: %v", name, statErr)
+			}
+			queued, live, inFlight := p.D.Engine.InspectUnpublishedPendingForTest()
+			require.Empty(t, queued)
+			require.Zero(t, live)
+			require.Zero(t, inFlight)
 		}
 	}
 }

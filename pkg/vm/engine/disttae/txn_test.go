@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -501,12 +500,18 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
 	proc := testutil.NewProc(t)
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	parent, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	require.NoError(t, proc.SetHashBuildBudgetForTesting(parent))
+	defer parent.Close()
 
 	t.Run("A", func(t *testing.T) {
 		txn := Transaction{
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		for i := 0; i < 10; i++ {
@@ -519,7 +524,8 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			require.Equal(t, int(0), int(rowIds[0].GetRowOffset()))
 			require.Equal(t, int(ll-1), int(rowIds[len(rowIds)-1].GetRowOffset()))
 
-			vec.Free(common.DefaultAllocator)
+			vec.Free(proc.Mp())
+			require.Zero(t, txn.workspaceAccount.Snapshot().Used)
 		}
 	})
 
@@ -528,6 +534,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := options.DefaultBlockMaxRows*11 + 1
@@ -555,7 +562,8 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		require.Equal(t, 12, len(mm1))
 		require.Equal(t, 1, len(mm2))
 
-		vec.Free(common.DefaultAllocator)
+		vec.Free(proc.Mp())
+		require.Zero(t, txn.workspaceAccount.Snapshot().Used)
 	})
 
 	t.Run("C", func(t *testing.T) {
@@ -563,6 +571,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := math.MaxUint16
@@ -1143,6 +1152,11 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	}
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Len(t, txn.writes, 30, "fallible admission retains original slot boundaries")
+	for _, e := range txn.writes[1:] {
+		require.Nil(t, e.bat)
+	}
+	txn.compactNilWorkspaceSlotsLocked()
 	require.Len(t, txn.writes, 1)
 	require.Equal(t, 30, txn.writes[0].bat.RowCount())
 	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
@@ -1151,6 +1165,8 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
 	txn.releaseWorkspaceEntryBatchLocked(0)
+	require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+	txn.closeWorkspaceAllocation()
 }
 
 func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
@@ -1300,6 +1316,8 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 
 	bat.Clean(proc.Mp())
 	txn.writes[0].bat.Clean(proc.Mp())
+	require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+	txn.closeWorkspaceAllocation()
 }
 
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {

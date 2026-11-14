@@ -32,10 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,6 +46,47 @@ import (
 type emptyDispatchChild struct {
 	*value_scan.ValueScan
 	called chan struct{}
+}
+
+type handoffDispatchWorkspace struct{ client.Workspace }
+
+func (handoffDispatchWorkspace) RemoteWorkspaceHandoffScope() (ioutil.RemoteWorkspaceHandoffScope, bool) {
+	return ioutil.RemoteWorkspaceHandoffScope{Version: ioutil.RemoteWorkspaceHandoffVersion1}, true
+}
+
+type handoffDispatchTxn struct{ client.TxnOperator }
+
+func (handoffDispatchTxn) GetWorkspace() client.Workspace { return handoffDispatchWorkspace{} }
+
+func TestWorkspaceHandoffReceiverCapabilityBeforeChild(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = handoffDispatchTxn{}
+	child := &emptyDispatchChild{ValueScan: value_scan.NewArgument(), called: make(chan struct{})}
+	d := &Dispatch{ctr: &container{isRemote: true, prepared: true, remoteReceivers: []*process.WrapCs{{WorkspaceHandoffVersion: 0}}}}
+	d.AppendChild(child)
+	_, err := d.Call(proc)
+	require.Error(t, err)
+	select {
+	case <-child.called:
+		t.Fatal("an incompatible receiver must be rejected before the producer runs")
+	default:
+	}
+	d.ctr.remoteReceivers[0].WorkspaceHandoffVersion = ioutil.RemoteWorkspaceHandoffVersion1
+	require.NoError(t, d.requireWorkspaceHandoffReceivers(proc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	proc.Ctx = ctx
+	d.ctr.prepared = false
+	d.ctr.remoteInfo = make(chan *process.WrapCs)
+	d.RemoteRegs = []colexec.ReceiveInfo{{}}
+	_, err = d.Call(proc)
+	require.Error(t, err)
+	select {
+	case <-child.called:
+		t.Fatal("a canceled receiver wait must not run the producer")
+	default:
+	}
 }
 
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {

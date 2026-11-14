@@ -79,6 +79,10 @@ func (op *PartitionMultiUpdate) OpType() vm.OpType {
 	return vm.PartitionMultiUpdate
 }
 
+func (op *PartitionMultiUpdate) ProducesRemoteWorkspaceObjects() bool {
+	return op.raw != nil && op.raw.ProducesRemoteWorkspaceObjects()
+}
+
 func (op *PartitionMultiUpdate) Prepare(
 	proc *process.Process,
 ) error {

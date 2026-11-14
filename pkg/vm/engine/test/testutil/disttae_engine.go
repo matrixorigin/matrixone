@@ -75,6 +75,8 @@ type TestDisttaeEngine struct {
 	quota                    uint64
 	extraWorkspaceThreshold  uint64
 	insertEntryMaxCount      int
+	testWorkspaceBudgetCap   uint64
+	testWorkspaceGeneration  *process.HashBuildBudgetGeneration
 	newTxnMu                 sync.Mutex
 
 	rootDir string
@@ -189,6 +191,18 @@ func NewTestDisttaeEngine(
 	de.txnOperator = op
 	if err = de.Engine.New(de.ctx, op); err != nil {
 		return nil, err
+	}
+	if de.testWorkspaceBudgetCap != 0 {
+		budget := process.MustNewHashBuildBudget(de.testWorkspaceBudgetCap, de.testWorkspaceBudgetCap)
+		generation, openErr := budget.OpenGeneration(1)
+		if openErr != nil {
+			return nil, openErr
+		}
+		if setErr := op.GetWorkspace().(*disttae.Transaction).GetProc().SetHashBuildBudgetForTesting(generation); setErr != nil {
+			generation.Close()
+			return nil, setErr
+		}
+		de.testWorkspaceGeneration = generation
 	}
 
 	qc, _ := qclient.NewQueryClient("", morpc.Config{})
@@ -470,6 +484,9 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	de.cancel()
 	de.wg.Wait()
 	de.Engine.Close()
+	if de.testWorkspaceGeneration != nil {
+		de.testWorkspaceGeneration.Close()
+	}
 	de.queryClient.Close()
 
 	if err := os.RemoveAll(de.rootDir); err != nil {

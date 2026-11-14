@@ -1796,6 +1796,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		if err != nil {
 			return err
 		}
+		owned, copyErr := txn.copyWorkspaceBatch(bat)
+		bat.Clean(txn.proc.Mp())
+		if copyErr != nil {
+			return copyErr
+		}
+		bat = owned
 		if _, err = txn.WriteBatch(ALTER, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, bat, txn.tnStores[0]); err != nil {
 			bat.Clean(txn.proc.Mp())
@@ -1831,7 +1837,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				}
 				transferred := cur
 				transferred.tableName = tbl.tableName // in case renaming
-				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+				transferred.bat, err = txn.copyWorkspaceBatch(cur.bat)
 				transferred.accountedSize = 0
 				if err != nil {
 					return err
@@ -1886,6 +1892,16 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 	return attrs, nil
 }
 
+// WorkspaceHandoffDecision exposes only this transaction's fenced result to
+// the local coordinator after an object-recording failure.
+func (tbl *txnTable) WorkspaceHandoffDecision(id ioutil.RemoteWorkspaceHandoffID) (ioutil.RemoteWorkspaceHandoffDecision, error) {
+	txn := tbl.getTxn()
+	if txn == nil || txn.op == nil || string(txn.op.Txn().ID) != id.TxnID {
+		return ioutil.RemoteWorkspaceHandoffUnknown, moerr.NewInvalidStateNoCtx("remote workspace decision transaction mismatch")
+	}
+	return txn.engine.QueryCoordinatorWorkspaceHandoff(id)
+}
+
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
@@ -1909,7 +1925,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
@@ -1952,34 +1968,37 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
+) (bat *batch.Batch, fileName string, persisted []string, err error) {
 
 	proc := tbl.proc.Load()
 
-	var (
-		err error
-		fs  fileservice.FileService
-	)
-
+	var fs fileservice.FileService
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	s3Writer := colexec.NewCNS3DataWriter(
 		proc.Mp(), fs, tbl.tableDef, -1, false,
-	)
-
-	defer func() { s3Writer.Close() }()
-
-	var (
-		bat      *batch.Batch
-		stats    []objectio.ObjectStats
-		fileName string
+		tbl.getTxn().SinkerCapacityOption(),
 	)
 
 	defer func() {
-		if bat != nil {
-			bat.Clean(proc.Mp())
+		persisted = s3Writer.AbandonAndRetainableNames()
+		if closeErr := s3Writer.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	var stats []objectio.ObjectStats
+	var infoBat *batch.Batch
+	var rowsBat *batch.Batch
+
+	defer func() {
+		if rowsBat != nil {
+			rowsBat.Clean(proc.Mp())
+		}
+		if infoBat != nil {
+			infoBat.Clean(proc.Mp())
 		}
 	}()
 
@@ -1987,12 +2006,15 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		true,
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			deletes := blockDeletes[blk.BlockID]
+			// The compaction journal compares the original deletion sequence at
+			// settlement. Sorting the journal's backing in place would make an
+			// unchanged, unsorted snapshot look like a concurrent mutation.
+			deletes := slices.Clone(blockDeletes[blk.BlockID])
 			slices.Sort(deletes)
-			if bat == nil {
-				bat = batch.NewWithSize(len(tbl.seqnums))
+			if rowsBat == nil {
+				rowsBat = batch.NewWithSize(len(tbl.seqnums))
 			}
-			bat.CleanOnlyData()
+			rowsBat.CleanOnlyData()
 
 			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
@@ -2000,18 +2022,18 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				deletes,
 				tbl.seqnums,
 				tbl.typs,
-				bat,
+				rowsBat,
 				tbl.getTxn().engine.fs,
 				tbl.getTxn().proc.GetMPool(),
 			); err != nil {
 				return false
 			}
 
-			if bat.RowCount() == 0 {
+			if rowsBat.RowCount() == 0 {
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, bat); err != nil {
+			if err = s3Writer.Write(ctx, rowsBat); err != nil {
 				return false
 			}
 
@@ -2021,24 +2043,25 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+		return nil, fileName, persisted, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
+	if infoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		return nil, fileName, persisted, err
 	}
 
-	if len(stats) != 0 {
-		fileName = stats[0].ObjectLocation().String()
+	if len(stats) == 0 {
+		return nil, "", persisted, nil
 	}
 
-	ret, err := bat.Dup(proc.Mp())
+	fileName = stats[0].ObjectLocation().String()
+	bat, err = infoBat.Dup(proc.Mp())
 
-	return ret, fileName, err
+	return bat, fileName, persisted, err
 }
 
 func (tbl *txnTable) Delete(
@@ -2158,7 +2181,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}

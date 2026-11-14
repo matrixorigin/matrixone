@@ -63,6 +63,7 @@ func TestCommittedDeleteZeroDataCreditsUsesBoundedWorkspace(t *testing.T) {
 	w.memController.throttler = deny
 	var observed int
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 	txnOp.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 		observed++
 		require.NotNil(t, w.activeWorkspace)

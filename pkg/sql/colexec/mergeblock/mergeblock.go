@@ -73,8 +73,17 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return input, nil
 	}
 	bat := input.Batch
+	handoffScope, hasHandoff, err := colexec.WorkspaceHandoffFromBatch(proc, bat)
+	if err != nil {
+		return input, err
+	}
 	if err := mergeBlock.Split(proc, bat, analyzer); err != nil {
 		return input, err
+	}
+	if hasHandoff {
+		mergeBlock.container.mp[0].ExtraBuf = append(mergeBlock.container.mp[0].ExtraBuf[:0], bat.ExtraBuf...)
+	} else {
+		mergeBlock.container.mp[0].ExtraBuf = nil
 	}
 
 	// handle origin/main table.
@@ -86,7 +95,15 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 			return mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0])
 		}); err != nil {
+			if hasHandoff {
+				_ = colexec.SettleFailedWorkspaceHandoff(proc, mergeBlock.container.source, handoffScope, mergeBlock.container.mp[0], 1)
+			}
 			return input, err
+		}
+		if hasHandoff {
+			if err := colexec.ConfirmWorkspaceHandoffRecords(proc, handoffScope, mergeBlock.container.mp[0], 1); err != nil {
+				return input, err
+			}
 		}
 		analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
 	}

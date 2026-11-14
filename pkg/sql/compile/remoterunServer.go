@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -118,7 +119,6 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		return handlePipelineBatchAck(msg, cs)
 	}
-
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
@@ -277,11 +277,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		infoToDispatchOperator := &process.WrapCs{
-			ReceiverDone: false,
-			MsgId:        receiver.messageId,
-			Uid:          receiver.messageUuid,
-			Cs:           receiver.clientSession,
-			Err:          make(chan error, 1),
+			ReceiverDone:            false,
+			MsgId:                   receiver.messageId,
+			Uid:                     receiver.messageUuid,
+			Cs:                      receiver.clientSession,
+			Err:                     make(chan error, 1),
+			WorkspaceHandoffVersion: receiver.workspaceHandoffVersion,
 		}
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
@@ -512,6 +513,34 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				ws := disttae.NewTxnWorkSpace(disttaeEngine, runCompile.proc)
 				runCompile.proc.GetTxnOperator().AddWorkspace(ws)
 				ws.BindTxnOp(runCompile.proc.GetTxnOperator())
+			}
+		}
+		mayPersist, handoffErr := remoteScopeMayPersistWorkspaceObjects(s, runCompile.addr)
+		if handoffErr != nil {
+			return handoffErr
+		}
+		if mayPersist {
+			helper := receiver.procBuildHelper
+			if helper.workspaceHandoffVersion != ioutil.RemoteWorkspaceHandoffVersion1 ||
+				helper.workspaceHandoffFragment == uuid.Nil || helper.remoteExecutionID == uuid.Nil {
+				return moerr.NewRetryForCNRollingRestart()
+			}
+			op := runCompile.proc.GetTxnOperator()
+			if op == nil {
+				return moerr.NewInvalidStateNoCtx("remote workspace writer has no transaction")
+			}
+			owner, ok := op.GetWorkspace().(interface {
+				ConfigureRemoteWorkspaceHandoff(ioutil.RemoteWorkspaceHandoffScope) error
+			})
+			if !ok {
+				return moerr.NewInvalidStateNoCtx("remote workspace writer has no handoff owner")
+			}
+			if err := owner.ConfigureRemoteWorkspaceHandoff(ioutil.RemoteWorkspaceHandoffScope{
+				Version: helper.workspaceHandoffVersion, TxnID: string(op.Txn().ID),
+				ExecutionID: helper.remoteExecutionID, FragmentID: helper.workspaceHandoffFragment,
+				Attempt: helper.workspaceHandoffAttempt, ProducerCN: receiver.cnInformation.cnAddr,
+			}); err != nil {
+				return err
 			}
 		}
 
@@ -762,12 +791,15 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId                 uuid.UUID
-	statementRuntimeIgnore bool
-	prepareParams          pipeline.PrepareParamInfo
-	affectedRows           int64
-	remoteFragmentCounts   map[string]uint32
-	remoteExecutionID      uuid.UUID
+	StmtId                   uuid.UUID
+	statementRuntimeIgnore   bool
+	prepareParams            pipeline.PrepareParamInfo
+	affectedRows             int64
+	remoteFragmentCounts     map[string]uint32
+	remoteExecutionID        uuid.UUID
+	workspaceHandoffVersion  uint32
+	workspaceHandoffFragment uuid.UUID
+	workspaceHandoffAttempt  uint32
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -790,9 +822,10 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
-	requestedTeardownMode pipeline.StreamTeardownMode
-	acceptedTeardownMode  pipeline.StreamTeardownMode
-	streamLifecycle       *pipelineStreamLifecycle
+	requestedTeardownMode   pipeline.StreamTeardownMode
+	workspaceHandoffVersion uint32
+	acceptedTeardownMode    pipeline.StreamTeardownMode
+	streamLifecycle         *pipelineStreamLifecycle
 
 	colexecServer *colexec.Server
 
@@ -824,16 +857,17 @@ func newMessageReceiverOnServer(
 	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
 	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
-		messageCtx:            ctx,
-		connectionCtx:         connectionCtx,
-		messageId:             m.GetId(),
-		messageTyp:            m.GetCmd(),
-		clientSession:         cs,
-		messageAcquirer:       messageAcquirer,
-		maxMessageSize:        maxMessageSizeToMoRpc,
-		needNotReply:          m.NeedNotReply,
-		requestedTeardownMode: m.GetRequestedTeardownMode(),
-		colexecServer:         colexecServer,
+		messageCtx:              ctx,
+		connectionCtx:           connectionCtx,
+		messageId:               m.GetId(),
+		messageTyp:              m.GetCmd(),
+		clientSession:           cs,
+		messageAcquirer:         messageAcquirer,
+		maxMessageSize:          maxMessageSizeToMoRpc,
+		needNotReply:            m.NeedNotReply,
+		requestedTeardownMode:   m.GetRequestedTeardownMode(),
+		workspaceHandoffVersion: m.GetWorkspaceHandoffVersion(),
+		colexecServer:           colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -1171,14 +1205,26 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	}
 
 	result := processHelper{
-		id:                     procInfo.Id,
-		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:               procInfo.UnixTime,
-		accountId:              procInfo.AccountId,
-		txnClient:              cli,
-		affectedRows:           procInfo.AffectedRows,
-		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
-		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+		id:                      procInfo.Id,
+		lim:                     process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:                procInfo.UnixTime,
+		accountId:               procInfo.AccountId,
+		txnClient:               cli,
+		affectedRows:            procInfo.AffectedRows,
+		statementRuntimeIgnore:  procInfo.StatementRuntimeIgnore,
+		remoteFragmentCounts:    maps.Clone(procInfo.RemoteFragmentCounts),
+		workspaceHandoffVersion: procInfo.WorkspaceHandoffVersion,
+		workspaceHandoffAttempt: procInfo.WorkspaceHandoffAttempt,
+	}
+	if len(procInfo.WorkspaceHandoffFragment) != 0 {
+		result.workspaceHandoffFragment, err = uuid.FromBytes(procInfo.WorkspaceHandoffFragment)
+		if err != nil {
+			return processHelper{}, err
+		}
+	}
+	if (result.workspaceHandoffVersion == 0) != (result.workspaceHandoffFragment == uuid.Nil) ||
+		(result.workspaceHandoffVersion == 0 && result.workspaceHandoffAttempt != 0) {
+		return processHelper{}, moerr.NewInvalidInputNoCtx("incomplete remote workspace handoff metadata")
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

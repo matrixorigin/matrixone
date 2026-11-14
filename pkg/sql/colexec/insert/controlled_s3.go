@@ -40,27 +40,28 @@ import (
 // admitted domains. Build retains compact object stats in the output slot;
 // Eval expands the original MergeBlock protocol one object per Call.
 type controlledS3 struct {
-	proc        *process.Process
-	owner       *Insert
-	fs          fileservice.FileService
-	memory      *process.ImportMemory
-	throttler   rscthrottler.RSCThrottler
-	dataMP      *mpool.MPool
-	outputMP    *mpool.MPool
-	outputSlot  *rscthrottler.InputLease
-	writer      *colexec.CNS3Writer
-	unit        int64
-	bufferBytes int64
-	staged      int64
-	mu          sync.Mutex
-	granted     int64
-	mutations   int
-	statsSpool  *colexec.MetadataSpool
-	statsCount  int64
-	stats       *vector.Vector
-	read        int
-	output      *batch.Batch
-	counters    *perfcounter.CounterSet
+	proc                *process.Process
+	owner               *Insert
+	fs                  fileservice.FileService
+	memory              *process.ImportMemory
+	throttler           rscthrottler.RSCThrottler
+	dataMP              *mpool.MPool
+	outputMP            *mpool.MPool
+	outputSlot          *rscthrottler.InputLease
+	writer              *colexec.CNS3Writer
+	unrecordedSinkNames []string
+	unit                int64
+	bufferBytes         int64
+	staged              int64
+	mu                  sync.Mutex
+	granted             int64
+	mutations           int
+	statsSpool          *colexec.MetadataSpool
+	statsCount          int64
+	stats               *vector.Vector
+	read                int
+	output              *batch.Batch
+	counters            *perfcounter.CounterSet
 }
 
 func (insert *Insert) insertControlledS3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {
@@ -101,6 +102,16 @@ func (insert *Insert) insertControlledS3(proc *process.Process, analyzer process
 			return vm.CancelResult, err
 		}
 		if output != nil {
+			var names []string
+			if colexec.WorkspaceHandoffEnabled(proc) {
+				names, err = colexec.WorkspaceHandoffObjectNames(output, 1)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+			}
+			if err = colexec.AttachWorkspaceHandoffScope(proc, output, names...); err != nil {
+				return vm.CancelResult, err
+			}
 			result = vm.NewCallResult()
 			result.Batch = output
 			return result, nil
@@ -187,6 +198,9 @@ func (s *controlledS3) ensureWriter() {
 	}
 	opts := []ioutil.SinkerOption{ioutil.WithMemoryWorkspace(s.memory.WorkingSet),
 		ioutil.WithBufferBytes(s.bufferBytes), ioutil.WithRetainedRelease(s.sourceReleased), ioutil.WithPipelineFlush()}
+	if opt := colexec.WorkspaceSinkerCapacityOption(s.proc); opt != nil {
+		opts = append(opts, opt)
+	}
 	s.writer = colexec.NewCNS3DataWriter(s.dataMP, s.fs, s.owner.InsertCtx.TableDef, int(s.bufferBytes), false, opts...)
 }
 
@@ -332,6 +346,9 @@ func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) e
 	if err == nil {
 		err = s.collectStats(proc.Ctx, stats)
 	}
+	if s.writer.HasUncommittedCapacityHook() {
+		s.unrecordedSinkNames = append(s.unrecordedSinkNames, s.writer.AbandonAndRetainableNames()...)
+	}
 	// Close drains async jobs and destroys the retained free list. Its source
 	// callbacks may return only actual capacity, never the prepaid next N.
 	err = errors.Join(err, s.writer.Close())
@@ -475,6 +492,9 @@ func (s *controlledS3) next(ctx context.Context) (*batch.Batch, error) {
 
 func (s *controlledS3) close() (err error) {
 	s.begin()
+	if s.owner != nil {
+		s.owner.retainUnrecordedSinkObjects(s.proc)
+	}
 	if s.writer != nil {
 		err = s.writer.Close()
 		s.writer = nil

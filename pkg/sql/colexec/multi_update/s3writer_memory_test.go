@@ -194,6 +194,7 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				}
 				op := mock_frontend.NewMockTxnOperator(ctrl)
 				op.EXPECT().TxnOptions().Return(options).AnyTimes()
+				op.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 				proc.Base.TxnOperator = op
 			}
 			if mode == "wait for capacity" || mode == "autocommit waits" || mode == "autocommit output waits" {

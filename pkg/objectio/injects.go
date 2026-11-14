@@ -862,3 +862,19 @@ func UpstreamSQLHelperInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_UpstreamSQLHelper)
 	return sarg, injected
 }
+
+// CNWorkspaceAllocationLimit returns a test-only limit for one explicitly named
+// database. An empty selector is deliberately inert to protect unrelated work.
+func CNWorkspaceAllocationLimit(database string) uint64 {
+	limit, target, injected := fault.TriggerFault("fj/cn/workspace_allocation_limit")
+	if !injected || target == "" || target != database || limit <= 0 {
+		return 0
+	}
+	return uint64(limit)
+}
+
+// CNWorkspaceRemoteRecordRefusal is test-only and targets one named database.
+func CNWorkspaceRemoteRecordRefusal(database string) bool {
+	_, target, injected := fault.TriggerFault("fj/cn/workspace_remote_record_refusal")
+	return injected && target != "" && target == database
+}
