@@ -381,32 +381,7 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
-		// The original data size exercises CN-created multi-block objects.
-		// Check before compaction can replace those objects.
-		func() {
-			readTxn, err := p.T.StartTxn()
-			require.NoError(t, err)
-			defer func() { require.NoError(t, readTxn.Rollback(p.Ctx)) }()
-			readTxn.BindAccessInfo(0, 0, 0)
-			readDB, err := readTxn.GetDatabase(dbName)
-			require.NoError(t, err)
-			readRel, err := readDB.GetRelationByName(schema.Name)
-			require.NoError(t, err)
-			cnObjects := 0
-			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
-				if object.HasDropCommitted() {
-					continue
-				}
-				stats := object.GetObjectStats()
-				if stats.GetCNCreated() {
-					cnObjects++
-					require.EqualValues(t, rowsCnt, stats.Rows(), "table %s must retain the CN-created rows", schema.Name)
-					require.EqualValues(t, 2, stats.BlkCnt(), "table %s must retain the original two-block object", schema.Name)
-				}
-			}
-			require.Equal(t, 1, cnObjects, "table %s must retain one CN-created object", schema.Name)
-		}()
-
+		// CN-created multi-block coverage lives in TestChangesHandleStaleFiles2.
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		func() {
 			readTxn, err := p.T.StartTxn()

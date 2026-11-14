@@ -1090,9 +1090,12 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
-	blockCnt := 10
+	// Two full blocks retain the CN multi-block and stale-file paths without
+	// writing ten blocks for a test whose error is independent of that count.
+	blockCnt := 2
 	rowsCount := objectio.BlockMaxRows * blockCnt
 	bat := catalog2.MockBatch(schema, rowsCount)
+	defer bat.Close()
 	bats := bat.Split(blockCnt)
 
 	// write table
@@ -1119,7 +1122,8 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), true, mp)
-		assert.NoError(t, err)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, handle.Close()) }()
 		{
 			txn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
 			iter := dnRel.MakeObjectItOnSnap(false)
@@ -1130,7 +1134,11 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 					objs = append(objs, obj)
 				}
 			}
-			assert.NoError(t, txn.Commit(ctx))
+			iter.Close()
+			require.NoError(t, txn.Commit(ctx))
+			require.Len(t, objs, 1, "the committed batch must be one CN-created object")
+			require.EqualValues(t, rowsCount, objs[0].ObjectStats.Rows())
+			require.EqualValues(t, 2, objs[0].ObjectStats.BlkCnt(), "the CN object must have two blocks")
 			fs := taeEngine.GetDB().Runtime.Fs
 			for _, obj := range objs {
 				deleteFileName := obj.ObjectStats.ObjectName().String()
