@@ -293,19 +293,7 @@ func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 		require.True(t, first.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), first.SessionInfo.FixedOffsetSeconds)
 		require.Empty(t, first.SessionInfo.TimeZoneName)
-		// Go's binary time format reserves a whole-minute offset of -1 for UTC,
-		// so -119s..-60s have no legacy encoding and keep the empty field.
-		legacyEncodable := offset/60 != -1
-		var legacyTime time.Time
-		if legacyEncodable {
-			// Simulate an old receiver that ignores the new fixed-offset fields.
-			require.NotEmpty(t, first.SessionInfo.TimeZone)
-			require.NoError(t, legacyTime.UnmarshalBinary(first.SessionInfo.TimeZone))
-			_, legacyOffset := legacyTime.Zone()
-			require.Equal(t, offset, legacyOffset)
-		} else {
-			require.Empty(t, first.SessionInfo.TimeZone)
-		}
+		require.Empty(t, first.SessionInfo.TimeZone)
 		wire, err := first.Marshal()
 		require.NoError(t, err)
 		var received pipeline.ProcessInfo
@@ -321,14 +309,7 @@ func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, forwarded.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), forwarded.SessionInfo.FixedOffsetSeconds)
-		if legacyEncodable {
-			require.NotEmpty(t, forwarded.SessionInfo.TimeZone)
-			require.NoError(t, legacyTime.UnmarshalBinary(forwarded.SessionInfo.TimeZone))
-			_, forwardedLegacyOffset := legacyTime.Zone()
-			require.Equal(t, offset, forwardedLegacyOffset)
-		} else {
-			require.Empty(t, forwarded.SessionInfo.TimeZone)
-		}
+		require.Empty(t, forwarded.SessionInfo.TimeZone)
 	}
 	for _, offset := range []int{1 << 32, -(1 << 32)} {
 		proc.Base.SessionInfo.TimeZone = time.FixedZone("", offset)

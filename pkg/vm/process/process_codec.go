@@ -168,15 +168,6 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, moerr.NewInvalidInputNoCtxf("invalid fixed time zone offset %d", offset)
 			}
 			zoneName = ""
-			// Older CNs ignore FixedOffsetPresent/Seconds and decode TimeZone.
-			// Keep the legacy binary offset during mixed-version rolling upgrades.
-			// time.Time.MarshalBinary cannot encode a whole-minute offset of -1
-			// (reserved for UTC, i.e. -119s..-60s) or one beyond int16 minutes;
-			// those keep the previous empty field and rely on FixedOffsetSeconds
-			// instead of failing the query.
-			if legacy, err := (time.Time{}).In(loc).MarshalBinary(); err == nil {
-				timeBytes = legacy
-			}
 		} else {
 			offset = 0
 			var err error
