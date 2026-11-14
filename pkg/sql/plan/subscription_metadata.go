@@ -33,6 +33,18 @@ import (
 
 const (
 	informationSchemaStatistics = "statistics"
+	// informationSchemaStatisticsNdvFunction names the published distinct-value
+	// estimate inside the persisted STATISTICS body. A publisher branch appends
+	// the in-band publisher account config to each call so the estimate
+	// resolves through the publisher identity without any per-row internal
+	// subscription lookup.
+	informationSchemaStatisticsNdvFunction = "mo_table_col_ndv"
+	// informationSchemaStatisticsNullCntFunction names the published NULL-row
+	// population used beside the distinct-value estimate by CARDINALITY's
+	// NULL value group. A publisher branch bakes the same publisher account
+	// config into it, because the subscriber session cannot open the
+	// publisher's database by name at evaluation time.
+	informationSchemaStatisticsNullCntFunction = "mo_table_col_nullcnt"
 	// maxSubscriptionStatisticsPublisherBranches is the validated admission
 	// envelope for the current UNION-based representation: 64 visible
 	// subscriptions across four logical STATISTICS occurrences. The limit is
@@ -432,6 +444,251 @@ func (v currentAccountIDVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
 }
 
 func (v currentAccountIDVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+// rewriteSubscriptionStatisticsNdvArguments bakes the publisher branch's
+// publication identity into every statistics-estimator call of the persisted
+// STATISTICS body. The branch keeps scanning the publisher's catalog rows, so
+// tbl.reldatabase already carries the publisher's physical database name, but
+// the volatile estimate is evaluated later with the subscriber session
+// identity, which cannot open the publisher's database by name. Appending the
+// publisher account id as an in-band config argument lets the executor attach
+// that account before resolving the already-published database and relation
+// directly through the engine, so a publisher branch performs no per-row
+// subscription metadata lookup at execution time. The branch representation
+// is a UNION: its publisher arms run as parallel scopes, and resolving the
+// account through the session's shared internal executor from more than one
+// arm interleaves internal result sets on one channel and corrupts them, so
+// the resolved identity must be carried in the plan itself.
+//
+// The walk reaches the projections, WHERE, HAVING and GROUP BY of the body's
+// select clauses, which is where the repository's STATISTICS body can legally
+// compute the estimate. The persisted visibility CTEs and FROM sources are
+// deliberately left alone: they contain EXISTS subqueries, tree.Subquery.Accept
+// is not implemented, and the estimate never depends on their expressions.
+//
+// Account id zero is the sys account. Publications created by the sys session
+// (CREATE PUBLICATION under dump, every `from sys publication` subscription)
+// publish with mo_subs.pub_account_id = 0, and those branches scan sys catalog
+// rows whose reldatabase still names the physical published database, so the
+// account must be baked for them exactly as for any foreign publisher (#30910).
+func rewriteSubscriptionStatisticsNdvArguments(stmt *tree.Select, pubMeta *planpb.SubscriptionMeta) {
+	if stmt == nil || pubMeta == nil {
+		return
+	}
+	rewriteStatisticsNdvProjectionSelect(
+		stmt, statisticsNdvArgumentRewriter{publicationAccountID: pubMeta.GetAccountId()})
+}
+
+func rewriteStatisticsNdvProjectionSelect(stmt *tree.Select, visitor statisticsNdvArgumentRewriter) {
+	if stmt == nil {
+		return
+	}
+	rewriteStatisticsNdvProjectionStatement(stmt.Select, visitor)
+}
+
+func rewriteStatisticsNdvProjectionStatement(
+	selectStatement tree.SelectStatement,
+	visitor statisticsNdvArgumentRewriter,
+) {
+	switch selectStatement := selectStatement.(type) {
+	case *tree.SelectClause:
+		rewriteStatisticsNdvProjectionClause(selectStatement, visitor)
+	case *tree.Select:
+		rewriteStatisticsNdvProjectionSelect(selectStatement, visitor)
+	case *tree.ParenSelect:
+		rewriteStatisticsNdvProjectionStatement(selectStatement.Select, visitor)
+	case *tree.UnionClause:
+		rewriteStatisticsNdvProjectionStatement(selectStatement.Left, visitor)
+		rewriteStatisticsNdvProjectionStatement(selectStatement.Right, visitor)
+	}
+}
+
+func rewriteStatisticsNdvProjectionClause(clause *tree.SelectClause, visitor statisticsNdvArgumentRewriter) {
+	for i := range clause.Exprs {
+		if clause.Exprs[i].Expr != nil {
+			clause.Exprs[i].Expr, _ = clause.Exprs[i].Expr.Accept(visitor)
+		}
+	}
+	if clause.GroupBy != nil {
+		for groupIndex := range clause.GroupBy.GroupByExprsList {
+			rewriteStatisticsNdvExprs(clause.GroupBy.GroupByExprsList[groupIndex], visitor)
+		}
+		rewriteStatisticsNdvExprs(clause.GroupBy.GroupingSet, visitor)
+	}
+	if clause.Where != nil && clause.Where.Expr != nil {
+		clause.Where.Expr, _ = clause.Where.Expr.Accept(visitor)
+	}
+	if clause.Having != nil && clause.Having.Expr != nil {
+		clause.Having.Expr, _ = clause.Having.Expr.Accept(visitor)
+	}
+}
+
+func rewriteStatisticsNdvExprs(exprs tree.Exprs, visitor statisticsNdvArgumentRewriter) {
+	for i := range exprs {
+		if exprs[i] != nil {
+			exprs[i], _ = exprs[i].Accept(visitor)
+		}
+	}
+}
+
+// statisticsPublicationAccountConfigPrefix introduces the in-band publisher
+// account marker appended by the rewriter. The format is private to the
+// builtins' publication arms; nothing user-visible may depend on it.
+const statisticsPublicationAccountConfigPrefix = "pubacct="
+
+// statisticsPublicationAccountConfig renders the in-band config argument that
+// names the publisher account owning a branch row's statistics.
+func statisticsPublicationAccountConfig(accountID int32) string {
+	return statisticsPublicationAccountConfigPrefix +
+		strconv.FormatInt(int64(accountID), 10)
+}
+
+// statisticsNdvConfigArity and statisticsNullCntConfigArity name the plain
+// direct arities the persisted STATISTICS body keeps for the two estimators:
+// mo_table_col_ndv's fourth argument is the index's algo_params and
+// mo_table_col_nullcnt's third argument is the column. The publisher-account
+// config argument sits exactly one position beyond them.
+const (
+	statisticsNdvConfigArity     = 4
+	statisticsNullCntConfigArity = 3
+)
+
+// isUserSuppliedPublicationConfigLiteral reports whether one estimator
+// argument is a plain string literal carrying the in-band publication-config
+// marker. The config channel is compiler-owned, so text reaches it only as
+// the bake's P_char literal or as a literal typed verbatim by the user; the
+// numeric suffix mirrors the estimator's parser (publicationAccountIDFromConfig)
+// so a decodable marker never masquerades as index metadata.
+func isUserSuppliedPublicationConfigLiteral(arg tree.Expr) bool {
+	literal, ok := arg.(*tree.NumVal)
+	if !ok || literal.ValType != tree.P_char {
+		return false
+	}
+	rest, prefixed := strings.CutPrefix(literal.String(), statisticsPublicationAccountConfigPrefix)
+	if !prefixed || rest == "" {
+		return false
+	}
+	if _, err := strconv.ParseUint(rest, 10, 32); err != nil {
+		return false
+	}
+	return true
+}
+
+// userSuppliedStatisticsConfigStripped removes the user-reachable
+// publication-config argument(s) from a bound estimator call and returns the
+// arguments to bind instead. The config argument is a compiler-owned channel:
+// the only authorized producer is
+// rewriteSubscriptionStatisticsNdvArguments, which appends the publisher
+// identity to a publisher branch while
+// QueryBuilder.queryingSubscriptionMetadata scopes that branch's binding.
+// A config argument reaching binding from anywhere else - direct SQL, view
+// bodies, subqueries, prepared or default expressions - would let user text
+// select another account's statistics, so outside that scope the removal
+// holds at every reachable shape (#30910 tenant isolation):
+//
+//   - a call of exactly the baked arity (statisticsNdvConfigArity+1 /
+//     statisticsNullCntConfigArity+1) carries user-produced text in the
+//     config slot, whatever its form - literal, column reference or prepared
+//     placeholder - so the trailing argument is removed wholesale and the
+//     remaining plain direct arguments keep their own overload surface;
+//   - inside the plain direct surface, a config-shaped string literal is
+//     removed only from mo_table_col_ndv's index/algo-parameter slot, the
+//     one plain argument that is a parameter rather than an object name:
+//     there it would otherwise render a false unavailable estimate instead
+//     of the plain call's published value. The database, table and column
+//     arguments spell object names, so a literal that merely equals the
+//     marker text - SHOW INDEX supplies db and table as literals, so SHOW
+//     INDEX FROM d.`pubacct=0` must keep binding - stays bound as the name
+//     it asks for, and mo_table_col_nullcnt, whose plain surface ends at
+//     the identity arguments, keeps only the trailing rule above.
+//
+// A nil builder binds on the base binder path outside any publisher branch,
+// so it strips as well. Calls beyond the baked arity are left untouched: no
+// overload exists for them, so binding fails closed. Non-config literals and
+// marker text the estimator cannot decode are left to normal binding for
+// the same reason - they select no account and can only bind the plain
+// overload surface.
+func userSuppliedStatisticsConfigStripped(
+	builder *QueryBuilder,
+	funcName string,
+	args tree.Exprs,
+) tree.Exprs {
+	visible := builder != nil && builder.queryingSubscriptionMetadata != nil
+	plainArgs := -1
+	switch {
+	case visible:
+		return args
+	case strings.EqualFold(funcName, informationSchemaStatisticsNdvFunction):
+		plainArgs = statisticsNdvConfigArity
+	case strings.EqualFold(funcName, informationSchemaStatisticsNullCntFunction):
+		plainArgs = statisticsNullCntConfigArity
+	default:
+		return args
+	}
+
+	stripped := args
+	if len(stripped) == plainArgs+1 {
+		stripped = stripped[:len(stripped)-1]
+	}
+	if len(stripped) > plainArgs {
+		return stripped
+	}
+	// The only plain direct-surface position a config literal can occupy
+	// without displacing an object name is mo_table_col_ndv's algo-parameter
+	// slot: a decodable literal there is removed so the call binds to the
+	// identical plain call. Every earlier position is the db/table/column
+	// identity and keeps its spelled value (a legal identifier may equal
+	// the marker text), and mo_table_col_nullcnt has no plain parameter
+	// beyond its identity arguments, so only the trailing rule removes
+	// its config-shaped text.
+	if plainArgs == statisticsNdvConfigArity &&
+		len(stripped) == statisticsNdvConfigArity &&
+		isUserSuppliedPublicationConfigLiteral(stripped[statisticsNdvConfigArity-1]) {
+		stripped = stripped[:statisticsNdvConfigArity-1]
+	}
+	return stripped
+}
+
+type statisticsNdvArgumentRewriter struct {
+	publicationAccountID int32
+}
+
+func (v statisticsNdvArgumentRewriter) Enter(expr tree.Expr) (tree.Expr, bool) {
+	function, ok := expr.(*tree.FuncExpr)
+	if !ok || function.FuncName == nil {
+		return expr, false
+	}
+	// CARDINALITY derives its estimate from both statistics builtins, so the
+	// publisher branch must bake its identity into each one it publishes: the
+	// distinct-value estimate (the overload ends with the index's algo_params)
+	// and the NULL-row population.
+	name := function.FuncName.Origin()
+	isNdv := strings.EqualFold(name, informationSchemaStatisticsNdvFunction)
+	isNullCnt := strings.EqualFold(name, informationSchemaStatisticsNullCntFunction)
+	if !isNdv && !isNullCnt {
+		return expr, false
+	}
+	configuredArgs := statisticsNdvConfigArity
+	if isNullCnt {
+		configuredArgs = statisticsNullCntConfigArity
+	}
+	// The persisted body carries either publication-config-bearing calls or
+	// the plain direct shapes; the config argument is appended exactly once,
+	// so a re-visited tree never grows a second config.
+	if len(function.Exprs) < configuredArgs || len(function.Exprs) > configuredArgs {
+		return function, true
+	}
+	function.Exprs = append(function.Exprs, tree.NewNumVal(
+		statisticsPublicationAccountConfig(v.publicationAccountID),
+		statisticsPublicationAccountConfig(v.publicationAccountID),
+		false, tree.P_char,
+	))
+	return function, true
+}
+
+func (v statisticsNdvArgumentRewriter) Exit(expr tree.Expr) (tree.Expr, bool) {
 	return expr, true
 }
 

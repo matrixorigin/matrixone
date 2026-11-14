@@ -13294,6 +13294,7 @@ func (builder *QueryBuilder) bindView(
 				builder.GetContext(), "unsupported STATISTICS metadata visibility CTE",
 			)
 		}
+		rewriteSubscriptionStatisticsNdvArguments(viewStmt.AsSource, meta)
 		previousMetadata := builder.queryingSubscriptionMetadata
 		builder.queryingSubscriptionMetadata = metadataSubscription
 		defer func() { builder.queryingSubscriptionMetadata = previousMetadata }()

@@ -23,7 +23,7 @@ SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
 ➤ grantee[12,292,0]  ¦  table_catalog[12,512,0]  ¦  privilege_type[12,64,0]  ¦  is_grantable[12,3,0]
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, NON_UNIQUE, NULL AS INDEX_QUALIFIER, INDEX_NAME,3 AS TYPE, SEQ_IN_INDEX AS ORDINAL_POSITION, COLUMN_NAME,COLLATION AS ASC_OR_DESC, CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'procs_priv' ORDER BY NON_UNIQUE, INDEX_NAME, SEQ_IN_INDEX limit 1;
 ➤ TABLE_CAT[12,5000,0]  ¦  TABLE_SCHEM[12,4,0]  ¦  TABLE_NAME[12,5000,0]  ¦  NON_UNIQUE[-5,64,0]  ¦  INDEX_QUALIFIER[12,4,0]  ¦  INDEX_NAME[12,64,0]  ¦  TYPE[-5,64,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ASC_OR_DESC[12,1,0]  ¦  CARDINALITY[-5,64,0]  ¦  PAGES[-5,64,0]  ¦  FILTER_CONDITION[12,4,0]  𝄀
-mysql  ¦  null  ¦  procs_priv  ¦  0  ¦  null  ¦  PRIMARY  ¦  3  ¦  1  ¦  Host  ¦  A  ¦  0  ¦  0  ¦  null
+mysql  ¦  null  ¦  procs_priv  ¦  0  ¦  null  ¦  PRIMARY  ¦  3  ¦  1  ¦  Host  ¦  A  ¦  null  ¦  0  ¦  null
 SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
 ➤ host[1,255,0]  ¦  db[1,64,0]  ¦  user[1,32,0]  ¦  table_name[1,64,0]  ¦  column_name[1,64,0]  ¦  timestamp[93,64,0]  ¦  column_priv[12,10,0]
 SELECT * FROM `mysql`.`db` LIMIT 0,1000;

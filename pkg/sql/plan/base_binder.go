@@ -3580,6 +3580,21 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	// The statistics estimators' publication-config argument is a
+	// compiler-owned channel: only the subscription STATISTICS bake may
+	// append the authorized publisher identity, and that branch binds under
+	// QueryBuilder.queryingSubscriptionMetadata. Outside that scope the
+	// user-reachable config shapes are removed before overload resolution -
+	// the whole trailing argument at the baked arity whatever form user
+	// text takes, and a config-shaped string literal in mo_table_col_ndv's
+	// plain index/algo-parameter slot - while the database, table and
+	// column arguments stay bound as the object names they spell - so user
+	// text can select neither another account's statistics nor a false
+	// unavailable estimate, and the call resolves under the caller's own
+	// identity (#30910 tenant isolation).
+	if stripped := userSuppliedStatisticsConfigStripped(b.builder, funcName, astExpr.Exprs); len(stripped) < len(astExpr.Exprs) {
+		astExpr.Exprs = stripped
+	}
 	if strings.EqualFold(funcName, "values") {
 		// VALUES in a nested ODKU subquery still names the incoming row of
 		// that assignment owner. Count query blocks, skipping binderless

@@ -929,7 +929,13 @@ var predefinedFunids = map[int]int{
 	TEMPORAL_DATETIME_BOUND:  634,
 	TEMPORAL_TIMESTAMP_BOUND: 635,
 	MO_IS_PHYSICAL_INDEX:     633,
-	FUNCTION_END_NUMBER:      636,
+	// Public statistics projection (issue #30910/#31164); renumbered above
+	// main's 605..635 allocation during the PR rebase.
+	MO_TABLE_COL_NDV:     636,
+	MO_TABLE_INDEX_SIZE:  637,
+	MO_TABLE_DATA_SIZE:   638,
+	MO_TABLE_COL_NULLCNT: 639,
+	FUNCTION_END_NUMBER:  640,
 }
 
 func Test_funids(t *testing.T) {

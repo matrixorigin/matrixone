@@ -603,3 +603,25 @@ func TestTableStatsExecutorDetachesStockFromAlphaTask(t *testing.T) {
 		stockAfter(t, d, 7)
 	})
 }
+
+func TestTableStatsRecordEscapesQuotedIdentifiers(t *testing.T) {
+	// plain names keep the historical record shape
+	require.Equal(t,
+		`(0,1,2,'db','tbl','{"table_rows":3}','2026-11-07 08:41:34.000000',7)`,
+		tableStatsRecord(0, 1, 2, "db", "tbl", `{"table_rows":3}`,
+			"2026-11-07 08:41:34.000000", 7))
+
+	// Identifiers may legally contain single quotes (a table named
+	// odd'name): they must be doubled, or the bulk insert SQL breaks and
+	// such tables never get statistics published.
+	require.Equal(t,
+		"(0,1,2,'pubq_oddtbl','odd''name','{}','2026-11-07 08:41:34.000000',0)",
+		tableStatsRecord(0, 1, 2, "pubq_oddtbl", "odd'name", "{}",
+			"2026-11-07 08:41:34.000000", 0))
+
+	// A literal backslash otherwise corrupts or swallows the closing quote.
+	require.Equal(t,
+		`(0,1,2,'a\\b','c''d','{}','2026-11-07 08:41:34.000000',0)`,
+		tableStatsRecord(0, 1, 2, `a\b`, "c'd", "{}",
+			"2026-11-07 08:41:34.000000", 0))
+}

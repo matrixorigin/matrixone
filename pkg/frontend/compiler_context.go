@@ -86,7 +86,17 @@ type TxnCompilerContext struct {
 	// cached backExec for subscription meta queries, reused within the same transaction
 	viewSchemaRead bool
 	cachedBackExec BackgroundExec
-	mu             sync.Mutex
+	// cachedBackExecUseMu serializes every use of cachedBackExec. Volatile
+	// direct-estimator calls stay runtime expressions, so sibling scopes of
+	// one statement - for example the arms of a UNION of mo_table_col_ndv
+	// over two subscription aliases - share one session and may resolve
+	// concurrently. The cached executor's internal result sets are cleared
+	// and repopulated per resolution, so overlapping uses would let one
+	// branch clear or read another branch's catalog results. tcc.mu only
+	// guards cache creation and swapping, never the SQL executed through
+	// the returned executor; lock order is cachedBackExecUseMu -> tcc.mu.
+	cachedBackExecUseMu sync.Mutex
+	mu                  sync.Mutex
 }
 
 // NewViewDescriptionCompilerContext returns an isolated mutable binder context
@@ -1721,6 +1731,11 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		defer bh.Close()
 		return getSubscriptionMeta(tempCtx, dbName, ses, txn, bh)
 	}
+	// Serialize the cached executor across the whole use: the resolution
+	// clears, repopulates and reads the shared executor's result sets, so a
+	// sibling scope resolving concurrently must not interleave them.
+	tcc.cachedBackExecUseMu.Lock()
+	defer tcc.cachedBackExecUseMu.Unlock()
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
@@ -1753,6 +1768,11 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 		}
 		defer bh.Close()
 	} else {
+		// Serialize the cached executor's three resolution steps the same
+		// way as GetSubscriptionMeta: the enumeration, source-account and
+		// visibility checks all clear and read the shared result sets.
+		tcc.cachedBackExecUseMu.Lock()
+		defer tcc.cachedBackExecUseMu.Unlock()
 		bh = tcc.getOrCreateBackExec(tempCtx)
 	}
 
@@ -1902,6 +1922,8 @@ func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
+	tcc.cachedBackExecUseMu.Lock()
+	defer tcc.cachedBackExecUseMu.Unlock()
 	bh := tcc.getOrCreateBackExec(tcc.GetContext())
 	bh.ClearExecResultSet()
 	// The create-only admission variant: CREATE DATABASE ... FROM must prove

@@ -1423,23 +1423,30 @@ func TestSystemViewsExistRequiresCurrentSystemDefinitions(t *testing.T) {
 	currentTables := sysview.InformationSchemaTablesCurrentDDL
 	currentViews := sysview.InformationSchemaViewsDDL
 	currentPartitions := sysview.InformationSchemaPartitionsDDL
+	currentStatistics := sysview.InformationSchemaStatisticsPrefixSubPartDDL
 	oldPartitions := strings.Replace(currentPartitions, catalog.NonIndexRelationSQLPredicate("tbl"), "NOT startswith(`tbl`.`relname`, '__mo_index_')", 1)
 	require.NotEqual(t, currentPartitions, oldPartitions)
 	for _, tc := range []struct {
-		name, tables, views, partitions string
-		traceMissing, expectComplete    bool
-		failView                        string
+		name, tables, views, partitions, statistics string
+		traceMissing, expectComplete                bool
+		failView                                    string
 	}{
-		{name: "complete", tables: currentTables, views: currentViews, partitions: currentPartitions, expectComplete: true},
+		{name: "complete", tables: currentTables, views: currentViews, partitions: currentPartitions, statistics: currentStatistics, expectComplete: true},
 		{name: "missing trace", traceMissing: true},
-		{name: "missing tables", views: currentViews, partitions: currentPartitions},
-		{name: "stale tables", tables: sysview.InformationSchemaTablesV118DDL, views: currentViews, partitions: currentPartitions},
-		{name: "missing views", tables: currentTables, partitions: currentPartitions},
-		{name: "stale views", tables: currentTables, views: sysview.InformationSchemaViewsLegacyDDL, partitions: currentPartitions},
-		{name: "missing partitions", tables: currentTables, views: currentViews},
-		{name: "stale partitions", tables: currentTables, views: currentViews, partitions: oldPartitions},
+		{name: "missing tables", views: currentViews, partitions: currentPartitions, statistics: currentStatistics},
+		{name: "stale tables", tables: sysview.InformationSchemaTablesV118DDL, views: currentViews, partitions: currentPartitions, statistics: currentStatistics},
+		{name: "missing views", tables: currentTables, partitions: currentPartitions, statistics: currentStatistics},
+		{name: "stale views", tables: currentTables, views: sysview.InformationSchemaViewsLegacyDDL, partitions: currentPartitions, statistics: currentStatistics},
+		{name: "missing partitions", tables: currentTables, views: currentViews, statistics: currentStatistics},
+		{name: "stale partitions", tables: currentTables, views: currentViews, partitions: oldPartitions, statistics: currentStatistics},
+		{name: "missing statistics", tables: currentTables, views: currentViews, partitions: currentPartitions},
+		// The byte-stable historical template is exactly the pre-#30910
+		// persisted body a same-version cluster can carry: constant-zero
+		// cardinality and no derived cardinality/sub_part shape.
+		{name: "stale statistics", tables: currentTables, views: currentViews, partitions: currentPartitions, statistics: sysview.InformationSchemaStatisticsDDL},
 		{name: "table lookup error", failView: "TABLES"},
-		{name: "partitions lookup error", tables: currentTables, views: currentViews, failView: "PARTITIONS"},
+		{name: "partitions lookup error", tables: currentTables, views: currentViews, statistics: currentStatistics, failView: "PARTITIONS"},
+		{name: "statistics lookup error", tables: currentTables, views: currentViews, partitions: currentPartitions, failView: "STATISTICS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -1460,6 +1467,8 @@ func TestSystemViewsExistRequiresCurrentSystemDefinitions(t *testing.T) {
 					definition = tc.views
 				case strings.Contains(sql, "tbl.relname = 'PARTITIONS'"):
 					definition = tc.partitions
+				case strings.Contains(sql, "tbl.relname = 'STATISTICS'"):
+					definition = tc.statistics
 				}
 				if definition == "" {
 					return executor.Result{}, nil

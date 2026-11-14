@@ -1,0 +1,824 @@
+drop database if exists information_schema_stats_publication;
+create database information_schema_stats_publication;
+use information_schema_stats_publication;
+create table stats_pub_t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_t values (1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80);
+analyze table stats_pub_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  8  ¦  1  ¦  8  ¦  1  ¦  448  ¦  OK  ¦  q=1/1
+select count(*) as tbl_rows, count(distinct v) as distinct_v from stats_pub_t;
+➤ tbl_rows[-5,64,0]  ¦  distinct_v[-5,64,0]  𝄀
+8  ¦  8
+create table stats_pub_rept (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_rept values
+(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),
+(11,1),(12,2),(13,3),(14,4),(15,5),(16,6),(17,7),(18,8),(19,9),(20,10),
+(21,1),(22,2),(23,3),(24,4),(25,5),(26,6),(27,7),(28,8),(29,9),(30,10),
+(31,1),(32,2),(33,3),(34,4),(35,5),(36,6),(37,7),(38,8),(39,9),(40,10),
+(41,1),(42,2),(43,3),(44,4),(45,5),(46,6),(47,7),(48,8),(49,9),(50,10),
+(51,1),(52,2),(53,3),(54,4),(55,5),(56,6),(57,7),(58,8),(59,9),(60,10),
+(61,1),(62,2),(63,3),(64,4),(65,5),(66,6),(67,7),(68,8),(69,9),(70,10),
+(71,1),(72,2),(73,3),(74,4),(75,5),(76,6),(77,7),(78,8),(79,9),(80,10),
+(81,1),(82,2),(83,3),(84,4),(85,5),(86,6),(87,7),(88,8),(89,9),(90,10),
+(91,1),(92,2),(93,3),(94,4),(95,5),(96,6),(97,7),(98,8),(99,9),(100,10);
+analyze table stats_pub_rept;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_rept  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  100  ¦  1  ¦  100  ¦  1  ¦  5600  ¦  OK  ¦  q=1/1
+create table stats_pub_multi (
+id int primary key,
+a int,
+b int,
+unique key uq_b (b),
+key ix_ab (a, b)
+);
+insert into stats_pub_multi values
+(1,1,6),(2,1,7),(3,2,8),(4,2,9),(5,3,10),(6,3,11),(7,3,12),(8,4,13);
+analyze table stats_pub_multi;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_multi  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  8  ¦  1  ¦  8  ¦  1  ¦  672  ¦  OK  ¦  q=1/1
+create table stats_pub_pref (
+id int primary key,
+a int,
+b int,
+key ix_ab (a, b)
+);
+insert into stats_pub_pref values
+(1,1,10),(2,2,10),(3,3,20),(4,4,20),(5,5,30),(6,6,30);
+analyze table stats_pub_pref;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_pref  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  6  ¦  1  ¦  6  ¦  1  ¦  504  ¦  OK  ¦  q=1/1
+select count(*) as tbl_rows, count(distinct a) as distinct_a,
+count(distinct b) as distinct_b from stats_pub_pref;
+➤ tbl_rows[-5,64,0]  ¦  distinct_a[-5,64,0]  ¦  distinct_b[-5,64,0]  𝄀
+6  ¦  6  ¦  3
+create table stats_pub_empty (
+id int primary key,
+v int,
+key ix_v (v)
+);
+analyze table stats_pub_empty;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_empty  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  0  ¦  1  ¦  0  ¦  1  ¦  0  ¦  OK  ¦  q=1/1
+create table stats_pub_nulls (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_nulls values (1,null),(2,null),(3,null);
+analyze table stats_pub_nulls;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_nulls  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select count(*) as nulls_rows, count(distinct v) as nulls_distinct_nonnull,
+count(*) - count(v) as nulls_null_rows
+from stats_pub_nulls;
+➤ nulls_rows[-5,64,0]  ¦  nulls_distinct_nonnull[-5,64,0]  ¦  nulls_null_rows[-5,64,0]  𝄀
+3  ¦  0  ¦  3
+create table stats_pub_mixed (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_mixed values (1,10),(2,20),(3,null);
+analyze table stats_pub_mixed;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_mixed  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select count(*) as mixed_rows, count(distinct v) as mixed_distinct_nonnull,
+count(*) - count(v) as mixed_null_rows
+from stats_pub_mixed;
+➤ mixed_rows[-5,64,0]  ¦  mixed_distinct_nonnull[-5,64,0]  ¦  mixed_null_rows[-5,64,0]  𝄀
+3  ¦  2  ¦  1
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_t'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  1  ¦  v  ¦  8  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  8
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_rept'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  1  ¦  v  ¦  10  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  100
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_multi'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_ab  ¦  1  ¦  a  ¦  4  𝄀
+ix_ab  ¦  2  ¦  b  ¦  null  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  8  𝄀
+uq_b  ¦  1  ¦  b  ¦  8
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_pref'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_ab  ¦  1  ¦  a  ¦  6  𝄀
+ix_ab  ¦  2  ¦  b  ¦  null  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  6
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_empty'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  1  ¦  v  ¦  0  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  0
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_nulls'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  1  ¦  v  ¦  1  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  3
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_mixed'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  1  ¦  v  ¦  3  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  3
+create table stats_pub_case (
+ID int primary key,
+V int,
+key ix_V (V)
+);
+insert into stats_pub_case (ID, V) values (1,10),(2,20),(3,30);
+analyze table stats_pub_case;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_case  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select count(*) as case_rows, count(distinct ID) as distinct_id,
+count(distinct V) as distinct_v
+from stats_pub_case;
+➤ case_rows[-5,64,0]  ¦  distinct_id[-5,64,0]  ¦  distinct_v[-5,64,0]  𝄀
+3  ¦  3  ¦  3
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_case'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_V  ¦  1  ¦  V  ¦  3  𝄀
+PRIMARY  ¦  1  ¦  ID  ¦  3
+select mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_case', 'ID') as ndv_declared_id,
+mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_case', 'V') as ndv_declared_v,
+mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_case', 'v') as ndv_canonical_v;
+➤ ndv_declared_id[-5,64,0]  ¦  ndv_declared_v[-5,64,0]  ¦  ndv_canonical_v[-5,64,0]  𝄀
+3  ¦  3  ¦  3
+create table stats_pub_prefix_ix (
+id int primary key,
+v varchar(16),
+key ix_full_part (v),
+key ix_prefix_part (v(4))
+);
+insert into stats_pub_prefix_ix (id, v) values
+(1,'abcd0101'),(2,'abcd0202'),(3,'abcd0303'),(4,'abcd0404'),
+(5,'abcd0505'),(6,'abcd0606'),(7,'abcd0707'),(8,'abcd0808');
+analyze table stats_pub_prefix_ix;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_prefix_ix  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  8  ¦  1  ¦  8  ¦  1  ¦  608  ¦  OK  ¦  q=1/1
+select count(*) as prefix_ix_rows, count(distinct v) as distinct_full_string,
+count(distinct left(v, 4)) as distinct_truncated
+from stats_pub_prefix_ix;
+➤ prefix_ix_rows[-5,64,0]  ¦  distinct_full_string[-5,64,0]  ¦  distinct_truncated[-5,64,0]  𝄀
+8  ¦  8  ¦  1
+select index_name, seq_in_index, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_prefix_ix'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_full_part  ¦  1  ¦  v  ¦  8  𝄀
+ix_prefix_part  ¦  1  ¦  v  ¦  null  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  8
+create table stats_pub_fi (
+id int primary key,
+v int,
+index ix_f ((v+1))
+);
+insert into stats_pub_fi values (1,10),(2,20),(3,30);
+analyze table stats_pub_fi;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_fi  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select index_name, seq_in_index, column_name, cardinality,
+case when expression is null then 'N' else 'Y' end as expr_present
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_fi'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  ¦  expr_present[12,1,0]  𝄀
+ix_f  ¦  1  ¦  null  ¦  null  ¦  Y  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  3  ¦  N
+create table stats_pub_gen (
+id int primary key,
+v int,
+g int generated always as (v + 1) stored,
+key ix_g (g)
+);
+insert into stats_pub_gen (id, v) values (1,10),(2,20),(3,30);
+analyze table stats_pub_gen;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+information_schema_stats_publication.stats_pub_gen  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  3  ¦  1  ¦  3  ¦  1  ¦  252  ¦  OK  ¦  q=1/1
+select index_name, seq_in_index, column_name, cardinality,
+case when expression is null then 'N' else 'Y' end as expr_present
+from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_gen'
+order by index_name, seq_in_index;
+➤ index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  ¦  expr_present[12,1,0]  𝄀
+ix_g  ¦  1  ¦  g  ¦  3  ¦  N  𝄀
+PRIMARY  ¦  1  ¦  id  ¦  3  ¦  N
+show index from stats_pub_t;
+➤ Table[12,11,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_t  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from stats_pub_multi;
+➤ Table[12,15,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_multi  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_multi  ¦  0  ¦  uq_b  ¦  1  ¦  b  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+stats_pub_multi  ¦  1  ¦  ix_ab  ¦  1  ¦  a  ¦  A  ¦  4  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+stats_pub_multi  ¦  1  ¦  ix_ab  ¦  2  ¦  b  ¦  A  ¦  null  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  b
+show index from stats_pub_rept;
+➤ Table[12,14,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_rept  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  100  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_rept  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  10  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from stats_pub_empty;
+➤ Table[12,15,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_empty  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_empty  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from stats_pub_nulls;
+➤ Table[12,15,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_nulls  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_nulls  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  1  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from stats_pub_mixed;
+➤ Table[12,15,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_mixed  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_mixed  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from stats_pub_case;
+➤ Table[12,14,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_case  ¦  0  ¦  PRIMARY  ¦  1  ¦  ID  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  ID  𝄀
+stats_pub_case  ¦  1  ¦  ix_V  ¦  1  ¦  V  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  V
+show index from stats_pub_prefix_ix;
+➤ Table[12,19,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_prefix_ix  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_prefix_ix  ¦  1  ¦  ix_full_part  ¦  1  ¦  v  ¦  A  ¦  8  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
+stats_pub_prefix_ix  ¦  1  ¦  ix_prefix_part  ¦  1  ¦  v  ¦  A  ¦  null  ¦  4  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦  {"prefix_lengths":"v:4"}  ¦  YES  ¦  v
+show index from stats_pub_fi;
+➤ Table[12,12,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_fi  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_fi  ¦  1  ¦  ix_f  ¦  1  ¦  null  ¦  A  ¦  null  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  `v` + 1
+show index from stats_pub_gen;
+➤ Table[12,13,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+stats_pub_gen  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+stats_pub_gen  ¦  1  ¦  ix_g  ¦  1  ¦  g  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  g
+set mo_table_stats.force_update = yes;
+select table_name, table_rows from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name in ('stats_pub_t', 'stats_pub_rept', 'stats_pub_multi', 'stats_pub_empty')
+order by table_name;
+➤ table_name[12,5000,0]  ¦  table_rows[-5,64,0]  𝄀
+stats_pub_empty  ¦  0  𝄀
+stats_pub_multi  ¦  8  𝄀
+stats_pub_rept  ¦  100  𝄀
+stats_pub_t  ¦  8
+select table_name,
+(data_length > 0) as data_positive,
+(index_length > 0) as index_positive,
+(avg_row_length > 0) as avg_row_positive
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name in ('stats_pub_t', 'stats_pub_rept', 'stats_pub_multi')
+order by table_name;
+➤ table_name[12,5000,0]  ¦  data_positive[-6,8,0]  ¦  index_positive[-6,8,0]  ¦  avg_row_positive[-6,8,0]  𝄀
+stats_pub_multi  ¦  1  ¦  1  ¦  1  𝄀
+stats_pub_rept  ¦  1  ¦  1  ¦  1  𝄀
+stats_pub_t  ¦  1  ¦  1  ¦  1
+select table_name, data_length, index_length, avg_row_length, data_free, max_data_length
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_empty';
+➤ table_name[12,5000,0]  ¦  data_length[-5,64,0]  ¦  index_length[-5,64,0]  ¦  avg_row_length[-5,64,0]  ¦  data_free[-5,64,0]  ¦  max_data_length[-5,64,0]  𝄀
+stats_pub_empty  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+create view stats_pub_v as select id, v from stats_pub_t;
+select table_rows, data_length, index_length, avg_row_length
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_v';
+➤ table_rows[-5,64,0]  ¦  data_length[-5,64,0]  ¦  index_length[-5,64,0]  ¦  avg_row_length[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select mo_table_rows('information_schema_stats_publication', 'stats_pub_t') as forced_rows,
+(mo_table_size('information_schema_stats_publication', 'stats_pub_t') > 0) as forced_size,
+(mo_table_index_size('information_schema_stats_publication', 'stats_pub_t') > 0) as forced_index;
+➤ forced_rows[-5,64,0]  ¦  forced_size[-6,8,0]  ¦  forced_index[-6,8,0]  𝄀
+8  ¦  1  ¦  1
+select mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_t', 'v') as ndv_v,
+mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_rept', 'v') as rept_ndv_v,
+mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_empty', 'id') as empty_ndv;
+➤ ndv_v[-5,64,0]  ¦  rept_ndv_v[-5,64,0]  ¦  empty_ndv[-5,64,0]  𝄀
+8  ¦  10  ¦  0
+select mo_table_col_ndv('information_schema_stats_publication', 'stats_pub_t', 'missing_column') is null as unknown_column_null;
+➤ unknown_column_null[-6,8,0]  𝄀
+1
+select mo_table_col_nullcnt('information_schema_stats_publication', 'stats_pub_nulls', 'v') as nulls_nullcnt,
+mo_table_col_nullcnt('information_schema_stats_publication', 'stats_pub_mixed', 'v') as mixed_nullcnt,
+mo_table_col_nullcnt('information_schema_stats_publication', 'stats_pub_t', 'v') as t_nullcnt;
+➤ nulls_nullcnt[-5,64,0]  ¦  mixed_nullcnt[-5,64,0]  ¦  t_nullcnt[-5,64,0]  𝄀
+3  ¦  1  ¦  0
+select mo_table_col_nullcnt('information_schema_stats_publication', 'stats_pub_t', 'missing_column') is null as nullcnt_unavailable_null;
+➤ nullcnt_unavailable_null[-6,8,0]  𝄀
+1
+show table status from information_schema_stats_publication like 'stats_pub_t';
+➤ Name[12,5000,0]  ¦  Engine[12,3,0]  ¦  Row_format[12,7,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,4,0]  ¦  Auto_increment[3,20,0]  ¦  Create_time[93,19,0]  ¦  Update_time[12,4,0]  ¦  Check_time[12,4,0]  ¦  Collation[12,64,0]  ¦  Checksum[12,4,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,5000,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,1,0]  𝄀
+stats_pub_t  ¦  Tae  ¦  Dynamic  ¦  8  ¦  44  ¦  352  ¦  0  ¦  512  ¦  NULL  ¦  0  ¦  2026-11-10 15:34:54  ¦  NULL  ¦  NULL  ¦  utf8mb4_general_ci  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin
+select (table_rows = mo_table_rows('information_schema_stats_publication', 'stats_pub_t')) as default_tables_rows_eq,
+(data_length = mo_table_data_size('information_schema_stats_publication', 'stats_pub_t')) as default_tables_data_eq,
+(index_length = mo_table_index_size('information_schema_stats_publication', 'stats_pub_t')) as default_tables_index_eq,
+(index_length > 0) as default_index_bytes_positive,
+(data_length = avg_row_length * table_rows) as default_avg_tie
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_t';
+➤ default_tables_rows_eq[-6,8,0]  ¦  default_tables_data_eq[-6,8,0]  ¦  default_tables_index_eq[-6,8,0]  ¦  default_index_bytes_positive[-6,8,0]  ¦  default_avg_tie[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+set mo_table_stats.force_update = no;
+set mo_table_stats.use_old_impl = yes;
+select mo_table_data_size('information_schema_stats_publication', 'stats_pub_t') as legacy_data_bytes,
+mo_table_index_size('information_schema_stats_publication', 'stats_pub_t') as legacy_index_bytes,
+mo_table_size('information_schema_stats_publication', 'stats_pub_t') as legacy_total_bytes;
+➤ legacy_data_bytes[-5,64,0]  ¦  legacy_index_bytes[-5,64,0]  ¦  legacy_total_bytes[-5,64,0]  𝄀
+320  ¦  416  ¦  736
+select mo_table_data_size('information_schema_stats_publication', 'stats_pub_t')
++ mo_table_index_size('information_schema_stats_publication', 'stats_pub_t')
+= mo_table_size('information_schema_stats_publication', 'stats_pub_t') as legacy_decomposition_ok,
+mo_table_data_size('information_schema_stats_publication', 'stats_pub_t')
+< mo_table_size('information_schema_stats_publication', 'stats_pub_t') as legacy_data_below_total;
+➤ legacy_decomposition_ok[-6,8,0]  ¦  legacy_data_below_total[-6,8,0]  𝄀
+1  ¦  1
+show table status from information_schema_stats_publication like 'stats_pub_t';
+➤ Name[12,5000,0]  ¦  Engine[12,3,0]  ¦  Row_format[12,7,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,4,0]  ¦  Auto_increment[3,20,0]  ¦  Create_time[93,19,0]  ¦  Update_time[12,4,0]  ¦  Check_time[12,4,0]  ¦  Collation[12,64,0]  ¦  Checksum[12,4,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,5000,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,1,0]  𝄀
+stats_pub_t  ¦  Tae  ¦  Dynamic  ¦  16  ¦  20  ¦  320  ¦  0  ¦  416  ¦  NULL  ¦  0  ¦  2026-11-10 15:34:54  ¦  NULL  ¦  NULL  ¦  utf8mb4_general_ci  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin
+select (data_length = mo_table_data_size('information_schema_stats_publication', 'stats_pub_t')) as legacy_tables_data_eq,
+(index_length = mo_table_index_size('information_schema_stats_publication', 'stats_pub_t')) as legacy_tables_index_eq
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_t';
+➤ legacy_tables_data_eq[-6,8,0]  ¦  legacy_tables_index_eq[-6,8,0]  𝄀
+1  ¦  1
+select table_name, table_rows, data_length, index_length, avg_row_length
+from information_schema.tables
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_t';
+➤ table_name[12,5000,0]  ¦  table_rows[-5,64,0]  ¦  data_length[-5,64,0]  ¦  index_length[-5,64,0]  ¦  avg_row_length[-5,64,0]  𝄀
+stats_pub_t  ¦  16  ¦  320  ¦  416  ¦  20
+set mo_table_stats.use_old_impl = no;
+analyze table information_schema_stats_publication.stats_pub_missing;
+no such table information_schema_stats_publication.stats_pub_missing
+select count(*) as readable_rows, count(distinct v) as readable_distinct from stats_pub_t;
+➤ readable_rows[-5,64,0]  ¦  readable_distinct[-5,64,0]  𝄀
+8  ¦  8
+select index_name, cardinality from information_schema.statistics
+where table_schema = 'information_schema_stats_publication'
+and table_name = 'stats_pub_t'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  8  𝄀
+PRIMARY  ¦  8
+select 'AFTER_MISSING_ANALYZE';
+➤ AFTER_MISSING_ANALYZE[12,21,0]  𝄀
+AFTER_MISSING_ANALYZE
+drop publication if exists p_qt;
+drop publication if exists p_ok;
+drop account if exists sp01q;
+drop account if exists sp01c;
+drop database if exists pubq_oddtbl;
+drop database if exists pubq_ok;
+create database pubq_oddtbl;
+create table pubq_oddtbl.`odd'name` (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into pubq_oddtbl.`odd'name` values (1,10),(2,20),(3,30);
+create database pubq_ok;
+create table pubq_ok.plainname (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into pubq_ok.plainname values (1,10),(2,20),(3,30);
+create table pubq_oddtbl.plain (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into pubq_oddtbl.plain values (1,10),(2,20),(3,30);
+analyze table pubq_oddtbl.`odd'name`;
+select count(*) as origin_odd_analyzed from pubq_oddtbl.`odd'name`;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+pubq_oddtbl.odd'name  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+analyze table pubq_oddtbl.plain;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+pubq_oddtbl.plain  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+analyze table pubq_ok.plainname;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+pubq_ok.plainname  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+create account sp01q admin_name = 'sub_admin' identified by '111';
+create account sp01c admin_name = 'sub_admin' identified by '111';
+create publication p_qt database pubq_oddtbl account sp01q;
+create publication p_ok database pubq_ok account sp01c;
+create database s_qt from sys publication p_qt;
+set mo_table_stats.force_update = yes;
+select table_schema, table_name,
+(table_rows > 0) as subscribed_rows_ok,
+(data_length > 0) as subscribed_data_ok,
+(index_length > 0) as subscribed_index_ok
+from information_schema.tables
+where table_schema = 's_qt';
+➤ table_schema[12,5000,0]  ¦  table_name[12,5000,0]  ¦  subscribed_rows_ok[-6,8,0]  ¦  subscribed_data_ok[-6,8,0]  ¦  subscribed_index_ok[-6,8,0]  𝄀
+s_qt  ¦  odd'name  ¦  1  ¦  1  ¦  1  𝄀
+s_qt  ¦  plain  ¦  1  ¦  1  ¦  1
+create database subq_views;
+create view subq_views.subscribed_odd_rows as select * from s_qt.`odd'name`;
+create view subq_views.odd_v10 as select v from s_qt.`odd'name` where v >= 10;
+select count(*) as subscribed_count from subq_views.subscribed_odd_rows;
+➤ subscribed_count[-5,64,0]  𝄀
+3
+select count(*) as subscribed_v10_count from subq_views.odd_v10;
+➤ subscribed_v10_count[-5,64,0]  𝄀
+3
+select table_name, table_rows, data_length, index_length
+from information_schema.tables
+where table_schema = 's_qt';
+➤ table_name[12,5000,0]  ¦  table_rows[-5,64,0]  ¦  data_length[-5,64,0]  ¦  index_length[-5,64,0]  𝄀
+odd'name  ¦  3  ¦  132  ¦  192  𝄀
+plain  ¦  3  ¦  132  ¦  192
+drop database subq_views;
+select table_name, index_name, cardinality
+from information_schema.statistics
+where table_schema = 's_qt' and table_name in ('odd''name', 'plain')
+order by table_name, index_name;
+➤ table_name[12,5000,0]  ¦  index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+odd'name  ¦  ix_v  ¦  3  𝄀
+odd'name  ¦  PRIMARY  ¦  3  𝄀
+plain  ¦  ix_v  ¦  3  𝄀
+plain  ¦  PRIMARY  ¦  3
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 's_qt' and table_name = 'plain'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  3  𝄀
+PRIMARY  ¦  3
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 's_qt' and table_name = 'odd''name'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  3  𝄀
+PRIMARY  ¦  3
+show index from s_qt.plain;
+➤ Table[12,5,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+plain  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+plain  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+create database s_ok from sys publication p_ok;
+set mo_table_stats.force_update = yes;
+select table_schema, table_name,
+(table_rows > 0) as control_rows_ok,
+(data_length > 0) as control_data_ok,
+(index_length > 0) as control_index_ok
+from information_schema.tables
+where table_schema = 's_ok';
+➤ table_schema[12,5000,0]  ¦  table_name[12,5000,0]  ¦  control_rows_ok[-6,8,0]  ¦  control_data_ok[-6,8,0]  ¦  control_index_ok[-6,8,0]  𝄀
+s_ok  ¦  plainname  ¦  1  ¦  1  ¦  1
+select count(*) as control_count from s_ok.plainname;
+➤ control_count[-5,64,0]  𝄀
+3
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 's_ok' and table_name = 'plainname'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  3  𝄀
+PRIMARY  ¦  3
+show index from s_ok.plainname;
+➤ Table[12,9,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+plainname  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+plainname  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+set mo_table_stats.force_update = yes;
+select coalesce(mo_table_rows('mo_catalog','mo_tables'), 0) > 0 as catalog_rows_positive;
+➤ catalog_rows_positive[-6,8,0]  𝄀
+1
+select coalesce(mo_table_size('mo_catalog','mo_tables'), 0) > 0 as catalog_size_positive;
+➤ catalog_size_positive[-6,8,0]  𝄀
+1
+select coalesce(mo_table_data_size('mo_catalog','mo_tables'), 0) > 0 as catalog_data_positive;
+➤ catalog_data_positive[-6,8,0]  𝄀
+1
+select coalesce(mo_table_index_size('mo_catalog','mo_tables'), 0) > 0 as catalog_index_positive;
+➤ catalog_index_positive[-6,8,0]  𝄀
+1
+set mo_table_stats.force_update = no;
+select mo_table_col_ndv('mo_catalog','mo_tables','relname') is null as catalog_col_ndv_unavailable;
+➤ catalog_col_ndv_unavailable[-6,8,0]  𝄀
+1
+select mo_table_col_ndv('mo_catalog','mo_tables','__mo_rowid') is null as catalog_rowid_ndv_unavailable;
+➤ catalog_rowid_ndv_unavailable[-6,8,0]  𝄀
+1
+select mo_table_col_ndv('information_schema_stats_publication','stats_pub_t','__mo_rowid') is null as user_rowid_ndv_unavailable;
+➤ user_rowid_ndv_unavailable[-6,8,0]  𝄀
+1
+select mo_table_col_ndv('information_schema_stats_publication','stats_pub_t','no_such_col') is null as unknown_col_ndv_unavailable;
+➤ unknown_col_ndv_unavailable[-6,8,0]  𝄀
+1
+create database stats_pub_priv;
+create table stats_pub_priv.secret_t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_priv.secret_t values (1,10),(2,20),(3,30),(4,40);
+analyze table stats_pub_priv.secret_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+stats_pub_priv.secret_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  4  ¦  1  ¦  4  ¦  1  ¦  224  ¦  OK  ¦  q=1/1
+create database stats_pub_priv_unpublished;
+create table stats_pub_priv_unpublished.hidden_t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_priv_unpublished.hidden_t values (1,10),(2,20);
+create account sp_att admin_name = 'att_admin' identified by '111';
+create account sp_leg admin_name = 'sub_admin' identified by '111';
+create publication p_priv database stats_pub_priv account sp_leg;
+select mo_table_col_ndv('stats_pub_priv','secret_t','v') as publisher_ndv_v;
+➤ publisher_ndv_v[-5,64,0]  𝄀
+4
+create database att_owned;
+create table att_owned.own_t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into att_owned.own_t values (1,10),(2,20),(3,30);
+analyze table att_owned.own_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+att_owned.own_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select mo_table_col_ndv('att_owned','own_t','id') as own_ndv_plain,
+mo_table_col_ndv('att_owned','own_t','id','','pubacct=0') as own_ndv_stripped;
+➤ own_ndv_plain[-5,64,0]  ¦  own_ndv_stripped[-5,64,0]  𝄀
+3  ¦  3
+select mo_table_col_ndv('att_owned','own_t','v') as own_ndv_v_plain,
+mo_table_col_ndv('att_owned','own_t','v','pubacct=0') as own_ndv_v_stripped;
+➤ own_ndv_v_plain[-5,64,0]  ¦  own_ndv_v_stripped[-5,64,0]  𝄀
+3  ¦  3
+select mo_table_col_ndv('stats_pub_priv','secret_t','v','','pubacct=0') as stolen_ndv_sys;
+internal error: db not exist: stats_pub_priv(OkExpectedEOB)
+select mo_table_col_nullcnt('stats_pub_priv','secret_t','v','pubacct=0') as stolen_nullcnt;
+internal error: db not exist: stats_pub_priv(OkExpectedEOB)
+select mo_table_col_ndv('stats_pub_priv','secret_t','v','pubacct=0') as stolen_ndv_algoconfig;
+internal error: db not exist: stats_pub_priv(OkExpectedEOB)
+select mo_table_col_ndv('stats_pub_priv','secret_t','v','','pubacct=1') as stolen_ndv_guess;
+internal error: db not exist: stats_pub_priv(OkExpectedEOB)
+select count(*) as leaked_stats_rows
+from information_schema.statistics
+where table_schema = 'stats_pub_priv';
+➤ leaked_stats_rows[-5,64,0]  𝄀
+0
+select count(*) as leaked_tables_rows
+from information_schema.tables
+where table_schema = 'stats_pub_priv';
+➤ leaked_tables_rows[-5,64,0]  𝄀
+0
+create database s_priv from sys publication p_priv;
+set mo_table_stats.force_update = yes;
+select table_name,
+(table_rows > 0) as leg_rows_ok,
+(data_length > 0) as leg_data_ok,
+(index_length > 0) as leg_index_ok
+from information_schema.tables
+where table_schema = 's_priv';
+➤ table_name[12,5000,0]  ¦  leg_rows_ok[-6,8,0]  ¦  leg_data_ok[-6,8,0]  ¦  leg_index_ok[-6,8,0]  𝄀
+secret_t  ¦  1  ¦  1  ¦  1
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 's_priv' and table_name = 'secret_t'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  4  𝄀
+PRIMARY  ¦  4
+select mo_table_col_ndv('s_priv','secret_t','v') as leg_ndv_plain,
+mo_table_col_ndv('s_priv','secret_t','v','','pubacct=0') as leg_ndv_stripped;
+➤ leg_ndv_plain[-5,64,0]  ¦  leg_ndv_stripped[-5,64,0]  𝄀
+4  ¦  4
+select mo_table_col_ndv('s_priv','secret_t','v') as leg_ndv_slot_plain,
+mo_table_col_ndv('s_priv','secret_t','v','pubacct=0') as leg_ndv_slot_stripped,
+mo_table_col_ndv('s_priv','secret_t','v','pubacct=999999') as leg_ndv_slot_bigguess;
+➤ leg_ndv_slot_plain[-5,64,0]  ¦  leg_ndv_slot_stripped[-5,64,0]  ¦  leg_ndv_slot_bigguess[-5,64,0]  𝄀
+4  ¦  4  ¦  4
+select mo_table_col_nullcnt('s_priv','secret_t','v') as leg_nullcnt_plain,
+mo_table_col_nullcnt('s_priv','secret_t','v','pubacct=0') as leg_nullcnt_stripped;
+➤ leg_nullcnt_plain[-5,64,0]  ¦  leg_nullcnt_stripped[-5,64,0]  𝄀
+0  ¦  0
+select mo_table_col_ndv('stats_pub_priv_unpublished','hidden_t','v','pubacct=0') as unpublished_ndv_config_shape;
+internal error: db not exist: stats_pub_priv_unpublished(OkExpectedEOB)
+select mo_table_col_ndv('stats_pub_priv_unpublished','hidden_t','v') as unpublished_ndv_plain;
+internal error: db not exist: stats_pub_priv_unpublished(OkExpectedEOB)
+set mo_table_stats.force_update = no;
+create database stats_pub_styled;
+create table stats_pub_styled.`pubacct=0` (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_styled.`pubacct=0` values (1,10),(2,20),(3,30);
+analyze table stats_pub_styled.`pubacct=0`;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+stats_pub_styled.pubacct=0  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select mo_table_col_ndv('stats_pub_styled','pubacct=0','v') as styled_tbl_ndv_plain,
+mo_table_col_ndv('stats_pub_styled','pubacct=0','v','pubacct=0') as styled_tbl_ndv_slotcfg,
+mo_table_col_ndv('stats_pub_styled','pubacct=0','v','pubacct=999999') as styled_tbl_ndv_slotguess,
+mo_table_col_nullcnt('stats_pub_styled','pubacct=0','v') as styled_tbl_nullcnt;
+➤ styled_tbl_ndv_plain[-5,64,0]  ¦  styled_tbl_ndv_slotcfg[-5,64,0]  ¦  styled_tbl_ndv_slotguess[-5,64,0]  ¦  styled_tbl_nullcnt[-5,64,0]  𝄀
+3  ¦  3  ¦  3  ¦  0
+show index from stats_pub_styled.`pubacct=0`;
+➤ Table[12,9,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+pubacct=0  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+pubacct=0  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+select index_name, column_name, cardinality
+from information_schema.statistics
+where table_schema = 'stats_pub_styled' and table_name = 'pubacct=0'
+order by index_name, column_name;
+➤ index_name[12,64,0]  ¦  column_name[12,256,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  v  ¦  3  𝄀
+PRIMARY  ¦  id  ¦  3
+create database `pubacct=0`;
+create table `pubacct=0`.styled_t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into `pubacct=0`.styled_t values (1,10),(2,20),(3,30);
+analyze table `pubacct=0`.styled_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+pubacct=0.styled_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select mo_table_col_ndv('pubacct=0','styled_t','v') as styled_db_ndv_plain,
+mo_table_col_nullcnt('pubacct=0','styled_t','v') as styled_db_nullcnt_plain;
+➤ styled_db_ndv_plain[-5,64,0]  ¦  styled_db_nullcnt_plain[-5,64,0]  𝄀
+3  ¦  0
+show index from `pubacct=0`.styled_t;
+➤ Table[12,8,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+styled_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+styled_t  ¦  1  ¦  ix_v  ¦  1  ¦  v  ¦  A  ¦  3  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+select count(*) as styled_db_stats_rows
+from information_schema.statistics
+where table_schema = 'pubacct=0' and table_name = 'styled_t';
+➤ styled_db_stats_rows[-5,64,0]  𝄀
+2
+create table stats_pub_styled.plain_t (
+id int primary key,
+`pubacct=0` int,
+key ix_p (`pubacct=0`)
+);
+insert into stats_pub_styled.plain_t values (1,10),(2,20),(3,30);
+analyze table stats_pub_styled.plain_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+stats_pub_styled.plain_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  3  ¦  1  ¦  3  ¦  1  ¦  168  ¦  OK  ¦  q=1/1
+select mo_table_col_nullcnt('stats_pub_styled','plain_t','pubacct=0') as styled_col_nullcnt,
+mo_table_col_ndv('stats_pub_styled','plain_t','pubacct=0') as styled_col_ndv;
+➤ styled_col_nullcnt[-5,64,0]  ¦  styled_col_ndv[-5,64,0]  𝄀
+0  ¦  3
+drop publication if exists stats_pub_union_p1;
+drop publication if exists stats_pub_union_p2;
+drop account if exists sp_union;
+drop database if exists stats_pub_union_u1;
+drop database if exists stats_pub_union_u2;
+create database stats_pub_union_u1;
+create table stats_pub_union_u1.t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_union_u1.t values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+create database stats_pub_union_u2;
+create table stats_pub_union_u2.t (
+id int primary key,
+v int,
+key ix_v (v)
+);
+insert into stats_pub_union_u2.t values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,null);
+select count(*) as union_u1_rows, count(distinct v) as union_u1_distinct from stats_pub_union_u1.t;
+➤ union_u1_rows[-5,64,0]  ¦  union_u1_distinct[-5,64,0]  𝄀
+6  ¦  6
+select count(*) as union_u2_rows, count(v) as union_u2_nonnull, count(distinct v) as union_u2_distinct from stats_pub_union_u2.t;
+➤ union_u2_rows[-5,64,0]  ¦  union_u2_nonnull[-5,64,0]  ¦  union_u2_distinct[-5,64,0]  𝄀
+9  ¦  8  ¦  8
+analyze table stats_pub_union_u1.t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+stats_pub_union_u1.t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  6  ¦  1  ¦  6  ¦  1  ¦  336  ¦  OK  ¦  q=1/1
+analyze table stats_pub_union_u2.t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+stats_pub_union_u2.t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  2  ¦  9  ¦  1  ¦  9  ¦  1  ¦  504  ¦  OK  ¦  q=1/1
+create account sp_union admin_name = 'sub_admin' identified by '111';
+create publication stats_pub_union_p1 database stats_pub_union_u1 account sp_union;
+create publication stats_pub_union_p2 database stats_pub_union_u2 account sp_union;
+create database sub_a from sys publication stats_pub_union_p1;
+create database sub_b from sys publication stats_pub_union_p2;
+set mo_table_stats.force_update = yes;
+select mo_table_col_ndv('sub_a','t','v') as ndv_alias_a;
+➤ ndv_alias_a[-5,64,0]  𝄀
+6
+select mo_table_col_ndv('sub_b','t','v') as ndv_alias_b;
+➤ ndv_alias_b[-5,64,0]  𝄀
+8
+select mo_table_col_nullcnt('sub_a','t','v') as nullcnt_alias_a;
+➤ nullcnt_alias_a[-5,64,0]  𝄀
+0
+select mo_table_col_nullcnt('sub_b','t','v') as nullcnt_alias_b;
+➤ nullcnt_alias_b[-5,64,0]  𝄀
+1
+select mo_table_rows('sub_a','t') as rows_alias_a;
+➤ rows_alias_a[-5,64,0]  𝄀
+6
+select mo_table_rows('sub_b','t') as rows_alias_b;
+➤ rows_alias_b[-5,64,0]  𝄀
+9
+select mo_table_col_ndv('sub_a','t','v') as ndv_union_a
+union
+select mo_table_col_ndv('sub_b','t','v') as ndv_union_b
+order by 1;
+➤ ndv_union_a[-5,64,0]  𝄀
+6  𝄀
+8
+select mo_table_col_nullcnt('sub_a','t','v') as nullcnt_union_a
+union
+select mo_table_col_nullcnt('sub_b','t','v') as nullcnt_union_b
+order by 1;
+➤ nullcnt_union_a[-5,64,0]  𝄀
+0  𝄀
+1
+select mo_table_rows('sub_a','t') as rows_union_a
+union
+select mo_table_rows('sub_b','t') as rows_union_b
+order by 1;
+➤ rows_union_a[-5,64,0]  𝄀
+6  𝄀
+9
+select mo_table_col_ndv('sub_a','t','v') as ndv_union_repeat
+union
+select mo_table_col_ndv('sub_b','t','v') as ndv_union_repeat
+order by 1;
+➤ ndv_union_repeat[-5,64,0]  𝄀
+6  𝄀
+8
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 'sub_a' and table_name = 't'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  6  𝄀
+PRIMARY  ¦  6
+select index_name, cardinality
+from information_schema.statistics
+where table_schema = 'sub_b' and table_name = 't'
+order by index_name;
+➤ index_name[12,64,0]  ¦  cardinality[-5,64,0]  𝄀
+ix_v  ¦  9  𝄀
+PRIMARY  ¦  9
+drop database if exists sub_a;
+drop database if exists sub_b;
+drop publication if exists stats_pub_union_p1;
+drop publication if exists stats_pub_union_p2;
+drop account if exists sp_union;
+drop database if exists stats_pub_union_u1;
+drop database if exists stats_pub_union_u2;
+drop publication if exists p_priv;
+drop account if exists sp_att;
+drop account if exists sp_leg;
+drop database if exists stats_pub_priv;
+drop database if exists stats_pub_priv_unpublished;
+drop database if exists `pubacct=0`;
+drop database if exists stats_pub_styled;
+drop publication if exists p_qt;
+drop publication if exists p_ok;
+drop account if exists sp01q;
+drop account if exists sp01c;
+drop database if exists pubq_oddtbl;
+drop database if exists pubq_ok;
+drop view stats_pub_v;
+drop database information_schema_stats_publication;

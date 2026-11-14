@@ -1078,6 +1078,12 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	tblName := stmt.TableName.GetTableName()
+	// The statistics resolvers take the session-visible database name: for a
+	// subscription alias table the reassignment below replaces dbName with the
+	// publisher's physical schema, which the estimator cannot resolve by
+	// account, while the alias routes through the subscription metadata the
+	// way the STATISTICS view's NDV arguments do (#30910).
+	statsDbName := dbName
 	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
@@ -1112,7 +1118,17 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
-		"'A' as `Collation`, 0 as `Cardinality`, " +
+		"'A' as `Collation`, " +
+		// SHOW INDEX publishes the same per-part estimate information_schema.STATISTICS
+		// exposes (#30910): a visible first key part publishes the analyzed column's
+		// distinct-value estimate plus its NULL value group, later composite parts and
+		// hidden generated parts render NULL, a prefix-truncated part renders NULL, and
+		// an unpublished estimate stays NULL instead of a false known zero.
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, " +
+		"if(`idx`.`ordinal_position` = 1, " +
+		"case when mo_table_col_ndv(%s, %s, `idx`.`column_name`, ifnull(`idx`.`algo_params`, '')) is null then null " +
+		"else mo_table_col_ndv(%s, %s, `idx`.`column_name`, ifnull(`idx`.`algo_params`, '')) + " +
+		"if(coalesce(mo_table_col_nullcnt(%s, %s, `idx`.`column_name`), 0) > 0, 1, 0) end, NULL)) as `Cardinality`, " +
 		// Retained prefix lengths come from the canonical index metadata:
 		// the number of indexed characters when the part carries a prefix,
 		// actual SQL NULL for whole-column index parts (#30935).
@@ -1165,7 +1181,13 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef.IsTemporary {
 		tblName = tableDef.Name
 	}
-	showIndexSql := fmt.Sprintf(sql, sqlquote.String(displayTblName), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(tblName), sqlquote.String(catalog.AliasPrefix+"%"))
+	SQL_STATS_ARGS := sqlquote.String(statsDbName)
+	showIndexSql := fmt.Sprintf(sql, sqlquote.String(displayTblName),
+		SQL_STATS_ARGS, sqlquote.String(tblName),
+		SQL_STATS_ARGS, sqlquote.String(tblName),
+		SQL_STATS_ARGS, sqlquote.String(tblName),
+		MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME,
+		sqlquote.String(dbName), sqlquote.String(tblName), sqlquote.String(catalog.AliasPrefix+"%"))
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)

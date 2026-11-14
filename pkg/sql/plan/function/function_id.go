@@ -974,8 +974,19 @@ const (
 	TEMPORAL_DATETIME_BOUND  = 634
 	TEMPORAL_TIMESTAMP_BOUND = 635
 
+	// Public statistics projection (issues #30910/#31164): per-column distinct
+	// estimates, per-column NULL populations, and per-table index storage size
+	// read from the engine's existing statistics. All are read-only CN-side
+	// lookups. Upstream allocated 620..635 on parallel branches first; the ids
+	// are internal plan wiring only and every reference is by name, so these
+	// entries renumber to 636..639.
+	MO_TABLE_COL_NDV     = 636 // table column distinct-value estimate
+	MO_TABLE_INDEX_SIZE  = 637 // table hidden index storage size
+	MO_TABLE_DATA_SIZE   = 638 // table base-object storage bytes
+	MO_TABLE_COL_NULLCNT = 639 // table column NULL-value count used as an index key group
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 640
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1433,6 +1444,10 @@ var functionIdRegister = map[string]int32{
 	"mo_table_size":                  MO_TABLE_SIZE,
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
+	"mo_table_col_ndv":               MO_TABLE_COL_NDV,
+	"mo_table_col_nullcnt":           MO_TABLE_COL_NULLCNT,
+	"mo_table_index_size":            MO_TABLE_INDEX_SIZE,
+	"mo_table_data_size":             MO_TABLE_DATA_SIZE,
 	"truncate":                       TRUNCATE,
 	"trim":                           TRIM,
 	"sha2":                           SHA2,

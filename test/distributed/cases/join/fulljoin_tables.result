@@ -222,8 +222,8 @@ null  ¦  null  ¦  null  ¦  7  ¦  c_other  𝄀
 6  ¦  lone body  ¦  null  ¦  null  ¦  null
 show index from ft_src where key_name = 'ftidx';
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-ft_src  ¦  1  ¦  ftidx  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
-ft_src  ¦  1  ¦  ftidx  ¦  2  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
+ft_src  ¦  1  ¦  ftidx  ¦  1  ¦  body  ¦  A  ¦  null  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
+ft_src  ¦  1  ¦  ftidx  ¦  2  ¦  title  ¦  A  ¦  null  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
 select 'ft_match_standalone' as tag;
 ➤ tag[12,-1,0]  𝄀
 ft_match_standalone

@@ -121,7 +121,7 @@ PRIMARY    1    id    0    BTREE
 uq_collision_code    1    code    0    BTREE
 show index from abmoxindexyfoo where Index_type = 'BTREE';
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-abmoxindexyfoo    0    PRIMARY    1    id    A    0    NULL    NULL        BTREE                YES    id
-abmoxindexyfoo    0    uq_collision_code    1    code    A    0    NULL    NULL    YES    BTREE                YES    code
-abmoxindexyfoo    1    idx_collision_v    1    v    A    0    NULL    NULL    YES    BTREE                YES    v
+abmoxindexyfoo    0    PRIMARY    1    id    A    null    NULL    NULL        BTREE                YES    id
+abmoxindexyfoo    0    uq_collision_code    1    code    A    null    NULL    NULL    YES    BTREE                YES    code
+abmoxindexyfoo    1    idx_collision_v    1    v    A    null    NULL    NULL    YES    BTREE                YES    v
 drop database information_schema_constraint_index_contract;
