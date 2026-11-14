@@ -3,7 +3,7 @@
 - Status: draft
 - Issue: #32033
 - Implementation PRs: #32034, #32040, #32275
-- Last updated: 2026-11-06
+- Last updated: 2026-11-10
 
 ## Problem
 
@@ -58,6 +58,11 @@ The plan marks these scans. The mark is a hint, not a policy: it lets the scan s
 object prefetch, and its table's signal decides whether it does. Other vector and fulltext
 joins can adopt the mark when measured.
 
+The join back no longer goes through the signal: it reads only the primary key and the
+projected or filter columns, never the vector column, so it never fills whole objects and
+prefetches only those columns' ranges (see the [object prefetcher design](20261110-object-prefetcher.md)).
+The signal still decides for the entries search.
+
 ### The disk cache keeps one signal per table (decision)
 
 Each narrow read tells the disk cache which table it reads for. The cache maps each
@@ -69,7 +74,9 @@ observes, with no configuration:
   file size, at most 1. Files no narrow read touched belong to no table and do not count.
 - **Turning on.** A table's signal turns on when the moving average of efficiency over the
   evictions of its files falls below 0.1 after at least 4 evictions, or below 0.4 after at
-  least 16.
+  least 16, unless another table whose efficiency is lower and whose signal is off had a
+  file evicted within its quiet period. When a table's signal turns on, the evictions of
+  every table whose signal is off start again from none.
 - **Turning off.** A table's signal turns off after a quiet period with no eviction of its
   whole-object files, once another whole object fits in the disk cache beside the cached
   files and the whole-object fills in progress. The period is 30 seconds, doubled up to
@@ -77,7 +84,12 @@ observes, with no configuration:
 
 Two tables that evict each other's whole objects both look thrashed at first, and the one
 that switches first decides the outcome: once it reads ranges, the other often fits. The
-two thresholds make the table that uses its whole objects least switch first. On the
+two thresholds favor the table that uses its whole objects least, and the rule above
+makes it switch first: the evictions the other tables saw were partly made by its files.
+Without the rule, the entries table, about 0.33 efficiency, reached 16 evictions before
+the base table reached 4 in most runs at 1 GB memory and 4 GB disk; it never turned off
+again, as the cache stayed full, and filtered queries after a TPC-H round took 29 s per
+100 against 12 s when only the base table switched. On the
 measured workload the join back reads under 0.1% of each base-table object and the entries
 search about 20% of each entries object; when the entries table switched first, the base
 table fit as whole objects and warm queries took 113 ms instead of 25 ms.

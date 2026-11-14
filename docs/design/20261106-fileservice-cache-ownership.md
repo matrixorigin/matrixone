@@ -13,11 +13,12 @@ must link that revision, before implementation review resumes. Material deviatio
 the implementation from this document require a new version and review.
 
 v2 was approved and merged with #32275. v3 adds the contracts of the fixes that review of
-the merged code found: a download keeps its reader's deadline and ends when the disk
-cache closes; the cost estimates use only downloads from object storage and range reads
-read to the end; reads of a downloading object count toward its read share; an item
-larger than the disk cache's capacity is evicted first; and an item is neither evicted
-nor counted toward eviction before its insert notification returns.
+the merged code found, and one lookup: a download keeps its reader's deadline and ends
+when the disk cache closes; the cost estimates use only downloads from object storage
+and range reads read to the end; reads of a downloading object count toward its read
+share; an item larger than the disk cache's capacity is evicted first; an item is
+neither evicted nor counted toward eviction before its insert notification returns;
+and a read inside a cached range is served from it.
 
 ## Problem
 
@@ -101,6 +102,17 @@ results; a general-purpose cache library; tuning the policy per workload at runt
   inserted as oldest, and so is an item larger than the capacity, which eviction then
   removes before any other; a use of it does not make it newer.
 - **Held entries.** Index-file entries that are held are never evicted.
+- **Ranges.** A read of a range is served by a cached file of that exact range, else by
+  the object's whole file or its download, else by the smallest cached range file of
+  the object that contains it, else by object storage. Range files of objects whose
+  paths have no separator are indexed by object when they enter the cache, including
+  those found on disk at startup; a read passes over and forgets an indexed file the
+  cache no longer holds. A read that skips disk cache reads is not served from cached
+  ranges. Deleting an object cancels its prefetch range reads under way and waits for
+  them, then deletes its indexed range files, so no read of the object after the delete
+  is served from them. A delete is counted before those files are deleted, and an entry
+  cached by a read that began before the count is removed again: an entry is never kept
+  for an object deleted after its bytes were read, whatever read cached it.
 - **Eviction and bound.** Inserts leave eviction to an evictor already running, which
   checks again when it stops, so a burst cannot lose a wakeup. Eviction removes
   bounded batches and runs every removal callback outside all locks, so a callback may
