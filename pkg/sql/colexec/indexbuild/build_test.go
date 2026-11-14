@@ -15,8 +15,10 @@
 package indexbuild
 
 import (
+	"bytes"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,8 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -610,4 +615,82 @@ func TestIndexBuildCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
 	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestIndexBuildSortedPayloadReaderSnapshot(t *testing.T) {
+	for _, name := range []string{"int32", "varchar"} {
+		t.Run(name, func(t *testing.T) {
+			proc := indexBuildTestProcess(t)
+			typ := types.T_int32.ToType()
+			if name == "varchar" {
+				typ = types.T_varchar.ToType()
+			}
+			packer := types.NewPacker()
+			defer packer.Close()
+			makeVector := func(values []int32) *vector.Vector {
+				v := vector.NewVec(typ)
+				for _, n := range values {
+					if name == "int32" {
+						require.NoError(t, vector.AppendFixed(v, n, false, proc.Mp()))
+					} else {
+						// The physical varchar key can contain a packed tuple and an out-of-line part.
+						packer.Reset()
+						packer.EncodeInt32(n)
+						part := "short"
+						if n >= 7 {
+							part = strings.Repeat("long", 40)
+						}
+						packer.EncodeStringType([]byte(part))
+						require.NoError(t, vector.AppendBytes(v, packer.GetBuf(), false, proc.Mp()))
+					}
+				}
+				return v
+			}
+			input := makeVector([]int32{7, 3, 7})
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{indexBuildBatch(input, 3), nil})
+			arg := NewArgument()
+			arg.RuntimeFilterSpec = indexBuildRawSpec(130, 16, typ)
+			arg.AppendChild(child)
+			require.NoError(t, child.Prepare(proc))
+			prepareIndexBuild(t, arg, proc)
+			defer cleanupIndexBuild(t, arg, child, proc)
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			msg := receiveIndexBuildRuntimeFilter(t, proc, 130)
+			defer msg.Destroy()
+			require.Equal(t, int32(message.RuntimeFilter_IN), msg.Typ)
+			require.EqualValues(t, 3, msg.Card, "advertising sort must not change the collected keys")
+			wire := bytes.Clone(msg.Data)
+			decoded := vector.NewVec(types.T_any.ToType())
+			require.NoError(t, decoded.UnmarshalBinary(msg.Data))
+			defer decoded.Free(proc.Mp())
+			require.True(t, decoded.GetSorted())
+			table := &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "pk", Typ: *indexBuildPlanType(typ)}}, Name2ColIndex: map[string]int32{"pk": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk", Names: []string{"pk"}}}
+			probeCol := indexBuildColExpr(typ)
+			probeCol.GetCol().Name = "pk"
+			expr := plan2.MakeInExpr(proc.Ctx, probeCol, msg.Card, msg.Data, false)
+			base, err := readutil.ConstructBasePKFilter(expr, table, proc.Mp())
+			require.NoError(t, err)
+			defer base.Cleanup()
+			require.True(t, base.Valid)
+			require.NotEmpty(t, base.Vec.GetData())
+			require.True(t, &decoded.GetData()[0] == &base.Vec.GetData()[0], "sorted message data is borrowed without mutation")
+			if name == "varchar" {
+				require.NotEmpty(t, decoded.GetArea())
+				require.True(t, &decoded.GetArea()[0] == &base.Vec.GetArea()[0])
+			}
+			block, err := readutil.ConstructBlockPKFilter(false, base, nil)
+			require.NoError(t, err)
+			if block.Cleanup != nil {
+				defer block.Cleanup()
+			}
+			sorted := makeVector([]int32{1, 3, 3, 7, 8})
+			defer sorted.Free(proc.Mp())
+			unsorted := makeVector([]int32{7, 1, 3, 7, 8})
+			defer unsorted.Free(proc.Mp())
+			require.Equal(t, []int64{1, 2, 3}, block.DecideSearchFunc(true)(containers.Vectors{*sorted}))
+			require.Equal(t, []int64{0, 2, 3}, block.DecideSearchFunc(false)(containers.Vectors{*unsorted}))
+			require.Equal(t, wire, msg.Data, "both reader routes must preserve the shared wire snapshot")
+		})
+	}
 }

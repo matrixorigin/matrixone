@@ -743,3 +743,80 @@ func resetChildren(arg *Top, bats []*batch.Batch) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+// A NULL heap root is not a numeric TopValue bound, including in spill mode.
+func TestTopValueSkipsNullHeapRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		limit      int64
+		flag       plan.OrderBySpec_OrderByFlag
+		bound      int64
+		firstValue int64
+	}{
+		{name: "desc_resident", limit: 2, flag: plan.OrderBySpec_DESC, bound: -10, firstValue: 100},
+		{name: "desc_spill", limit: int64(topSpillThreshold + 1), flag: plan.OrderBySpec_DESC, bound: -10, firstValue: 100},
+		{name: "asc_nulls_last_resident", limit: 2, flag: plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, bound: 100, firstValue: -10},
+		{name: "asc_nulls_last_spill", limit: int64(topSpillThreshold + 1), flag: plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, bound: 100, firstValue: -10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, child := newTopLayoutFixture(t, types.T_int64.ToType(), tc.limit)
+			fixture.arg.Fs[0].Flag = tc.flag
+			fixture.arg.TopValueTag = 42
+			fixture.proc.SetMessageBoard(message.NewMessageBoard())
+			receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), fixture.proc.GetMessageBoard())
+
+			first := batch.NewWithSize(1)
+			first.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			child.WithBatchs([]*batch.Batch{first})
+			for i := int64(1); i < tc.limit; i++ {
+				require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(-10), false, fixture.proc.Mp()))
+			}
+			require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(0), true, fixture.proc.Mp()))
+			first.SetRowCount(int(tc.limit))
+			appendTopLayoutBatch(t, fixture, child, int64(100))
+			child.WithBatchs([]*batch.Batch{batch.EmptyBatch})
+			child.WithBatchCallback(func(i int) {
+				msgs, _, err := receiver.ReceiveMessage(false, fixture.proc.Ctx)
+				require.NoError(t, err)
+				switch i {
+				case 1:
+					require.Empty(t, msgs, "NULL heap root must not publish a numeric bound")
+				case 2:
+					require.Len(t, msgs, 1)
+					zm := msgs[0].(message.TopValueMessage).TopValueZM
+					require.Equal(t, tc.bound, types.DecodeInt64(zm.GetMaxBuf()))
+				}
+			})
+			require.NoError(t, fixture.arg.Prepare(fixture.proc))
+			result, err := vm.Exec(fixture.arg, fixture.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, tc.firstValue, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])[0])
+		})
+	}
+}
+
+func TestTopValueSkipsNullVarlenaHeapRoot(t *testing.T) {
+	fixture, child := newTopLayoutFixture(t, types.T_varchar.ToType(), 1)
+	fixture.arg.TopValueTag = 42
+	fixture.proc.SetMessageBoard(message.NewMessageBoard())
+	receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), fixture.proc.GetMessageBoard())
+	appendTopLayoutBatch(t, fixture, child, nil)
+	appendTopLayoutBatch(t, fixture, child, "z")
+	child.WithBatchs([]*batch.Batch{batch.EmptyBatch})
+	child.WithBatchCallback(func(i int) {
+		msgs, _, err := receiver.ReceiveMessage(false, fixture.proc.Ctx)
+		require.NoError(t, err)
+		switch i {
+		case 1:
+			require.Empty(t, msgs)
+		case 2:
+			require.Len(t, msgs, 1)
+			require.True(t, msgs[0].(message.TopValueMessage).TopValueZM.IsInited())
+		}
+	})
+	require.NoError(t, fixture.arg.Prepare(fixture.proc))
+	result, err := vm.Exec(fixture.arg, fixture.proc)
+	require.NoError(t, err)
+	require.Equal(t, "z", string(result.Batch.Vecs[0].GetBytesAt(0)))
+}

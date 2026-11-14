@@ -31,6 +31,8 @@ type indexHintSet struct {
 	join           indexHintScopeSet
 	useSpecified   bool
 	forceSpecified bool
+	// The ORDER prepass delegates this plain FORCE scan to its JOIN owner.
+	orderNeedsJoinAccess bool
 }
 
 type indexHintScopeSet struct {

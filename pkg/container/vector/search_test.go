@@ -15,7 +15,10 @@
 package vector
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -303,4 +306,107 @@ func TestVarlenBinarySearchOffsetByValFactoryWithDuplicateNumbers(t *testing.T) 
 	}
 
 	require.Equal(t, expected, fn(vec))
+}
+
+func TestVarlenBinarySearchOffsetByValFactoryDistributions(t *testing.T) {
+	for _, tc := range []struct {
+		name, encoding             string
+		keys, step, offset, repeat int
+		miss                       bool
+	}{
+		{name: "sparse", keys: 65, step: 97, repeat: 1},
+		{name: "clustered", keys: 300, step: 1, offset: 7000, repeat: 1},
+		{name: "dense", keys: 8192, step: 1, repeat: 1},
+		{name: "alternating", keys: 4096, step: 2, repeat: 1},
+		{name: "two-row gaps", keys: 2731, step: 3, repeat: 1},
+		{name: "duplicate rows and needles", keys: 300, step: 7, repeat: 2},
+		{name: "absent between rows", keys: 300, step: 17, repeat: 1, miss: true},
+		{name: "outside range", keys: 300, step: 1, offset: 9000, repeat: 1},
+		{name: "long values", encoding: "long", keys: 300, step: 19, repeat: 1},
+		{name: "variable lengths", encoding: "variable", keys: 300, step: 19, repeat: 1},
+		{name: "binary boundaries", encoding: "binary", keys: 300, step: 19, repeat: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { vec.Free(mp); require.Zero(t, mp.CurrNB()) })
+			encode := func(n int) []byte {
+				v := fmt.Sprintf("%08d", n)
+				switch tc.encoding {
+				case "long":
+					v = strings.Repeat("long", 20) + v
+				case "variable":
+					v = strings.Repeat("x", n%40) + v
+				case "binary":
+					v = string([]byte{0, 255, 0}) + v
+				}
+				return []byte(v)
+			}
+			var values []string
+			for i := 0; i < 8192; i++ {
+				values = append(values, string(encode(2*(i/tc.repeat))))
+			}
+			var keys [][]byte
+			for i := 0; i < tc.keys; i++ {
+				n := 2 * (tc.offset + i*tc.step)
+				if tc.miss {
+					n++
+				}
+				key := encode(n)
+				keys = append(keys, key)
+				if tc.repeat > 1 {
+					keys = append(keys, bytes.Clone(key))
+				}
+			}
+			if tc.encoding == "binary" {
+				for _, v := range [][]byte{nil, {}, {0}, {0, 0}, []byte("a"), []byte("ab"), []byte("abc"), {255}} {
+					values = append(values, string(v))
+					keys = append(keys, bytes.Clone(v))
+				}
+			}
+			sort.Strings(values)
+			sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i], keys[j]) < 0 })
+			for _, v := range values {
+				require.NoError(t, AppendBytes(vec, []byte(v), false, mp))
+			}
+			// A scalar membership set is independent of the sorted search strategy.
+			members := make(map[string]bool, len(keys))
+			for _, key := range keys {
+				members[string(key)] = true
+			}
+			var want []int64
+			for i, v := range values {
+				if members[v] {
+					want = append(want, int64(i))
+				}
+			}
+			beforeData, beforeArea := bytes.Clone(vec.GetData()), bytes.Clone(vec.GetArea())
+			require.Equal(t, want, VarlenBinarySearchOffsetByValFactory(keys)(vec))
+			require.Equal(t, beforeData, vec.GetData())
+			require.Equal(t, beforeArea, vec.GetArea())
+		})
+	}
+}
+
+func TestGallopVarlenGEComparison(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	defer func() { vec.Free(mp); require.Zero(t, mp.CurrNB()) }()
+	values := []string{"", "", "a", "a", "aa", "ab", "abc", strings.Repeat("x", 80), "\xff"}
+	for _, v := range values {
+		require.NoError(t, AppendBytes(vec, []byte(v), false, mp))
+	}
+	col := MustFixedColNoTypeCheck[types.Varlena](vec)
+	for lo := 0; lo <= len(values); lo++ {
+		for hi := lo; hi <= len(values); hi++ {
+			for _, key := range []string{"", "\x00", "a", "a\x00", "aa", "ac", "x", "\xff", "\xff\x00"} {
+				want := lo + sort.Search(hi-lo, func(i int) bool { return bytes.Compare([]byte(values[lo+i]), []byte(key)) >= 0 })
+				got, cmp := gallopVarlenGE(col, vec.GetArea(), []byte(key), lo, hi)
+				require.Equal(t, want, got)
+				if got < hi {
+					require.Equal(t, bytes.Compare([]byte(values[got]), []byte(key)), cmp)
+				}
+			}
+		}
+	}
 }
