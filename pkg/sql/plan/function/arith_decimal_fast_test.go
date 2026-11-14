@@ -1660,6 +1660,43 @@ func TestD128SubDiffScaleDecimalMinusIntLiteralCases(t *testing.T) {
 
 func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 	max := types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1}
+	min := types.Decimal128{B64_127: 1 << 63}
+	t.Run("single row endpoints and NULL", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			owner func([]types.Decimal128, []types.Decimal128, []types.Decimal128, *nulls.Nulls) int
+			x, y  types.Decimal128
+			want  types.Decimal128
+			index int
+		}{
+			{"add positive overflow", d128AddSameScale, max, types.Decimal128FromInt64(1), min, 0},
+			{"add negative overflow", d128AddSameScale, min, types.Decimal128FromInt64(-1), max, 0},
+			{"sub positive overflow", d128SubSameScale, max, types.Decimal128FromInt64(-1), min, 0},
+			{"sub negative overflow", d128SubSameScale, min, types.Decimal128FromInt64(1), max, 0},
+			{"add endpoint", d128AddSameScale, min, types.Decimal128FromInt64(1), types.Decimal128{B0_63: 1, B64_127: 1 << 63}, -1},
+			{"sub endpoint", d128SubSameScale, max, types.Decimal128FromInt64(1), types.Decimal128{B0_63: ^uint64(0) - 1, B64_127: ^uint64(0) >> 1}, -1},
+		} {
+			for _, alias := range []string{"none", "left", "right"} {
+				for _, masked := range []bool{false, true} {
+					x, y := []types.Decimal128{tc.x}, []types.Decimal128{tc.y}
+					out := []types.Decimal128{{B0_63: 17, B64_127: 29}}
+					if alias == "left" {
+						out = x
+					} else if alias == "right" {
+						out = y
+					}
+					want, index := tc.want, tc.index
+					np := nulls.NewWithSize(1)
+					if masked {
+						np.Add(0)
+						want, index = out[0], -1
+					}
+					require.Equal(t, index, tc.owner(x, y, out, np), "%s alias=%s NULL=%t", tc.name, alias, masked)
+					require.Equal(t, want, out[0], "%s alias=%s NULL=%t", tc.name, alias, masked)
+				}
+			}
+		}
+	})
 
 	t.Run("add same length no null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(1)}

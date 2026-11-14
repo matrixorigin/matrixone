@@ -1,0 +1,34 @@
+//go:build !amd64 || !go1.27 || !goexperiment.simd
+
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
+func tryDecimalSIMD(_ int32, _, _, _ *vector.Vector, _, _, _, _ int) bool { return false }
+
+func decimalSIMDQuickCheck(_ int32, _, _ *vector.Vector, _, _ int) bool { return false }
+
+func decimalMulSubSIMDPrefix(_, _ []types.Decimal64, _ types.Decimal64, _ []types.Decimal128) int {
+	return 0
+}
+func decimal64MulSIMDPrefix(_, _ []types.Decimal64, _ []types.Decimal128, _ int) int { return 0 }
+func decimal64WidenSIMDPrefix(_ []types.Decimal64, _ []types.Decimal128, _ int) int  { return 0 }
+func decimal128AddSIMDPrefix(_, _, _ []types.Decimal128, _ int) int                  { return 0 }
+func decimal128SubSIMDPrefix(_, _, _ []types.Decimal128, _ int) int                  { return 0 }
