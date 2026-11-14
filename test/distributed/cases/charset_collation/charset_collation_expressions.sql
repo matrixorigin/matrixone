@@ -134,6 +134,14 @@ SELECT _utf8mb4'a' COLLATE utf8_unicode_ci;
 -- The utf8mb4 introducer name is matched case-insensitively.
 SELECT _utf8mb4'test', _UTF8MB4'test', _UtF8mB4'test';
 SELECT DATE_FORMAT('2024-01-15', _UTF8MB4'%Y-%m');
+-- A 0x hex literal after the utf8mb4 introducer is text, the same as X'...'.
+SELECT _utf8mb4 0xc3a95ce7958c AS hex_0x, _utf8mb4 X'c3a95ce7958c' AS hex_quoted;
+SELECT _utf8mb4 0xc3a95ce7958c = _utf8mb4 X'c3a95ce7958c' AS same_value,
+       CHARSET(_utf8mb4 0xc3a95ce7958c) AS cs,
+       CHAR_LENGTH(_utf8mb4 0xc3a95ce7958c) AS char_len,
+       LENGTH(_utf8mb4 0xc3a95ce7958c) AS byte_len;
+-- An odd number of hex digits is left-padded with a zero nibble.
+SELECT HEX(_utf8mb4 0x414) AS odd_hex, CHAR_LENGTH(_utf8mb4 0x414) AS odd_char_len;
 
 -- A scalar subquery retains the projected expression's comparison domain.
 CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);

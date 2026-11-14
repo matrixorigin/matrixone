@@ -231,6 +231,18 @@ test  ¦  test  ¦  test
 SELECT DATE_FORMAT('2024-01-15', _UTF8MB4'%Y-%m');
 ➤ DATE_FORMAT('2024-01-15', '%Y-%m')[12,7,0]  𝄀
 2024-01
+SELECT _utf8mb4 0xc3a95ce7958c AS hex_0x, _utf8mb4 X'c3a95ce7958c' AS hex_quoted;
+➤ hex_0x[12,3,0]  ¦  hex_quoted[12,3,0]  𝄀
+é\界  ¦  é\界
+SELECT _utf8mb4 0xc3a95ce7958c = _utf8mb4 X'c3a95ce7958c' AS same_value,
+CHARSET(_utf8mb4 0xc3a95ce7958c) AS cs,
+CHAR_LENGTH(_utf8mb4 0xc3a95ce7958c) AS char_len,
+LENGTH(_utf8mb4 0xc3a95ce7958c) AS byte_len;
+➤ same_value[-7,1,0]  ¦  cs[12,65535,0]  ¦  char_len[-5,64,0]  ¦  byte_len[-5,64,0]  𝄀
+1  ¦  utf8mb4  ¦  3  ¦  6
+SELECT HEX(_utf8mb4 0x414) AS odd_hex, CHAR_LENGTH(_utf8mb4 0x414) AS odd_char_len;
+➤ odd_hex[12,16,0]  ¦  odd_char_len[-5,64,0]  𝄀
+0414  ¦  2
 CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
 INSERT INTO scalar_values VALUES (1, 'Á');
 SELECT s = 'a', (SELECT s FROM scalar_values WHERE id = 1) = 'a',
