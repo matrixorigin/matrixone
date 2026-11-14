@@ -224,6 +224,16 @@ func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }
 
+// WithCatalogUpgrade marks a statement issued by the catalog upgrade framework.
+func (opts StatementOption) WithCatalogUpgrade() StatementOption {
+	opts.catalogUpgrade = true
+	return opts
+}
+
+func (opts StatementOption) CatalogUpgrade() bool {
+	return opts.catalogUpgrade
+}
+
 func (opts Options) WithDisableTrace() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
 	return opts

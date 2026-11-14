@@ -1038,6 +1038,86 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 	}
 }
 
+func TestScopeAlterTableCopyCatalogLineage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		database   string
+		defaultDB  string
+		catalogDDL bool
+		upgrade    bool
+	}{
+		{"upgrade explicit catalog", catalog.MO_CATALOG, "test", true, true},
+		{"upgrade default catalog", "", catalog.MO_CATALOG, true, true},
+		{"upgrade user database under sys", "test", catalog.MO_CATALOG, false, true},
+		{"default user database", "", "test", false, false},
+		{"upgrade user database with mo prefix", "mo_app", "test", false, true},
+		{"ordinary catalog", catalog.MO_CATALOG, "test", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			copyErr := errors.New("stop after copying catalog rows")
+			metadataErr := moerr.NewNoSuchTableNoCtx(catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
+			spyExec := &alterCopyInsertSpyExecutor{
+				insertSQL: "insert into mo_pitr_copy select * from mo_pitr",
+				insertErr: copyErr,
+				errs: map[string]error{
+					databranchutils.LineageOwnerPublicationLockSQL(): metadataErr,
+					alterDataBranchParticipationSQL(1):               metadataErr,
+				},
+			}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			c.db = tc.defaultDB
+			if tc.upgrade {
+				ctx := context.WithValue(c.proc.Ctx, defines.CatalogUpgradeKey{}, true)
+				c.proc.Ctx = ctx
+				c.proc.ReplaceTopCtx(ctx)
+			}
+			alterTable := &plan2.AlterTable{
+				Database:          tc.database,
+				TableDef:          &plan2.TableDef{TblId: 1, Name: catalog.MO_PITR},
+				CopyTableDef:      &plan2.TableDef{TblId: 2, Name: "mo_pitr_copy"},
+				CreateTmpTableSql: "create table mo_pitr_copy",
+				InsertTmpDataSql:  spyExec.insertSQL,
+				Options:           &plan2.AlterCopyOpt{},
+			}
+			c.pn.GetDdl().Definition = &plan2.DataDefinition_AlterTable{AlterTable: alterTable}
+			s := &Scope{Magic: AlterTable, Plan: c.pn}
+			originRel := mock_frontend.NewMockRelation(ctrl)
+			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+			copyRel := mock_frontend.NewMockRelation(ctrl)
+			copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(alterTable.CopyTableDef).AnyTimes()
+			db := mock_frontend.NewMockDatabase(ctrl)
+			db.EXPECT().Relation(gomock.Any(), catalog.MO_PITR, gomock.Any()).Return(originRel, nil).AnyTimes()
+			db.EXPECT().Relation(gomock.Any(), "mo_pitr_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+			resolvedDB := tc.database
+			if resolvedDB == "" {
+				resolvedDB = tc.defaultDB
+			}
+			c.e.(*mock_frontend.MockEngine).EXPECT().Database(gomock.Any(), resolvedDB, gomock.Any()).Return(db, nil).AnyTimes()
+
+			err := s.AlterTableCopy(c)
+			if tc.catalogDDL {
+				require.ErrorIs(t, err, copyErr)
+				require.Equal(t, []string{alterTable.CreateTmpTableSql, spyExec.insertSQL}, spyExec.executedSQLs)
+			} else {
+				require.ErrorIs(t, err, metadataErr)
+				require.Equal(t, []string{databranchutils.LineageOwnerPublicationLockSQL()}, spyExec.executedSQLs)
+			}
+
+			// A disabled lineage plan still probes metadata during preservation.
+			// Marked catalog ALTER must skip that final probe as well as preparation.
+			spyExec.executedSQLs = nil
+			err = c.preserveAlterDataBranchLineage(alterDataBranchLineagePlan{}, 1, 2, resolvedDB, catalog.MO_PITR)
+			if tc.catalogDDL {
+				require.NoError(t, err)
+				require.Empty(t, spyExec.executedSQLs)
+			} else {
+				require.ErrorIs(t, err, metadataErr)
+			}
+		})
+	}
+}
+
 func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

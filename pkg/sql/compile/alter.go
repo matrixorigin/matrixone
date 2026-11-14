@@ -624,6 +624,15 @@ func alterDataBranchLineageMetadata(
 	return uint32(meta.Creator), databranchutils.NextAlterLineageLevel(meta.Level)
 }
 
+func (c *Compile) isCatalogUpgrade(database string) bool {
+	ctx := c.proc.Ctx
+	if ctx == nil {
+		ctx = c.proc.GetTopContext()
+	}
+	return strings.EqualFold(database, catalog.MO_CATALOG) &&
+		ctx != nil && ctx.Value(defines.CatalogUpgradeKey{}) == true
+}
+
 // preserveAlterDataBranchLineage models ALTER's copy-and-swap as a lineage
 // edge whenever the old physical table has a live branch descendant. The
 // matching snapshot pins the old generation until every later generation and
@@ -633,6 +642,9 @@ func (c *Compile) preserveAlterDataBranchLineage(
 	oldTableID, newTableID uint64,
 	databaseName, tableName string,
 ) error {
+	if c.isCatalogUpgrade(databaseName) {
+		return nil
+	}
 	if !plan.enabled {
 		participates, err := c.alterTableParticipatesInDataBranch(oldTableID)
 		if err != nil || !participates {
@@ -1149,27 +1161,31 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 			lineageSnapshotAdvanced = true
 		}
 	}
-	// The stable row exists even when no owner does. Snapshot and PITR creation
-	// cross the same write barrier before choosing their timestamp and retain
-	// the write through owner publication. Pessimistic transactions wait; an
-	// optimistic write-write loser retries the whole statement.
-	if err = c.lockDataBranchLineageOwnerPublication(); err != nil {
-		return err
-	}
-	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)
-	if err != nil {
-		return err
-	}
-	if !lineagePlan.enabled {
-		var hasLatestHistory bool
-		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
-			oldId, dbName, tblName,
-		); err != nil {
+	// Catalog migrations can create the lineage tables and columns themselves.
+	// Only those marked statements may run without the lineage prerequisites.
+	if !c.isCatalogUpgrade(dbName) {
+		// The stable row exists even when no owner does. Snapshot and PITR creation
+		// cross the same write barrier before choosing their timestamp and retain
+		// the write through owner publication. Pessimistic transactions wait; an
+		// optimistic write-write loser retries the whole statement.
+		if err = c.lockDataBranchLineageOwnerPublication(); err != nil {
 			return err
 		}
-		if hasLatestHistory {
-			lineagePlan.enabled = true
-			lineagePlan.preserveHistoricalSource = true
+		lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)
+		if err != nil {
+			return err
+		}
+		if !lineagePlan.enabled {
+			var hasLatestHistory bool
+			if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
+				oldId, dbName, tblName,
+			); err != nil {
+				return err
+			}
+			if hasLatestHistory {
+				lineagePlan.enabled = true
+				lineagePlan.preserveHistoricalSource = true
+			}
 		}
 	}
 	if lineagePlan.enabled {

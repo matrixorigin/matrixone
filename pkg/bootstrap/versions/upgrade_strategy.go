@@ -157,9 +157,12 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	if exist {
 		return nil
 	} else {
+		option := executor.StatementOption{}.
+			WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId).
+			WithCatalogUpgrade()
 		// 1. First, judge whether there is prefix sql
 		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+			res, err := txn.Exec(u.PreSql, option)
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -168,7 +171,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		}
 
 		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+		res, err := txn.Exec(u.UpgSql, option)
 		if err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
@@ -177,7 +180,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 		// 2. Third, after the upgrade is completed, judge whether there is post-sql
 		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+			res, err = txn.Exec(u.PostSql, option)
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err

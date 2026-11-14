@@ -23,13 +23,31 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
+
+func TestTxnExecutorCatalogUpgradeContextRestoredAfterParseError(t *testing.T) {
+	for _, account := range []bool{false, true} {
+		parent := context.Background()
+		exec := &txnExecutor{ctx: parent}
+		option := executor.StatementOption{}.WithCatalogUpgrade()
+		if account {
+			option = option.WithAccountID(0)
+		}
+		res, err := exec.Exec("alter table", option)
+		res.Close()
+		require.Error(t, err)
+		require.Equal(t, parent, exec.ctx)
+		require.Nil(t, exec.ctx.Value(defines.CatalogUpgradeKey{}))
+	}
+}
 
 func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)

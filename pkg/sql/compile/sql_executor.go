@@ -319,6 +319,9 @@ func (exec *txnExecutor) Exec(
 		}()
 	}
 	//------------------------------------------------------------------------------------------------------------------
+	if statementOption.CatalogUpgrade() {
+		exec.ctx = context.WithValue(exec.ctx, defines.CatalogUpgradeKey{}, true)
+	}
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.IgnoreForeignKey{},
