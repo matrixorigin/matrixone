@@ -904,13 +904,82 @@ func TestTerminalRetirementRejectsHandlerBeforeExecution(t *testing.T) {
 	t.Cleanup(routine.cancelRoutineFunc)
 	conn := &Conn{}
 	manager := &RoutineManager{ctx: context.Background(), clients: map[*Conn]*Routine{conn: routine}}
+	require.True(t, routine.setInProcessRequest(true))
 	require.True(t, routine.retireTerminalConnection())
+	require.True(t, routine.setInProcessRequest(false))
 	require.ErrorIs(t, manager.Handler(conn, []byte{0}), io.EOF)
+}
+
+func TestTerminalRetirementIgnoresIdleSnapshot(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	routine.setCancelRequestFunc(cancel)
+	require.True(t, routine.setInProcessRequest(true))
+	require.True(t, routine.setInProcessRequest(false))
+	require.False(t, routine.retireTerminalConnection(), "a finished request cannot retire an idle session")
+	require.NoError(t, requestCtx.Err())
+	require.True(t, routine.setInProcessRequest(true))
+	require.True(t, routine.retireTerminalConnection())
+	require.ErrorIs(t, requestCtx.Err(), context.Canceled)
+}
+
+func TestLegacyCloseRechecksAgeAndCancelsLifecycle(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	routine.setCancelRequestFunc(cancel)
+	require.True(t, routine.setInProcessRequest(true))
+	operationCtx, admitted := routine.mc.beginOperationWithContext(context.Background())
+	require.True(t, admitted)
+	t.Cleanup(routine.mc.endOperation)
+
+	now := time.Now()
+	minimum := 30 * time.Second
+	// An old snapshot must not close a newer request on the same routine.
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-minimum + time.Nanosecond)))
+	require.False(t, routine.tryBeginCloseForRequest(clientRequestClockValue(now), minimum))
+	require.NoError(t, requestCtx.Err())
+	require.NoError(t, operationCtx.Err())
+
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-minimum)))
+	require.True(t, routine.tryBeginCloseForRequest(clientRequestClockValue(now), minimum))
+	require.ErrorIs(t, requestCtx.Err(), context.Canceled)
+	require.ErrorIs(t, operationCtx.Err(), context.Canceled, "legacy close must cancel an admitted lifecycle operation")
+	require.False(t, routine.mc.tryBeginOperation())
+	require.False(t, routine.isTerminalRetired(), "legacy close retains its admission policy")
+}
+
+func TestLegacyCloseSkipsBusyRoutineLock(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.setInProcessRequest(true))
+	now := time.Now()
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Minute)))
+	routine.mu.Lock()
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(routine.mu.Unlock) }
+	t.Cleanup(unlock)
+	done := make(chan bool, 1)
+	go func() { done <- routine.tryBeginCloseForRequest(clientRequestClockValue(now), 30*time.Second) }()
+	select {
+	case closed := <-done:
+		unlock()
+		require.False(t, closed)
+	case <-time.After(time.Second):
+		unlock()
+		<-done
+		t.Fatal("a busy routine lock blocked the monitor")
+	}
+	require.True(t, routine.tryBeginCloseForRequest(clientRequestClockValue(now), 30*time.Second))
 }
 
 func TestTerminalRetirementRacesLifecycleAdmission(t *testing.T) {
 	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.setInProcessRequest(true))
 	start := make(chan struct{})
 	lifecycle := make(chan bool, 1)
 	retired := make(chan bool, 1)
@@ -939,6 +1008,7 @@ func TestTerminalRetirementSkipsBusyLocks(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 			t.Cleanup(routine.cancelRoutineFunc)
+			require.True(t, routine.setInProcessRequest(true))
 			var unlock func()
 			if target == "routine" {
 				routine.mu.Lock()
