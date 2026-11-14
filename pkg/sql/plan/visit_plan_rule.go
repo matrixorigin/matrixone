@@ -3948,6 +3948,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			// A serialized legacy call with an already-JSON argument keeps that
+			// argument. A new unresolved marker can instead acquire the text
+			// conversion when its actual input domain becomes known.
+			if originalFuncObj == planfunction.EncodeOverloadID(planfunction.CRC32, 0) && rewritten.GetF() != nil {
+				rewritten.GetF().Func.Obj = originalFuncObj
+				rewritten.Typ = originalTyp
+				// A persisted legacy JSON call owns its original binary argument;
+				// rebinding it must not retain the explicit text cast inserted for
+				// new JSON calls. An unresolved parameter is rebound normally so
+				// its actual JSON, text, or binary domain can be selected.
+				if len(originalArgs) == 1 && originalArgs[0] != nil && types.T(originalArgs[0].Typ.Id) == types.T_json {
+					rewritten.GetF().Args = boundArgs
+				}
+			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
 				functionName, originalTyp, originalArgs, rewritten,

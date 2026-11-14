@@ -1023,6 +1023,35 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	require.False(t, features.DecimalLiteralSemantics)
 }
 
+func TestCRC32ExecutionIdentityRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		typ      int32
+		textCast bool
+	}{
+		{planJSONTypeID, false}, {planAnyTypeID, false}, {61, false}, {planJSONTypeID, true},
+	} {
+		arg := &Expr{Typ: Type{Id: tc.typ}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if tc.textCast {
+			arg = &Expr{Typ: Type{Id: planTextTypeID}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(21)<<32 | 1, ObjName: "cast"}, Args: []*Expr{arg},
+			}}}
+		}
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(crc32FunctionID) << 32, ObjName: "crc32"}, Args: []*Expr{arg}}}}
+		owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: expr, IsStored: true}}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		decoded := &TableDef{}
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(decoded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
+		folded := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: expr}}}
+		features, err = RequiredRemoteExpressionFeatures(folded)
+		require.NoError(t, err)
+		require.Equal(t, tc.textCast, features.JSONOpaqueTextContracts)
+	}
+}
+
 func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	column := func(id int32) *Expr {
 		return &Expr{Typ: Type{Id: id}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
