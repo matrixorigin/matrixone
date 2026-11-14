@@ -17,7 +17,9 @@ package firstreplay
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,8 +27,11 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
@@ -34,11 +39,102 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// The cluster owns cleanup even when an intermediate startup step fails.
+func startReplayControlPlane(startLog, startTN, waitTN func() error) error {
+	for _, step := range []struct {
+		name string
+		run  func() error
+	}{{"log", startLog}, {"TN", startTN}, {"TN shard readiness", waitTN}} {
+		if err := step.run(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
+		}
+	}
+	return nil
+}
+
+func waitForReplayTN(ctx context.Context, client interface {
+	GetClusterDetails(context.Context) (logservicepb.ClusterDetails, error)
+}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var lastErr error
+	for {
+		details, err := client.GetClusterDetails(ctx)
+		if err != nil {
+			lastErr = err
+		} else {
+			for _, store := range details.TNStores {
+				if len(store.Shards) > 0 {
+					return nil
+				}
+			}
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("waiting for TN shard: %w", errors.Join(ctx.Err(), lastErr))
+		case <-timer.C:
+		}
+	}
+}
+
+// Do not release the admission lease or remove storage until startup has
+// completed and every service has actually closed. The two final operations
+// are independent after that point, so report both errors if either fails.
+func cleanupReplayResources(waitStartup func(), closeCluster, removeData, releaseAdmission func() error) error {
+	waitStartup()
+	if err := closeCluster(); err != nil {
+		return fmt.Errorf("close replay cluster: %w", err)
+	}
+	return errors.Join(removeData(), releaseAdmission())
+}
+
+type replayStartup struct {
+	done chan struct{}
+	err  error
+}
+
+func startReplayCN(start func() error) *replayStartup {
+	startup := &replayStartup{done: make(chan struct{})}
+	go func() {
+		defer close(startup.done)
+		startup.err = start()
+	}()
+	return startup
+}
+
 func TestCNFirstReplayDisconnect(t *testing.T) {
 	// This package has its own test process: replay faults cannot affect the
 	// shared embed cluster, and admission remains exclusive across processes.
 	// Reserve time for replay and cleanup instead of charging admission wait to
 	// the replay deadline below.
+	dataPath, err := os.MkdirTemp("", "mo-first-replay-")
+	require.NoError(t, err)
+	var c embed.Cluster
+	var admission *clusteradmission.Lease
+	var startup *replayStartup
+	t.Cleanup(func() {
+		// Fault cleanups run first; the package timeout is the outer guard if
+		// an operator cannot stop. Keep the data directory on a close error.
+		err := cleanupReplayResources(func() {
+			if startup != nil {
+				<-startup.done
+			}
+		}, func() error {
+			if c == nil {
+				return nil
+			}
+			return c.Close()
+		}, func() error {
+			return os.RemoveAll(dataPath)
+		}, func() error {
+			return admission.Release()
+		})
+		require.NoError(t, err)
+	})
+
 	admissionCtx := t.Context()
 	if deadline, ok := t.Deadline(); ok {
 		reserve := min(150*time.Second, time.Until(deadline)/2)
@@ -46,30 +142,53 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 		admissionCtx, cancel = context.WithDeadline(admissionCtx, deadline.Add(-reserve))
 		defer cancel()
 	}
-	admission, err := clusteradmission.Acquire(admissionCtx)
+	admission, err = clusteradmission.Acquire(admissionCtx)
 	require.NoError(t, err, "acquire test cluster admission")
-	t.Cleanup(func() { require.NoError(t, admission.Release()) })
-
-	c, err := embed.NewCluster(embed.WithTesting(), embed.WithDataPath(t.TempDir()), embed.WithCNCount(1))
-	started := make(chan struct{})
-	var startupErr error
-	startupLaunched := false
-	if c != nil {
-		t.Cleanup(func() {
-			// Fault cleanups run first. Join Start before Close, which uses the
-			// same cluster lock. A failed start cannot make cleanup wait forever.
-			if startupLaunched {
-				select {
-				case <-started:
-				case <-time.After(30 * time.Second):
-					t.Error("cluster Start did not terminate after fault removal")
-					return
-				}
-			}
-			require.NoError(t, c.Close())
-		})
-	}
+	c, err = embed.NewCluster(embed.WithTesting(), embed.WithDataPath(dataPath), embed.WithCNCount(1))
 	require.NoError(t, err)
+
+	var logOp, tnOp, cnOp embed.ServiceOperator
+	counts := make(map[metadata.ServiceType]int)
+	c.ForeachServices(func(op embed.ServiceOperator) bool {
+		counts[op.ServiceType()]++
+		switch op.ServiceType() {
+		case metadata.ServiceType_LOG:
+			logOp = op
+		case metadata.ServiceType_TN:
+			tnOp = op
+		case metadata.ServiceType_CN:
+			cnOp = op
+		}
+		return true
+	})
+	require.Equal(t, 1, counts[metadata.ServiceType_LOG])
+	require.Equal(t, 1, counts[metadata.ServiceType_TN])
+	require.Equal(t, 1, counts[metadata.ServiceType_CN])
+	t.Log("starting log and TN before measuring first CN replay")
+	require.NoError(t, startReplayControlPlane(logOp.Start, tnOp.Start, func() error {
+		readyCtx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		// The TN runtime already exists; the first CN has not started yet.
+		for {
+			attemptCtx, cancelAttempt := context.WithTimeout(readyCtx, 5*time.Second)
+			client, err := logservice.NewCNHAKeeperClient(attemptCtx, tnOp.ServiceID(), cnOp.GetServiceConfig().HAKeeperClient)
+			cancelAttempt()
+			if err == nil {
+				return func() (err error) {
+					defer func() { err = errors.Join(err, client.Close()) }()
+					return waitForReplayTN(readyCtx, client)
+				}()
+			}
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-readyCtx.Done():
+				timer.Stop()
+				return errors.Join(readyCtx.Err(), err)
+			case <-timer.C:
+			}
+		}
+	}))
+	t.Log("TN shard is ready; starting the first CN")
 
 	var receiverPaused atomic.Bool
 	previousReporter := logutil.GetReportZapFunc()
@@ -97,14 +216,10 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 	addFault(objectio.FJ_CNReplayCacheErr, "wait", 0, "")
 	const waiters = "first-replay-test-waiters"
 	addFault(waiters, "getwaiters", 0, objectio.FJ_CNReplayCacheErr)
-	startupLaunched = true
-	go func() {
-		startupErr = c.Start()
-		close(started)
-	}()
+	startup = startReplayCN(cnOp.Start)
 	require.Eventually(t, func() bool {
 		select {
-		case <-started:
+		case <-startup.done:
 			return true
 		default:
 		}
@@ -112,8 +227,8 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 		return ok && n == 1
 	}, 30*time.Second, 10*time.Millisecond, "CN must reach its first catalog replay")
 	select {
-	case <-started:
-		require.NoError(t, startupErr, "cluster startup failed before first replay")
+	case <-startup.done:
+		require.NoError(t, startup.err, "cluster startup failed before first replay")
 		t.Fatal("cluster started without reaching the first replay fault")
 	default:
 	}
@@ -125,8 +240,8 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 	_, err = fault.RemoveFaultPoint(ctx, objectio.FJ_CNReplayCacheErr)
 	require.NoError(t, err)
 	select {
-	case <-started:
-		require.NoError(t, startupErr)
+	case <-startup.done:
+		require.NoError(t, startup.err)
 	case <-ctx.Done():
 		t.Fatal("first-replay disconnect prevented cluster startup")
 	}

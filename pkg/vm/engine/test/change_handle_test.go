@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	cmd_util "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -4260,6 +4262,43 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 
+	// Cold sink creation is unrelated to recovery from the injected timestamp
+	// error. Materialize an empty target before registering the consumer.
+	value, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	require.True(t, ok)
+	sqlExec, ok := value.(executor.SQLExecutor)
+	require.True(t, ok)
+	targetTable := fmt.Sprintf("`%s`.`test_table_%d_%s`", iscp.TargetDbName, tableID, jobName)
+	require.NoError(t, sqlExec.ExecTxn(ctxWithTimeout, func(txn executor.TxnExecutor) error {
+		for _, statement := range []string{
+			fmt.Sprintf("create database if not exists `%s`", iscp.TargetDbName),
+			fmt.Sprintf("create table %s like `srcdb`.`src_table`", targetTable),
+		} {
+			result, err := txn.Exec(statement, executor.StatementOption{})
+			result.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}, executor.Options{}))
+	checkRows := func(query string, expected int) {
+		t.Helper()
+		result, err := sqlExec.Exec(ctxWithTimeout, query, executor.Options{})
+		rows := 0
+		if err == nil {
+			result.ReadRows(func(n int, _ []*vector.Vector) bool {
+				rows += n
+				return true
+			})
+		}
+		result.Close()
+		require.NoError(t, err, query)
+		require.Equal(t, expected, rows, query)
+	}
+	checkRows("select * from `srcdb`.`src_table`", 1)
+	checkRows("select * from "+targetTable, 0)
+
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestInvalidTimestamp")
 	t.Cleanup(func() {
 		fault.Disable()
@@ -4268,7 +4307,7 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err := iscp.RegisterJob(
+	ok, err = iscp.RegisterJob(
 		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
@@ -4303,6 +4342,9 @@ func TestInvalidTimestamp(t *testing.T) {
 		tableID,
 		jobName,
 	)
+	checkRows("select * from "+targetTable, 1)
+	checkRows("select * from `srcdb`.`src_table` except select * from "+targetTable, 0)
+	checkRows("select * from "+targetTable+" except select * from `srcdb`.`src_table`", 0)
 }
 
 func TestCancelIteration1(t *testing.T) {
