@@ -561,18 +561,6 @@ def test_fulltext_reserved_and_atomic_column_names(client, first_column, record_
     try:
         client.execute(f"INSERT INTO {table} VALUES(1,'alpha','alpha'),(2,'beta','beta')")
         ddl = f'CREATE FULLTEXT INDEX ft ON {table}({quoted})'
-        if os.environ.get('MO_SDK_TARGET') == '4.2.8' and first_column in ('order', 'fulltext1'):
-            with pytest.raises(QueryError, match='syntax error') as native:
-                client.execute(ddl)
-            assert native.value.errno in (1064, 1105)
-            assert client.execute(f'SELECT id, {quoted} FROM {table} ORDER BY id').rows == [
-                (1, 'alpha', 'alpha'),
-                (2, 'beta', 'beta'),
-            ]
-            record_property(
-                'matrixone.feature.fulltext_' + first_column + '_column', 'native-rejected:' + str(native.value.errno)
-            )
-            return
         client.execute(ddl)
         record_property('matrixone.feature.fulltext_' + first_column + '_column', 'supported')
         columns = [sa.Column(first_column), sa.Column(second_column)]

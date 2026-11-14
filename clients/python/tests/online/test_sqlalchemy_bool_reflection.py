@@ -23,23 +23,6 @@ import pytest
 import sqlalchemy as sa
 
 
-def _is_release_428(connection):
-    if os.environ.get('MO_SDK_TARGET') != '4.2.8':
-        return False
-    from scripts.run_contracts import validate_server_identity
-
-    version, revision = connection.exec_driver_sql('SELECT version(),git_version()').one()
-    validate_server_identity(version, revision, '4.2.8', os.environ.get('MO_SDK_EXPECT_REVISION'))
-    return True
-
-
-def _assert_show_create_rejected(connection, source, record_property, feature):
-    with pytest.raises(sa.exc.DBAPIError) as error:
-        connection.exec_driver_sql(f'SHOW CREATE TABLE `{source}`')
-    assert error.value.orig.args[0] == 1105 and 'syntax error' in str(error.value).lower()
-    record_property('matrixone.feature.' + feature, 'native-rejected:1105')
-
-
 @pytest.fixture
 def mysql_engine(connection_params):
     host, port, user, password, database = connection_params
@@ -64,7 +47,6 @@ def test_describe_view_reflection_without_boolean_aliases(mysql_engine, connecti
     try:
         # Commit before Inspector opens its independent metadata connection.
         with mysql_engine.begin() as conn:
-            legacy = _is_release_428(conn)
             conn.exec_driver_sql(f'CREATE TABLE `{source}` (i INT, s VARCHAR(8), a DECIMAL(24,6))')
             conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT * FROM `{source}`')
         with warnings.catch_warnings(record=True) as caught:
@@ -72,22 +54,6 @@ def test_describe_view_reflection_without_boolean_aliases(mysql_engine, connecti
             inspector = sa.inspect(mysql_engine)
             assert view in inspector.get_view_names(schema=database)
             for name in (source, view):
-                if legacy and name == view:
-                    with mysql_engine.connect() as conn:
-                        native = conn.exec_driver_sql(f'DESCRIBE `{view}`').all()
-                    assert [(row[0], row[1]) for row in native] == [
-                        ('i', 'INT(32)'),
-                        ('s', 'VARCHAR(8)'),
-                        ('a', 'DECIMAL(24,6)'),
-                    ]
-                    with warnings.catch_warnings(record=True) as native_warnings:
-                        with pytest.raises(TypeError, match='NullType'):
-                            inspector.get_columns(name, schema=database)
-                    assert native_warnings and all('Did not recognize type' in str(w.message) for w in native_warnings)
-                    record_property(
-                        'matrixone.feature.standard_mysql_view_reflection', 'native-uppercase-types-incompatible'
-                    )
-                    continue
                 columns = inspector.get_columns(name, schema=database)
                 assert [column['name'] for column in columns] == ['i', 's', 'a']
                 assert isinstance(columns[0]['type'], sa.Integer)
@@ -113,7 +79,6 @@ def test_boolean_metadata_reflection(mysql_engine, connection_params, record_pro
     source, view, clone_name = [f'bool_reflection_{kind}_{suffix}' for kind in ('source', 'view', 'clone')]
     try:
         with engine.begin() as conn:
-            legacy = _is_release_428(conn)
             conn.exec_driver_sql(
                 f'CREATE TABLE `{source}` (id INT PRIMARY KEY, flag BOOL DEFAULT NULL, '
                 'enabled BOOLEAN NOT NULL DEFAULT TRUE, disabled BOOL DEFAULT FALSE, '
@@ -130,31 +95,6 @@ def test_boolean_metadata_reflection(mysql_engine, connection_params, record_pro
                 f"CREATE VIEW `{view}` AS SELECT *, CAST('2026-01-02' AS DATE) AS day, "
                 f"CAST('Up' AS VARCHAR(20)) AS label FROM `{source}`"
             )
-
-        if legacy:
-            with warnings.catch_warnings(record=True) as native_warnings:
-                warnings.simplefilter('always', sa.exc.SAWarning)
-                table = sa.Table(source, sa.MetaData(), autoload_with=engine)
-                with pytest.raises(TypeError, match='NullType'):
-                    sa.Table(view, sa.MetaData(), autoload_with=engine)
-            assert isinstance(table.c.flag.type, sa.types.NullType)
-            assert any("'bool'" in str(w.message).lower() for w in native_warnings)
-            with engine.connect() as conn:
-                assert conn.exec_driver_sql(f'SELECT * FROM `{source}` ORDER BY id').all() == [
-                    (1, 1, 1, 0, None, 18446744073709551615, Decimal('1.25'), 2, None, None),
-                    (2, 0, 1, 0, None, 8, Decimal('2.50'), 0, None, None),
-                    (3, None, 1, 0, None, 9, Decimal('3.75'), None, None, None),
-                ]
-                assert (
-                    conn.exec_driver_sql(
-                        'SELECT mo_show_visible_bin(atttyp,2) FROM mo_catalog.mo_columns '
-                        "WHERE att_database=%s AND att_relname=%s AND attname='flag'",
-                        (database, source),
-                    ).scalar_one()
-                    == 'BOOL'
-                )
-            record_property('matrixone.feature.standard_mysql_boolean_reflection', 'native-BOOL-incompatible')
-            return
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', sa.exc.SAWarning)
@@ -264,13 +204,9 @@ def test_enum_set_show_create_replay(mysql_engine, connection_params, sql_mode, 
                 conn.exec_driver_sql('SET SESSION sql_mode=%s', (sql_mode,))
                 domain = ','.join(member_sql)
                 conn.exec_driver_sql(f'CREATE TABLE `{source}` (id INT PRIMARY KEY, e ENUM({domain}), s SET({domain}))')
-                if _is_release_428(conn):
-                    _assert_show_create_rejected(conn, source, record_property, 'enum_set_replay')
-                    names = (source,)
-                else:
-                    ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
-                    conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
-                    names = (source, clone)
+                ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
+                conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
+                names = (source, clone)
                 for name in names:
                     domains = conn.exec_driver_sql(
                         'SELECT attname,attr_enum FROM mo_catalog.mo_columns '
@@ -317,17 +253,6 @@ def test_empty_enum_metadata_replay(mysql_engine, connection_params, record_prop
         with engine.begin() as conn:
             conn.exec_driver_sql(f"CREATE TABLE `{source}` (id INT PRIMARY KEY, e ENUM(''))")
             conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT * FROM `{source}`')
-            if _is_release_428(conn):
-                _assert_show_create_rejected(conn, source, record_property, 'empty_enum_replay')
-                for name in (source, view):
-                    columns = conn.exec_driver_sql(f'DESCRIBE `{name}`').all()
-                    assert next(row[1] for row in columns if row[0] == 'e') == 'ENUM(0)'
-                    assert conn.exec_driver_sql(
-                        'SELECT mo_show_visible_bin(atttyp,2),attr_enum FROM mo_catalog.mo_columns '
-                        "WHERE att_database=%s AND att_relname=%s AND attname='e'",
-                        (database, name),
-                    ).one() == ('ENUM', '')
-                return
             ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
             assert "`e` enum('')" in ddl
             conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))

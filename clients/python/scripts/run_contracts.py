@@ -5,6 +5,13 @@ No credentials are written. Explicit server jobs fail on skips or wrong identity
 pytest's green status alone cannot certify an unconfigured integration target.
 """
 
+# Target selection identifies a backend; it does not waive functional assertions.
+# Published v4.2.8 reproduces known kernel defects fixed by companion PR #32723.
+# Qualify a new 4.2 build containing those fixes; do not make the immutable old
+# image green with SDK retries, expected errors or simpler test inputs. Required
+# behavior, optional native capabilities and reopening criteria are documented
+# separately in docs/design/release-quality.md#maintaining-version-contracts.
+
 import argparse
 import hashlib
 import importlib.metadata

@@ -288,7 +288,10 @@ async def test_async_cross_cn_upload_and_file_relation_visibility(trial, source)
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
 @pytest.mark.parametrize('suffix', [" 'q' {space}", '/part', '%2F', 'ÉCOLE'])
-async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kind, suffix):
+async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kind, suffix, record_property):
+    # Required behavior on every target. Official v4.2.8 fails until a new server
+    # release includes #32723; accepting QueryError would hide unrelated faults.
+    # See docs/design/release-quality.md#maintaining-version-contracts.
     import inspect
     import uuid
     from urllib.parse import quote
@@ -298,6 +301,7 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
 
     client = trial.client if kind == 'sync' else async_client
     name = 'sdk_' + uuid.uuid4().hex[:10] + suffix
+    canonical = name.lower()
     nested_name = 'sdk_nested_' + uuid.uuid4().hex[:10]
     directory = trial.directory / "quoted'directory"
     directory.mkdir()
@@ -309,11 +313,6 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
     owned = False
     nested = False
     try:
-        if os.environ.get('MO_EXPECT_STAGE_LITERAL_SUPPORT', '1') == '0':
-            with pytest.raises(QueryError):
-                await resolve(client.stage.create(name, url, comment=comment))
-            return  # Explicit negative qualification of an older native server.
-        canonical = name.lower()
         try:
             await resolve(
                 client.stage.create(
@@ -376,3 +375,4 @@ async def test_stage_literal_catalog_and_file_consumers(trial, async_client, kin
             assert not trial.client.execute(
                 'SELECT stage_name FROM mo_catalog.mo_stages WHERE stage_name=?', (canonical,)
             ).rows
+    record_property('matrixone.feature.stage_literal_catalog_and_file_consumers', 'supported')

@@ -1,9 +1,34 @@
 # Python SDK release compatibility boundaries
 
-The SDK supports the 4.1.x and 4.2.x release families through common execution
-and SQL construction contracts. Version banners identify test targets; they do
-not establish that a server supports a feature. Explicit native operations stay
-authoritative. Related issues: #30963, #31023, #30067, #30068, #30069.
+This record qualifies the SDK against pinned main and 4.2 candidate builds.
+Official 4.2.8 is a compatibility/reproduction baseline with known failures; it
+is not certified as fully compatible. Common execution contracts are intended
+for the 4.1/4.2 families, but this work does not recertify every historical patch.
+Version banners do not establish feature support: native operations and exact
+source/image identities stay authoritative. Related issues: #30963, #31023,
+#30067, #30068, #30069.
+
+## Maintaining version contracts
+
+Target identity and capability support are separate contracts. Use the following
+decisions when diagnosing future failures; the dated evidence below freezes the
+specific builds actually tested.
+
+| Boundary | Owner and maintenance rule |
+|---|---|
+| Published v4.2.8 defects: metadata/replay, branch deletion, quoted/ASYNC FULLTEXT, numeric/dollar syntax, Stage literals and FLOAT32 infinity | Kernel companion #32723 fixes these on the 4.2 line. Keep the original functional inputs and positive assertions. Do not retry changes to an immutable release image or add SDK expected-error/version branches for these defects. Qualify a new server build containing the fixes. |
+| Native Arrow LOAD on 4.2 | `matrixone/capabilities.py` owns checkout-scoped format detection. SDK Arrow-input upload remains required through checked Parquet, with the same value, transaction and cleanup oracles. Reevaluate from the native probe if support changes; do not add a guessed minimum-version threshold. |
+| Native VECF8/VECF4 on 4.2 | These types are outside the bug-fix backport. `tests/online/test_block_vector_reflection_online.py` requires exact native rejection and no created object on the declared 4.2 profiles. This is an unsupported feature boundary, not a defect to emulate in the SDK. Change the expectation only after a verified 4.2 build implements the types and passes the complete positive tests. |
+| Current main and a future fixed 4.2 release | Freeze real revisions/images and run the same required positive scenarios. A previous passing commit does not certify a later commit. Advance the CI release target and its configured expected identity together after a release containing #32723 exists. |
+
+`scripts/run_contracts.py`, the online fixture, the Stage functional test and the
+capability/type decisions link here. `MO_SDK_SOURCE_LINE` describes the selected
+source line; it neither proves a feature nor suppresses a required failure.
+Do not generalize one pinned release's capability observations to every 4.2
+patch. Reopen a recorded limitation when a native implementation, a contrary
+public-path reproduction or an explicitly expanded product requirement changes
+its premises. A red old-release baseline alone does not reopen an already fixed
+candidate defect. Never label that baseline as fully compatible.
 
 ## SQL construction
 
@@ -158,10 +183,12 @@ identity. Full server contracts include shared export/file access; core contract
 cover queries, transactions, values, snapshots, errors, administration, metadata,
 fulltext zero limits and safe clone no-ops without an export mount.
 
-Test 4.1.0/4.1.6/4.2.0/4.2.6 with the full suite and every intermediate stable
-patch with core contracts. Independently test SQLAlchemy 1.4, 2.0 and 2.1.
-Native unsupported outcomes are accepted only by a narrow native-versus-SDK
-negative contract, recorded as feature outcomes rather than hidden skips.
+Broader historical certification would require full suites on
+4.1.0/4.1.6/4.2.0/4.2.6 and core contracts on intermediate stable patches;
+this round does not claim those runs. Independently test SQLAlchemy 1.4, 2.0
+and 2.1. Native-error-preservation tests certify propagation only; required
+functional tests still demand success. Optional native format/type rejections
+are recorded separately from positive feature support, without hidden skips.
 Optional TLS/S3/HNSW, multi-CN topologies and async Arrow are separate qualification
 surfaces; passing this matrix does not certify them. Direct registered
 `matrixone://` engine URLs still lack a DBAPI entrypoint in the baseline and are
@@ -169,121 +196,128 @@ not qualified here; use SDK connect or adopt a configured MySQL driver engine.
 
 ## 2026-11-13 release and main validation
 
-The main source target is `14b1ddced58d411c4b13ffaaf6034b3468076009`.
-The patched 4.2 target is [the kernel companion PR #32723](https://github.com/matrixorigin/matrixone/pull/32723),
-based on 4.2-dev `1a3e7fb6960995e9a143e5cc3d5a50f2feb0980f`.
-Official **v4.2.8**, revision `10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`,
-remains the immutable reproduction and physical-upgrade source, pinned to
+Each validation round freezes a backend identity. The original release is
+**v4.2.8**, revision `10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`, image
 `matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`.
-Fixes in the companion need a new 4.2 release; this SDK does not rewrite an
-already published server binary.
+The 4.2 candidate uses [kernel companion #32723](https://github.com/matrixorigin/matrixone/pull/32723),
+based on 4.2-dev `1a3e7fb6960995e9a143e5cc3d5a50f2feb0980f`.
+Its real-service binary is `ec0e3ad8af2`; the later uninitialized-process guard
+has complete owning-package race/coverage proof and leaves initialized SQL
+consumers unchanged. Main is now frozen at
+`5540b068209c27b0ed13c65d3a0364d28d2512e0`; it is rebuilt with Go 1.27.1 and
+its new binary is SHA-256
+`f21f54f1036edbba6c9423c10204346f1e0ae69ba45d1f352c55917860e5812c`.
+The full main suites below are fresh exact-source runs, superseding the earlier
+`2a42b3e99f`/`14b1ddced58` semantic-reuse record.
 
-Each source target has its own two-CN cluster, data, deployment identity and
-HAKeeper/raft/gossip/status ports. Restore-capable suites own an exclusive lease
-for the whole cluster, including readiness and teardown. Different databases
-alone cannot isolate `RESTORE CLUSTER`. The earlier missing S3 Stage was
-reproduced as overlapping cluster restore rewinding `mo_catalog.mo_stages`;
-serial restore/S3 controls passed with no SDK Stage workaround.
+### Required behavior and genuine capability boundaries
 
-Source binaries are pinned by Git revision and SHA-256, independently of the
-version banner. Build the 4.2 candidate with `make build MO_VERSION=4.2-dev`:
-Make's default uses the local working branch, and the legacy native formatter
-turns `codex/pr32671-42-compat` into the invalid version `3267142`. The corrected
-build keeps the real branch and commit metadata and advertises the actual
-4.2 development series. A new full 1296-case online sweep passes with no skips.
-The SDK parser and version assertions are unchanged.
-Main's detached source build advertises v1.3.0; its revision identifies the code.
+A required functional test has the same positive oracle on released servers,
+4.2 candidates and main. In this follow-up, remove version branches which had
+accepted errors for view/BOOL/ENUM reflection and replay, empty database branch
+deletion, special FULLTEXT identifiers and numeric/dollar query/export syntax.
+Restore the original special identifiers and ASYNC gojieba parser on 4.2;
+ordinary names or synchronous execution cannot substitute for those scenarios.
+Remove the legacy Stage-support override: catalog values, credentials, status,
+file reads, import/export, nested Stage use and cleanup must all succeed.
+An original 4.2.8 failure remains a failure, without xfail or a known-bug pass.
 
-Full online/analytics validation uses Python 3.12.16, SQLAlchemy 2.0.43,
-PyMySQL 1.2.4 and aiomysql 0.3.2. Additional real async upload controls exercise
-SQLAlchemy 1.4 on patched 4.2 and 2.1 on main. Offline profiles are a separate
-matrix; they do not imply an online cross-product of every dependency version.
+The former Stage negative branch accepted any QueryError. Fault injection
+showed it accepted unrelated permission/connection errors, an incorrect target,
+a mismatched version and partial state. An intermediate attempt to narrow its
+errno assumed a syntax code; the real pinned server returned 20101/invalid-input,
+and direct catalog cleanup was forbidden. Preserve those failed experiments;
+do not enlarge the expected-error set. The final change deletes this negative
+branch. A separate nine-case probe proves old override settings cannot convert
+any required-feature error into a pass and preserves the primary exception.
+
+Native format/type controls have a different contract. Native Arrow LOAD is
+absent on 4.2, while public SDK Arrow-input upload must still pass all value,
+transaction, streaming, cancellation and cleanup assertions through checked
+Parquet staging. Only the exact 20300 format rejection selects Parquet; unknown
+errors and invalidated connections do not. Input is consumed once, into one
+bounded file, and the actual write checkout is requalified. All former Arrow
+positive skip gates are gone. Four VECF8/VECF4 tests on 4.2 explicitly require
+native rejection and no catalog object; these are unsupported-type checks,
+**not positive reflection/round-trip support**. Main and unknown profiles keep
+the full positive type checks. VECF16/VECF32 positives remain on both lines.
+
+Separate native-error-preservation/differential tests certify propagation of a
+native outcome; they cannot certify that the failing feature works. Test pass
+counts must be read together with this functional/capability map.
+
+### Terminal evidence
+
+Full server sweeps use Python 3.12.16, SQLAlchemy 2.0.43, PyMySQL 1.2.4 and
+aiomysql 0.3.2. The eight offline profiles are a separate dependency matrix,
+not a full online cross-product. Executable runtime, offline-test and runner
+inputs are unchanged by this follow-up; final maintenance comments preserve
+their parsed syntax trees. Their frozen evidence remains valid. The full
+server sweeps ran the strengthened oracles above; final comment-only edits
+preserve those executable inputs too.
 
 | Selection | Result |
 |---|---|
-| Full offline, Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | 3363 / 3359 / 3367 passed; no errors, failures or skips |
+| Main `5540b068209`, new complete online | 1296 passed; zero failures/errors/skips, unchanged inputs |
+| Main `5540b068209`, new complete analytics | 338 passed; zero failures/errors/skips, unchanged inputs |
+| Patched 4.2, restored complete online | 1296 passed; zero failures/errors/skips, including the four explicitly unavailable-type controls above |
+| Patched 4.2, restored complete analytics | 338 passed; zero failures/errors/skips, all mandatory Stage and Arrow-input positives execute |
+| Original immutable v4.2.8, same restored online oracles | 1269 passed, 27 failed, no errors/skips; **not qualified** |
+| Original immutable v4.2.8, same restored analytics oracles | 329 passed, 9 failed, no errors/skips; **not qualified** |
+| Full offline, Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | 3363 / 3359 / 3367 passed; no failures/errors/skips |
 | Full offline, Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | 3363 / 3359 passed; no skips |
 | Full offline, Python 3.11 / SQLAlchemy 2.1.8 | 3367 passed; no skips |
 | Full offline, Python 3.12 / SQLAlchemy 2.0.57 | 3359 passed; no skips |
-| Exact PyMySQL 1.2.3 regression tuple, Python 3.12 / SQLAlchemy 2.0.43 / aiomysql 0.3.2 | 3359 passed; no skips |
-| Core without Arrow, Python 3.8 / SQLAlchemy 1.4 and Python 3.9 / SQLAlchemy 2.0 | 139 runtime checks passed per profile; installed wheel import/portable compilation passed |
-| Main complete online | 1296 passed at `2a42b3e99f`; semantic reuse for `14b1ddced58` described below |
-| Main complete analytics on current target | 338 passed, no errors/failures/skips, unchanged source |
-| Patched 4.2 complete online | 1296 passed in the new complete sweep; no failures, errors or skips, unchanged source |
-| Patched 4.2 complete analytics, including all former Arrow positives | 338 passed in the final complete sweep; no failures, errors or skips, unchanged source |
-| Real async driver facade controls | Six passed on SA1.4/patched4.2 and six on SA2.1/main; no failures, errors or skips |
-| Native 4.2 stateful BVT | Six Stage/snapshot/branch scripts passed twice: each run has 911 statements, 903 successes, 8 unchanged issue-marked ignores and no failures/abnormal results |
-| Native saved-SHOW BVT and missing-process guard | Three complete scripts pass twice: 510 statements, 509 successes, 1 existing ignore each; whole datalink + stageutil race/coverage, vet and lint pass |
-| Native 4.2 upgrade | Actual physical copy of official v4.2.8 data passed value, marker, restore, legacy receipt and rejection checks |
-| Native 4.2 concurrency | Whole frontend race suite, four affected roots 100 times each, deterministic embedded DDL/delete lifecycle under race passed |
-| CI selection parity | 1634 distinct online/analytics cases: 207 required + 1427 extended; no omissions or duplicates |
+| Exact PyMySQL 1.2.3 regression tuple | 3359 passed; no skips |
+| Core without Arrow, Python 3.8/SA1.4 and Python 3.9/SA2.0 | 139 runtime checks per profile; installed wheel imports/portable compilation pass |
+| Async lifecycle/real drivers | 95 focused checks each on SA1.4/2.0/2.1; six actual SA1.4/patched4.2 and six SA2.1/main controls pass |
+| CI selection parity | Same 1634 cases: 207 required + 1427 extended, no omissions/duplicates |
+| CI/static/package | All 50 CI scope checks pass; scoped Black/fatal flake8 pass; final package verification recorded before push |
 
-### Preserved behavior and evidence reuse
+The first original-release baseline had 25 additional file-access failures (17 LOAD and eight Stage cases)
+because the Docker fixture still shared another SDK worktree's tmpfiles path.
+Add only the missing current-worktree bind and rerun the complete baseline;
+exclude that environment invocation from native bug counts. Keep its logs.
+Original release data and previous physical-upgrade copies remain untouched.
 
-| Scenario | Retained or strengthened oracle |
+### Ownership, resource envelope and preserved oracles
+
+| Scenario | Retained or strengthened proof |
 |---|---|
-| Abandoned, rolled-back and committed transactions | Independent observer rows; rollback before autocommit; failed-reset disposal; explicit AUTOCOMMIT and next-checkout state on real sync/async drivers |
-| Export literals, comments and callable binds | Dollar/numeric tokens, both escaping modes, actual one-slot checkout, exact CSV/JSONL bytes, failure/cancel/timeout cleanup and one callable evaluation |
-| Multiple predicates, joins and CTEs | Grouped typed conditions, atomic invalid calls, raw binding, native RIGHT JOIN, executed CTEs and complete row/value results |
-| Metadata and FULLTEXT | Exact decimal values and processors, standard MySQL BOOL/view reflection, native schema replay and FULLTEXT-only catalog/index counts |
-| CLONE and branch lifecycle | Missing-source non-mutation, existing-target no-op, populated and empty branch deletion, source preservation, historical clones, account privileges and DDL/restore conflict controls |
-| Arrow upload on 4.2 | Same public input, wire schema, values, create/append/rollback, staging bounds, cross-CN conflicts, cancellation and session/pool cleanup through checked Parquet staging |
-| Raw native Arrow rejection | Independent 20300 format-unsupported control remains; a successful Parquet upload does not advertise native Arrow support |
-| Async pending probe close | Timeout, primary error and cancellation retain the existing two-upload admission; the third operation cannot consume input, check out or create a table; drain and reuse are checked |
-| Relation cleanup retry | Real one-slot aiosqlite pool, both initial deadline/cancel paths, one retained DROP, one execution, unrelated row 42, absence and released pool are unchanged; in-memory SQLite removes irrelevant disk fsync |
-| OFFSET None/0/nonzero and LIMIT None/0/positive | Three fulltext facades plus sync/async ORM exact slices, preserving explicit zero and unlimited semantics |
+| Transactions/pool reset | Independent observer rows, rollback before autocommit, failed-reset disposal, explicit AUTOCOMMIT, next-checkout mode |
+| Export/query building | Exact CSV/JSONL bytes, real dollar/numeric tokens, both escaping modes, one-slot checkout, one callable evaluation, grouped predicates and executed CTEs |
+| Metadata/FULLTEXT | Standard MySQL source/view/clone processors and replay; exact decimals/domain values; quoted identifiers, asynchronous catch-up and parser propagation |
+| CLONE/branch/restore | Missing-source non-mutation, no-op targets, empty/populated deletion, preserved source, historical clones, account/privilege differences and DDL conflicts |
+| Pending async probe close | Existing two admissions remain charged through close completion on timeout/error/cancel; third input/checkout/DDL is blocked; drain and reuse checked |
+| Relation cleanup retry | Real one-slot aiosqlite pool, original deadlines, retained single DROP, unrelated row42, absent table and released pool; memory SQLite removes irrelevant fsync |
+| Native BVT/upgrade | Six stateful scripts twice:911total/903success/8existingignores each; saved-SHOW scripts twice:510total/509success/1existingignore each; metadata1435+Boolean67; real v4.2.8 copy upgrade |
+| Native races | Full frontend race, four affected roots100times, deterministic DDL/delete lifecycle; datalink/stageutil complete race+coverage, vet and lint |
 
-Both current-main analytics attempts that found a file-backed SQLite deadline
-and two native SQL timeouts are retained. The later in-memory cleanup fixture
-keeps its original deadlines; the final full analytics run on a fresh NVMe
-instance passes all 338 cases with no SDK timeout increase. During the earlier
-run host IO pressure exceeded 50%, and a later native stack showed Raft and
-LocalETLFS fsync waits. This supports the resource explanation without claiming
-a pre-event causal profile. Original data and partial migration copies remain
-untouched; the physical-upgrade evidence is recorded separately.
+Each target owns independent two-CN data, deployment identity and
+HAKeeper/raft/gossip/status ports. Restore-capable suites hold a whole-cluster
+lease including readiness and teardown. The earlier missing S3 Stage was
+independently reproduced as overlapping RESTORE CLUSTER rewinding mo_stages;
+different databases do not isolate it. Synthetic S3 buckets use unique names.
 
-The final offline matrix freezes all production, selected test and script inputs.
-The later in-memory fixture edit changes only two unselected analytics scenarios;
-all offline semantic inputs remain equal. The async probe-close fix has full
-three-series focused and core-without-Arrow evidence and renewed complete
-analytics evidence; online modules do not call its async upload owner.
+During earlier qualification, host IO pressure and later native Raft/LocalETLFS
+fsync stacks accompanied request/startup timeouts. Fresh NVMe qualification
+keeps client deadlines unchanged. Elapsed failure time includes cleanup and is
+not a claim about the configured timeout. Original data, failed runs and partial
+migration copies are retained; physical upgrade evidence is separate.
 
-The 1296-case main online sweep used exactly the final SDK production/online
-inputs before the probe-close fix. The only subsequent main kernel delta is
-`14b1ddced58`'s INTERVAL user-variable binding guard; those online queries do not
-use INTERVAL. Fourteen independent current-main public Session controls cover
-calendar operations, inherited numeric behavior, source values, the native
-strict-literal error and next-checkout reuse. The final 32-case wave2 selection and complete 338-case analytics suite pass
-on current main and exercise their current consumers. This records the scope of reused evidence;
-it does not claim one new exact-head full run or treat a pending test as a pass.
+Source builds are identified by real revisions and binary hashes. The 4.2 build
+uses `MO_VERSION=4.2-dev`; Make's local branch-name default had manufactured the
+invalid banner3267142. This is corrected build metadata, not a new release tag
+or a relaxed SDK parser. Main's detached build advertises v1.3.0; its commit/hash
+identifies the code and capability probes decide operation support.
 
-Final distributions build and pass `twine check`. All 62 packaged Python modules
-byte-match the final source. Installed Python 3.8/3.9 core imports and portable
-compilation pass without Arrow. Scoped Black covers all 66 changed Python files;
-fatal flake8 and the 50 CI scope contracts pass.
+A new 4.2 release containing #32723 is required for the native fixes. Existing
+unmarked empty databases cannot safely be inferred as branches; persisted
+ENUM/SET views that lost provenance require recreation. Upgrades are shutdown-
+only, and old binaries must not open data written by the new binary.
 
-### Release capability boundaries
-
-- Native Arrow LOAD remains unavailable on 4.2. A bounded read-only probe permits
-  Parquet only for the exact native 20300 format rejection. Unknown errors do
-  not choose a fallback; an invalidated connection fails. The actual write
-  checkout is requalified before DDL, and input is consumed once into one
-  bounded file. All former Arrow-dependent positive tests execute; their skip
-  gate has been deleted. Native Arrow stays the main path.
-- 4.2 has no VECF8/VECF4 storage types. Four explicit native 1064 and no-catalog-
-  object checks are negative capability contracts, with no skips. They do not
-  certify positive storage/round-trip support. Main and unrecognized source
-  profiles keep the original positive cases. VECF16/VECF32 positives remain.
-- The companion fixes TLS buffering/reset monitoring, schema display/view
-  provenance, FULLTEXT identifiers, numeric tokenization, Stage grammar/catalog
-  writes, FLOAT32 infinities and branch identity/restore locking. Existing
-  persisted ENUM/SET views that lost provenance require recreation; an old
-  unmarked empty database cannot safely be inferred to be a branch. The upgrade
-  is shutdown-only, and the original released data is not opened by the new
-  binary. Do not run the old binary on the upgraded copy.
-
-The online CI matrix still has two jobs (4.2.8 and current-source); no runners or
-shards were added. Required/extended file sets are disjoint and complete.
-An unconfigured/skipped GitHub online workflow is not online validation, and
-local pass evidence is not a claim that every GitHub check is green. No job
-wall-time reduction is inferred from checkout/build time or case counts.
+The existing two online CI jobs still select 4.2.8 and current-source, with an
+explicit source-line label. Required functional failures on the old release
+are visible when that job executes; the candidate is qualified locally until
+its release exists. A skipped GitHub online job is not validation. No runner or
+shard is added, and no case-count/build-time claim substitutes for coverage.

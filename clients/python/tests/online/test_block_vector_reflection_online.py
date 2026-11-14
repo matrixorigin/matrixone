@@ -16,7 +16,11 @@ from matrixone.exceptions import QueryError
 
 
 def _block_vector_unavailable(client, kind):
-    # Only the declared 4.2 contract permits the explicit rejection oracle.
+    # VECF8/VECF4 are main features, outside the #32723 4.2 bug-fix backport.
+    # This is an absent-type contract, not a TODO to emulate native storage in
+    # the SDK. Reopen only when a 4.2 build implements the types; then require
+    # the full table/view/round-trip checks below for that verified identity.
+    # See docs/design/release-quality.md#maintaining-version-contracts.
     # Main and unknown targets always retain the complete positive checks.
     target = os.environ.get('MO_SDK_TARGET')
     if kind in ('vecf8', 'vecf4') and target == 'current-source' and os.environ.get('MO_SDK_SOURCE_LINE') == '4.2':

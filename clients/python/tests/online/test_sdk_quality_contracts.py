@@ -57,25 +57,13 @@ async def test_export_numeric_dollar_alias_native_outcome(client, async_client, 
     native = f'SELECT 1.0$tag${alias}$tag$'
     exporter = client.export if kind == 'sync' else async_client.export
     try:
-        if os.environ.get('MO_SDK_TARGET') == '4.2.8':
-            with pytest.raises(QueryError) as error:
-                client.execute(native)
-            assert error.value.errno == 20301
-            with pytest.raises(QueryError) as error:
-                result = exporter.to_jsonl(server_path, native + ';')
-                if inspect.isawaitable(result):
-                    await result
-            assert error.value.errno == 20301
-            assert not local_path.exists()
-            record_property('matrixone.feature.numeric_dollar_alias_export', 'native-rejected:20301')
-        else:
-            result = exporter.to_jsonl(server_path, native + ';')
-            if inspect.isawaitable(result):
-                await result
-            # Native JSONLINE preserves DECIMAL values as lossless strings.
-            assert client.execute(native).rows == [(Decimal('1.0'),)]
-            assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{alias: '1.0'}]
-            record_property('matrixone.feature.numeric_dollar_alias_export', 'supported')
+        result = exporter.to_jsonl(server_path, native + ';')
+        if inspect.isawaitable(result):
+            await result
+        # Native JSONLINE preserves DECIMAL values as lossless strings.
+        assert client.execute(native).rows == [(Decimal('1.0'),)]
+        assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{alias: '1.0'}]
+        record_property('matrixone.feature.numeric_dollar_alias_export', 'supported')
     finally:
         local_path.unlink(missing_ok=True)
 

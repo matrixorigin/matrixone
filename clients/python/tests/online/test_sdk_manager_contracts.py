@@ -39,21 +39,10 @@ async def test_empty_database_branch_delete_native_contract(client, async_client
     try:
         client.execute(f'DATA BRANCH CREATE DATABASE {native} FROM {source}')
         await resolve(c.branch.create_database_branch(managed, source))
-        if os.environ.get('MO_SDK_TARGET') == '4.2.8':
-            # The server fixture verifies this exact release and revision.
-            # Preserve its rejection instead of silently falling back to DROP.
-            with pytest.raises(QueryError, match='not an active branch database') as error:
-                client.execute(str(delete_database_branch(native)))
-            assert error.value.errno == 20101
-            with pytest.raises(BranchError, match='not an active branch database'):
-                await resolve(c.branch.delete_database_branch(managed))
-            expected = 1
-            record_property('matrixone.feature.empty_database_branch_delete', 'native-rejected:20101')
-        else:
-            client.execute(str(delete_database_branch(native)))
-            await resolve(c.branch.delete_database_branch(managed))
-            expected = 0
-            record_property('matrixone.feature.empty_database_branch_delete', 'supported')
+        client.execute(str(delete_database_branch(native)))
+        await resolve(c.branch.delete_database_branch(managed))
+        expected = 0
+        record_property('matrixone.feature.empty_database_branch_delete', 'supported')
         for target in (native, managed):
             assert (
                 client.execute(
@@ -344,17 +333,6 @@ async def test_fulltext_embedded_backtick_column(client, async_client, kind, rec
     client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, `tick``col` TEXT)')
     try:
         client.execute(f"INSERT INTO {table} VALUES (1, 'alpha beta'), (2, 'gamma')")
-        if os.environ.get('MO_SDK_TARGET') in ('4.2.5', '4.2.8'):
-            # This release predates the server fix for generated identifier SQL.
-            with pytest.raises(QueryError, match='syntax error') as error:
-                client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
-            assert error.value.errno in (1064, 1105)
-            record_property('matrixone.feature.fulltext_embedded_backtick', 'native-rejected:' + str(error.value.errno))
-            assert client.execute(f'SELECT id, `tick``col` FROM {table} ORDER BY id').rows == [
-                (1, 'alpha beta'),
-                (2, 'gamma'),
-            ]
-            return
         client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
         predicate = boolean_match('tick`col').must('alpha').compile()
         assert (await resolve(c.execute(f'SELECT id FROM {table} WHERE {predicate}'))).rows == [(1,)]
@@ -376,11 +354,10 @@ async def test_fulltext_embedded_backtick_column(client, async_client, kind, rec
 async def test_async_fulltext_special_identifiers_catch_up(client, record_property):
     table = name('ft_async_ident_')
     parser_table = name('ft_async_parser_')
-    limited = os.environ.get('MO_SDK_TARGET') in ('4.2.5', '4.2.8')
-    key, body, title = ('id', 'body', 'title') if limited else ('`key``id`', '`tick``col`', '`order`')
+    key, body, title = ('`key``id`', '`tick``col`', '`order`')
     record_property(
         'matrixone.feature.async_fulltext_quoted_identifiers',
-        'native-limitation:ordinary-identifiers-tested' if limited else 'supported',
+        'supported',
     )
     try:
         client.execute(
@@ -409,11 +386,11 @@ async def test_async_fulltext_special_identifiers_catch_up(client, record_proper
 
         client.execute(
             f'CREATE TABLE {parser_table} (id BIGINT PRIMARY KEY, body TEXT, '
-            'FULLTEXT ft_idx(body) WITH PARSER gojieba' + (')' if limited else ' ASYNC)')
+            'FULLTEXT ft_idx(body) WITH PARSER gojieba ASYNC)'
         )
         record_property(
             'matrixone.feature.async_fulltext_parser',
-            'native-limitation:synchronous-parser-tested' if limited else 'supported',
+            'supported',
         )
         client.execute(f"INSERT INTO {parser_table} VALUES (1, '苹果香蕉')")
         for _ in range(120):

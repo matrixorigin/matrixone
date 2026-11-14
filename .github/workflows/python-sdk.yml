@@ -168,6 +168,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 4.2.8 is an immutable reproduction baseline with known kernel failures.
+        # Required functional assertions stay positive; #32723 needs a new 4.2
+        # release. Update the release target and verified environment identity
+        # together once it ships, without disguising a candidate as 4.2.8.
+        # See clients/python/docs/design/release-quality.md.
         server: ['4.2.8', 'current-source']
     environment: matrixone-sdk-${{ matrix.server }}
     defaults:
@@ -190,7 +195,7 @@ jobs:
       MO_SDK_EXPORT_LOCAL_DIR: ${{ vars.MO_SDK_EXPORT_LOCAL_DIR }}
       MO_SDK_DISPOSABLE_SERVER: ${{ vars.MO_SDK_DISPOSABLE_SERVER }}
       MO_ANALYTICS_ONLINE: '1'
-      MO_EXPECT_STAGE_LITERAL_SUPPORT: ${{ matrix.server == 'current-source' && '1' || '0' }}
+      MO_SDK_SOURCE_LINE: ${{ matrix.server == '4.2.8' && '4.2' || 'main' }}
       MO_SDK_ONLINE: '1'
       MO_SECOND_CN_PORT: ${{ vars.MO_SECOND_CN_PORT }}
       MO_ANALYTICS_S3_ENDPOINT: ${{ vars.MO_ANALYTICS_S3_ENDPOINT }}
