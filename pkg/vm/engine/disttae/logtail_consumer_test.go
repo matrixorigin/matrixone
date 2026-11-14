@@ -2559,6 +2559,27 @@ func TestSubscribedTable_StateTransitions(t *testing.T) {
 	})
 }
 
+// Repeated missing-table responses must clear only their own subscription.
+// The engine integration test covers real RPC responses separately.
+func TestMissingTableSubscriptionCleanupRepeated(t *testing.T) {
+	const dbID, validID, missingID = uint64(100), uint64(1), uint64(2)
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.SetSubscribeState(dbID, validID, Subscribed)
+	for i := 0; i < 1000; i++ {
+		c.SetSubscribeState(dbID, missingID, SubRspTableNotExist)
+		err := c.TryToSubscribeTable(context.Background(), 0, dbID, missingID, "db", "missing")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "iteration %d: %v", i, err)
+		c.subscribed.rw.RLock()
+		_, exists := c.subscribed.m[missingID]
+		valid := c.subscribed.m[validID]
+		c.subscribed.rw.RUnlock()
+		require.False(t, exists, "iteration %d must clear the missing table", i)
+		require.NotNil(t, valid)
+		require.Equal(t, Subscribed, valid.state)
+	}
+}
+
 // TestGetState_Concurrent tests concurrent GetState calls
 func TestGetState_Concurrent(t *testing.T) {
 	var c PushClient
