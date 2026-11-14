@@ -15,7 +15,9 @@
 package pSpool
 
 import (
+	"cmp"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -123,7 +125,13 @@ func (cb *cachedBatch) GetCopiedBatch(
 		dst.Attrs[i] = src.Attrs[i]
 	}
 
-	// copy vectors.
+	var localColumns [32]int
+	copyColumns := localColumns[:0]
+	var localRequests [32]batchMemoryRequest
+	requests := localRequests[:0]
+	memoryCache := &cb.buffer.bytesCache[cacheID]
+
+	// Prepare unique destinations before assigning the batch's cached backing.
 	for i := range dst.Vecs {
 		vec := src.Vecs[i]
 		if vec == nil || dst.Vecs[i] != nil {
@@ -144,20 +152,39 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 		}
 
+		copyColumns = append(copyColumns, i)
+		if !vec.IsConst() && len(memoryCache.buffers) > 0 {
+			// Reusable data may include historical spare backing. Only live logical
+			// descriptors/fixed values are needed by the destination.
+			if size := vec.Length() * typ.TypeSize(); size > 0 {
+				requests = append(requests, batchMemoryRequest{dst.Vecs[i], size, vector.DetachedDataBuffer})
+			}
+			if size := len(vec.GetArea()); size > 0 {
+				requests = append(requests, batchMemoryRequest{dst.Vecs[i], size, vector.DetachedAreaBuffer})
+			}
+		}
+
+		// range src and found the same vector.
+		for j := i + 1; j < len(src.Vecs); j++ {
+			if dst.Vecs[j] == nil && src.Vecs[j] == vec {
+				dst.Vecs[j] = dst.Vecs[i]
+			}
+		}
+	}
+	if err = memoryCache.setSuitableBuffers(requests); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Copy payload and metadata in the original source-column order.
+	for _, i := range copyColumns {
+		vec := src.Vecs[i]
+		typ := *vec.GetType()
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
 				return nil, false, 0, err
 			}
 
 		} else {
-			if err = cb.buffer.bytesCache[cacheID].
-				setSuitableDataAreaToVector(
-					len(vec.GetData()),
-					len(vec.GetArea()),
-					dst.Vecs[i],
-				); err != nil {
-				return nil, false, 0, err
-			}
 			dst.Vecs[i].Reset(typ)
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
@@ -181,13 +208,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
 		}
 		dst.Vecs[i].SetIsBin(vec.GetIsBin())
-
-		// range src and found the same vector.
-		for j := i + 1; j < len(src.Vecs); j++ {
-			if dst.Vecs[j] == nil && src.Vecs[j] == vec {
-				dst.Vecs[j] = dst.Vecs[i]
-			}
-		}
 	}
 
 	dst.ExtraBuf = src.ExtraBuf
@@ -200,106 +220,85 @@ func (cb *cachedBatch) GetCopiedBatch(
 	return dst, true, cacheID, nil
 }
 
-// setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
-// if not found, set the last one to the vector.
-func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
-	dataSize, areaSize int,
-	vec *vector.Vector,
-) error {
-	// return directly once cache was empty.
+// batchMemoryRequest names one uniquely owned destination backing. Requests
+// from every column participate so a small column cannot consume a later
+// column's only suitable cached block.
+type batchMemoryRequest struct {
+	vec  *vector.Vector
+	size int
+	kind vector.DetachedBufferKind
+}
+
+func (request batchMemoryRequest) capacity() int {
+	if request.kind == vector.DetachedDataBuffer {
+		return cap(request.vec.GetData())
+	}
+	return cap(request.vec.GetArea())
+}
+
+func (mc *oneBatchMemoryCache) setSuitableBuffers(requests []batchMemoryRequest) error {
 	if len(mc.buffers) == 0 {
 		return nil
 	}
-
-	setDataFirst := dataSize >= areaSize
-
-	first, second := dataSize, areaSize
-	firstKind := vector.DetachedDataBuffer
-	secondKind := vector.DetachedAreaBuffer
-	if !setDataFirst {
-		first, second = areaSize, dataSize
-		firstKind, secondKind = secondKind, firstKind
-	}
-
-	if first > 0 {
-		suitIdx := -1
-		suitDifference := math.MaxInt
-
+	// Stable shapes normally resolve here without sorting or oversized reuse.
+	pending := requests[:0]
+	for _, request := range requests {
+		if request.size <= 0 {
+			continue
+		}
+		exact := -1
 		for i := range mc.buffers {
-			if !mc.buffers[i].CanAttachTo(vec, firstKind) {
+			if mc.buffers[i].Capacity() == request.size && mc.buffers[i].CanAttachTo(request.vec, request.kind) {
+				exact = i
+				break
+			}
+		}
+		if exact < 0 {
+			pending = append(pending, request)
+		} else if err := mc.attachBuffer(exact, request); err != nil {
+			return err
+		}
+	}
+	// All exact fits are reserved. Match the largest remaining needs first,
+	// including descriptor data as well as varlen areas.
+	slices.SortStableFunc(pending, func(left, right batchMemoryRequest) int {
+		return cmp.Compare(right.size, left.size)
+	})
+	for _, request := range pending {
+		suitable, difference := -1, math.MaxInt
+		for i := range mc.buffers {
+			if !mc.buffers[i].CanAttachTo(request.vec, request.kind) {
 				continue
 			}
-			if difference := mc.buffers[i].Capacity() - first; difference >= 0 {
-				if difference < suitDifference {
-					suitIdx = i
-					suitDifference = difference
-				}
+			if extra := mc.buffers[i].Capacity() - request.size; extra >= 0 && extra < difference {
+				suitable, difference = i, extra
 			}
 		}
-
-		if suitIdx != -1 {
-			mem := mc.removeItemAndArrange(suitIdx)
-			if err := mem.AttachTo(vec, firstKind); err != nil {
-				mc.buffers = append(mc.buffers, mem)
+		if suitable >= 0 {
+			if err := mc.attachBuffer(suitable, request); err != nil {
 				return err
 			}
 		}
 	}
-
-	if second > 0 {
-		suitIdx := -1
-		suitDifference := math.MaxInt
-
-		for i := range mc.buffers {
-			if !mc.buffers[i].CanAttachTo(vec, secondKind) {
-				continue
-			}
-			if difference := mc.buffers[i].Capacity() - second; difference >= 0 {
-				if difference < suitDifference {
-					suitIdx = i
-					suitDifference = difference
-				}
-			}
+	// Undersized fallback runs only after every sufficient request had its turn.
+	for _, request := range pending {
+		if request.capacity() != 0 {
+			continue
 		}
-
-		if suitIdx != -1 {
-			mem := mc.removeItemAndArrange(suitIdx)
-			if err := mem.AttachTo(vec, secondKind); err != nil {
-				mc.buffers = append(mc.buffers, mem)
+		if i := mc.lastAttachable(request.vec, request.kind); i >= 0 {
+			if err := mc.attachBuffer(i, request); err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
 
-	if cap(vec.GetData()) == 0 && dataSize > 0 {
-		if idx := mc.lastAttachable(
-			vec,
-			vector.DetachedDataBuffer,
-		); idx >= 0 {
-			mem := mc.removeItemAndArrange(idx)
-			if err := mem.AttachTo(
-				vec,
-				vector.DetachedDataBuffer,
-			); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
-	}
-	if cap(vec.GetArea()) == 0 && areaSize > 0 {
-		if idx := mc.lastAttachable(
-			vec,
-			vector.DetachedAreaBuffer,
-		); idx >= 0 {
-			mem := mc.removeItemAndArrange(idx)
-			if err := mem.AttachTo(
-				vec,
-				vector.DetachedAreaBuffer,
-			); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
+func (mc *oneBatchMemoryCache) attachBuffer(index int, request batchMemoryRequest) error {
+	backing := mc.removeItemAndArrange(index)
+	if err := backing.AttachTo(request.vec, request.kind); err != nil {
+		mc.buffers = append(mc.buffers, backing)
+		return err
 	}
 	return nil
 }
