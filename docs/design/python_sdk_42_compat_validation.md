@@ -49,10 +49,14 @@ Existing valid schema-display strings such as `INT(32)`, `VARCHAR(20)`,
 `DECIMAL(10,2)`, and the system-view `FLOAT(0)`/`DOUBLE(0)` are retained. The
 previously malformed `BOOL(0)`, `BIGINT UNSIGNED(64)`, `DATE(0)` and `TEXT(0)`
 forms are corrected. A scaled `FLOAT(5,2)` also retains its scale instead of the
-old `FLOAT(5)` display. Clients comparing those corrected strings literally can
-observe a change; storage OIDs and signed-integer `DATA_TYPE` stay unchanged.
-Standard SQLAlchemy view reflection of uppercase legacy strings remains the
-separate issue [#32746](https://github.com/matrixorigin/matrixone/issues/32746).
+old `FLOAT(5)` display. `SHOW CREATE TABLE` changes the old valid `bool` spelling
+to `boolean`: both are valid SQL, but unmodified SQLAlchemy 2.0.46's MySQL table
+reflection recognizes `boolean` and fails to recognize `bool`. This is an
+intentional BOOL client fix and a textual compatibility change. Clients comparing
+these corrected strings literally can observe a change; storage OIDs and
+signed-integer `DATA_TYPE` stay unchanged. Standard SQLAlchemy view reflection
+of uppercase legacy strings remains the separate issue
+[#32746](https://github.com/matrixorigin/matrixone/issues/32746).
 
 `CREATE STAGE ... ENABLE=false` now creates a disabled Stage, whereas the old
 implementation silently created an enabled one. Workloads relying on that old
@@ -175,6 +179,14 @@ The subsequent system-view follow-up reproduced the old `FLOAT(0)` and
 previously failing DDL cases, two system-view cases and the BOOL/metadata case
 passed 368/368 real tester comparisons with no failures or ignored statements.
 The complete affected function package passed normal and race runs again.
+
+A separate real-service control ran the same four current SQLAlchemy 2.0.46
+cases with each SHOW CREATE spelling. The shipped `boolean` spelling passed all
+four. Restoring the 4.2 `bool` spelling made one case fail because the standard
+client did not recognize four BOOL columns; the other three passed. No client
+assertions were removed for that comparison. The negative-control service also
+required a forced stop after a 30-second shutdown wait; this did not affect the
+already recorded client results, and the shutdown cause remains undetermined.
 
 After the three earlier tester cases completed, the isolated service required a forced
 stop after a 30-second shutdown wait; the cause is not established. A subsequent
