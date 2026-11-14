@@ -147,7 +147,9 @@ var (
 		"update_at=?, " +
 		"end_at=? where task_id=?"
 
-	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
+	updateDaemonTaskState = "update sys_daemon_task set task_status=? where task_id=?"
+
+	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=? and task_runner=?"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
 
@@ -1820,6 +1822,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			exec, err := tx.ExecContext(ctx, heartbeatDaemonTask,
 				lastHeartbeat,
 				t.ID,
+				t.TaskRunner,
 			)
 			if err != nil {
 				return err
@@ -1887,6 +1890,119 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 	return
 }
 
+func (m *mysqlTaskStorage) ClaimCDCRestart(ctx context.Context, claimed task.DaemonTask, previousRunner string, staleBefore time.Time) (ok bool, err error) {
+	details := claimed.Details.GetCreateCdc()
+	if taskFrameworkDisabled() || claimed.ID == 0 || claimed.TaskRunner == "" ||
+		claimed.TaskStatus != task.TaskStatus_Running || claimed.Metadata.Executor != task.TaskCode_InitCdc ||
+		claimed.TaskType != task.TaskType_CreateCdc || claimed.Metadata.ID == "" || staleBefore.IsZero() ||
+		details == nil || details.TaskId != claimed.Metadata.ID || len(details.Accounts) == 0 ||
+		details.Accounts[0] == nil || details.Accounts[0].Id != uint64(claimed.AccountID) {
+		return false, moerr.NewInternalError(ctx, "invalid CDC restart claim")
+	}
+	encodedDetails, err := claimed.Details.Marshal()
+	if err != nil {
+		return false, err
+	}
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, cdcTaskStorageError(err, false)
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				err = errors.Join(err, cdcTaskStorageError(rollbackErr, false))
+			}
+		}
+	}()
+	// The catalog admission and daemon lease are one transition. In
+	// particular, a failed restart cannot become an ordinary failed/Running
+	// task if the new owner disappears before its executor starts.
+	result, err := tx.ExecContext(ctx,
+		"update mo_catalog.mo_cdc_task set state=? where account_id=? and task_id=? and state in (?,?,?)",
+		"restarting", claimed.AccountID, claimed.Metadata.ID, "failed", "restarting", "running")
+	if err != nil {
+		return false, cdcTaskStorageError(err, false)
+	}
+	matched, err := result.RowsAffected()
+	if err != nil {
+		return false, cdcTaskStorageError(err, false)
+	}
+	if matched != 1 {
+		return false, nil
+	}
+	result, err = tx.ExecContext(ctx,
+		"update sys_daemon_task set task_status=?,task_runner=?,last_heartbeat=?,update_at=?,last_run=?,details=? where task_id=? and coalesce(task_runner,'')=? and task_status=? and task_metadata_id=? and task_metadata_executor=? and account_id=? and task_type=? and (last_heartbeat<=? or last_heartbeat is null)",
+		claimed.TaskStatus, claimed.TaskRunner, claimed.LastHeartbeat, claimed.UpdateAt, claimed.LastRun, encodedDetails,
+		claimed.ID, previousRunner, task.TaskStatus_RestartRequested, claimed.Metadata.ID, task.TaskCode_InitCdc,
+		claimed.AccountID, task.TaskType_CreateCdc.String(), staleBefore.Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return false, cdcTaskStorageError(err, false)
+	}
+	matched, err = result.RowsAffected()
+	if err != nil {
+		return false, cdcTaskStorageError(err, false)
+	}
+	if matched != 1 {
+		return false, nil
+	}
+	err = tx.Commit()
+	finished = true
+	return err == nil, cdcTaskStorageError(err, true)
+}
+
+func (m *mysqlTaskStorage) UpdateOwnedCDCTask(
+	ctx context.Context,
+	owner CDCTaskOwner,
+	target CDCTaskTransition,
+	mutate func(context.Context, SqlExecutor) error,
+) (err error) {
+	if taskFrameworkDisabled() || owner.DaemonID == 0 || owner.Runner == "" || owner.Key.TaskId == "" || mutate == nil || (target.ReleaseLease && !target.StartedAt.IsZero()) {
+		return moerr.NewInternalError(ctx, "invalid or unavailable CDC task owner")
+	}
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return cdcTaskStorageError(err, false)
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			if rollbackErr := tx.Rollback(); err != nil && rollbackErr != nil {
+				err = errors.Join(err, cdcTaskStorageError(rollbackErr, false))
+			}
+		}
+	}()
+	// CDC controls already lock the catalog before the daemon row. Preserve
+	// that order and fence the mutation with the owner in the same transaction.
+	if err = mutate(ctx, tx); err != nil {
+		return err
+	}
+	query := "update sys_daemon_task set task_status=?"
+	args := []any{target.Status}
+	if target.ReleaseLease {
+		query += ", task_runner='', last_heartbeat=null"
+	} else if !target.StartedAt.IsZero() {
+		query += ", last_run=?, last_heartbeat=?"
+		args = append(args, target.StartedAt, target.StartedAt)
+	}
+	query += " where task_id=? and task_runner=? and task_status=? and task_metadata_id=? and task_metadata_executor=? and account_id=? and task_type=?"
+	args = append(args, owner.DaemonID, owner.Runner, owner.Status, owner.Key.TaskId, task.TaskCode_InitCdc, owner.Key.AccountId, task.TaskType_CreateCdc.String())
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return cdcTaskStorageError(err, false)
+	}
+	matched, err := result.RowsAffected()
+	if err != nil {
+		return cdcTaskStorageError(err, false)
+	}
+	if matched != 1 {
+		return &CDCTaskOwnerMismatch{err: moerr.NewInternalErrorf(ctx, "CDC daemon task %d no longer has the expected owner", owner.DaemonID)}
+	}
+	err = tx.Commit()
+	finished = true
+	return cdcTaskStorageError(err, true)
+}
+
 func (m *mysqlTaskStorage) UpdateCDCTask(
 	ctx context.Context,
 	targetStatus task.TaskStatus,
@@ -1897,11 +2013,11 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		SqlExecutor,
 	) (int, error),
 	condition ...Condition,
-) (int, error) {
+) (n int, err error) {
 	if taskFrameworkDisabled() || taskCollector == nil {
 		return 0, nil
 	}
-	var affectedCdcRow, affectedTaskRow int
+	var affectedCdcRow int
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -1989,18 +2105,32 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 					)
 				}
 			}
-			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)
 		}
 	}
 
 	//step5: update daemon task status
-	if len(updateTasks) > 0 {
-		affectedTaskRow, err = m.RunUpdateDaemonTask(ctx, updateTasks, tx)
+	for _, dTask := range updateTasks {
+		// A control request owns only the status transition. Rewriting the
+		// previously read row can restore a runner or heartbeat superseded by
+		// a concurrent lease handoff.
+		var result sql.Result
+		result, err = tx.ExecContext(ctx,
+			updateDaemonTaskState+buildDaemonTaskWhereClause(newConditions(WithTaskStatusCond(dTask.TaskStatus))),
+			targetStatus, dTask.ID)
 		if err != nil {
 			return 0, err
 		}
-		affectedCdcRow += affectedTaskRow
+		var affectedTaskRow int64
+		affectedTaskRow, err = result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if affectedTaskRow != 1 {
+			err = moerr.NewInternalErrorf(ctx, "CDC task %d status changed concurrently; retry the request", dTask.ID)
+			return 0, err
+		}
+		affectedCdcRow += int(affectedTaskRow)
 	}
 
 	return affectedCdcRow, nil

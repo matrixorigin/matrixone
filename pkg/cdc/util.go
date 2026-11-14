@@ -592,19 +592,32 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //	return
 //}
 
-var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
+var OpenDbConn = func(ctx context.Context, user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	logutil.Info("cdc.util.open_db_conn", zap.String("timeout", timeout))
 	cfg, err := makeMysqlConfig(user, password, ip, port, timeout)
 	if err != nil {
 		return nil, err
 	}
 	for i := 0; i < 3; i++ {
-		if db, err = tryConn(cfg); err == nil {
+		if db, err = tryConn(ctx, cfg); err == nil {
 			// TODO check table existence
 			return
 		}
 		v2.CdcMysqlConnErrorCounter.Inc()
-		time.Sleep(time.Second)
+		if i == 2 {
+			break
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	logutil.Error("cdc.util.open_db_conn_failed", zap.Error(err))
 	return
@@ -629,7 +642,7 @@ func makeMysqlConfig(user, password string, ip string, port int, timeout string)
 
 var openDbWithConnector = sql.OpenDB
 
-var tryConn = func(cfg *mysql.Config) (*sql.DB, error) {
+var tryConn = func(ctx context.Context, cfg *mysql.Config) (*sql.DB, error) {
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, err
@@ -638,11 +651,19 @@ var tryConn = func(cfg *mysql.Config) (*sql.DB, error) {
 	db.SetConnMaxLifetime(time.Minute * 3)
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	time.Sleep(time.Millisecond * 100)
+	timer := time.NewTimer(time.Millisecond * 100)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		_ = db.Close()
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
 
 	//ping opens the connection
-	err = db.Ping()
+	err = db.PingContext(ctx)
 	if err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	return db, err

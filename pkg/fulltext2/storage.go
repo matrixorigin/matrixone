@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -915,8 +916,9 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 
 // StaleGenSqls returns the two queries whose results form the cache-freshness generation
 // used by Fulltext2Search.IsStale: MAX(metadata.timestamp) (bumped by a REBUILD/MERGE that
-// writes a new base model row) and MAX(storage.chunk_id) of the tag=1 CdcTail (bumped by a
-// CDC append). A change in EITHER means the loaded index is stale. Two reads because
+// writes a new base model row) and MIN/MAX(storage.chunk_id) of the tag=1 CdcTail.
+// A changed minimum prevents retaining replaced tail data; an advancing maximum
+// with the same minimum permits delta reuse. Any changed component is stale. Two reads because
 // timestamp and tag live in different tables (metadata has no tag; storage has no
 // timestamp). The tail read is scoped to (CdcTailId, tag=1) — the exact CDC delta — so an
 // unrelated base sub-index's higher chunk_id can't mask a fresh append.
@@ -924,7 +926,8 @@ func StaleGenSqls(cfg TableConfig) (tsSQL, tailSQL string) {
 	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Timestamp,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	tailSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d",
+	tailSQL = fmt.Sprintf("SELECT COALESCE(MIN(%s), -1), COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullText2Index_TblCol_Storage_Chunk_Id,
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
@@ -947,50 +950,60 @@ func consumeScalarInt64(res executor.Result) int64 {
 	return resultScalarInt64(res)
 }
 
-// LoadGeneration reads the current (timestamp, tailChunk) generation using the caller's
+func consumeTailBounds(res executor.Result) (int64, int64) {
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat != nil && bat.RowCount() > 0 {
+			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
+		}
+	}
+	return -1, -1
+}
+
+// LoadGeneration reads the current (timestamp, tailMin, tailMax) generation using the caller's
 // LIVE sqlproc/txn — called at load time so the captured generation reflects exactly the
 // txn snapshot the cached index was built from.
-func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tail int64, err error) {
+func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tailMin int64, tailMax int64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("LoadGeneration recovered: %v", r))
+			ts, tailMin, tailMax, err = 0, 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("LoadGeneration recovered: %v", r))
 		}
 	}()
 	tsSQL, tailSQL := StaleGenSqls(cfg)
 	res, err := runSql(sqlproc, tsSQL)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	ts = consumeScalarInt64(res)
 	res, err = runSql(sqlproc, tailSQL)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	tail = consumeScalarInt64(res)
-	return ts, tail, nil
+	tailMin, tailMax = consumeTailBounds(res)
+	return ts, tailMin, tailMax, nil
 }
 
-// QueryGeneration reads the current (timestamp, tailChunk) generation in the BACKGROUND
-// (housekeeping goroutine, no live sqlproc) via an executor-managed auto-commit txn, keyed
-// by the CN UUID + tenant captured at load. Used by IsStale.
-func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg TableConfig) (ts int64, tail int64, err error) {
+// QueryGeneration reads freshness in the background via two auto-commit queries,
+// keyed by the CN UUID and tenant captured at load. Tail MIN/MAX share one query
+// and snapshot; the base timestamp is a separate observation. Used by IsStale.
+func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg TableConfig) (ts int64, tailMin int64, tailMax int64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("QueryGeneration recovered: %v", r))
+			ts, tailMin, tailMax, err = 0, 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("QueryGeneration recovered: %v", r))
 		}
 	}()
 	tsSQL, tailSQL := StaleGenSqls(cfg)
 	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tsSQL)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	ts = consumeScalarInt64(res)
 	res, err = sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tailSQL)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	tail = consumeScalarInt64(res)
-	return ts, tail, nil
+	tailMin, tailMax = consumeTailBounds(res)
+	return ts, tailMin, tailMax, nil
 }
 
 // CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron
@@ -1034,4 +1047,17 @@ func FrameChunkCount(frameLen int) int64 {
 		n = 1
 	}
 	return n
+}
+
+// EmptyTailSQL retains a replacement's recency without adding documents or
+// tombstones. Future appends cannot reuse a generation held by a remote cache.
+func EmptyTailSQL(cfg TableConfig, recency int64) string {
+	frame := cuvscdc.FrameCdcChunk(nil, nil, 0, 0, 0)
+	return fmt.Sprintf("INSERT INTO %s VALUES (%s,%d,unhex(%s),%d)", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), sqlquote.String(vectorindex.CdcTailId), recency, sqlquote.String(hex.EncodeToString(frame)), vectorindex.Tag_CdcEvents)
+}
+
+func PersistEmptyTail(proc *sqlexec.SqlProcess, cfg TableConfig, recency int64) error {
+	res, err := runSql(proc, EmptyTailSQL(cfg, recency))
+	res.Close()
+	return err
 }

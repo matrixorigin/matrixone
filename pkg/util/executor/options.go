@@ -15,6 +15,7 @@
 package executor
 
 import (
+	"context"
 	"maps"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -171,13 +173,34 @@ func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	return opts
 }
 
-func (opts StatementOption) WithAlterCopyOpt(opt *plan.AlterCopyOpt) StatementOption {
-	opts.alterCopyOpt = opt
+func (opts StatementOption) WithAlterTableCopy(database string, opt *plan.AlterCopyOpt) StatementOption {
+	if opt == nil {
+		opts.internalInsertOptions = nil
+	} else {
+		opts.internalInsertOptions = &InternalInsertOptions{Purpose: InternalInsertCopy, Database: database, Dedup: opt}
+	}
 	return opts
 }
 
-func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
-	return opts.alterCopyOpt
+func (opts StatementOption) WithIndexBackfillOpt(database string, opt *plan.AlterCopyOpt) StatementOption {
+	if opt == nil {
+		opts.internalInsertOptions = nil
+	} else {
+		opts.internalInsertOptions = &InternalInsertOptions{Purpose: InternalInsertIndexBackfill, Database: database, Dedup: opt}
+	}
+	return opts
+}
+
+func (opts StatementOption) InternalInsertOptions() *InternalInsertOptions {
+	return opts.internalInsertOptions
+}
+
+func InternalInsertFromContext(ctx context.Context) *InternalInsertOptions {
+	if ctx == nil {
+		return nil
+	}
+	opts, _ := ctx.Value(defines.InternalInsertOptionsKey{}).(*InternalInsertOptions)
+	return opts
 }
 
 func (opts StatementOption) AccountID() uint32 {

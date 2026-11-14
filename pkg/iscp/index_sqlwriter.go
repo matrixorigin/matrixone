@@ -48,6 +48,21 @@ type IndexSqlWriter interface {
 	Empty() bool
 }
 
+// SnapshotSQLWriter describes the SQL sink used by RunIndex. A snapshot may
+// commit in several bounded batches, so each attempt must first clear the
+// previous attempt's output before it applies the next source snapshot.
+type SnapshotSQLWriter interface {
+	IndexSqlWriter
+	SnapshotTarget() (database, table string)
+}
+
+// SourceSnapshotWriter owns format-specific replacement recency in the same
+// transaction as a compiler-provided complete source initializer.
+type SourceSnapshotWriter interface {
+	IndexSqlWriter
+	PrepareSourceSnapshot(*sqlexec.SqlProcess) (func(*sqlexec.SqlProcess) error, error)
+}
+
 // Base implementation of IVFFLAT and FULLTEXT.  Their implementation are simliar.
 type BaseIndexSqlWriter struct {
 	lastCdcOp string
@@ -84,6 +99,14 @@ type IvfflatSqlWriter struct {
 	includeCols   []string
 }
 
+func (w *FulltextSqlWriter) SnapshotTarget() (string, string) {
+	return w.dbName, w.indexTableName
+}
+
+func (w *IvfflatSqlWriter) SnapshotTarget() (string, string) {
+	return w.info.DBName, w.entries_tbl
+}
+
 // Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
 type HnswSqlWriter[T types.RealNumbers] struct {
 	cdc       *vectorindex.VectorIndexCdc[T]
@@ -105,6 +128,8 @@ type HnswSqlWriter[T types.RealNumbers] struct {
 var _ IndexSqlWriter = new(FulltextSqlWriter)
 var _ IndexSqlWriter = new(IvfflatSqlWriter)
 var _ IndexSqlWriter = new(HnswSqlWriter[float32])
+var _ SnapshotSQLWriter = new(FulltextSqlWriter)
+var _ SnapshotSQLWriter = new(IvfflatSqlWriter)
 
 // NewIndexSqlWriter dispatches to the per-algorithm writer via the
 // iscp Hooks registry. Replaces the hardcoded fulltext / ivfflat /
@@ -542,6 +567,10 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 
 func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
 	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension)
+}
+
+func (w *HnswSqlWriter[T]) NewSnapshotSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
+	return hnsw.NewHnswSnapshotSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer

@@ -16,16 +16,20 @@ package iscp
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -338,7 +342,6 @@ type CuvsSyncFactory func(sqlproc *sqlexec.SqlProcess) (CuvsSync, error)
 // HNSW stays on RunHnsw[T] / VectorIndexCdc[T] — different sync
 // architecture (in-memory graph mutation, no event log).
 func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever, factory CuvsSyncFactory) {
-	datatype := r.GetDataType()
 
 	var sync CuvsSync
 	err := c.RunTxn(ctx, r, 30*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
@@ -386,14 +389,11 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 					if e := sync.Save(sqlproc); e != nil {
 						return e
 					}
-					if datatype == ISCPDataType_Tail {
-						if objectio.ISCPIndexWatermarkErrInjected() {
-							return injectedISCPIndexErr("watermark")
-						}
-						sqlctx := sqlproc.SqlCtx
-						return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+					if objectio.ISCPIndexWatermarkErrInjected() {
+						return injectedISCPIndexErr("watermark")
 					}
-					return nil
+					sqlctx := sqlproc.SqlCtx
+					return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 				})
 				if err != nil {
 					reportIndexConsumerErr(errch, err)
@@ -413,4 +413,64 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 			}
 		}
 	}
+}
+
+var _ SourceSnapshotWriter = (*CuvsCdcWriter)(nil)
+
+// An empty event frame retains the index's existing chunk-generation floor
+// across a full rebuild, including a small or empty source with no model tar.
+// It carries INCLUDE metadata but contributes no inserts, deletes or upserts.
+type cuvsSnapshotMarker struct {
+	cfg    vectorindex.IndexTableConfig
+	header []byte
+	floor  int64
+}
+
+func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func(*sqlexec.SqlProcess) error, error) {
+	cfg := vectorindex.IndexTableConfig{DbName: w.dbName, SrcTable: w.tblName}
+	for _, idx := range w.indexdef {
+		switch idx.IndexAlgoTableType {
+		case catalog.Cagra_TblType_Storage, catalog.Ivfpq_TblType_Storage:
+			cfg.IndexTable = idx.IndexTableName
+		}
+	}
+	if cfg.IndexTable == "" {
+		return nil, moerr.NewInternalError(proc.GetContext(), "cuVS snapshot storage table is missing")
+	}
+	marker := &cuvsSnapshotMarker{cfg: cfg, header: []byte(w.colMetaJSON)}
+	floor, err := marker.nextChunk(proc)
+	if err != nil {
+		return nil, err
+	}
+	marker.floor = floor
+	return marker.persist, nil
+}
+
+func (m *cuvsSnapshotMarker) nextChunk(proc *sqlexec.SqlProcess) (int64, error) {
+	res, err := ExecWithResult(proc.GetContext(), cuvscdc.NextChunkIdSql(m.cfg, vectorindex.CdcTailId, vectorindex.Tag_CdcEvents), proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat != nil && bat.RowCount() > 0 {
+			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+		}
+	}
+	return 0, nil
+}
+
+func (m *cuvsSnapshotMarker) persist(proc *sqlexec.SqlProcess) error {
+	next, err := m.nextChunk(proc)
+	if err != nil {
+		return err
+	}
+	if next < m.floor {
+		next = m.floor
+	}
+	frame := cuvscdc.FrameCdcChunk(nil, m.header, 0, 0, 0)
+	sql := fmt.Sprintf("INSERT INTO %s VALUES (%s,%d,unhex(%s),%d)", sqlquote.QualifiedIdent(m.cfg.DbName, m.cfg.IndexTable), sqlquote.String(vectorindex.CdcTailId), next, sqlquote.String(hex.EncodeToString(frame)), vectorindex.Tag_CdcEvents)
+	res, err := ExecWithResult(proc.GetContext(), sql, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
+	res.Close()
+	return err
 }

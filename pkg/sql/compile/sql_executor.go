@@ -337,11 +337,10 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
-	if v := statementOption.AlterCopyDedupOpt(); v != nil {
+	if v := statementOption.InternalInsertOptions(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.AlterCopyOpt{}, v)
+			defines.InternalInsertOptionsKey{}, v)
 	}
-
 	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.LogicalIdKey{},

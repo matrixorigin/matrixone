@@ -113,6 +113,7 @@ func TestSaveToFileNoFDLeak(t *testing.T) {
 // created fails (CheckSum here, forced via the injectable saveToFileCheckSum hook), SaveToFile
 // must remove the temp file (no orphan) via the deferred cleanup and leave idx.Path unset.
 func TestSaveToFileCleanupOnError(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
 	orig := saveToFileCheckSum
 	defer func() { saveToFileCheckSum = orig }()
 	saveToFileCheckSum = func(string) (string, error) {
@@ -159,6 +160,9 @@ func mock_runSql_streaming_error(
 }
 
 func TestModelStreamError(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	originalRunSQL, originalStreaming := runSql, runSql_streaming
+	t.Cleanup(func() { runSql, runSql_streaming = originalRunSQL, originalStreaming })
 	var err error
 
 	m := mpool.MustNewZero()
@@ -185,7 +189,8 @@ func TestModelStreamError(t *testing.T) {
 	// load from file
 	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
 	fmt.Printf("err %v\n", err)
-	require.NotNil(t, err)
+	require.ErrorContains(t, err, "mock_runSql_streaming_error")
+	require.Empty(t, idx.Path)
 
 	after := hnswTempFiles()
 	require.Equal(t, len(before), len(after),
@@ -201,7 +206,8 @@ func TestModelStreamError(t *testing.T) {
 	before = hnswTempFiles()
 	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
 	fmt.Printf("err %v\n", err)
-	require.NotNil(t, err)
+	require.ErrorContains(t, err, "mock_runSql_streaming_error")
+	require.Empty(t, idx.Path)
 
 	after = hnswTempFiles()
 	require.Equal(t, len(before), len(after),
@@ -615,6 +621,9 @@ func TestSearch_WrongDimension(t *testing.T) {
 // LoadIndexFromBuffer, lines 729-731 in LoadIndex) where pending Results
 // must be drained and closed after an error cancels the producer.
 func TestStreamingDrain(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	originalRunSQL, originalStreaming := runSql, runSql_streaming
+	t.Cleanup(func() { runSql, runSql_streaming = originalRunSQL, originalStreaming })
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -656,6 +665,9 @@ func TestStreamingDrain(t *testing.T) {
 }
 
 func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	originalRunSQL, originalStreaming := runSql, runSql_streaming
+	t.Cleanup(func() { runSql, runSql_streaming = originalRunSQL, originalStreaming })
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)

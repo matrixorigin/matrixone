@@ -250,43 +250,20 @@ func TestCancelAndDrainJobConsumerOnlyCancelsMatchingJob(t *testing.T) {
 	require.True(t, stillRunning)
 }
 
-func TestFilterFencedIterationRemovesOnlyFencedJobs(t *testing.T) {
-	exec := newRuntimeTestExecutor()
-	iter := NewIterationContext(
-		1,
-		2,
-		[]string{"index_idx01", "index_idx02"},
-		[]uint64{10, 20},
-		[]uint64{100, 200},
-		types.BuildTS(1, 0),
-		types.BuildTS(2, 0),
-	)
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 10))
-
-	filtered := exec.filterFencedIteration(iter)
-
-	require.NotNil(t, filtered)
-	require.Equal(t, []string{"index_idx02"}, filtered.jobNames)
-	require.Equal(t, []uint64{20}, filtered.jobIDs)
-	require.Equal(t, []uint64{200}, filtered.lsn)
-	require.True(t, filtered.fromTS.EQ(&iter.fromTS))
-	require.True(t, filtered.toTS.EQ(&iter.toTS))
-}
-
-func TestFilterFencedIterationDropsAllJobs(t *testing.T) {
-	exec := newRuntimeTestExecutor()
-	iter := NewIterationContext(
-		1,
-		2,
-		[]string{"index_idx01"},
-		[]uint64{10},
-		[]uint64{100},
-		types.BuildTS(1, 0),
-		types.BuildTS(2, 0),
-	)
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 10))
-
-	require.Nil(t, exec.filterFencedIteration(iter))
+func TestQueuedFencedIterationRequiresDurableRecovery(t *testing.T) {
+	for _, names := range [][]string{{"index_idx01"}, {"index_idx01", "index_idx02"}} {
+		exec := newRuntimeTestExecutor()
+		ids, lsns := make([]uint64, len(names)), make([]uint64, len(names))
+		for i := range ids {
+			ids[i] = uint64(i + 10)
+			lsns[i] = 100
+		}
+		iter := NewIterationContext(1, 2, names, ids, lsns, types.BuildTS(1, 0), types.BuildTS(2, 0))
+		require.NoError(t, exec.checkIterationFences(iter))
+		require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, names[0], ids[0]))
+		require.ErrorIs(t, exec.checkIterationFences(iter), errIterationNeedsRecovery)
+		require.Equal(t, names, iter.jobNames, "pending siblings are retained for durable recovery")
+	}
 }
 
 func TestTableEntryGetCandidateSkipsFencedJob(t *testing.T) {

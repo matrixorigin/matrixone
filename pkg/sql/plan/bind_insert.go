@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
@@ -470,17 +471,12 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 		return nil
 	}
 
-	// During a copy-based ALTER TABLE, an irregular index whose columns are not
-	// affected by the change is shallow-cloned into the new table (see
-	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. The data
-	// copy runs as a normal INSERT, so skip sync maintenance for such indexes here
-	// — exactly as the regular-index path skips them via SkipIndexesCopy — to avoid
-	// inserting every row's entries twice (cloned + rebuilt).
+	// COPY handles plugin indexes after the base rows are copied; unaffected
+	// regular and master indexes are cloned instead of maintained here.
 	var alterCopyOpt *plan.AlterCopyOpt
-	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
-		if opt, ok := v.(*plan.AlterCopyOpt); ok && opt.TargetTableName == tableDef.Name {
-			alterCopyOpt = opt
-		}
+	insertOptions := executor.InternalInsertFromContext(builder.compCtx.GetContext())
+	if insertOptions.IsCopyTarget(tableDef.DbName, tableDef.Name) {
+		alterCopyOpt = insertOptions.Dedup
 	}
 
 	multiTableIndexes := make(map[string]*MultiTableIndex)
@@ -493,8 +489,7 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 		if !indexdef.TableExist {
 			continue
 		}
-		if alterCopyOpt != nil && alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
-			// cloned by the ALTER, not rebuilt by this copy insert
+		if skipAlterCopyIndexMaintenance(alterCopyOpt, indexdef) {
 			continue
 		}
 		switch {
@@ -2092,16 +2087,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			skipUniqueIdxDedup map[string]bool
 		)
 
-		if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
-			option = v.(*plan.AlterCopyOpt)
-			if option.TargetTableName == tableDef.Name {
-				logutil.Info("alter copy dedup exec",
-					zap.String("tableDef", tableDef.Name),
-					zap.Any("option", option),
-				)
-				skipPkDedup = option.SkipPkDedup
-				skipUniqueIdxDedup = option.SkipUniqueIdxDedup
-			}
+		if opt := executor.InternalInsertFromContext(builder.compCtx.GetContext()).DedupFor(tableDef.DbName, tableDef.Name); opt != nil {
+			option = opt
+			logutil.Info("internal insert dedup exec",
+				zap.String("tableDef", tableDef.Name),
+				zap.Any("option", option),
+			)
+			skipPkDedup = option.SkipPkDedup
+			skipUniqueIdxDedup = option.SkipUniqueIdxDedup
 		}
 
 		// dedup#1:handle pk dedup
@@ -3011,6 +3004,14 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 // based on the given INSERT statement and table definition.
 // If the INSERT statement does not specify the columns, all columns except the fake primary key column
 // will be included in the list.
+func (builder *QueryBuilder) isAlterTableCopyTarget(tableDef *TableDef) bool {
+	return executor.InternalInsertFromContext(builder.compCtx.GetContext()).IsCopyTarget(tableDef.DbName, tableDef.Name)
+}
+
+func (builder *QueryBuilder) canCopyGeneratedColumn(tableDef *TableDef, col *ColDef) bool {
+	return col.GeneratedCol != nil && builder.isAlterTableCopyTarget(tableDef)
+}
+
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -3033,7 +3034,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
-			if tableDef.Cols[idx].GeneratedCol != nil {
+			if tableDef.Cols[idx].GeneratedCol != nil && !builder.canCopyGeneratedColumn(tableDef, tableDef.Cols[idx]) {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
 			insertColNames = append(insertColNames, tableDef.Cols[idx].Name)
@@ -3052,7 +3053,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if tableDef.Cols[idx].GeneratedCol != nil {
+			if tableDef.Cols[idx].GeneratedCol != nil && !builder.canCopyGeneratedColumn(tableDef, tableDef.Cols[idx]) {
 				genPositions[i] = true
 			}
 		}
@@ -3215,13 +3216,32 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 		lastNodeID = builder.reuseCTEs(lastNodeID, true)
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
-		return 0, nil, nil, err
-	}
-
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
 		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+	}
+	if builder.isAlterTableCopyTarget(tableDef) {
+		for i, column := range insertColumns {
+			target := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+			if !isEnumOrSetPlanType(&target) {
+				continue
+			}
+			project := lastNode.ProjectList[i]
+			raw, ok := storedMySQLSpecialTypeExpr(project)
+			if !ok || raw.GetCol() == nil {
+				continue
+			}
+			sourceType := project.GetF().Args[1].Typ
+			if sourceType.Id == target.Id && sourceType.Enumvalues == target.Enumvalues {
+				// Preserve the typed ENUM ordinal or SET bitmap; converting through
+				// its display string is not reversible for every stored value.
+				raw.Typ = sourceType
+				lastNode.ProjectList[i] = raw
+			}
+		}
+	}
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+		return 0, nil, nil, err
 	}
 
 	selectTag := lastNode.BindingTags[0]

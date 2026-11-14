@@ -20,13 +20,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 
@@ -34,6 +39,33 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+func newTestISCPTaskExecutor(
+	ctx context.Context,
+	eng engine.Engine,
+	tc client.TxnClient,
+	cnUUID string,
+	option *iscp.ISCPExecutorOption,
+	mp *mpool.MPool,
+) (*iscp.ISCPTaskExecutor, error) {
+	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "missing internal SQL executor")
+	}
+	sqlExec := v.(executor.SQLExecutor)
+	for _, sql := range []string{
+		"create database if not exists mo_task",
+		"create table mo_task.sys_daemon_task (task_id bigint primary key, task_metadata_executor int, task_type varchar(64), task_runner varchar(64), task_status int)",
+		fmt.Sprintf("insert into mo_task.sys_daemon_task values (1, 9, 'ISCP', %s, 1)", sqlquote.String(cnUUID)),
+	} {
+		result, err := sqlExec.Exec(ctx, sql, executor.Options{})
+		if err != nil {
+			return nil, err
+		}
+		result.Close()
+	}
+	return iscp.NewISCPTaskExecutor(ctx, eng, tc, cnUUID, 1, option, mp)
+}
 
 type internalExecResult struct {
 	batch     *batch.Batch

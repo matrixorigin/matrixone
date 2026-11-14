@@ -24,6 +24,7 @@ import (
 
 	"github.com/mohae/deepcopy"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
@@ -555,7 +556,7 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 
 	n := 0
 	for _, t := range tasks {
-		if current, ok := s.daemonTasks[t.ID]; ok {
+		if current, ok := s.daemonTasks[t.ID]; ok && current.TaskRunner == t.TaskRunner {
 			n++
 			current.LastHeartbeat = t.LastHeartbeat
 			s.daemonTasks[t.ID] = current
@@ -726,6 +727,14 @@ func (s *memTaskStorage) filterSQLTaskRun(c *conditions, run SQLTaskRun) bool {
 
 func sqlTaskIndexKey(accountID uint32, taskName string) string {
 	return fmt.Sprintf("%d/%s", accountID, taskName)
+}
+
+func (s *memTaskStorage) UpdateOwnedCDCTask(ctx context.Context, _ CDCTaskOwner, _ CDCTaskTransition, _ func(context.Context, SqlExecutor) error) error {
+	return moerr.NewNotSupported(ctx, "owned CDC catalog mutation in memory task storage")
+}
+
+func (s *memTaskStorage) ClaimCDCRestart(ctx context.Context, _ task.DaemonTask, _ string, _ time.Time) (bool, error) {
+	return false, moerr.NewNotSupported(ctx, "CDC restart claim in memory task storage")
 }
 
 func (s *memTaskStorage) UpdateCDCTask(ctx context.Context, targetStatus task.TaskStatus, f func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {

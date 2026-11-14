@@ -1,0 +1,394 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iscp
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
+)
+
+func TestUnfinishedIterationPreservesCompletedSiblings(t *testing.T) {
+	iter := NewIterationContext(0, 10, []string{"done", "pending"}, []uint64{1, 2}, []uint64{7, 9}, types.BuildTS(10, 1), types.BuildTS(20, 1))
+	specs := []*JobSpec{{ConsumerInfo: ConsumerInfo{IndexName: "done"}}, {ConsumerInfo: ConsumerInfo{IndexName: "pending"}}}
+	statuses := []*JobStatus{{LSN: 7}, {LSN: 8}}
+	out, kept, _, err := unfinishedIteration(iter, specs, statuses, []int8{ISCPJobState_Completed, ISCPJobState_Completed})
+	require.NoError(t, err)
+	require.Equal(t, []string{"pending"}, out.jobNames)
+	require.Equal(t, []uint64{2}, out.jobIDs)
+	require.Equal(t, []uint64{9}, out.lsn)
+	require.Same(t, specs[1], kept[0])
+	require.Equal(t, iter.fromTS, out.fromTS)
+	// A failed/repaired completed iteration is terminal too; the scheduler
+	// retries its safe watermark in a new LSN, rather than replaying this one.
+	statuses[0].ErrorCode = 1
+	out, _, _, err = unfinishedIteration(iter, specs, statuses, []int8{ISCPJobState_Completed, ISCPJobState_Completed})
+	require.NoError(t, err)
+	require.Equal(t, []string{"pending"}, out.jobNames)
+	statuses[1].LSN = 9
+	_, _, _, err = unfinishedIteration(iter, specs, statuses, []int8{ISCPJobState_Completed, ISCPJobState_Running})
+	require.ErrorIs(t, err, errIterationNeedsRecovery, "same LSN is insufficient to claim another runner's work")
+	statuses[1].LSN = 10
+	out, _, _, err = unfinishedIteration(iter, specs, statuses, []int8{ISCPJobState_Completed, ISCPJobState_Running})
+	require.NoError(t, err)
+	require.Nil(t, out, "newer durable work supersedes this iteration")
+	require.Equal(t, types.TS{}, previousWatermark(types.TS{}))
+	require.Equal(t, types.BuildTS(10, 0), previousWatermark(iter.fromTS))
+}
+
+type statusTestEngine struct{ engine.Engine }
+
+func (statusTestEngine) LatestLogtailAppliedTime() timestamp.Timestamp { return timestamp.Timestamp{} }
+func (statusTestEngine) New(context.Context, client.TxnOperator) error { return nil }
+
+type statusTestClient struct {
+	client.TxnClient
+	ops  []*statusTestTxn
+	next int
+}
+
+func (c *statusTestClient) New(context.Context, timestamp.Timestamp, ...client.TxnOption) (client.TxnOperator, error) {
+	op := c.ops[c.next]
+	c.next++
+	return op, nil
+}
+
+type statusTestTxn struct {
+	client.TxnOperator
+	commits, rollbacks int
+	commitErr          error
+	rollbackErr        error
+}
+
+func (t *statusTestTxn) Commit(context.Context) error    { t.commits++; return t.commitErr }
+func (t *statusTestTxn) Rollback(context.Context) error  { t.rollbacks++; return t.rollbackErr }
+func (t *statusTestTxn) SnapshotTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
+type initPanicExecutor struct {
+	calls   int
+	panicAt int
+}
+
+func (e *initPanicExecutor) Exec(context.Context, string, executor.Options) (executor.Result, error) {
+	e.calls++
+	if e.calls == e.panicAt {
+		panic("initializer panic")
+	}
+	return executor.Result{}, nil
+}
+
+func (*initPanicExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+	panic("unexpected transaction")
+}
+
+func TestProcessInitSQLFinalizationOutcome(t *testing.T) {
+	operationErr := errors.New("initializer failed")
+	finalizeErr := errors.New("transaction outcome unknown")
+	for _, tc := range []struct {
+		name        string
+		operation   error
+		commitErr   error
+		rollbackErr error
+		uncertain   bool
+		commits     int
+		rollbacks   int
+	}{
+		{name: "success", commits: 1},
+		{name: "commit acknowledgement lost", commitErr: finalizeErr, uncertain: true, commits: 1},
+		{name: "confirmed rollback", operation: operationErr, rollbacks: 1},
+		{name: "rollback failed", operation: operationErr, rollbackErr: finalizeErr, uncertain: true, rollbacks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := &statusTestTxn{commitErr: tc.commitErr, rollbackErr: tc.rollbackErr}
+			ctx := defines.AttachAccountId(t.Context(), 0)
+			uncertain := false
+			err := processInitSQL(ctx, "", statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, "W10=", "", "", "", func(*sqlexec.SqlProcess) error { return tc.operation }, nil, &uncertain)
+			if tc.operation != nil {
+				require.ErrorIs(t, err, tc.operation)
+				if tc.rollbackErr == nil {
+					require.Same(t, tc.operation, err)
+				}
+			}
+			if tc.commitErr != nil || tc.rollbackErr != nil {
+				require.ErrorIs(t, err, finalizeErr)
+			}
+			if tc.operation == nil && tc.commitErr == nil {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.uncertain, uncertain)
+			require.Equal(t, tc.commits, txn.commits)
+			require.Equal(t, tc.rollbacks, txn.rollbacks)
+		})
+	}
+}
+
+func TestProcessInitSQLRollsBackOnCallbackPanic(t *testing.T) {
+	const service = "iscp-init-panic-test"
+	for _, phase := range []string{"before", "statement", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			txn := &statusTestTxn{}
+			sqlExec := &initPanicExecutor{}
+			if phase == "statement" {
+				sqlExec.panicAt = 2
+			}
+			rt := commonruntime.DefaultRuntime()
+			rt.SetGlobalVariables(commonruntime.InternalSQLExecutor, sqlExec)
+			commonruntime.SetupServiceBasedRuntime(service, rt)
+			ctx := defines.AttachAccountId(t.Context(), 0)
+			before := func(*sqlexec.SqlProcess) error {
+				if phase == "before" {
+					panic("initializer panic")
+				}
+				return nil
+			}
+			complete := func(*sqlexec.SqlProcess, types.TS) error {
+				if phase == "complete" {
+					panic("initializer panic")
+				}
+				return nil
+			}
+			require.PanicsWithValue(t, "initializer panic", func() {
+				sql := base64.StdEncoding.EncodeToString([]byte(`["first", "second"]`))
+				_ = processInitSQL(ctx, service, statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, sql, "", "", "", before, complete, nil)
+			})
+			require.Zero(t, txn.commits)
+			require.Equal(t, 1, txn.rollbacks)
+			if phase == "statement" || phase == "complete" {
+				require.Equal(t, 2, sqlExec.calls)
+			}
+		})
+	}
+}
+
+func durableStatusResult(t *testing.T, mp *mpool.MPool, status *JobStatus, state int8, watermark types.TS) executor.Result {
+	t.Helper()
+	mem := executor.NewMemResult([]types.Type{types.T_json.ToType(), types.T_int8.ToType(), types.T_varchar.ToType()}, mp)
+	if status != nil {
+		text, err := MarshalJobStatus(status)
+		require.NoError(t, err)
+		mem.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendBytesRows(mem, 0, encodeJSONRows(t, []string{text})))
+		require.NoError(t, executor.AppendFixedRows(mem, 1, []int8{state}))
+		require.NoError(t, executor.AppendStringRows(mem, 2, []string{watermark.ToString()}))
+	}
+	return mem.GetResult()
+}
+
+func TestFinalPublicationReconcilesDurableOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		status           *JobStatus
+		state            int8
+		ackLost, wantErr bool
+	}{
+		{name: "committed output acknowledgement lost", status: &JobStatus{LSN: 7}, state: ISCPJobState_Completed, ackLost: true},
+		{name: "completed output rejects error overwrite", status: &JobStatus{LSN: 7}, state: ISCPJobState_Completed},
+		{name: "successor", status: &JobStatus{LSN: 8}, state: ISCPJobState_Running},
+		{name: "retired"},
+		{name: "running needs retry", status: &JobStatus{LSN: 7}, state: ISCPJobState_Running, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			write, read := &statusTestTxn{}, &statusTestTxn{}
+			if tc.ackLost {
+				write.commitErr = moerr.NewInternalErrorNoCtx("lost acknowledgement")
+			}
+			tcClient := &statusTestClient{ops: []*statusTestTxn{write, read}}
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old })
+			updates := 0
+			ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+				if updates == 0 {
+					updates++
+					require.Contains(t, sql, "AND job_state = 2")
+					if tc.ackLost {
+						return executor.Result{AffectedRows: 1}, nil
+					}
+					return executor.Result{}, nil
+				}
+				require.Contains(t, sql, "SELECT job_status, job_state, watermark")
+				return durableStatusResult(t, mp, tc.status, tc.state, types.BuildTS(20, 0)), nil
+			}
+			err := FlushJobStatusOnIterationState(t.Context(), "", statusTestEngine{}, tcClient, 0, 10, []string{"idx"}, []uint64{3}, []uint64{7}, []*JobStatus{{LSN: 7, ErrorCode: 1}}, types.BuildTS(10, 0), ISCPJobState_Completed, []uint64{7})
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, 1, updates, "reconciliation must not rewrite the completed output")
+			require.Equal(t, 1, read.commits)
+			if tc.ackLost {
+				require.Equal(t, 1, write.commits)
+			} else {
+				require.Equal(t, 1, write.rollbacks)
+			}
+		})
+	}
+}
+
+func TestIdleWatermarkDoesNotReplaceInitializationState(t *testing.T) {
+	old := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = old })
+	table := NewTableEntry(&ISCPTaskExecutor{}, 0, 1, 2, "db", "t")
+	job := NewJobEntry(table, "idx", &JobSpec{}, 3, types.BuildTS(10, 0), ISCPJobState_Completed, 0)
+	job.watermark = types.BuildTS(20, 0)
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		require.Contains(t, sql, "JSON_SET(job_status, '$.LSN'")
+		require.NotContains(t, sql, "$.Stage")
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	flush, err := job.tryFlushWatermark(t.Context(), nil, 0)
+	require.NoError(t, err)
+	require.True(t, flush)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	require.Equal(t, types.BuildTS(10, 0), job.persistedWatermark, "in-memory progress must wait for commit")
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, nil
+	}
+	_, err = job.tryFlushWatermark(t.Context(), nil, 0)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, context.Canceled))
+}
+
+func TestDataRetrieverCancelAfterClose(t *testing.T) {
+	r := NewDataRetriever(t.Context(), 0, 1, "idx", 1, &JobStatus{}, 1, ISCPDataType_Snapshot)
+	r.Close()
+	cause := moerr.NewInternalErrorNoCtx("retired generation")
+	r.Cancel(cause)
+	require.True(t, r.IsCanceled())
+	require.ErrorIs(t, r.terminalError(), cause)
+}
+
+func TestWorkerDoesNotCompleteUnownedRunningGeneration(t *testing.T) {
+	// This durable row can result either from another runner admitting queued
+	// work during lease handoff, or from this runner losing its admission ACK.
+	for _, why := range []string{"queued runner handoff", "admission acknowledgement lost"} {
+		t.Run(why, func(t *testing.T) {
+			res, mp := newISCPLogResult(t, []iscpLogBatch{{jobNames: []string{"index_idx"}, jobIDs: []uint64{3}, jobSpecs: []string{mustMarshalJobSpec(t, "idx")}, jobStatuss: []string{mustMarshalJobStatus(t, 7, JobStage_Init)}}})
+			vector.MustFixedColWithTypeCheck[int8](res.Batches[0].Vecs[4])[0] = ISCPJobState_Running
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old; require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			reads := 0
+			ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+				require.Contains(t, sql, "SELECT job_name, job_id, job_spec", "unknown admission never authorizes a status write")
+				reads++
+				return res, nil
+			}
+			txn := &statusTestTxn{}
+			w := &worker{ctx: t.Context(), cnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}}
+			w.onItem(NewIterationContext(0, 10, []string{"index_idx"}, []uint64{3}, []uint64{7}, types.TS{}, types.TS{}))
+			require.Equal(t, 1, reads, "uncertain ownership stops before retry or failure publication")
+			require.Equal(t, 1, txn.rollbacks)
+		})
+	}
+}
+
+func TestCleanIterationWatermarkIsAtomic(t *testing.T) {
+	table := NewTableEntry(nil, 0, 1, 2, "db", "t")
+	watermark := types.BuildTS(10, 0)
+	from := watermark.Next()
+	to := types.BuildTS(20, 0)
+	for _, name := range []string{"a", "b"} {
+		table.AddOrUpdateSinker(t.Context(), name, &JobSpec{}, &JobStatus{LSN: 1}, 1, types.BuildTS(10, 0), ISCPJobState_Completed, 0)
+	}
+	iter := NewIterationContext(0, 2, []string{"a", "b"}, []uint64{1, 1}, []uint64{2, 2}, from, to)
+	job := table.jobs[JobKey{JobName: "b", JobID: 1}]
+	job.watermark = types.BuildTS(11, 0)
+	require.Error(t, table.UpdateWatermark(iter))
+	require.Equal(t, types.BuildTS(10, 0), table.jobs[JobKey{JobName: "a", JobID: 1}].watermark)
+	require.Equal(t, types.BuildTS(11, 0), job.watermark)
+	job.watermark = types.BuildTS(10, 0)
+	require.NoError(t, table.UpdateWatermark(iter))
+	require.Equal(t, to, table.jobs[JobKey{JobName: "a", JobID: 1}].watermark)
+	require.Equal(t, to, job.watermark)
+}
+
+func TestIdleFlushCommitRejectsOlderReplay(t *testing.T) {
+	old := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = old })
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	txn := &statusTestTxn{}
+	exec := &ISCPTaskExecutor{ctx: t.Context(), txnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}, tables: newISCPTableTree()}
+	table := NewTableEntry(exec, 0, 1, 2, "db", "t")
+	oldWatermark := types.BuildTS(10, 0)
+	newWatermark := types.BuildTS(20, 0)
+	spec := &JobSpec{}
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 1}, 1, oldWatermark, ISCPJobState_Completed, 0)
+	job := table.jobs[JobKey{JobName: "idx", JobID: 1}]
+	job.watermark = newWatermark
+	exec.tables.Set(table)
+	require.NoError(t, exec.FlushWatermarkForAllTables(0))
+	require.Equal(t, 1, txn.commits)
+	require.Equal(t, uint64(2), job.currentLSN)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 1}, 1, oldWatermark, ISCPJobState_Completed, 0)
+	require.Equal(t, newWatermark, job.watermark)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 2}, 1, newWatermark, ISCPJobState_Completed, 0)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+}
+
+func TestIdleFlushDoesNotAdvanceMemoryOnFailure(t *testing.T) {
+	for _, mode := range []string{"write failure", "commit acknowledgement failure"} {
+		t.Run(mode, func(t *testing.T) {
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old })
+			failure := moerr.NewInternalErrorNoCtx(mode)
+			txn := &statusTestTxn{}
+			if mode == "commit acknowledgement failure" {
+				txn.commitErr = failure
+			}
+			ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+				if mode == "write failure" {
+					return executor.Result{}, failure
+				}
+				return executor.Result{AffectedRows: 1}, nil
+			}
+			exec := &ISCPTaskExecutor{ctx: t.Context(), txnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}, tables: newISCPTableTree()}
+			table := NewTableEntry(exec, 0, 1, 2, "db", "t")
+			persisted := types.BuildTS(10, 0)
+			table.AddOrUpdateSinker(t.Context(), "idx", &JobSpec{}, &JobStatus{LSN: 1}, 1, persisted, ISCPJobState_Completed, 0)
+			job := table.jobs[JobKey{JobName: "idx", JobID: 1}]
+			job.watermark = types.BuildTS(20, 0)
+			exec.tables.Set(table)
+			require.ErrorIs(t, exec.FlushWatermarkForAllTables(0), failure)
+			require.Equal(t, uint64(1), job.currentLSN)
+			require.Equal(t, ISCPJobState_Completed, job.state)
+			require.Equal(t, persisted, job.persistedWatermark)
+			if mode == "write failure" {
+				require.Equal(t, 1, txn.rollbacks)
+			} else {
+				require.Equal(t, 1, txn.commits)
+			}
+		})
+	}
+}

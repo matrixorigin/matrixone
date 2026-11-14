@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,4 +122,28 @@ func TestCreateLocalSpillAndTempFile(t *testing.T) {
 
 func TestLocalSpillDirNilRootFS(t *testing.T) {
 	require.Equal(t, "", LocalSpillDir(context.Background(), nil))
+}
+
+func TestEmptyTailPreservesGenerationWithoutDocuments(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	var statements []string
+	installPersistenceExecutor(t, sp, func(sql string, _ executor.StatementOption) (executor.Result, error) {
+		statements = append(statements, sql)
+		return executor.Result{}, nil
+	})
+	require.NoError(t, PersistEmptyTail(sp, cfg, 42))
+	require.Len(t, statements, 1)
+	require.Contains(t, statements[0], "42,unhex('")
+	parts := strings.Split(statements[0], "unhex('")
+	raw, err := hex.DecodeString(strings.Split(parts[1], "')")[0])
+	require.NoError(t, err)
+	seg, deletes, err := UnframeTail("marker", raw)
+	require.NoError(t, err)
+	require.Nil(t, seg)
+	require.Empty(t, deletes)
+	_, _, inserts, removed, upserts, err := cuvscdc.UnframeCdcChunk(raw)
+	require.NoError(t, err)
+	require.Zero(t, inserts+removed+upserts)
+	require.Zero(t, mp.CurrNB())
 }

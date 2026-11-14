@@ -106,6 +106,7 @@ var _ Sinker = (*mysqlSinker2)(nil)
 // This is the main entry point for creating CDC sink, replacing the old CreateMysqlSinker
 // Defined as var for test mocking
 var CreateMysqlSinker2 = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -126,6 +127,7 @@ var CreateMysqlSinker2 = func(
 
 	// 2. Create Executor (replaces Sink in old architecture)
 	executor, err := NewExecutor(
+		ctx,
 		sinkUri.User, sinkUri.Password,
 		sinkUri.Ip, sinkUri.Port,
 		retryTimes, retryDuration,
@@ -136,8 +138,7 @@ var CreateMysqlSinker2 = func(
 		return nil, err
 	}
 
-	// 3. Execute DDL initialization (same as old version)
-	ctx := context.Background()
+	// 3. Execute DDL initialization within the caller's lifecycle.
 
 	// Helper function to add padding
 	addPadding := func(sql string) []byte {
@@ -919,10 +920,19 @@ func (s *mysqlSinker2) SendDummy() {
 // Thread-safe and panic-free (unlike old implementation)
 func (s *mysqlSinker2) Error() error {
 	errPtr := s.err.Load()
-	if errPtr == nil {
-		return nil
+	if errPtr != nil {
+		return *errPtr
 	}
-	return *errPtr
+	// A closed sink can no longer accept a commit or the barrier used to
+	// confirm it. Report that terminal state even after ClearError so a dropped
+	// command cannot be mistaken for a successful transaction.
+	s.closeMutex.RLock()
+	closed := s.closed
+	s.closeMutex.RUnlock()
+	if closed {
+		return context.Canceled
+	}
+	return nil
 }
 
 // SetError sets the error state
