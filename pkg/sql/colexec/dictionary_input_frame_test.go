@@ -152,4 +152,98 @@ func TestDictionaryInputFrameSharesAndRefreshesColumns(t *testing.T) {
 		require.Nil(t, executor.(*FunctionExpressionExecutor).dictionaryState)
 	}
 	nextFrame.End()
+	frame.Free(mp)
+	require.Equal(t, DictionaryInputFrame{}, frame, "End must not hide initialized scratch from Free")
+	frame.Free(mp)
+	nextFrame.Free(mp)
+	require.Equal(t, DictionaryInputFrame{}, nextFrame)
+}
+
+type opaqueFrameCleanupExecutor struct{ ExpressionExecutor }
+
+func TestDictionaryInputFrameFreeUnusedAndPartial(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	t.Run("unused-and-repeated", func(t *testing.T) {
+		var frame DictionaryInputFrame
+		frame.Free(mp)
+		frame.Free(mp)
+		require.Equal(t, DictionaryInputFrame{}, frame)
+	})
+	t.Run("counter-only", func(t *testing.T) {
+		frame := DictionaryInputFrame{Gathers: 1}
+		frame.Free(mp)
+		require.Equal(t, DictionaryInputFrame{}, frame)
+	})
+	t.Run("discovery-before-predicate-input", func(t *testing.T) {
+		input := batch.NewWithSize(1)
+		t.Cleanup(func() { input.Clean(mp) })
+		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{1, 2}, nil, mp))
+		input.SetRowCount(2)
+		var frame DictionaryInputFrame
+		t.Cleanup(func() { frame.Free(mp) })
+		executor := &opaqueFrameCleanupExecutor{ExpressionExecutor: &ColumnExpressionExecutor{colIndex: 0}}
+		output, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { output.Clean(mp) })
+		require.False(t, borrowed)
+		require.Nil(t, frame.predicateInput)
+		require.NotNil(t, frame.predicateSeen)
+		require.Equal(t, []int64{2}, vector.MustFixedColNoTypeCheck[int64](output.Vecs[0]))
+		frame.Free(mp)
+		require.Equal(t, DictionaryInputFrame{}, frame)
+	})
+}
+
+func TestDictionaryInputFrameAccountAndWidthCleanup(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		used := mp.CurrNB()
+		mpool.DeleteMPool(mp)
+		require.Zero(t, used)
+	})
+	source := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(source, []int64{1, 2}, nil, mp))
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1<<16)
+	require.NoError(t, err)
+	selections := make([]*vector.AllocationAccountSelection, 2)
+	accounts := make([]*mpool.AllocationAccount, 2)
+	for i := range accounts {
+		accounts[i], err = registry.Open(1 << 20)
+		require.NoError(t, err)
+		account := accounts[i]
+		t.Cleanup(func() {
+			stats := account.Seal()
+			_, err := registry.Finalize(account)
+			require.Zero(t, stats.Used)
+			require.NoError(t, err)
+		})
+		selections[i], err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+	}
+	var frame DictionaryInputFrame
+	t.Cleanup(func() { frame.Free(mp) })
+	input := &batch.Batch{Vecs: []*vector.Vector{source}}
+	input.SetRowCount(2)
+	frame.Begin(input, selections[0], mp)
+	_, found, err := frame.materialize(source, selections[0], mp)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Positive(t, accounts[0].Snapshot().Used)
+	frame.End()
+	wide := &batch.Batch{Vecs: []*vector.Vector{source, source}}
+	wide.SetRowCount(2)
+	frame.Begin(wide, selections[1], mp)
+	require.Zero(t, accounts[0].Snapshot().Used, "rebind must retire the prior account's scratch")
+	require.Len(t, frame.inputs, 2)
+	_, found, err = frame.materialize(source, selections[1], mp)
+	require.NoError(t, err)
+	require.True(t, found)
+	frame.End()
+	frame.Free(mp)
+	require.Zero(t, accounts[1].Snapshot().Used)
+	require.Equal(t, DictionaryInputFrame{}, frame)
 }

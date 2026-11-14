@@ -79,6 +79,16 @@ func (f *DictionaryInputFrame) End() {
 	}
 }
 func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
+	// Predicate scopes are bound only after predicateInput is created. Column
+	// discovery can precede it, so include that scratch and counter-only state.
+	if f.inputs == nil && f.flat == nil && f.ready == nil &&
+		f.predicateInput == nil && f.predicateVectors == nil &&
+		f.predicateSeen == nil && f.predicateColumns == nil &&
+		f.predicateExecutor == nil && f.pooledRows == nil && f.allocation == nil &&
+		f.Gathers == 0 && f.gatherRows == 0 && f.gatherBytes == 0 &&
+		f.reportedGathers == 0 && f.reportedRows == 0 && f.reportedBytes == 0 {
+		return
+	}
 	f.endPredicateScope()
 	f.predicateScope.Free(mp)
 	if f.pooledRows != nil {
