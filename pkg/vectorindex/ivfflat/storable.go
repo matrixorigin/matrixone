@@ -70,7 +70,10 @@ func NewStorage(base types.T, q string, min, max float64, bounded bool) Storage 
 
 // Check returns the reason the index cannot store vec, the bytes of a base vector, or nil.
 func (s Storage) Check(vec []byte) error {
-	// typeswitch:partial int8/uint8 bases need no check; vecf8/vecf4 cannot carry a vector index (rejected at DDL)
+	if len(vec) == 0 {
+		return moerr.NewIndexVectorDimensionNoCtx("the vector is empty")
+	}
+	// typeswitch:partial integer bases need only the common empty check; vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch s.Base {
 	case types.T_array_float64:
 		return s.checkF64(types.BytesToArray[float64](vec))
