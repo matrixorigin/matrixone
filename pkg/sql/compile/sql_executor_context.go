@@ -472,8 +472,26 @@ func (c *compilerContext) GetProcess() *process.Process {
 	return c.proc
 }
 
+// GetQueryResultMeta resolves saved-result metadata for result_scan plans.
+// The stored metadata is account-scoped (frontend.BuildQueryResultMetaPath),
+// and access is authorized separately by re-checking the saved source AST/plan
+// against the CURRENT calling role (frontend checkResultQueryPrivilege); the
+// delegate below carries the calling session's compiler identity and imposes
+// no producer-session ownership on the saved result. The internal executor has
+// no account/session identity of its own, so it consults the calling frontend
+// session's compiler context, which CTAS populate installs via
+// attachInternalExecutorCompilerContext. Without such a delegate nothing can
+// be resolved here: return a clean typed error instead of panicking.
 func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
-	panic("not supported in internal sql executor")
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.GetQueryResultMeta(uuid)
+	}
+	errCtx := c.ctx
+	if errCtx == nil {
+		errCtx = context.Background()
+	}
+	return nil, "", moerr.NewInternalError(errCtx,
+		"query result metadata requires a session compiler context in internal sql executor")
 }
 
 func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
