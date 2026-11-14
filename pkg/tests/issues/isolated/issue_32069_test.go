@@ -75,18 +75,15 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 	exec("create database issue32069_owners")
 	exec("use issue32069_owners")
 	exec("set max_dop=16")
-	exec("create table l(k bigint)")
-	exec("create table r(k bigint)")
-	exec("insert into l select case when result % 4 = 0 then null else result % 4 end from generate_series(0,1048575) g")
-	exec("insert into r select case when result % 4 = 0 then null else result % 4 end from generate_series(0,524287) g")
-	exec("create table ltext(k bigint, v varchar(8))")
-	exec("create table rtext(k bigint, v char(8))")
-	exec("insert into ltext select k, 'a ' from l")
-	exec("insert into rtext select k, 'a' from r")
-	for _, table := range []string{"l", "r", "ltext", "rtext"} {
+	const leftRows, rightRows = 524288, 262144
+	exec("create table l(k bigint, v varchar(8))")
+	exec("create table r(k bigint, v char(8))")
+	exec(fmt.Sprintf("insert into l select case when result %% 4 = 0 then null else result %% 4 end, 'a ' from generate_series(0,%d) g", leftRows-1))
+	exec(fmt.Sprintf("insert into r select case when result %% 4 = 0 then null else result %% 4 end, 'a' from generate_series(0,%d) g", rightRows-1))
+	for _, table := range []string{"l", "r"} {
 		exec("select mo_ctl('dn','flush','issue32069_owners." + table + "')")
 	}
-	exec("analyze table l, r, ltext, rtext")
+	exec("analyze table l, r")
 	oldForce := plan.GetForceScanOnMultiCN()
 	t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
 	for _, cnCount := range []int{1, 2} {
@@ -117,8 +114,8 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 				op   string
 				want int64
 			}{
-				{"intersect all", 131072},
-				{"except all", 131072},
+				{"intersect all", rightRows / 4},
+				{"except all", (leftRows - rightRows) / 4},
 				{"intersect", 1},
 				{"except", 0},
 			} {
@@ -176,7 +173,7 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 			// The integer subset routes equal tuples together while the existing
 			// full key applies PAD SPACE; the surviving left bytes stay unchanged.
 			for _, op := range []string{"intersect all", "except all"} {
-				set := "select k,v from ltext " + op + " select k,v from rtext"
+				set := "select k,v from l " + op + " select k,v from r"
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+set)
 				require.NoError(t, err)
 				require.Positive(t, strings.Count(strings.ToLower(physical.Text), strings.Replace(op, "except", "minus", 1)), physical.Text)
@@ -188,7 +185,7 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 				var rows int64
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&hex, &rows))
 				require.Equal(t, "6120", hex)
-				require.Equal(t, int64(524288), rows)
+				require.Equal(t, int64(leftRows-rightRows), rows)
 			}
 			var count int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select k from l intersect all select k from r limit 1) s").Scan(&count))

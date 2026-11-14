@@ -39,36 +39,15 @@ const (
 )
 
 type container struct {
-	localRank    *localRankIndex
-	allocation   colexec.AnalyticAllocation
-	sortMetadata uint64
-	status       int
+	windowAggregateState
+	aggregateStates []windowAggregateState
+	localRank       *localRankIndex
+	allocation      colexec.AnalyticAllocation
+	sortMetadata    uint64
+	status          int
 
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
-
-	// runningAgg retains the one-group aggregate for cumulative and bounded
-	// sliding frames between output chunks. runningNextRow guards against
-	// accidentally reusing the state out of order; runningLeft/runningRight
-	// describe the current half-open sliding frame. For RANGE frames,
-	// runningPeerEnd lets every row in one peer group reuse the same boundaries.
-	runningAgg       aggexec.AggFuncExec
-	runningNextRow   int
-	runningPartition int
-	runningLeft      int
-	runningRight     int
-	runningPeerEnd   int
-
-	// fullPartitionResults caches finalized aggregate values across output chunks.
-	// Ordinary aggregates cache only partitions reached by the current chunk;
-	// ordered-set aggregates retain their eager evaluation behavior.
-	// fullPartition is the global partition and fullPartitionResultIndex its
-	// position in the current cache. Both are reset with the input generation.
-	fullPartitionResults     *vector.Vector
-	fullPartitionNextRow     int
-	fullPartition            int
-	fullPartitionResultIndex int
-
 	// ewmAggs carries the EWM window-statistics dispatch state, one entry
 	// per window slot: the decoded per-execution configuration, the
 	// staged partition row view, the per-partition accounts and the
@@ -115,6 +94,25 @@ type container struct {
 	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
 	civilMetadata       uint64
 	civilSelection      timestampRangeSelection
+}
+
+// Each fused expression owns its resumable aggregate state. Input batches,
+// argument vectors and sorting remain owned once by container.
+type windowAggregateState struct {
+	// Running frames retain one aggregate and their publication/partition
+	// cursor between output chunks; these cursors never cross expressions.
+	runningAgg       aggexec.AggFuncExec
+	runningNextRow   int
+	runningPartition int
+	runningLeft      int
+	runningRight     int
+	runningPeerEnd   int
+
+	// Whole-partition results are finalized once and borrowed by later chunks.
+	fullPartitionResults     *vector.Vector
+	fullPartitionNextRow     int
+	fullPartition            int
+	fullPartitionResultIndex int
 }
 
 type timestampCivilOrderKey struct {
@@ -218,6 +216,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeAggregateStates(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
 	ctr.freeEwmState()
 	if ctr.hasAccountedBufferedData() {
@@ -244,6 +243,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeAggregateStates(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
 	ctr.freeEwmState()
 	ctr.freeBatch(proc.Mp())
@@ -331,6 +331,20 @@ func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
 	ctr.fullPartitionNextRow = 0
 	ctr.fullPartition = 0
 	ctr.fullPartitionResultIndex = 0
+}
+
+func (ctr *container) freeAggregateStates(mp *mpool.MPool) {
+	for i := range ctr.aggregateStates {
+		state := &ctr.aggregateStates[i]
+		if state.runningAgg != nil {
+			state.runningAgg.Free()
+		}
+		if state.fullPartitionResults != nil {
+			state.fullPartitionResults.Free(mp)
+		}
+		*state = windowAggregateState{}
+	}
+	ctr.aggregateStates = nil
 }
 
 func (ctr *container) freeEwmState() {
