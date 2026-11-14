@@ -233,7 +233,192 @@ execute zm_commuted using @zm_lower;
 200  𝄀
 201
 deallocate prepare zm_commuted;
+set optimizer_hints='';
+create table bool_values (id int, enabled bool);
+insert into bool_values values (1,true),(2,true),(3,true),(4,false),(5,false),(6,null);
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_values)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from bool_values where enabled = false order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select id from bool_values where enabled is null order by id;
+➤ id[4,32,0]  𝄀
+6
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+➤ left_count[-5,64,0]  𝄀
+2
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+➤ right_count[-5,64,0]  𝄀
+2
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
+➤ left_id[4,32,0]  ¦  right_id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+null  ¦  3
+create table bool_aggregate (b bool);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+insert into bool_aggregate values (false),(false);
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select max(b) from bool_aggregate;
+➤ max(b)[-7,1,0]  𝄀
+0
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  false
+select count(1), min(b), max(b) from bool_aggregate;
+➤ count(1)[-5,64,0]  ¦  min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+2  ¦  0  ¦  0
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+truncate table bool_aggregate;
+insert into bool_aggregate values (false),(null);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+0  ¦  0
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  false
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+truncate table bool_aggregate;
+insert into bool_aggregate values (true),(true);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+1  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+true  ¦  true
+truncate table bool_aggregate;
+insert into bool_aggregate values (false),(true),(null);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+0  ¦  1
+select mo_table_col_min('non_primary_zonemap','bool_aggregate','b'), mo_table_col_max('non_primary_zonemap','bool_aggregate','b');
+➤ mo_table_col_min(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  ¦  mo_table_col_max(non_primary_zonemap, bool_aggregate, b)[12,-1,0]  𝄀
+false  ¦  true
+select min(b), max(b), max(if(b,1,0)) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  ¦  max(if(b, 1, 0))[-5,64,0]  𝄀
+0  ¦  1  ¦  1
+truncate table bool_aggregate;
+insert into bool_aggregate values (null),(null);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.bool_aggregate');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.bool_aggregate)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select min(b), max(b) from bool_aggregate;
+➤ min(b)[-7,1,0]  ¦  max(b)[-7,1,0]  𝄀
+null  ¦  null
+select length(mo_table_col_min('non_primary_zonemap','bool_aggregate','b')) as min_length, length(mo_table_col_max('non_primary_zonemap','bool_aggregate','b')) as max_length;
+➤ min_length[-5,64,0]  ¦  max_length[-5,64,0]  𝄀
+0  ¦  0
 set optimizer_hints='blockFilter=2';
+select id from bool_values where enabled = true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select count(*) as left_count from bool_values where id in (1,2) and enabled = true;
+➤ left_count[-5,64,0]  𝄀
+2
+select count(*) as right_count from bool_values where id in (2,3) and enabled = true;
+➤ right_count[-5,64,0]  𝄀
+2
+select l.id as left_id, r.id as right_id
+from (select id, enabled from bool_values where id in (1,2) and enabled = true) l
+full outer join (select id, enabled from bool_values where id in (2,3) and enabled = true) r
+on l.id = r.id and l.enabled = r.enabled
+order by coalesce(l.id, r.id);
+➤ left_id[4,32,0]  ¦  right_id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+null  ¦  3
 select k from clustered where 100 < k order by k;
 ➤ k[4,32,0]  𝄀
 150  𝄀
