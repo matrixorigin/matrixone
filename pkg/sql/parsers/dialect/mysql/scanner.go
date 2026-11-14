@@ -238,7 +238,11 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 
 		if ch == '_' {
-			if s.isCharsetIntroducer() {
+			// A qualified-name component never consumes the introducer: after
+			// `t.`, `_utf8mb4` must stay a plain identifier even when an
+			// introducer-shaped literal follows, preserving the token stream
+			// qualified names had before introducer consumption (issue #22157).
+			if !s.identifierAfterDot && s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
 				if s.cur() == '\'' {
@@ -248,6 +252,21 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 				// A character-set-introduced hex literal is text, not a
 				// binary HEXNUM or a width-constrained CAST. Decode through
 				// STRING so binding infers the original character width.
+				if s.cur() == '0' && (s.peek(1) == 'x' || s.peek(1) == 'X') {
+					token, value := s.scanNumber()
+					if token != HEXNUM {
+						return LEX_ERROR, value
+					}
+					digits := value[2:]
+					if len(digits)%2 == 1 {
+						digits = "0" + digits
+					}
+					decoded, err := hex.DecodeString(digits)
+					if err != nil {
+						return LEX_ERROR, value
+					}
+					return STRING, string(decoded)
+				}
 				s.incN(2) // X'
 				token, value := s.scanHex()
 				if token != HEXNUM {
@@ -413,7 +432,8 @@ func (s *Scanner) isCharsetIntroducer() bool {
 		break
 	}
 	return pos < len(s.buf) && (s.buf[pos] == '\'' ||
-		(pos > end && pos+1 < len(s.buf) && (s.buf[pos] == 'x' || s.buf[pos] == 'X') && s.buf[pos+1] == '\''))
+		(pos > end && pos+1 < len(s.buf) && (s.buf[pos] == 'x' || s.buf[pos] == 'X') && s.buf[pos+1] == '\'') ||
+		(pos > end && pos+1 < len(s.buf) && s.buf[pos] == '0' && (s.buf[pos+1] == 'x' || s.buf[pos+1] == 'X')))
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR

@@ -168,6 +168,13 @@ func TestCharsetIntroducer(t *testing.T) {
 		{"_utf8mb4 X'6'", "", LEX_ERROR},
 		{"_utf8mb4 X'zz'", "", LEX_ERROR},
 		{"_utf8mb4 X'61", "", LEX_ERROR},
+		{"_utf8mb4 0x41", "A", STRING},
+		{"_UTF8MB4 \t 0X41", "A", STRING},
+		{"_utf8mb4 0x615c62", `a\b`, STRING},
+		{"_utf8mb4 0xc3a95ce7958c", `é\界`, STRING},
+		{"_utf8mb4 0x4", "\x04", STRING},
+		{"_utf8mb4 0x", "", LEX_ERROR},
+		{"_utf8mb4 0xzz", "", LEX_ERROR},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			scanner := NewScanner(dialect.MYSQL, tc.input)
