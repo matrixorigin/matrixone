@@ -8,7 +8,7 @@ utf8    utf8_bin    UTF-8 Unicode    4
 utf8mb4    utf8mb4_bin    UTF-8 Unicode    4
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    privileges    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_tables    rel_id    1    null    YES    BIGINT UNSIGNED    null    null    null    null    null    null    null    BIGINT UNSIGNED(0)            select,insert,update,references            null
+def    mo_catalog    mo_tables    rel_id    1    null    YES    BIGINT UNSIGNED    null    null    null    null    null    null    null    bigint unsigned            select,insert,update,references            null
 def    mo_catalog    mo_tables    relname    2    null    YES    VARCHAR    5000    20000    null    null    null    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
@@ -132,8 +132,8 @@ TABLE_CATALOG    VARCHAR(64)    YES        null
 TABLE_SCHEMA    VARCHAR(64)    YES        null        
 TABLE_NAME    VARCHAR(64)    YES        null        
 COLUMN_NAME    VARCHAR(64)    YES        null        
-ORDINAL_POSITION    INT UNSIGNED(32)    YES        null        
-POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED(32)    YES        null        
+ORDINAL_POSITION    int unsigned    YES        null        
+POSITION_IN_UNIQUE_CONSTRAINT    int unsigned    YES        null        
 REFERENCED_TABLE_SCHEMA    VARCHAR(64)    YES        null        
 REFERENCED_TABLE_NAME    VARCHAR(64)    YES        null        
 REFERENCED_COLUMN_NAME    VARCHAR(64)    YES        null        
@@ -200,7 +200,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
 DEFAULT_COLLATE_NAME    VARCHAR(64)    YES        null        
 DESCRIPTION    VARCHAR(2048)    YES        null        
-MAXLEN    INT UNSIGNED(32)    YES        null        
+MAXLEN    int unsigned    YES        null        
 show columns from `TRIGGERS`;
 Field    Type    Null    Key    Default    Extra    Comment
 TRIGGER_CATALOG    VARCHAR(64)    YES        null        
@@ -210,9 +210,9 @@ EVENT_MANIPULATION    VARCHAR(10)    YES        null
 EVENT_OBJECT_CATALOG    VARCHAR(64)    YES        null        
 EVENT_OBJECT_SCHEMA    VARCHAR(64)    YES        null        
 EVENT_OBJECT_TABLE    VARCHAR(64)    YES        null        
-ACTION_ORDER    INT UNSIGNED(32)    YES        null        
+ACTION_ORDER    int unsigned    YES        null        
 ACTION_CONDITION    BINARY(0)    YES        null        
-ACTION_STATEMENT    TEXT(0)    YES        null        
+ACTION_STATEMENT    text    YES        null        
 ACTION_ORIENTATION    VARCHAR(3)    YES        null        
 ACTION_TIMING    VARCHAR(10)    YES        null        
 ACTION_REFERENCE_OLD_TABLE    BINARY(0)    YES        null        
@@ -240,28 +240,28 @@ data_length    BIGINT(0)    YES        null
 max_data_length    BIGINT(0)    YES        null        
 index_length    BIGINT(0)    YES        null        
 data_free    BIGINT(0)    YES        null        
-auto_increment    BIGINT UNSIGNED(0)    YES        null        
+auto_increment    bigint unsigned    YES        null        
 create_time    TIMESTAMP(0)    YES        null        
 update_time    TIMESTAMP(0)    YES        null        
 check_time    TIMESTAMP(0)    YES        null        
 table_collation    VARCHAR(18)    NO        null        
 checksum    BIGINT(0)    YES        null        
 create_options    VARCHAR(256)    YES        null        
-table_comment    TEXT(0)    YES        null        
+table_comment    text    YES        null        
 show columns from `PARTITIONS`;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        
 table_schema    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
 partition_name    VARCHAR(64)    YES        null        
-subpartition_name    TEXT(4)    YES        null        
-partition_ordinal_position    SMALLINT UNSIGNED(16)    YES        null        
-subpartition_ordinal_position    TEXT(4)    YES        null        
+subpartition_name    text    YES        null        
+partition_ordinal_position    smallint unsigned    YES        null        
+subpartition_ordinal_position    text    YES        null        
 partition_method    VARCHAR(13)    YES        null        
-subpartition_method    TEXT(4)    YES        null        
+subpartition_method    text    YES        null        
 partition_expression    VARCHAR(2048)    YES        null        
-subpartition_expression    TEXT(4)    YES        null        
-partition_description    TEXT(0)    YES        null        
+subpartition_expression    text    YES        null        
+partition_description    text    YES        null        
 table_rows    BIGINT(0)    YES        null        
 avg_row_length    BIGINT(0)    NO        null        
 data_length    BIGINT(0)    YES        null        
@@ -269,17 +269,17 @@ max_data_length    BIGINT(0)    NO        null
 index_length    BIGINT(0)    NO        null        
 data_free    BIGINT(0)    NO        null        
 create_time    TIMESTAMP(0)    YES        null        
-update_time    TEXT(4)    YES        null        
-check_time    TEXT(4)    YES        null        
-checksum    TEXT(4)    YES        null        
+update_time    text    YES        null        
+check_time    text    YES        null        
+checksum    text    YES        null        
 partition_comment    VARCHAR(2048)    NO        null        
 nodegroup    VARCHAR(7)    NO        null        
-tablespace_name    TEXT(4)    YES        null        
+tablespace_name    text    YES        null        
 use mo_catalog;
 show columns from `mo_data_key`;
 Field    Type    Null    Key    Default    Extra    Comment
-account_id    BIGINT UNSIGNED(64)    NO    PRI    null        
-key_id    UUID(0)    NO    PRI    null        
+account_id    bigint unsigned    NO    PRI    null        
+key_id    uuid    NO    PRI    null        
 encrypted_key    VARCHAR(128)    YES        null        
 create_time    TIMESTAMP(0)    NO        current_timestamp()        
 update_time    TIMESTAMP(0)    NO        current_timestamp()        

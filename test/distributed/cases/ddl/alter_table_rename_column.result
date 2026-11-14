@@ -329,7 +329,7 @@ show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    MUL    null        
 bNew    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+c    date    YES        null        
 d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
@@ -371,7 +371,7 @@ show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 bNewNew    CHAR(10)    YES        null        
-c    DATE(0)    YES    MUL    null        
+c    date    YES    MUL    null        
 d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
@@ -403,7 +403,7 @@ show columns from cluster01;
 Field    Type    Null    Key    Default    Extra    Comment
 NewAAAAAAAA    TINYINT(8)    NO    PRI    null        
 b    SMALLINT(16)    YES        null        
-c    INT UNSIGNED(32)    YES        null        
+c    int unsigned    YES        null        
 d    BIGINT(64)    NO        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable

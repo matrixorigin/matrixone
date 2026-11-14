@@ -2,7 +2,7 @@ drop table if exists t1;
 create table t1(a uuid);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    UUID(0)    YES        null    
+a    uuid    YES        null    
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` uuid DEFAULT NULL\n)
@@ -16,7 +16,7 @@ drop table if exists t2;
 create table t2(a uuid primary key);
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    UUID(0)    NO    PRI    null
+a    uuid    NO    PRI    null
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` uuid NOT NULL,\n  PRIMARY KEY (`a`)\n)
@@ -32,7 +32,7 @@ drop table if exists t4;
 create table t4(a uuid default uuid());
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    UUID(0)    YES        uuid()
+a    uuid    YES        uuid()
 show create table t4;
 Table    Create Table
 t4    CREATE TABLE `t4` (\n  `a` uuid DEFAULT uuid()\n)

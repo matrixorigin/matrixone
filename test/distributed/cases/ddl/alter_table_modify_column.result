@@ -31,7 +31,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -45,7 +45,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 a  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ b[1,10,0]  ¦  a[12,-1,0]  ¦  c[91,64,0]  𝄀
 ab  ¦  1  ¦  1980-12-17  𝄀
@@ -57,7 +57,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -70,7 +70,7 @@ alter table t1 modify a VARCHAR(20) after c;
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 a  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 select * from t1;
 ➤ b[1,10,0]  ¦  c[91,64,0]  ¦  a[12,-1,0]  𝄀
@@ -83,7 +83,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -97,7 +97,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ b[12,-1,0]  ¦  a[4,32,0]  ¦  c[91,64,0]  𝄀
 ab  ¦  1  ¦  1980-12-17  𝄀
@@ -109,7 +109,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -124,8 +124,8 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-d  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[4,32,0]  𝄀
 1  ¦  ab  ¦  1980-12-17  ¦  800  𝄀
@@ -137,7 +137,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -155,9 +155,9 @@ alter table t1 modify b VARCHAR(20) first, modify d int unsigned after b;
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-d  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ b[12,-1,0]  ¦  d[4,32,0]  ¦  a[4,32,0]  ¦  c[91,64,0]  𝄀
 ab  ¦  800  ¦  1  ¦  1980-12-17  𝄀
@@ -196,7 +196,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
@@ -221,7 +221,7 @@ select * from t1;
 alter table t1 modify c date first;
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DATE(0)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
@@ -246,7 +246,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -281,7 +281,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  VARCHAR(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
@@ -294,7 +294,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -355,14 +355,14 @@ primary key(empno, ename)
 );
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+empno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 ename  ¦  VARCHAR(15)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+mgr  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+hiredate  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+deptno  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 INSERT INTO t1 VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO t1 VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
 INSERT INTO t1 VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
@@ -398,12 +398,12 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 ename  ¦  VARCHAR(15)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+mgr  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+hiredate  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 empno  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+deptno  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ ename[12,-1,0]  ¦  job[12,-1,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,64,0]  ¦  sal[3,7,2]  ¦  empno[12,-1,0]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
 SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  7369  ¦  null  ¦  20  𝄀
@@ -424,9 +424,9 @@ drop table if exists t1;
 create table t1(a int unsigned, b varchar(15) NOT NULL, c date, d decimal(7,2), primary key(a));
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+a  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
@@ -445,7 +445,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
@@ -459,7 +459,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 d  ¦  DECIMAL(6,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,6,2]  𝄀
@@ -515,11 +515,11 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp modify deptno varchar(25);
 desc emp;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+empno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+mgr  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+hiredate  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 deptno  ¦  VARCHAR(25)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
@@ -2001,7 +2001,7 @@ show create table president;
 president  ¦  CREATE TABLE `president` (
   `name` varchar(100) NOT NULL,
   `nth` int NOT NULL,
-  `impeached` bool DEFAULT NULL
+  `impeached` boolean DEFAULT NULL
 )
 ALTER TABLE president MODIFY impeached INTEGER;
 show create table president;

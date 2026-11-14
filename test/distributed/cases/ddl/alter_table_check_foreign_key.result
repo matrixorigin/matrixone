@@ -46,25 +46,25 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp modify deptno int unsigned;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    null        
+deptno    int unsigned    YES    MUL    null        
 alter table emp modify deptno int unsigned default 100;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    100        
+deptno    int unsigned    YES    MUL    100        
 alter table emp change deptno deptid varchar(20);
 Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptid bigint;
@@ -72,14 +72,14 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptid int unsigned;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptid    INT UNSIGNED(32)    YES    MUL    null        
+deptid    int unsigned    YES    MUL    null        
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
@@ -143,36 +143,36 @@ INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table emp ALTER COLUMN deptno SET DEFAULT 10;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
+deptno    int unsigned    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno SET INVISIBLE;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
+deptno    int unsigned    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno drop default;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    null        所在部门
+deptno    int unsigned    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -192,14 +192,14 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 alter table emp rename column deptno to deptid;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
 ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
 sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
-deptid    INT UNSIGNED(32)    YES    MUL    null        所在部门
+deptid    int unsigned    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20

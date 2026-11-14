@@ -224,8 +224,8 @@ index    INT(4)    YES        null
 key    VARCHAR(65535)    YES        null
 path    VARCHAR(65535)    YES        null
 seq    INT(4)    YES        null
-this    JSON(0)    YES        null
-value    JSON(0)    YES        null
+this    json    YES        null
+value    json    YES        null
 drop table if exists t1;
 create table t1(a int,b json);
 insert into t1 values(1,'{"people":[{"name":"a1","address":"a2"},{"name":"b1","address":"b2"}]}');

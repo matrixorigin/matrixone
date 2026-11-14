@@ -56,32 +56,32 @@ TABLE_CATALOG  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 TABLE_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 COLUMN_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-ORDINAL_POSITION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-POSITION_IN_UNIQUE_CONSTRAINT  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+ORDINAL_POSITION  ¦  int unsigned  ¦  null  ¦  null  𝄀
+POSITION_IN_UNIQUE_CONSTRAINT  ¦  int unsigned  ¦  null  ¦  null  𝄀
 REFERENCED_TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 REFERENCED_TABLE_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 REFERENCED_COLUMN_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='keywords' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  maximum[12,-1,0]  ¦  minimum[12,-1,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-RESERVED  ¦  INT UNSIGNED(32)  ¦  null  ¦  null
+RESERVED  ¦  int unsigned  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='parameters' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  maximum[12,-1,0]  ¦  minimum[12,-1,0]  𝄀
 SPECIFIC_CATALOG  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 SPECIFIC_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  null  ¦  null  𝄀
+ORDINAL_POSITION  ¦  bigint unsigned  ¦  null  ¦  null  𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  null  ¦  null  𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DATA_TYPE  ¦  text  ¦  null  ¦  null  𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
-NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+NUMERIC_PRECISION  ¦  int unsigned  ¦  null  ¦  null  𝄀
 NUMERIC_SCALE  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
-DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+DATETIME_PRECISION  ¦  int unsigned  ¦  null  ¦  null  𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DTD_IDENTIFIER  ¦  text  ¦  null  ¦  null  𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='mo_columns' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 invalid input: mo_table_col_max has bad input table mo_columns
@@ -176,25 +176,25 @@ Event_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_issuer  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_subject  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-max_questions  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_updates  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_user_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+ssl_cipher  ¦  blob  ¦  null  ¦  null  𝄀
+x509_issuer  ¦  blob  ¦  null  ¦  null  𝄀
+x509_subject  ¦  blob  ¦  null  ¦  null  𝄀
+max_questions  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_updates  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_connections  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_user_connections  ¦  int unsigned  ¦  null  ¦  null  𝄀
 plugin  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-authentication_string  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+authentication_string  ¦  text  ¦  null  ¦  null  𝄀
 password_expired  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
-password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
+password_lifetime  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
 account_locked  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Create_role_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Drop_role_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Password_reuse_history  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
-Password_reuse_time  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
+Password_reuse_history  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
+Password_reuse_time  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
 Password_require_current  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-User_attributes  ¦  JSON(0)  ¦  null  ¦  null
+User_attributes  ¦  json  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  maximum[12,-1,0]  ¦  minimum[12,-1,0]  𝄀
 metric_name  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
@@ -203,7 +203,7 @@ value  ¦  DOUBLE(0)  ¦  null  ¦  null  𝄀
 node  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
 role  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
 account  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+account_id  ¦  int unsigned  ¦  null  ¦  null  𝄀
 type  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
 __mo_cbkey_011collecttime010account_id011metric_name  ¦  VARCHAR(65535)  ¦  null  ¦  null
 SELECT concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(duration) AS value, `query_type` AS type FROM `system`.`statement_info` WHERE request_at >= '2023-07-28 04:20:43' AND request_at <= '2023-07-28 04:50:43' AND `query_type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `query_type`, concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') ORDER BY concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00')LIMIT 100;
@@ -501,7 +501,7 @@ DESC `information_schema`.`character_sets` ;
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DEFAULT_COLLATE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DESCRIPTION  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-MAXLEN  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+MAXLEN  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`engines` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 ENGINE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -519,40 +519,40 @@ TABLE_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 TABLE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COLUMN_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ORDINAL_POSITION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-POSITION_IN_UNIQUE_CONSTRAINT  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ORDINAL_POSITION  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+POSITION_IN_UNIQUE_CONSTRAINT  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 REFERENCED_TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 REFERENCED_TABLE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 REFERENCED_COLUMN_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`keywords` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-RESERVED  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+RESERVED  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`parameters` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 SPECIFIC_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SPECIFIC_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ORDINAL_POSITION  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATA_TYPE  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+NUMERIC_PRECISION  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 NUMERIC_SCALE  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATETIME_PRECISION  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DTD_IDENTIFIER  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `mo_catalog`.`mo_columns` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -570,7 +570,7 @@ att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -673,25 +673,25 @@ Event_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_issuer  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_subject  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-max_questions  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_updates  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_user_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+ssl_cipher  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_issuer  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_subject  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+max_questions  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_updates  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_connections  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_user_connections  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 plugin  ¦  CHAR(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
-authentication_string  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+authentication_string  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_expired  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+password_lifetime  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_locked  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Create_role_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Drop_role_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Password_reuse_history  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-Password_reuse_time  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+Password_reuse_history  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+Password_reuse_time  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 Password_require_current  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-User_attributes  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+User_attributes  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`metric` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 metric_name  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...  𝄀
@@ -700,7 +700,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦  metric value  𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node uuid  𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node role, like: CN, DN, LOG  𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  account name  𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  account id  𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦  account id  𝄀
 type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -709,7 +709,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`server_storage_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -717,7 +717,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`sql_statement_errors` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -725,7 +725,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`sql_transaction_total` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -734,7 +734,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 INSERT INTO `mo_catalog`.`statement_mo` (`statement_id`,`account`,`response_at`,`stu`,`account_id`) VALUES ('057247c5-2d0c-11ee-9e81-96ce077ba0f3','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','2023-07-28 06:00:20','0.0003963262009632',2);
 no such table mo_catalog.statement_mo
 INSERT INTO `mo_mo`.`statement_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 04:50:00');

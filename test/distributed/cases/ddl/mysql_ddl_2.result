@@ -228,21 +228,21 @@ col1    TINYINT(8)    YES        null
 col2    SMALLINT(16)    YES        null        
 col3    INT(32)    NO    MUL    null        
 col4    BIGINT(64)    NO    PRI    null        
-col5    TINYINT UNSIGNED(8)    YES        null        
-col6    SMALLINT UNSIGNED(16)    YES        null        
-col7    INT UNSIGNED(32)    YES        null        
-col8    BIGINT UNSIGNED(64)    YES        null        
+col5    tinyint unsigned    YES        null        
+col6    smallint unsigned    YES        null        
+col7    int unsigned    YES        null        
+col8    bigint unsigned    YES        null        
 col9    FLOAT(0)    YES        null        
 col10    DOUBLE(0)    YES        null        
 col11    VARCHAR(255)    YES        null        
-col12    DATE(0)    YES        null        
+col12    date    YES        null        
 col13    DATETIME(0)    YES        null        
 col14    TIMESTAMP(0)    YES        null        
-col15    BOOL(0)    YES        null        
+col15    boolean    YES        null        
 col16    DECIMAL(16,6)    YES        null        
-col17    TEXT(0)    YES        null        
-col18    JSON(0)    YES        null        
-col19    BLOB(0)    YES        null        
+col17    text    YES        null        
+col18    json    YES        null        
+col19    blob    YES        null        
 col20    BINARY(255)    YES        null        
 col21    VARBINARY(255)    YES        null        
 col22    VECF32(3)    YES        null        
@@ -283,7 +283,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    MUL    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+c    date    YES        null        
 d    DECIMAL(7,2)    YES        null        
 drop table if exists t2;
 CREATE TABLE t2(
@@ -313,7 +313,7 @@ desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES    MUL    null        
+c    date    YES    MUL    null        
 d    DECIMAL(7,2)    YES    UNI    null        
 drop table if exists t4;
 CREATE TABLE t4(
@@ -328,6 +328,6 @@ desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    UNI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+c    date    YES        null        
 d    DECIMAL(7,2)    YES        null        
 drop database if exists db1;

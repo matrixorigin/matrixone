@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -304,6 +305,45 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// formatLegacyColumnType preserves 4.2's already-valid public metadata spellings.
+// Types whose old spelling was invalid or lost type information use the common
+// SQL formatter instead (for example BOOL, unsigned integers, dates and scaled floats).
+func formatLegacyColumnType(typ types.Type) (string, bool) {
+	if typ.Width < 0 {
+		return "", false
+	}
+	// typeswitch:partial only families with a valid, faithful 4.2 spelling use the legacy form.
+	switch typ.Oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_timestamp, types.T_datetime, types.T_time:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return fmt.Sprintf("DECIMAL(%d,%d)", typ.Width, typ.Scale), true
+	case types.T_float32:
+		// FLOAT(24) and wider is parsed as DOUBLE; keep the legacy spelling
+		// only when replay preserves FLOAT and there is no omitted scale.
+		// System view expressions also represent unspecified precision and scale
+		// as (0, 0), so retain their existing FLOAT(0) metadata.
+		if (typ.Scale == -1 || (typ.Width == 0 && typ.Scale == 0)) && typ.Width < 24 {
+			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+		}
+		return "", false
+	case types.T_float64:
+		if typ.Scale == -1 || (typ.Width == 0 && typ.Scale == 0) {
+			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+		}
+		return "", false
+	case types.T_year:
+		if typ.Width == 4 {
+			return "YEAR(4)", true
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -365,17 +405,19 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-
-			ts := typ.String()
-			ret := ""
-			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
-				ts = "DECIMAL"
-				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			var ret string
+			// Public metadata queries use this path for ENUM with an empty
+			// attr_enum, which represents the single empty-string member.
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if formatted, ok := formatLegacyColumnType(*typ); ok {
+				ret = formatted
+			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
 			} else {
-				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				ret = fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			}
 
 			return functionUtil.QuickStrToBytes(ret), nil
@@ -513,16 +555,12 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		// get enum values
-		enums := strings.Split(enumStr, ",")
-		enumVal := ""
-		for i, e := range enums {
-			enumVal += fmt.Sprintf("'%s'", e)
-			if i < len(enums)-1 {
-				enumVal += ","
-			}
+		members := strings.Split(enumStr, ",")
+		for i := range members {
+			members[i] = sqlquote.String(members[i])
 		}
-		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
+		ret := typeName + "(" + strings.Join(members, ",") + ")"
+
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 

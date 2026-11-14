@@ -40,7 +40,7 @@ pri02    CREATE TABLE `pri02` (\n  `col1` char(1) DEFAULT NULL,\n  `col2` bigint
 show columns from pri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    YES        null        
-col2    BIGINT UNSIGNED(64)    YES        null        
+col2    bigint unsigned    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 pri02    col1    CHAR    YES
@@ -61,7 +61,7 @@ pri03    CREATE TABLE `pri03` (\n  `col1` char(1) NOT NULL,\n  `col2` bigint uns
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    NO    PRI    null        
-col2    BIGINT UNSIGNED(64)    YES        null        
+col2    bigint unsigned    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 pri03    col1    CHAR    NO
@@ -105,7 +105,7 @@ Table    Create Table
 pri05    CREATE TABLE `pri05` (\n  `col1` date NOT NULL,\n  `col2` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    DATE(0)    NO    PRI    null        
+col1    date    NO    PRI    null        
 col2    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri05' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
@@ -177,7 +177,7 @@ pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsi
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    NO    PRI    null        
-col2    INT UNSIGNED(32)    YES        null        
+col2    int unsigned    YES        null        
 alter table pri08 add constraint primary key (col2);
 Multiple primary key defined
 show create table pri08;
@@ -186,7 +186,7 @@ pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsi
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    NO    PRI    null        
-col2    INT UNSIGNED(32)    YES        null        
+col2    int unsigned    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri08' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 pri08    col1    BINARY    NO
@@ -208,7 +208,7 @@ pri09    CREATE TABLE `pri09` (\n  `col1` binary(1) DEFAULT NULL,\n  `col2` int 
 show columns from pri09;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    YES        null        
-col2    INT UNSIGNED(32)    YES        null        
+col2    int unsigned    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri09' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 pri09    col1    BINARY    YES

@@ -61,7 +61,7 @@ CREATE table t3 (a bigint unsigned not null auto_increment primary key, c float)
 desc t3;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+a  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 b  ¦  CHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t3;
 ➤ c[7,24,0]  ¦  a[-5,64,0]  ¦  b[1,5,0]  𝄀
@@ -219,7 +219,7 @@ desc table06;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col10  ¦  BINARY(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col9  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -678,8 +678,8 @@ create table string07 as select startswith(col1, ' '), endswith(col1, ' ') from 
 show create table string07;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string07  ¦  CREATE TABLE `string07` (
-  `startswith(col1,  )` bool DEFAULT NULL,
-  `endswith(col1,  )` bool DEFAULT NULL
+  `startswith(col1,  )` boolean DEFAULT NULL,
+  `endswith(col1,  )` boolean DEFAULT NULL
 )
 select * from string07;
 ➤ startswith(col1,  )[-7,1,0]  ¦  endswith(col1,  )[-7,1,0]  𝄀
@@ -1016,7 +1016,7 @@ table02  ¦  CREATE TABLE `table02` (
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
   `col4` date DEFAULT NULL,
-  `col5` bool DEFAULT NULL,
+  `col5` boolean DEFAULT NULL,
   `col6` enum('apple','banana','orange') DEFAULT NULL,
   `col7` text DEFAULT NULL,
   `col8` timestamp NULL DEFAULT NULL,
@@ -1048,7 +1048,7 @@ table02  ¦  CREATE TABLE `table02` (
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
   `newcolumn` int DEFAULT NULL,
-  `col5` bool DEFAULT NULL,
+  `col5` boolean DEFAULT NULL,
   `col6` enum('apple','banana','orange') DEFAULT NULL,
   `col7` text DEFAULT NULL,
   `col8` timestamp NULL DEFAULT NULL,
@@ -1063,11 +1063,11 @@ col1  ¦  VARCHAR(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col3  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 newcolumn  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col5  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col5  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  ENUM('apple','banana','orange')  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col7  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col7  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col9  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col9  ¦  blob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col10  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from table02;
 ➤ id[4,32,0]  ¦  col1[12,-1,0]  ¦  col2[4,32,0]  ¦  col3[3,10,2]  ¦  newcolumn[-5,64,0]  ¦  col5[-7,1,0]  ¦  col6[12,-1,0]  ¦  col7[12,0,0]  ¦  col8[93,64,0]  ¦  col9[12,0,0]  ¦  col10[1,1,0]  𝄀
@@ -2120,7 +2120,7 @@ where table_schema = 'repro_ctas_datetime6'
 order by ordinal_position;
 ➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES  𝄀
-t  ¦  __mo_fake_pk_col  ¦  BIGINT UNSIGNED(0)  ¦  NO
+t  ¦  __mo_fake_pk_col  ¦  bigint unsigned  ¦  NO
 create table t_union as
 select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
 union all

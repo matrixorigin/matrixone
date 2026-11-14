@@ -66,25 +66,25 @@ show triggers;
 use mo_catalog;
 show columns from mo_tables;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+creator  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+partition_info  ¦  blob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  bigint unsigned  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 select datname, dat_createsql from mo_database;
 ➤ datname[12,-1,0]  ¦  dat_createsql[12,-1,0]  𝄀
 mo_catalog  ¦    𝄀
@@ -192,9 +192,9 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 deptno  ¦  UNIQUE  ¦  deptno  ¦  1  ¦  0  ¦    ¦  deptno  ¦  1  ¦  null
 desc mo_catalog.mo_indexes;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-database_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+table_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+database_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(11)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 algo  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -204,10 +204,10 @@ is_visible  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
 CREATE TABLE trp (
 id INT NOT NULL,
 fname VARCHAR(30),
@@ -235,9 +235,9 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  name[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]
 desc mo_catalog.mo_indexes;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-database_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+table_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+database_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(11)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 algo  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -247,10 +247,10 @@ is_visible  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;
@@ -258,13 +258,13 @@ drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+stage_id  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+url  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
 select disable_fault_injection();
 ➤ disable_fault_injection()[-7,1,0]  𝄀
 1

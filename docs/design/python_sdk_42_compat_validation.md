@@ -1,0 +1,210 @@
+# 4.2 compatibility closure for the Python SDK
+
+This records the native companion to [SDK PR #32671](https://github.com/matrixorigin/matrixone/pull/32671).
+The latest stable release used for reproduction and physical-data upgrade is
+v4.2.8 (`10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`). It is immutable: a release
+containing these native changes is required to ship the corrected behavior.
+
+## Change and coverage map
+
+| Closure | Implementation and retained oracles |
+|---|---|
+| Buffered TLS and peer shutdown | Backport #29996 and retain the review follow-up that unwraps only owned buffered/TLS connections. Coalesced ClientHello, payload, reset, FIN grace, timeout/cancel, certificate/authentication rejection and pool release remain checked. |
+| SQL schema metadata | Adapt #29893 to the 4.2 type family. Keep existing valid 4.2 metadata spellings, including signed integers, decimal, string and temporal columns; correct BOOL and types whose old spellings were invalid or lost information. Preserve storage OIDs, dimensions, ENUM/SET values and MySQL view provenance. Retain the legacy DUMP type renderer and checksums. Short type headers fail without mutating the receiver. |
+| FULLTEXT identifiers | Adapt #31953 across planner/post-DML/ISCP: quote each identifier atomically and preserve async parser parameters. Exact identifier, async gojieba, values and rollback checks remain. |
+| Numeric scanner | Adapt #27010/#31137 without promoting a dotted or signed-exponent token into an identifier. Retain identifier/hex controls and malformed-input errors. 4.2 DOUBLE metadata and PREPARE error wrappers remain specific to 4.2. |
+| Stage and SQL mode | Adapt the relevant #31774 paths: literal/credential quoting, logical-name/URI equivalence, combined ALTER rollback, and response NO_BACKSLASH_ESCAPES status. CREATE also persists explicit ENABLE false/true; no option is silently ignored. |
+| FLOAT32 Parquet | Accept representable +/-Inf, retaining NaN, signed zero and finite-overflow rejection in plain and dictionary pages for FLOAT/DOUBLE. |
+| Database branch identity | Adapt #28272 to 4.2 without a new schema/RPC field or a main-only protocol gate. Mark new database branches in dat_type. Retain legacy table receipts, ordinary/subscription/unknown target rejection, every ordinary table's receipt, publication owner account, context scope and named/timestamp/PITR restore identity. |
+
+The branch design revision and separate root self-review are in
+[data_branch_identity_42.md](data_branch_identity_42.md) and
+[data_branch_identity_42_review_r1.md](data_branch_identity_42_review_r1.md).
+They precede implementation; they are not independent external approval.
+
+## Stage URI and error boundary
+
+The backport extends accepted Stage references. Existing valid host-form URIs
+such as `stage://simple/file.csv` remain supported; a path-form URI such as
+`stage:///two%20words/file.csv`, previously rejected as having an empty host,
+now addresses the logical Stage `two words`. The first path segment is decoded
+once, so `%2F` belongs to the name and `%252F` represents a literal `%2F`.
+Empty names remain invalid, and dot-only names use the host form. See the
+[Stage guide](../../clients/python/docs/stage_guide.rst) for examples, the
+existing SDK helper limitation, and the all-CN upgrade requirement.
+
+The CI Datalink regression exposed a separate missing-process error path after
+path-form parsing succeeded. Catalog lookup now returns an internal error when
+its process, process base or Stage cache is absent, instead of dereferencing it.
+This does not turn malformed Datalink ranges such as `size=c` into valid input;
+the range error is checked with an initialized Stage cache. Host and path forms,
+all four public Datalink consumers, and the original failing input retain error
+coverage.
+
+## Observable 4.2 behavior and compatibility
+
+This is a set of bug fixes, not a promise of byte-for-byte compatibility for
+all historical output or identical behavior on previously mishandled inputs.
+Existing valid schema-display strings such as `INT(32)`, `VARCHAR(20)`,
+`DECIMAL(10,2)`, and the system-view `FLOAT(0)`/`DOUBLE(0)` are retained. The
+previously malformed `BOOL(0)`, `BIGINT UNSIGNED(64)`, `DATE(0)` and `TEXT(0)`
+forms are corrected. A scaled `FLOAT(5,2)` also retains its scale instead of the
+old `FLOAT(5)` display. `SHOW CREATE TABLE` changes the old valid `bool` spelling
+to `boolean`: both are valid SQL, but unmodified SQLAlchemy 2.0.46's MySQL table
+reflection recognizes `boolean` and fails to recognize `bool`. This is an
+intentional BOOL client fix and a textual compatibility change. Clients comparing
+these corrected strings literally can observe a change; storage OIDs and
+signed-integer `DATA_TYPE` stay unchanged. Standard SQLAlchemy view reflection
+of uppercase legacy strings remains the separate issue
+[#32746](https://github.com/matrixorigin/matrixone/issues/32746).
+
+`CREATE STAGE ... ENABLE=false` now creates a disabled Stage, whereas the old
+implementation silently created an enabled one. Workloads relying on that old
+behavior must change their SQL or explicitly enable the Stage. New CREATE/ALTER
+credential input with duplicate keys, a comma in a value, or a comma/equal sign
+in a key is rejected because the existing catalog representation cannot safely
+encode it; previously it was accepted. Existing valid host-form Stage URIs remain
+accepted. The protocol status now reflects the active `NO_BACKSLASH_ESCAPES`
+mode, which can change client escaping in that mode. View descriptions can also
+expose preserved ENUM/SET provenance where the old implementation lost it.
+
+New database branches use the existing `mo_database.dat_type` field to persist
+their identity. This is a new persisted value, although it adds no catalog
+column. Upgrade uses the existing shutdown-only boundary: older binaries must not
+be started on data written by the updated binary. The physical upgrade proof and
+limits are described below.
+
+## Ownership, concurrency and restore boundaries
+
+Branch DELETE owns one pessimistic transaction and the existing mo_database
+account/name key. Its locking SELECT goes through runSqlWithBackExec, whose
+statement executor owns RC snapshot refresh after a lock wait. Direct LockRows
+had leaked errno 20628; the embedded deterministic CREATE TABLE/DELETE test
+exposed this and now verifies waiting followed by rejection of the added ordinary
+table. No new lock owner, retry policy, worker, cache or queue is introduced.
+
+Clone context is restored per statement, including multi-statement COM_QUERY.
+All source database identities are checked before account creation/deletion or
+other irreversible target effects. Account snapshot preflight uses the already
+authorized timestamp when switching to the source account; it does not resolve
+a sys-owned snapshot name in a tenant namespace. Original cross-account UDF,
+Stage, stored-procedure and user restoration assertions are retained. Catalog
+results have lexical cleanup, and transaction completion releases the key lock.
+Work remains linear in database/table definitions with existing receipt batches.
+
+## Oracle adaptations
+
+The metadata result audit compares parsed commands, result shapes, headers,
+values and errors, rather than line counts. The original audit covered 18,606
+commands and 71,428 result cells in 104 files. The compatibility follow-up
+restores the old 4.2 spellings for valid signed-integer, string, decimal,
+temporal, bit, YEAR(4), safe unscaled float and ENUM/SET metadata while
+retaining corrections for BOOL, invalid unsigned spellings, scaled floats and
+other malformed or unfaithful types. The executable bool.test
+also checks an exact legacy INT(32) comparison. No planner/explain query, table
+count, row count, statistics or expected data result is reduced. Test-script
+discovery includes .sql and .test. The later audit explicitly included two
+binary-classified `.result` files: it restored only type-only differences with
+byte-preserving comparisons and retained unrelated malformed-type corrections.
+
+Four new branch identity headers use 4.2's dat_type width (-1), rather than main's
+32. Sequence-only source coverage retains 4.2's existing clone filter, which
+excludes sequences: the resulting marked empty target is deletable and the
+source sequence survives. The source count, target count, deletion and source
+preservation assertions are explicit.
+
+One existing empty Stage result had a stale VARCHAR(152) JDBC precision. An
+independent raw-protocol control on official v4.2.8 and the patched service
+returns equal VARCHAR wire fields (length 0xffffffff) for both empty and populated
+tables. Only that expected header changes. The original DDL bound, empty row set,
+permissions and rejected local-file operations are retained. Combined ALTER now
+succeeds; only its five obsolete rejection rows are removed from the existing
+Stage/snapshot goldens, with all SQL and subsequent catalog assertions preserved.
+The saved `result_scan` expectations remain aligned with direct SHOW output:
+the three signed-integer cells retain `INT(32)`, while the corrected BOOL DDL
+uses `boolean`. The SQL and remaining result checks are unchanged.
+
+## Upgrade and release limits
+
+A stopped v4.2.8 instance wrote BOOL/Unicode/Decimal table and view rows, a legacy
+table-backed branch, legacy empty branch and ordinary empty database. The new
+binary booted a physical copy using the original Dragonboat hostname through
+the existing explicit-hostname configuration. Values survived in source/branch
+tables and views, the legacy table receipt remained deletable, unmarked empty
+targets stayed rejected, and new marker/context/snapshot-restore checks passed.
+The original release directory was never opened by the new binary.
+
+4.2 upgrades are shutdown-only. An older binary must not be started on data
+written by the new binary. Existing unmarked empty databases cannot safely be
+guessed to be branches. Existing persisted ENUM/SET views that had already lost
+logical provenance remain VARCHAR until recreated. VECF8/VECF4 and native Arrow
+LOAD are absent 4.2 features; this native PR does not claim to add them. The SDK
+provides checked Parquet staging for Arrow input while preserving the native
+capability fact and all positive write/atomicity/cleanup checks.
+
+## Validation
+
+Code build: `e54bcb763a23a0d3c6a8c746035c8f73982ed37e`, Go 1.26.4,
+Linux/amd64, with worktree-local verified CGo artifacts. Merging the remote
+branch update `64eb506d853` preserves the exact same complete tree; it only
+joins already included upstream merges. No code or fixture is changed by it.
+
+| Proof | Result |
+|---|---|
+| Metadata owners and clients before the legacy-spelling follow-up | Owning suites, scoped vet/lint and four positive SQLAlchemy reflection cases passed for the earlier canonical metadata output. They do not certify the follow-up output. |
+| Metadata BVT before the legacy-spelling follow-up | Eight real tester files: 1,435 comparisons passed; Boolean same-instance full-metadata repeat: 67 passed. These results predate the follow-up and do not certify its changed output. |
+| FULLTEXT/numeric | Owning packages and focused regressions passed; 30 normal BVT comparisons passed twice; 53 public SDK FULLTEXT/numeric/TLS checks passed. |
+| Stage/Parquet/SQL mode | Four owning packages, scoped vet/lint and native build passed; all 35 difficult scalar cases and the complete 335-case analytics collection passed without skips. |
+| Branch/restore final owners | Frontend and compile owning suites, frontend/compile/issues vet and incremental lint passed after the cross-account preflight fix. The new account-source regression fails before and passes after. |
+| Final Stage/snapshot/branch BVT | Six scripts, run twice on the same instance: each run has 911 total statements, 903 successful, zero failed/abnormal, eight existing issue-marked ignored statements. The 75 new identity, 258 privilege, 365 snapshot-system-table, 156 Stage and seven literal comparisons all pass. |
+| Public SDK native closure | 132 release/branch/clone/standard-MySQL cases pass without skips against the final native binary. Only an unselected analytics test file changed during that run; selected inputs and all production Python files matched its frozen manifest. |
+| Concurrency | Complete frontend race suite, four exact buffered-TLS/SQL-mode roots at 100 repetitions each, and the embedded deterministic branch DDL lifecycle root under race all passed. These proofs use a5a1705b70; the raced resource/lock owners are unchanged by the later stateless restore-query fix. |
+| Physical upgrade | Pinned official v4.2.8 data copy, legacy receipts, table/view values, empty-target protection, per-statement identity and snapshot/restore marker all passed. |
+
+For the later legacy-metadata follow-up, the full affected function package passed
+normal and race tests with `-short -tags matrixone_test`; go vet, pinned molint
+and pinned golangci-lint also passed. A CPU-only isolated 4.2 service verified
+exact legacy signed, string, decimal, temporal, unscaled float and year metadata,
+plus BOOL, unsigned and scaled-float controls. Three real tester cases passed:
+72 Boolean/metadata, 200 array and 64 SHOW comparisons, with zero skips or
+failures. Four current Python cases passed for standard table reflection, exact
+view SQL metadata and ENUM/SET replay. They do not assert that unmodified
+SQLAlchemy can reflect a view: the original positive view assertions are retained
+in the reproduction linked from [#32746](https://github.com/matrixorigin/matrixone/issues/32746),
+and the unmodified earlier suite had two passes and two view failures.
+
+The subsequent system-view follow-up reproduced the old `FLOAT(0)` and
+`DOUBLE(0)` values against the actual `mo_cache` and
+`system.sql_statement_hotspot` views. On the corrected CPU-only build, the two
+previously failing DDL cases, two system-view cases and the BOOL/metadata case
+passed 368/368 real tester comparisons with no failures or ignored statements.
+The complete affected function package passed normal and race runs again.
+
+A separate real-service control ran the same four current SQLAlchemy 2.0.46
+cases with each SHOW CREATE spelling. The shipped `boolean` spelling passed all
+four. Restoring the 4.2 `bool` spelling made one case fail because the standard
+client did not recognize four BOOL columns; the other three passed. No client
+assertions were removed for that comparison. The negative-control service also
+required a forced stop after a 30-second shutdown wait; this did not affect the
+already recorded client results, and the shutdown cause remains undetermined.
+
+After the three earlier tester cases completed, the isolated service required a forced
+stop after a 30-second shutdown wait; the cause is not established. A subsequent
+restart and minimal view reproduction shut down normally. Test results above
+were observed before shutdown and do not certify shutdown behavior.
+
+The eight issue-marked statements are unchanged existing coverage exclusions,
+not eight newly certified permission behaviors. The exact positive and negative
+privilege oracles in the 258-statement script and focused unit tests remain.
+The complete SDK online/analytics qualification and its source identities
+are recorded on [PR #32671](https://github.com/matrixorigin/matrixone/pull/32671).
+That earlier qualification predates the legacy-spelling follow-up. Standard
+SQLAlchemy view reflection with uppercase legacy types remains a known issue,
+tracked separately in [#32746](https://github.com/matrixorigin/matrixone/issues/32746).
+No runner was added. Local build/link time is not claimed as a case-speed benefit.
+
+Final implementation self-review: Codex `/root`, self/delivery review. Each closure
+above maps its producer, consumers, compatibility limits and unhappy paths;
+previous valid evidence is reused only where those inputs remain unchanged.
+The independently tracked SQLAlchemy view limitation remains open. This is not
+independent external review or a claim that a skipped/pending CI job passed.

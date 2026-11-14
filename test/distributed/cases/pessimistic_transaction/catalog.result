@@ -14,8 +14,8 @@ Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        
 node_id    VARCHAR(65535)    YES        null        
 type    VARCHAR(65535)    YES        null        
-used    BIGINT UNSIGNED(0)    YES        null        
-free    BIGINT UNSIGNED(0)    YES        null        
+used    bigint unsigned    YES        null        
+free    bigint unsigned    YES        null        
 hit_ratio    FLOAT(0)    YES        null        
 desc mo_transactions;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -41,7 +41,7 @@ account_name    VARCHAR(300)    YES        null
 dat_name    VARCHAR(5000)    YES        null        
 variable_name    VARCHAR(300)    YES        null        
 variable_value    VARCHAR(5000)    YES        null        
-system_variables    BOOL(0)    YES        null        
+system_variables    boolean    YES        null        
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        
@@ -53,7 +53,7 @@ internal    VARCHAR(65535)    YES        null
 desc mo_sessions;
 Field    Type    Null    Key    Default    Extra    Comment
 node_id    VARCHAR(65535)    YES        null        
-conn_id    INT UNSIGNED(0)    YES        null        
+conn_id    int unsigned    YES        null        
 session_id    VARCHAR(65535)    YES        null        
 account    VARCHAR(65535)    YES        null        
 user    VARCHAR(65535)    YES        null        
@@ -88,8 +88,8 @@ Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        
 node_id    VARCHAR(65535)    YES        null        
 type    VARCHAR(65535)    YES        null        
-used    BIGINT UNSIGNED(0)    YES        null        
-free    BIGINT UNSIGNED(0)    YES        null        
+used    bigint unsigned    YES        null        
+free    bigint unsigned    YES        null        
 hit_ratio    FLOAT(0)    YES        null        
 desc mo_transactions;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -115,7 +115,7 @@ account_name    VARCHAR(300)    YES        null
 dat_name    VARCHAR(5000)    YES        null        
 variable_name    VARCHAR(300)    YES        null        
 variable_value    VARCHAR(5000)    YES        null        
-system_variables    BOOL(0)    YES        null        
+system_variables    boolean    YES        null        
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        
@@ -127,7 +127,7 @@ internal    VARCHAR(65535)    YES        null
 desc mo_sessions;
 Field    Type    Null    Key    Default    Extra    Comment
 node_id    VARCHAR(65535)    YES        null        
-conn_id    INT UNSIGNED(0)    YES        null        
+conn_id    int unsigned    YES        null        
 session_id    VARCHAR(65535)    YES        null        
 account    VARCHAR(65535)    YES        null        
 user    VARCHAR(65535)    YES        null        

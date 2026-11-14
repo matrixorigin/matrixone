@@ -213,8 +213,8 @@ TABLE_CATALOG    VARCHAR(64)    YES        null
 TABLE_SCHEMA    VARCHAR(64)    YES        null        
 TABLE_NAME    VARCHAR(64)    YES        null        
 COLUMN_NAME    VARCHAR(64)    YES        null        
-ORDINAL_POSITION    INT UNSIGNED(32)    YES        null        
-POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED(32)    YES        null        
+ORDINAL_POSITION    int unsigned    YES        null        
+POSITION_IN_UNIQUE_CONSTRAINT    int unsigned    YES        null        
 REFERENCED_TABLE_SCHEMA    VARCHAR(64)    YES        null        
 REFERENCED_TABLE_NAME    VARCHAR(64)    YES        null        
 REFERENCED_COLUMN_NAME    VARCHAR(64)    YES        null        
@@ -256,7 +256,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        
 table_schema    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
-view_definition    TEXT(0)    YES        null        
+view_definition    text    YES        null        
 check_option    VARCHAR(4)    NO        null        
 is_updatable    VARCHAR(3)    NO        null        
 definer    VARCHAR(65535)    YES        null        
@@ -316,7 +316,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
 DEFAULT_COLLATE_NAME    VARCHAR(64)    YES        null        
 DESCRIPTION    VARCHAR(2048)    YES        null        
-MAXLEN    INT UNSIGNED(32)    YES        null        
+MAXLEN    int unsigned    YES        null        
 select character_set_name, description, maxlen from character_sets limit 5;
 character_set_name    description    maxlen
 binary    Binary pseudo charset    1
@@ -331,9 +331,9 @@ EVENT_MANIPULATION    VARCHAR(10)    YES        null
 EVENT_OBJECT_CATALOG    VARCHAR(64)    YES        null        
 EVENT_OBJECT_SCHEMA    VARCHAR(64)    YES        null        
 EVENT_OBJECT_TABLE    VARCHAR(64)    YES        null        
-ACTION_ORDER    INT UNSIGNED(32)    YES        null        
+ACTION_ORDER    int unsigned    YES        null        
 ACTION_CONDITION    BINARY(0)    YES        null        
-ACTION_STATEMENT    TEXT(0)    YES        null        
+ACTION_STATEMENT    text    YES        null        
 ACTION_ORIENTATION    VARCHAR(3)    YES        null        
 ACTION_TIMING    VARCHAR(10)    YES        null        
 ACTION_REFERENCE_OLD_TABLE    BINARY(0)    YES        null        

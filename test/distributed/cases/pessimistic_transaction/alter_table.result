@@ -19,7 +19,7 @@ alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
@@ -47,7 +47,7 @@ alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        
@@ -68,7 +68,7 @@ commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        
@@ -101,7 +101,7 @@ alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
@@ -129,7 +129,7 @@ alter table t1 drop column col3;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
 select * from t1;
@@ -149,7 +149,7 @@ commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
 select * from t1;
@@ -181,7 +181,7 @@ alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
@@ -199,7 +199,7 @@ alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        
@@ -220,7 +220,7 @@ t1    0    PRIMARY    1    col1    A    0    NULL    NULL                       
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 colx    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        
@@ -238,7 +238,7 @@ commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 colx    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        
@@ -271,7 +271,7 @@ alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    INT(32)    YES        0        
@@ -291,7 +291,7 @@ alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
+col2    date    NO        null        
 col3    VARCHAR(16)    NO        null        
 col4    INT(32)    NO        null        
 col5    VARCHAR(20)    YES        null        

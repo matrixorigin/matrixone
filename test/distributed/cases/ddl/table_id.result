@@ -16,7 +16,7 @@ show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null
 b    VARCHAR(100)    YES        null
-c    BOOL(0)    YES        true
+c    boolean    YES        true
 insert into t2(id, b) values (1, 'abc');
 select id, b, c from t2 order by id;
 id    b    c

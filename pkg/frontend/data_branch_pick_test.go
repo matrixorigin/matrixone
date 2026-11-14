@@ -2178,6 +2178,12 @@ func (e *pickStreamingExecutor) ExecTxn(ctx context.Context, execFunc func(txn e
 
 func newPickStreamingBackExecForTest(t *testing.T, ses *Session, exec executor.SQLExecutor) *backExec {
 	t.Helper()
+	service := ses.GetService()
+	previousRuntime := moruntime.ServiceRuntime(service)
+	if previousRuntime == nil {
+		previousRuntime = moruntime.DefaultRuntime()
+	}
+	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime(service, previousRuntime) })
 
 	if ses.respr == nil {
 		ses.respr = &NullResp{}

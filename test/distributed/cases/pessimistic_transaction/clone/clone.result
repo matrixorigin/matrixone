@@ -911,8 +911,8 @@ select * from employees;
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -989,8 +989,8 @@ select * from employees;
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -1066,8 +1066,8 @@ select * from employees;
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
