@@ -139,6 +139,40 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
+
+	// Adding JSON_VALUE must retain the independent MEDIUMINT v110 floor.
+	args := make([]*planpb.Expr, 7)
+	for i := range args {
+		args[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	}
+	jsonValue := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: args,
+	}}}
+	op.ProjectList = append(op.ProjectList, jsonValue)
+	qry.Nodes[0].ProjectList = op.ProjectList
+	p.InstructionList[0].ProjectList = op.ProjectList
+	data, err = p.Marshal()
+	require.NoError(t, err)
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion134} {
+		client.version = version
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		_, sendErr := encodeRemoteScope(scope, c.proc)
+		decoded, receiveErr := decodeScope(data, c.proc, true, nil)
+		if version < defines.MORPCVersion110 {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			require.ErrorContains(t, sendErr, "version 110")
+			require.ErrorContains(t, receiveErr, "version 110")
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.NoError(t, sendErr)
+			require.NoError(t, receiveErr)
+			decoded.release()
+		}
+	}
+	require.Equal(t, client.calls, client.releases)
 }
 
 func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {

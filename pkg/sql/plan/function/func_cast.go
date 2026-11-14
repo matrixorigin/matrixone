@@ -9669,19 +9669,29 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 	// Values are read directly below, so fixed vectors never allocate wrappers
 	// in the row loop.
 	rs.UseOptFunctionParamFrame(1)
+	return castToJSONRows(from, rs, proc, length, selectList)
+}
+
+type jsonCastSink interface {
+	jsonConstructorSink
+	AppendByteJson(bytejson.ByteJson, bool) error
+}
+
+// Both ordinary CAST and private JSON readers use these row conversions.
+func castToJSONRows(from *vector.Vector, rs jsonCastSink, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	ctx := context.Background()
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
 
 	for row := 0; row < length; row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row)) {
+		if selectList != nil && (selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		if from.IsNull(uint64(row)) {
+		if from.GetType().Oid == types.T_any || from.IsNull(uint64(row)) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -9694,14 +9704,21 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 			identity bool
 			err      error
 		)
+		var raw []byte
+		if from.GetType().IsVarlen() {
+			raw, err = from.GetBytesAtChecked(row)
+			if err != nil {
+				return err
+			}
+		}
 		switch from.GetType().Oid {
 		case types.T_json:
-			encoded = from.GetBytesAt(row)
+			encoded = raw
 			identity = true
 		case types.T_char, types.T_varchar, types.T_text:
-			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
+			value, err = types.ParseSliceToByteJson(raw)
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			value, err = jsonvalue.FromBinary(ctx, jsonSessionProtocolVersion(proc), from.GetType().Oid, from.GetBytesAt(row))
+			value, err = jsonvalue.FromBinary(ctx, jsonSessionProtocolVersion(proc), from.GetType().Oid, raw)
 		case types.T_bool:
 			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
 		case types.T_bit:
@@ -9743,7 +9760,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_timestamp:
 			value = newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](from, row).String2(jsonSessionTimeZone(proc), 6))
 		case types.T_geometry, types.T_geometry32:
-			value, err = geometryToByteJSON(ctx, from.GetBytesAt(row))
+			value, err = geometryToByteJSON(ctx, raw)
 		default:
 			return formatCastError(ctx, from, types.T_json.ToType(), "")
 		}

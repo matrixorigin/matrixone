@@ -85,6 +85,7 @@ type container struct {
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
+	colexec.CloseJSONProjectionExecutors(projection.ctr.projExecutors)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
 	projection.ctr.inputSeen = false
@@ -103,6 +104,7 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
+	colexec.CloseJSONProjectionExecutors(projection.ctr.projExecutors)
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {
 			projection.ctr.projExecutors[i].Free()

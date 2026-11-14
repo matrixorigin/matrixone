@@ -195,6 +195,9 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	if len(tableScan.ctr.domainRows) == bat.RowCount() {
 		return nil
 	}
+	if err := tableScan.jsonPublication().SelectRows(tableScan.ctr.domainRows, proc.Mp()); err != nil {
+		return err
+	}
 	return shrinkPopulatedVecs(bat, tableScan.ctr.domainRows, proc.Mp())
 }
 

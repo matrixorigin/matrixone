@@ -388,3 +388,9 @@ func (valueScan *ValueScan) genSubBatchFromOriginBatch(proc *process.Process) (*
 	}
 	return subBatch, nil
 }
+
+// PublishJSONInputs admits one delivered version only when a consumer requests
+// JSON_VALUE input columns. Reset and receiver ACK behavior remain unchanged.
+func (*ValueScan) PublishJSONInputs(proc *process.Process, input *batch.Batch, columns []int) (*colexec.JSONInputVersions, error) {
+	return colexec.PublishJSONInputSnapshotsForEvaluation(proc, input, columns)
+}

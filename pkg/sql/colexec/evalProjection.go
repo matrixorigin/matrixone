@@ -50,6 +50,9 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 			return
 		}
 	}
+	if err = PrepareJSONProjectionExecutors(proc, projection.ProjectExecutors, selection); err != nil {
+		return err
+	}
 	if projection.projectBat == nil {
 		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
 	}
@@ -65,10 +68,24 @@ func (projection *Projection) HasPreparedProjection() bool {
 }
 
 func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	return projection.evalProjection(bat, proc, nil)
+}
+
+// EvalProjectionWithJSONReaders consumes explicitly published storage versions.
+// The caller retains ownership of the map and its handles for this call.
+func (projection *Projection) EvalProjectionWithJSONReaders(bat *batch.Batch, proc *process.Process, readers map[int]vector.JSONReader) (*batch.Batch, error) {
+	return projection.evalProjection(bat, proc, readers)
+}
+
+func (projection *Projection) evalProjection(bat *batch.Batch, proc *process.Process, readers map[int]vector.JSONReader) (*batch.Batch, error) {
 	if len(projection.ProjectExecutors) == 0 || bat == nil || bat.IsEmpty() || bat.Last() {
 		return bat, nil
 	}
 
+	if err := projection.bindJSONInputs(proc, bat, readers); err != nil {
+		return nil, err
+	}
+	defer projection.releaseJSONInputs()
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {
@@ -89,6 +106,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 }
 
 func (projection *Projection) ResetProjection(proc *process.Process) {
+	CloseJSONProjectionExecutors(projection.ProjectExecutors)
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].ResetForNextQuery()
@@ -98,6 +116,7 @@ func (projection *Projection) ResetProjection(proc *process.Process) {
 }
 
 func (projection *Projection) FreeProjection(proc *process.Process) {
+	CloseJSONProjectionExecutors(projection.ProjectExecutors)
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].Free()

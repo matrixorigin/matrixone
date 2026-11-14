@@ -55,10 +55,16 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	if len(projection.ctr.projExecutors) == 0 {
 		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 
+		if err != nil {
+			return err
+		}
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
 			projection.ctr.expandBuf = batch.NewWithSize(len(projection.ProjectList))
 		}
+	}
+	if err = colexec.PrepareJSONProjectionExecutors(proc, projection.ctr.projExecutors, nil); err != nil {
+		return err
 	}
 	if projection.GroupingSetCount > 0 {
 		if len(projection.ProjectList) < 3 || len(projection.GroupingFlags) == 0 ||
@@ -81,6 +87,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return projection.emitRuntimeEmptyGroupingSet(proc)
 	}
 
+	jsonColumns := colexec.JSONProjectionColumns(projection.ctr.projExecutors)
+	if len(jsonColumns) != 0 {
+		if source, ok := projection.GetChildren(0).(colexec.JSONInputRequester); ok {
+			if err := source.RequestJSONInputs(proc, jsonColumns); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+	}
 	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
@@ -100,6 +114,25 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	}
 	bat := result.Batch
 	projection.ctr.inputSeen = true
+
+	var versions *colexec.JSONInputVersions
+	if len(jsonColumns) != 0 {
+		if publisher, ok := projection.GetChildren(0).(colexec.JSONInputPublisher); ok {
+			versions, err = publisher.PublishJSONInputs(proc, bat, jsonColumns)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			defer colexec.CloseJSONInputVersions(versions)
+		}
+		var readers map[int]vector.JSONReader
+		if versions != nil {
+			readers = versions.Readers
+		}
+		if err := colexec.BindJSONProjectionExecutors(proc, projection.ctr.projExecutors, bat, readers); err != nil {
+			return vm.CancelResult, err
+		}
+		defer colexec.ReleaseJSONProjectionExecutors(projection.ctr.projExecutors)
+	}
 
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX

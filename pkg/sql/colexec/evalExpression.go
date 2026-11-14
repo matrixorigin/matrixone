@@ -546,10 +546,34 @@ func newExpressionExecutorWithAllocation(
 			childScope.temporalMode = temporalPerRow
 		}
 		for i := range executor.parameterExecutor {
+			if executor.fid == function.JSON_VALUE && i == 0 && t.F.Args[i].Typ.Id == int32(types.T_json) && t.F.Args[i].AuxId >= 0 {
+				if literal := t.F.Args[i].GetLit(); literal != nil {
+					input, inputErr := newJSONLiteralExpressionExecutor(proc, literal, selection)
+					if inputErr != nil {
+						executor.Free()
+						return nil, inputErr
+					}
+					if input != nil {
+						executor.SetParameter(i, input)
+						continue
+					}
+				}
+			}
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx, childScope)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
+			}
+			if executor.fid == function.JSON_VALUE && i == 0 {
+				if producer, ok := subExecutor.(*FunctionExpressionExecutor); ok && producer.supportsJSONReaderConstructor() {
+					wrapped, wrapErr := newJSONConstructorExpressionExecutor(proc, producer, selection)
+					if wrapErr != nil {
+						subExecutor.Free()
+						executor.Free()
+						return nil, wrapErr
+					}
+					subExecutor = wrapped
+				}
 			}
 			executor.SetParameter(i, subExecutor)
 		}
@@ -705,6 +729,7 @@ type FunctionExpressionExecutor struct {
 	parameterExecutor        []ExpressionExecutor
 	flowControlKind          vector.PrepareParamKind
 	flowControlKindSeen      bool
+	jsonProjectionProbe      bool // preparation-local traversal mark; cleared before return
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
@@ -1536,6 +1561,11 @@ func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool
 		return source.resultVector.IsConst(), false
 	case *ParamExpressionExecutor, *VarExpressionExecutor:
 		return true, false
+	case *jsonConstructorExpressionExecutor:
+		if source.FunctionExpressionExecutor == nil {
+			return false, false
+		}
+		return scalarExpressionValue(source.FunctionExpressionExecutor)
 	case *FunctionExpressionExecutor:
 		// CAST's row-evaluation flags protect diagnostics, rather than
 		// declaring its converted value nondeterministic.
@@ -1760,8 +1790,10 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 			executor = source.state.executor
 		case *memoRootExpressionExecutor:
 			executor = source.executor
-		case *ColumnExpressionExecutor:
+		case *ColumnExpressionExecutor, *JSONReaderExpressionExecutor:
 			return true
+		case *jsonConstructorExpressionExecutor:
+			return source.FunctionExpressionExecutor != nil && source.constant == nil && !source.folded.canFold
 		case *FunctionExpressionExecutor:
 			return !source.folded.canFold
 		default:
@@ -1774,6 +1806,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	proc *process.Process,
 	rowCount int,
 	selectList []bool,
+	reader vector.JSONReader,
 ) (*vector.Vector, error) {
 	expr.selectedRows = expr.selectedRows[:0]
 	for row := 0; row < rowCount; row++ {
@@ -1788,6 +1821,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedParameterVectors = make([]*vector.Vector, len(expr.parameterResults))
 	}
 	for i, parameter := range expr.parameterResults {
+		if reader != nil && i == 0 {
+			expr.selectedParameterResults[i] = parameter
+			continue
+		}
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
 		// They must be passed through unchanged; only column and non-folded
 		// function results map one-to-one to the input batch rows.
@@ -1833,9 +1870,19 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
-	if err := expr.evalFn(
-		expr.semanticParameterVectors(expr.selectedParameterResults), expr.selectedResult, proc, selectedCount, nil); err != nil {
-		return nil, err
+	var evalErr error
+	if reader != nil {
+		selectedReader, err := reader.Select(expr.selectedRows, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		evalErr = function.JsonValueWithReader(selectedReader, expr.semanticParameterVectors(expr.selectedParameterResults), expr.selectedResult, proc, selectedCount, nil)
+		selectedReader.Close()
+	} else {
+		evalErr = expr.evalFn(expr.semanticParameterVectors(expr.selectedParameterResults), expr.selectedResult, proc, selectedCount, nil)
+	}
+	if evalErr != nil {
+		return nil, evalErr
 	}
 	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
 		if err := applyTransparentStringSource(
@@ -1910,6 +1957,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return expr.evalWithJSONReader(proc, batches, selectList, nil)
+}
+
+func (expr *FunctionExpressionExecutor) evalWithJSONReader(proc *process.Process, batches []*batch.Batch, selectList []bool, reader vector.JSONReader) (*vector.Vector, error) {
 	if len(batches) == 0 {
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	}
@@ -1952,6 +2003,43 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	} else {
 		for i := range expr.parameterExecutor {
+			if i == 0 && expr.fid == function.JSON_VALUE && reader != nil {
+				expr.parameterResults[i] = nil
+				continue
+			}
+			if i == 0 && expr.fid == function.JSON_VALUE && reader == nil {
+				// A bound column source already owns its retained version until
+				// projection release. Borrow it for this synchronous evaluation
+				// instead of allocating another window per expression.
+				if source, ok := expr.parameterExecutor[i].(*JSONReaderExpressionExecutor); ok && source.reader != nil {
+					if source.reader.Length() != rowCount {
+						return nil, moerr.NewInvalidInputNoCtx("JSON source row mapping mismatch")
+					}
+					reader = source.reader
+					expr.parameterResults[i] = nil
+					continue
+				}
+				if source, ok := expr.parameterExecutor[i].(interface {
+					jsonReaderInput(*process.Process, []*batch.Batch, []bool) (vector.JSONReader, error)
+				}); ok {
+					inputReader, inputErr := source.jsonReaderInput(proc, batches, selectList)
+					if inputErr != nil {
+						return nil, inputErr
+					}
+					if inputReader == nil {
+						goto ordinaryParameter
+					}
+					if inputReader.Length() != rowCount {
+						inputReader.Close()
+						return nil, moerr.NewInvalidInputNoCtx("JSON source row mapping mismatch")
+					}
+					reader = inputReader
+					expr.parameterResults[i] = nil
+					defer inputReader.Close()
+					continue
+				}
+			}
+		ordinaryParameter:
 			expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, selectList)
 			if err != nil {
 				return nil, err
@@ -1967,7 +2055,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 			}
 		}
 		if selectedCount < rowCount {
-			return expr.evalSelectedRows(proc, rowCount, selectList)
+			return expr.evalSelectedRows(proc, rowCount, selectList, reader)
 		}
 	}
 
@@ -1997,8 +2085,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.evalFn(
-		expr.semanticParameterVectors(expr.parameterResults), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
+	if reader != nil {
+		err = function.JsonValueWithReader(reader, expr.semanticParameterVectors(expr.parameterResults), expr.resultVector, proc, rowCount, &expr.selectList)
+	} else {
+		err = expr.evalFn(expr.semanticParameterVectors(expr.parameterResults), expr.resultVector, proc, rowCount, &expr.selectList)
+	}
+	if err != nil {
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
@@ -4107,4 +4199,17 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 			ev.Executor[i].ResetForNextQuery()
 		}
 	}
+}
+
+// EvalWithJSONReader evaluates JSON_VALUE against an explicit immutable
+// document version. The caller owns the reader and its batch row mapping.
+// It never caches trust based on the address of an ordinary input Vector.
+func (expr *FunctionExpressionExecutor) EvalWithJSONReader(proc *process.Process, batches []*batch.Batch, selectList []bool, reader vector.JSONReader) (*vector.Vector, error) {
+	if expr.fid != function.JSON_VALUE || reader == nil || expr.folded.canFold {
+		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader expression")
+	}
+	if reader.Length() != expressionRowCount(batches) {
+		return nil, moerr.NewInvalidInputNoCtx("JSON reader row mapping mismatch")
+	}
+	return expr.evalWithJSONReader(proc, batches, selectList, reader)
 }

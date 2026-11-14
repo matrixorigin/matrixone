@@ -43,6 +43,7 @@ type FmtCtx struct {
 	paramExprOffset               bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
+	jsonValueSemantics            bool
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
 	caseExpressions               *[]*CaseExpr
@@ -173,6 +174,14 @@ func WithViewDefinition() FmtCtxOption {
 func WithParamExprOffset() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.paramExprOffset = true
+	})
+}
+
+// WithJSONValueSemantics formats JSON_VALUE clauses in their canonical
+// expression-identity form without changing the syntax tree or ordinary SQL.
+func WithJSONValueSemantics() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.jsonValueSemantics = true
 	})
 }
 
