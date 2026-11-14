@@ -1,105 +1,86 @@
-# Recover released-server TLS negotiation before authentication
+# Released-server TLS repair and SDK diagnostics
 
 Owner: [SDK #32671](https://github.com/matrixorigin/matrixone/pull/32671).
-Native owner: [4.2 fixes #32723](https://github.com/matrixorigin/matrixone/pull/32723).
-Revision: `released-server-tls-recovery-r1`.
+Native defect: [#29928](https://github.com/matrixorigin/matrixone/issues/29928).
+Revision: `released-server-tls-recovery-r2`.
 
-## Contract and evidence
+## Decision
 
-Official 4.2.8 can read the MySQL SSLRequest and TLS ClientHello into its packet
-buffer, then hand only the underlying socket to TLS. The unread TLS prefix is
-lost. An independent valid-protocol probe deterministically reproduces this;
-the native fix preserves the buffered prefix. A full SDK sweep also recorded
-two TLS EOF connection failures affecting six setup cases. Those EOF failures
-have not been conclusively attributed to the buffered-prefix defect.
+Repair lost TLS input in the server on the actual `v4.2.8-hotfix` release
+branch. The older 4.2-dev companion does not place that repair on this release
+branch. Retain certificate/hostname verification and all existing positive TLS
+assertions. SDK diagnostics identify failed negotiation on qualified release
+profiles without silently retrying authentication, changing TLS settings or
+claiming that a connection failure is functional compatibility.
 
-The SDK must preserve TLS policy and certificate verification. A failed TLS
-handshake cannot become a passing functional test. There is, however, a safe
-recovery boundary: before the first authentication payload, no credentials,
-session initialization or SQL have been sent. Re-establishing that physical
-connection does not repeat an authenticated operation.
+This supersedes r1's proposed one-EOF reconnect. Real tests against the published
+hotfix also produce TLS handshake timeouts within the caller's three-second
+budget. Reconnection cannot recover an already-consumed budget, and a caller's
+native engine has its own creator. A successful synthetic EOF recovery does
+not prove repair of the underlying protocol. The rejected implementation and
+failed tests remain outside tracked source; no automatic retry is delivered.
 
-Add at most one fresh connection attempt after an actual `ssl.SSLEOFError`
-during this boundary, only for exactly qualified release handshake banners.
-The second attempt must retain all original connection/TLS options and fit in
-the remaining physical-connect timeout. Each TLS handshake uses the remaining
-budget, without extending a shorter configured socket timeout. Authentication,
-driver initialization and later SQL retain their existing timeout owners.
-No recovery is permitted after an authentication payload starts, for certificate
-errors, timeouts, authentication rejection, unknown/custom/source banners or a
-second failed attempt. There is no sleep, backoff, TLS downgrade or SQL retry.
+## Protocol invariant and first owner
 
-This changes a connection-recovery/security boundary, so design review must
-precede implementation even though its runtime scope is small.
+The frontend MySQL reader can consume SSLRequest and ClientHello in one read.
+Every byte beyond SSLRequest must reach TLS exactly once before further socket
+reads. Preserve the buffered prefix in frontend.Conn and use that connection
+at both TLS handoff sites. Keep net.Conn deadlines, close and Unix socket
+liveness available. Upstream #29996 already implements this repair; backport
+its complete four-file change, including buffered/unbuffered/coalesced and
+peer-close tests, rather than changing client packet spacing or adding sleeps.
 
-## Responsibility and implementation
+Each connection retains its existing socket owner. The copied prefix is bounded
+by the frontend read buffer, drained once and released. The wrapper forwards
+writes, close, addresses, deadlines and SyscallConn. There is no new worker,
+queue, protocol round trip, wire format, persistent state or retry owner.
 
-Keep one exact-banner authority in the existing release compatibility module.
-Qualify the newly published `v4.2.8-hotfix-20261114` independently; its frontend
-TLS source is unchanged from 4.2.8. Its release asset must match the published
-SHA-256 and actual handshake/revision before selecting its SDK contract.
+## SDK responsibility
 
-The SDK-owned synchronous PyMySQL creator is the sole retry owner. A driver
-subclass records the authentication phase around the existing driver method:
-the first successful 32-byte CLIENT_SSL request is the protocol SSLRequest;
-the first subsequent authentication packet is marked **before** its write.
-Only an SSL EOF after SSLRequest and before authentication is tagged with the
-observed release. The driver still owns packet formatting, TLS wrapping,
-authentication plugins and cleanup. No duplicate implementation of those
-protocols is introduced. Existing required-TLS rejection remains before auth.
+Use PyMySQL's existing `_secure` state to distinguish negotiation from an
+established TLS/authentication exchange. For known release banners only, an
+actual SSL EOF or timeout while TLS is selected and `_secure` is still false
+gets fixed actionable advice. Preserve the real errno/SSL exception and existing
+password redaction. Do not relabel certificate, permission, TCP-connect,
+post-TLS/authentication or unrelated errors as the buffered-prefix defect.
+Advice must be conditional: the same symptom does not prove that exact cause.
 
-The creator can inspect the tagged original SSL exception retained by
-PyMySQL's OperationalError. It reconnects once if budget remains, otherwise
-propagates the real failure with fixed actionable advice and attempt count.
-Retain native errno and underlying SSL exception. Diagnostics contain no
-credentials or SQL. Different targets reached through a pool are classified
-on each physical handshake, without a client-wide capability cache.
+The SDK-owned creator integrates this diagnostic with its existing LOCAL-file
+owner. Adopted engines and async creators retain their owners. Do not introduce
+a second authentication state machine, packet-length classifier, deadline,
+worker, cache or retry. The successful path uses the driver unchanged.
 
-Integrate this creator at the existing LOCAL-file do_connect owner; retain
-explicit True/False/automatic LOCAL behavior and its initialization guard.
-Adopted engines and async driver creators remain under their existing owners.
-This fix does not add a new async TLS API or mutate a caller's SSLContext.
+## Version and packaging boundaries
 
-## Alternatives
+Qualify published 4.2.8 and `4.2.8-hotfix-20261114` by their exact banner,
+revision and asset hash. The maintained source branch identifies itself as
+`v4.2.8-hotfix`; its release-family SQL compatibility profile is separate from
+4.2-dev and main. Source-candidate results must pin the real git revision and
+be reported as candidate evidence, never as tests of an immutable published
+image. Test configuration cannot select runtime feature behavior.
 
-* Native buffered-prefix fix is the complete protocol repair and remains in
-  #32723. It cannot alter an already-published immutable binary.
-* Delaying ClientHello or changing packet spacing has no application-level
-  acknowledgement to synchronize with, so cannot provide a sound workaround.
-* Disabling TLS, relaxing verification or retrying an entire Client operation
-  changes security or can duplicate effects; reject these approaches.
-* Unbounded/general connection retry can hide certificate, permission or
-  availability problems. Keep this recovery to one proven pre-auth TLS EOF.
+The published ZIP also omitted the dictionaries required by its tokenizer.
+Use the same release source's dictionary assets for validation and fix bundle
+packaging to include the standard sibling `dict` directory. Keep the original
+ZIP and binary hashes; do not describe an installed missing dependency as an
+unchanged complete bundle. No dataset, parser, query or expected value is
+reduced to make the Chinese search test pass.
 
-## Ownership and bounds
+Native MySQL and SDK-adopted reflection are separate consumers. Preserve the
+exact native uppercase-type control and all SDK-positive metadata/value/replay
+oracles. Do not claim a raw third-party dialect is repaired by SDK adoption.
 
-Each failed attempt is closed by PyMySQL's existing BaseException cleanup;
-the creator never publishes it to a pool. A successful attempt transfers once
-to SQLAlchemy. LOCAL guard installation retains its existing abort-on-failure
-owner. Cancellation, timeout and unrelated errors propagate without retry.
-At most two sequential physical attempts exist, with no new worker, queue,
-timer, global state or retained failure history. The deadline and phase flags
-belong to that creator/connection. No authenticated resource is duplicated.
+## Validation
 
-## Validation and release boundaries
+For the native hotfix, run focused TLS/disconnect tests, the complete owning
+frontend package, relevant race cases, scoped static checks and an independent
+coalesced SSLRequest/ClientHello probe against the actual release-line build.
+Run the existing positive SDK TLS/certificate/hostname/plaintext-peer controls
+without altered assertions. Verify the release archive contains its required
+dictionary assets.
 
-Use the existing connection tests and disposable services. A deterministic
-local protocol peer closes once after SSLRequest, then performs actual TLS
-and native-password authentication on the fresh connection. Prove identical
-certificate policy and exactly one authentication on success, at most two
-accepted sockets, deadline/no-retry exhaustion, and closure of failed sockets.
-Controls cover certificate/hostname errors, post-auth EOF, unknown identities,
-wrong error type, required TLS on plaintext peer and explicit LOCAL options.
-
-Then qualify actual 4.2.8, the new published 4.2 hotfix and current main:
-unchanged positive connection/query/transaction assertions, complete online
-and analytics, the existing offline driver matrix, installed core and packaging.
-Keep direct native coalescing controls visible: SDK recovery does not claim to
-repair the old server protocol. A persistent failure remains a real failure
-with actionable advice, not an expected-error functional pass.
-
-The release contract runner must recognize the exact hotfix identity rather
-than silently label it 4.2.8. Preserve the existing two CI jobs and environments;
-no runner, shard or test assertion is removed. Unknown releases need their own
-qualification. Revisit this recovery only when supported affected releases are
-retired or contrary evidence changes its pre-authentication safety proof.
+For the SDK, test diagnostic phase/identity/error controls and LOCAL integration,
+then full online/analytics on main and the fixed release-line candidate, plus
+the existing offline matrix, installed core, package and CI contract checks.
+Keep the original released-server failed runs as evidence. No extra CI runner,
+shard, skipped case, broader timeout or expected-error functional pass is added.
