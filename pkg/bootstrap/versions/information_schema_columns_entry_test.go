@@ -24,13 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The shared COLUMNS upgrade entry converges the pre-change identity of the
-// tinyint(1) revision (issue #31749) to the current definition exactly once:
-// a tenant whose live view still holds the pre-change identity is not ready
-// (the CREATE OR REPLACE authoring of the current definition runs), while
-// the current identity - in both its initialized and its persisted
-// authoring form - reads ready, so the second check is a no-op.
-func TestInformationSchemaColumnsUpgradeEntryConvergesPreBoolIdentity(t *testing.T) {
+// The shared COLUMNS upgrade entry keeps reading the current identity - in
+// both its initialized and its persisted CREATE OR REPLACE authoring form -
+// as ready, so the tinyint(1) revision never rewrites a tenant whose live
+// view already matches (issue #31749).
+func TestInformationSchemaColumnsUpgradeEntryReadsCurrentIdentityReady(t *testing.T) {
 	entry := InformationSchemaColumnsUpgradeEntry()
 	require.Equal(t, sysview.InformationDBConst, entry.Schema)
 	require.Equal(t, "COLUMNS", entry.TableName)
@@ -43,7 +41,6 @@ func TestInformationSchemaColumnsUpgradeEntryConvergesPreBoolIdentity(t *testing
 		stored string
 		ready  bool
 	}{
-		{"pre-change tinyint(1) identity upgrades", sysview.InformationSchemaColumnsPreBoolTinyIntOneDDL(), false},
 		{"current identity after the replace is a no-op", sysview.InformationSchemaColumnsDDL, true},
 		{"persisted authoring form of the current identity", strings.Replace(sysview.InformationSchemaColumnsDDL,
 			"CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), true},

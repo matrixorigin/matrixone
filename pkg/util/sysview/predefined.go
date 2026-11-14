@@ -514,21 +514,6 @@ func informationSchemaColumnsWithBoolTinyIntOneDDL() string {
 		informationSchemaColumnsPhysicalIndexDDL())
 }
 
-// InformationSchemaColumnsPreBoolTinyIntOneDDL is the frozen pre-change
-// identity of the tinyint(1) revision (issue #31749): exactly what binaries
-// between the merged current and this revision persisted as their live
-// information_schema.COLUMNS definition, before the tinyint(1) left arm
-// recreates the view. It is the previous fixed physical-index-filtered
-// derivation itself - built from frozen templates and the fixed
-// decoration/layer functions, never from the new left arm - so later
-// revisions cannot drift it. Released catalogs hold it as the live view and
-// pre-upgrade snapshots and backups keep it, so the historical readers
-// recognize it byte-stably (a test pins it to the recorded pre-change
-// fixture) and the existing shared upgrade entry converges it exactly once.
-func InformationSchemaColumnsPreBoolTinyIntOneDDL() string {
-	return informationSchemaColumnsPhysicalIndexDDL()
-}
-
 // The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
 // from its frozen V109 lineage: the pre-change current text is exactly the
 // V109 historical constructor with this arm layered into DATA_TYPE.
@@ -650,14 +635,6 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	if definition == InformationSchemaColumnsPreDefaultGeneratedDDL() {
 		return definition, true
 	}
-	// The pre-change identity of the tinyint(1) revision (issue #31749):
-	// exactly what binaries between the merged current and this revision
-	// persisted as their live definition. It is fully derived and already
-	// carries current column authority and projections, so it passes through
-	// byte-stable under the same rule as its DEFAULT_GENERATED predecessor.
-	if definition == InformationSchemaColumnsPreBoolTinyIntOneDDL() {
-		return definition, true
-	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -677,8 +654,7 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 		isPreAttributesColumnsDDL(definition) ||
 		definition == InformationSchemaColumnsV110DDL() || definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
 		definition == InformationSchemaColumns4018DDL() ||
-		definition == InformationSchemaColumnsPreDefaultGeneratedDDL() ||
-		definition == InformationSchemaColumnsPreBoolTinyIntOneDDL()
+		definition == InformationSchemaColumnsPreDefaultGeneratedDDL()
 	if !known {
 		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 			derived := informationSchemaDerivedColumnsDDL(legacy)
@@ -717,8 +693,7 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // binaries persisted as their current definition: the protocol-100
 // definition, the V110 MEDIUMINT template, its base-era NULL-selector
 // variant, the upstream 4.0.18 published identity, the pre-change identity
-// of the DEFAULT_GENERATED revision, the pre-change identity of the
-// tinyint(1) revision, and the current (merged) definition. The historical
+// of the DEFAULT_GENERATED revision, and the current (merged) definition. The historical
 // protocol-109 definition is an input to the adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewDDL(definition)
@@ -727,7 +702,6 @@ func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 		definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
 		definition == InformationSchemaColumns4018DDL() ||
 		definition == InformationSchemaColumnsPreDefaultGeneratedDDL() ||
-		definition == InformationSchemaColumnsPreBoolTinyIntOneDDL() ||
 		definition == InformationSchemaColumnsDDL
 }
 
