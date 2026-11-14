@@ -184,8 +184,8 @@ func TestLateMaterializationCandidateUsesBlockPayload(t *testing.T) {
 	belowThreshold := types.New(types.T_varchar, 95, 0)
 	atThreshold := types.New(types.T_varchar, 96, 0)
 
-	require.False(t, isLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
-	require.True(t, isLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
+	require.False(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
+	require.True(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
 }
 
 func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {

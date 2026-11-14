@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Run one of the two time-balanced BVT groups. The latest BVT timing assigns
-# about 1501s to group 0 and 1479s to group 1. Keep the statement-info
-# producers and verifiers in one group: mo-tester runs directories in lexical order, so log,
-# result_count, sql_source_type, and statement_query_type run before
-# zz_statement_query_type.
+# Run one of the two time-balanced BVT groups. Keep git4data in group 1 to
+# offset the snapshot-heavy group 0 and the pessimistic/fulltext-heavy group 1.
+# Keep the statement-info producers and verifiers in one group: mo-tester runs
+# directories in lexical order, so log, result_count, sql_source_type, and
+# statement_query_type run before zz_statement_query_type.
 #
 # New top-level directories are assigned deterministically so every case is
 # exercised immediately; rebalance the explicit list from collected timing.
@@ -38,10 +38,10 @@ while IFS= read -r script_path; do
     top_level=${relative_path%%/*}
 
     case "${top_level}" in
-        array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|function|git4data|hint|join|keyword|load_data|mo_cloud|optimizer|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|snapshot|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
+        array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|function|hint|join|keyword|load_data|mo_cloud|optimizer|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|snapshot|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
             assigned_group=0
             ;;
-        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|fulltext|geo|iceberg|log|metadata|operator|pessimistic_transaction|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|sql_source_type|statement_query_type|subquery|table|task|udf|window|zz_accesscontrol|zz_statement_query_type)
+        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|fulltext|geo|git4data|iceberg|log|metadata|operator|pessimistic_transaction|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|sql_source_type|statement_query_type|subquery|table|task|udf|window|zz_accesscontrol|zz_statement_query_type)
             assigned_group=1
             ;;
         *)
@@ -69,4 +69,4 @@ fi
 printf '%s\n' "${included_scripts[@]}"
 
 cd "${tester_dir}"
-./run.sh -n -g -o -p "${case_root}" -i "${include_list}" "${resource_args[@]}"
+./run.sh -n -g -o -p "${case_root}" -i "${include_list}" "${resource_args[@]+"${resource_args[@]}"}"

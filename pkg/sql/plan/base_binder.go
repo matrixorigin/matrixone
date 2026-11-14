@@ -804,6 +804,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	var typ *plan.Type
 	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
+	// joinOnUnresolved holds the on-clause diagnostic this binder stored for
+	// an unresolved table qualifier, for the final delegated-lookup failure
+	// branch below.
+	var joinOnUnresolved error
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
@@ -866,6 +870,19 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column '%s' does not exist", name)
 			}
+		} else if tb, ok := b.impl.(*TableBinder); ok && tb.joinOn && depth == 0 {
+			// A reference this JOIN ON predicate binds directly (depth 0)
+			// resolves only against the FROM bindings the clause already
+			// owns; a table qualifier that stays unresolved there is out of
+			// clause scope, which MySQL reports as an unknown on-clause
+			// column rather than a Postgres-style missing FROM entry. The
+			// parent-correlation walk below still gets its chance before
+			// this error surfaces. A lookup delegated into this binder at
+			// depth > 0 originates in another clause — a nested WHERE or
+			// SELECT inside the ON subquery — and keeps that clause's own
+			// diagnostic.
+			err = moerr.NewBadFieldError(localErrCtx, name, "on clause")
+			joinOnUnresolved = err
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
@@ -1036,9 +1053,44 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if err == nil {
 		b.ctx.isCorrelated = true
+	} else if joinOnUnresolved != nil && moerr.IsMoErrCode(err, moerr.ErrInvalidInput) &&
+		!b.joinOnNamespaceResolved(db, table) {
+		// The delegated lookup walks outward with the same qualified
+		// reference, and an InvalidInput it returns is not proof by
+		// itself: a binding context that owns the namespace can also
+		// return InvalidInput for a column-level failure, such as an
+		// ambiguous duplicate-named column. Substitute the on-clause
+		// diagnostic only when no binding context the delegation consults
+		// holds the table namespace itself: then every scope failed the
+		// same missing namespace lookup, and the innermost occurrence,
+		// this ON clause, owns the unknown-column class. Any parent error
+		// from an owned namespace, and every non-InvalidInput parent
+		// error, keeps the parent's own diagnostic; successful outer
+		// correlation above is untouched.
+		err = joinOnUnresolved
 	}
 
 	return
+}
+
+// joinOnNamespaceResolved reports whether any binding context that a
+// delegated parent lookup walks holds a binding for the qualified table
+// namespace: the binder-bearing ancestor chain, skipping the binder-less
+// contexts the parent delegation never binds against, with the same
+// per-context lazy default-database fallback as the delegated lookup. A
+// namespace owned by an outer context means that context binds against it,
+// so a delegated InvalidInput born there is a column-level failure of the
+// owned namespace rather than a missing namespace.
+func (b *baseBinder) joinOnNamespaceResolved(db, table string) bool {
+	for c := b.ctx.parent; c != nil; c = c.parent {
+		if c.binder == nil {
+			continue
+		}
+		if b.resolveTableBinding(c, db, table) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
@@ -1324,6 +1376,25 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if b.numericParamType != nil &&
+		(astExpr.Op == tree.PLUS || astExpr.Op == tree.MINUS) &&
+		(isSyntacticIntervalOperand(astExpr.Left) || isSyntacticIntervalOperand(astExpr.Right)) {
+		// `x +/- INTERVAL n unit` is temporal arithmetic rewriting into
+		// DATE_ADD/DATE_SUB: like that function's own argument boundary, its
+		// operands must keep their source domains even when an enclosing
+		// numeric expression has already installed a numeric context here.
+		// The inherited context is restored on every exit path, so the
+		// temporal result is still typed normally for the remaining outer
+		// numeric consumers.
+		inheritedParamType := b.numericParamType
+		inheritedSubqueryTarget := b.numericSubqueryTarget
+		b.numericParamType = nil
+		b.numericSubqueryTarget = nil
+		defer func() {
+			b.numericParamType = inheritedParamType
+			b.numericSubqueryTarget = inheritedSubqueryTarget
+		}()
+	}
 	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
 		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
@@ -1688,6 +1759,22 @@ func (b *baseBinder) numericAstTypesInternal(
 	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
 }
 
+// isSyntacticIntervalOperand reports whether expr is the parser's
+// `INTERVAL <expr> <unit>` production, optionally parenthesized: the grammar
+// reduces that production to a two-argument function named interval whose
+// second argument is the time unit, and the interval rewrite binds exactly
+// this shape to the INTERVAL type. A function that merely shares the
+// spelling but carries another arity or argument shape is an ordinary
+// function call, not syntactic INTERVAL.
+func isSyntacticIntervalOperand(expr tree.Expr) bool {
+	funcExpr, ok := unwrapParenExpr(expr).(*tree.FuncExpr)
+	if !ok || len(funcExpr.Exprs) != 2 {
+		return false
+	}
+	_, secondIsUnit := funcExpr.Exprs[1].(*tree.TimeUnitExpr)
+	return secondIsUnit && numericAstFunctionName(funcExpr) == "interval"
+}
+
 func (b *baseBinder) numericAstTypesInternalWithHint(
 	astExpr tree.Expr,
 	depth int32,
@@ -1744,6 +1831,18 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
+			return numericAstTypeScan{}, nil
+		}
+		// `x +/- INTERVAL n unit` is the operator spelling of DATE_ADD/
+		// DATE_SUB, not numeric arithmetic. Both operands must reach the
+		// operator binding with their own domains - date-like text, user
+		// variables, prepared markers, temporal columns - so the existing
+		// temporal rewrite can consume the source values. Establishing the
+		// default numeric context over the whole subtree here would
+		// prefix-convert date text to DOUBLE before that rewrite and fail
+		// the dispatch.
+		if (expr.Op == tree.PLUS || expr.Op == tree.MINUS) &&
+			(isSyntacticIntervalOperand(expr.Left) || isSyntacticIntervalOperand(expr.Right)) {
 			return numericAstTypeScan{}, nil
 		}
 		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
