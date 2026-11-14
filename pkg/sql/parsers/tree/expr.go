@@ -1767,10 +1767,25 @@ func (s SampleExpr) String() string {
 }
 
 func (s SampleExpr) Format(ctx *FmtCtx) {
-	if s.typ == SampleRows {
-		ctx.WriteString(fmt.Sprintf("sample %d rows", s.n))
+	ctx.WriteString("sample(")
+	if s.isStar {
+		ctx.WriteByte('*')
 	} else {
-		ctx.WriteString(fmt.Sprintf("sample %.1f percent", s.k))
+		s.columns.Format(ctx)
+	}
+	ctx.WriteString(", ")
+	if s.typ == SampleRows {
+		ctx.WriteString(strconv.Itoa(s.n))
+		ctx.WriteString(" rows, '")
+		if s.level == SampleUsingRow {
+			ctx.WriteString("row")
+		} else {
+			ctx.WriteString("block")
+		}
+		ctx.WriteString("')")
+	} else {
+		ctx.WriteString(strconv.FormatFloat(s.k, 'f', -1, 64))
+		ctx.WriteString(" percent)")
 	}
 }
 

@@ -346,6 +346,16 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 	return function.CastPreservesNonNull(types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id))
 }
 
+// Publish branch output proofs before HAVING/projection binding can consume
+// them. The source expressions retain their AGG/SAMPLE input encoding types.
+func groupingOutputType(groups []*plan.Expr, flags []bool, index int) plan.Type {
+	typ := groups[index].Typ
+	if index < len(flags) && !flags[index] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
 func isIfNullCase(fn *plan.Function) bool {
 	if fn.Func.ObjName != "case" || len(fn.Args) != 3 {
 		return false
@@ -389,6 +399,11 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 		}
 	case *plan.Expr_W:
 		refreshExprNullabilityFromInput(impl.W.WindowFunc, input)
+		// PartitionBy belongs to the upstream PARTITION node's input
+		// coordinates; those keys need not survive into this WINDOW input.
+		for _, order := range impl.W.OrderBy {
+			refreshExprNullabilityFromInput(order.Expr, input)
+		}
 		expr.Typ.NotNullable = function.DeduceWindowNotNullable(impl.W)
 		impl.W.WindowFunc.Typ.NotNullable = expr.Typ.NotNullable
 	}
@@ -991,7 +1006,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingOutputType(node.GroupBy, node.GroupingFlag, idx),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1036,7 +1051,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingOutputType(node.GroupBy, node.GroupingFlag, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -1117,7 +1132,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(len(node.ProjectList)),
+						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -1367,6 +1382,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
+			// Binding preceded grouping/UNION null extension. Refresh both
+			// the evaluated window arguments and its published result proof.
 			refreshExprNullabilityFromInput(expr, childProjList)
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
 			if colRefCnt[globalRef] == 0 {
@@ -2322,7 +2339,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot, distinct, grouping bool) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 	}
@@ -2395,6 +2412,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
+		if grouping {
+			subCtx.groupingStage = &groupingStage{orderBy: astOrderBy, distinct: distinct}
+		}
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
@@ -2423,9 +2443,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		nodes[idx] = nodeID
 	}
 
-	// reset all select's return Projection(type cast up)
-	// we use coalesce function's type check&type cast rule
-	for columnIdx, argsType := range projectTypList {
+	// SQL set operands use COALESCE's common-type rules. Internal grouping
+	// arms instead carry identically bound slots (only nullability differs).
+	// Recoercing them can discard GROUPING bitmaps, e.g. BINARY -> BLOB.
+	for columnIdx := 0; !grouping && columnIdx < len(projectTypList); columnIdx++ {
+		argsType := projectTypList[columnIdx]
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
@@ -2553,6 +2575,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			BindingTags: []int32{lastTag},
 			ProjectList: getProjectList(newUnionType[utIdx], lastNodeID, newNodes[i], lastTag),
 		}, ctx)
+	}
+
+	if grouping {
+		return builder.finishGroupingStage(lastNodeID, subCtxList[0], ctx, astLimit, astRankOption, distinct, isRoot)
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -3081,6 +3107,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var helpFunc *helpFunc
 	var boundTimeWindowGroupBy *plan.Expr
 	var rollupFilter bool
+	var hasGroupBy bool
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
@@ -3149,6 +3176,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		if selectClause.GroupBy != nil {
+			hasGroupBy = true
+			if selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube {
+				// Expansion belongs to this planning invocation. CTAS and CTEs
+				// can bind the same source AST again, including formatting it.
+				localClause := *selectClause
+				localGroup := *selectClause.GroupBy
+				localGroup.GroupByExprsList = []tree.Exprs{localGroup.GroupByExprsList[0]}
+				localClause.GroupBy = &localGroup
+				selectClause = &localClause
+			}
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
 					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])
@@ -3180,15 +3217,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
+					having := selectClause.Having
+					if having != nil {
+						localHaving := *having
+						localHaving.RollupHaving = true
+						having = &localHaving
+					}
 					for i, list := range selectClause.GroupBy.GroupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
-							Distinct: selectClause.Distinct,
-							Exprs:    selectClause.Exprs,
-							From:     selectClause.From,
-							Where:    selectClause.Where,
+							Exprs: selectClause.Exprs,
+							From:  selectClause.From,
+							Where: selectClause.Where,
 							GroupBy: &tree.GroupByClause{
 								GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
 								GroupingSet:      list,
@@ -3196,7 +3235,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having: selectClause.Having,
+							Having: having,
 							Option: selectClause.Option,
 						}
 					}
@@ -3208,7 +3247,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, selectClause.Distinct, true)
 			}
 		}
 
@@ -3226,7 +3265,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
-		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot, false, false)
 	case *tree.ValuesClause:
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
@@ -3239,6 +3278,20 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
 		return
+	}
+
+	if hasGroupBy && !ctx.sampleFunc.hasSampleFunc && len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
+		// An explicit empty set is a global group even for SELECT constants.
+		// Keep one hidden aggregate so empty input still emits its single row
+		// and remapping/execution retain a non-empty aggregate output.
+		count, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*plan.Expr{MakePlan2Int64ConstExprWithType(1)})
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		ctx.aggregates = append(ctx.aggregates, count)
+		// HAVING must filter the emitted global row, not its input: filtering
+		// the input to zero rows would still leave one aggregate result.
+		rollupFilter = true
 	}
 
 	// bind TIME WINDOW
@@ -3256,6 +3309,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		); err != nil {
 			return
 		}
+	}
+
+	// Expanded groups bind ordering inputs now, but apply ordering only after
+	// the complete grouped result and its windows have been constructed.
+	if ctx.groupingStage != nil {
+		astOrderBy = ctx.groupingStage.orderBy
 	}
 
 	// bind ORDER BY clause
@@ -3357,6 +3416,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		); err != nil {
 			return
 		}
+	}
+
+	if ctx.groupingStage != nil {
+		return builder.appendGroupingStage(ctx, nodeID, resultLen, boundOrderBys, boundHavingList, notCacheable)
 	}
 
 	// append WINDOW node
@@ -3721,7 +3784,7 @@ func (builder *QueryBuilder) bindGroupBy(
 
 		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
 		boundTimeWindowGroupBy = &plan.Expr{
-			Typ: groupBinder.ctx.groups[colPos].Typ,
+			Typ: groupingOutputType(ctx.groups, ctx.groupingFlag, int(colPos)),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: groupBinder.ctx.groupTag,
@@ -3923,6 +3986,20 @@ func (builder *QueryBuilder) bindOrderBy(
 		return
 	}
 
+	if ctx.groupingStage != nil && (ctx.groupingStage.distinct || ctx.sampleFunc.hasSampleFunc) {
+		projectionBinder.orderByProjects = make(map[string]*plan.Expr, len(ctx.aliasMap))
+		for name, alias := range ctx.aliasMap {
+			if alias.astExpr != nil {
+				projectionBinder.orderByProjects[name] = &plan.Expr{
+					Typ: ctx.projects[alias.idx].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: ctx.projectTag, ColPos: alias.idx,
+					}},
+				}
+			}
+		}
+		defer func() { projectionBinder.orderByProjects = nil }()
+	}
 	orderBinder := NewOrderBinder(projectionBinder, selectList)
 	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 	for _, order := range astOrderBy {
@@ -4136,6 +4213,14 @@ func (builder *QueryBuilder) appendSampleNode(
 	boundHavingList []*plan.Expr,
 ) (newNodeID int32, err error) {
 	nodeID = builder.appendNode(generateSamplePlanNode(ctx, nodeID), ctx)
+	if ctx.groupingStage != nil {
+		ctx.groupingStage.sampleProjects = DeepCopyExprList(ctx.projects)
+	}
+	for _, exprs := range [][]*plan.Expr{ctx.projects, boundHavingList} {
+		for _, expr := range exprs {
+			rewriteSampleGrouping(expr, ctx)
+		}
+	}
 
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr

@@ -1,0 +1,1321 @@
+drop database if exists grouping_ctas_test;
+create database grouping_ctas_test;
+use grouping_ctas_test;
+create table src(g int not null,h int not null,v int not null);
+insert into src values(1,10,5),(1,20,7),(2,10,9);
+select g,h,sum(v) s from src group by g,h
+union all select g,null,sum(v) from src group by g
+union all select null,null,sum(v) from src
+order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select g,h,sum(v) s from src group by g,h with rollup order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table r as select g,h,sum(v) s from src group by g,h with rollup;
+select * from r order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table inserted(g int,h int,s decimal(38,0));
+insert into inserted select g,h,sum(v) from src group by g,h with rollup;
+select * from inserted order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[3,39,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='r' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  YES  𝄀
+h  ¦  YES  𝄀
+s  ¦  YES  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into r(g,h,s) values(null,null,0);
+select count(*) from r where s=0 and g is null and h is null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select g,h,sum(v) s from src group by cube(g,h) order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  10  ¦  14  𝄀
+null  ¦  20  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table c as select coalesce(g,-1) g,coalesce(h,-1) h,sum(v) s
+from src group by cube(g,h);
+select * from c order by g,h;
+➤ g[-5,64,0]  ¦  h[-5,64,0]  ¦  s[-5,64,0]  𝄀
+-1  ¦  -1  ¦  21  𝄀
+-1  ¦  10  ¦  14  𝄀
+-1  ¦  20  ¦  7  𝄀
+1  ¦  -1  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  -1  ¦  9  𝄀
+2  ¦  10  ¦  9
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='c' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+h  ¦  NO  𝄀
+s  ¦  YES  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into c(g,h,s) values(null,0,0);
+constraint violation: Column 'g' cannot be null
+insert into c(g,h,s) values(0,null,0);
+constraint violation: Column 'h' cannot be null
+create table sets_result as select g,h,sum(v) s
+from src group by grouping sets ((g,h),(g),());
+select * from sets_result order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table duplicates as select g,sum(v) s
+from src group by grouping sets ((g),(g),());
+select * from duplicates order by g,s;
+➤ g[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  21  𝄀
+1  ¦  12  𝄀
+1  ¦  12  𝄀
+2  ¦  9  𝄀
+2  ¦  9
+create table empty_set as select count(*) c from src group by grouping sets (());
+select * from empty_set;
+➤ c[-5,64,0]  𝄀
+3
+create table duplicate_empty as select count(*) c from src group by grouping sets ((),());
+select * from duplicate_empty order by c;
+➤ c[-5,64,0]  𝄀
+3  𝄀
+3
+create table common_key as select g,h,count(*) c
+from src group by grouping sets ((g,h),(g));
+select * from common_key order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='common_key' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+h  ¦  YES  𝄀
+c  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into common_key(g,h,c) values(null,0,0);
+constraint violation: Column 'g' cannot be null
+insert into common_key(g,h,c) values(0,0,null);
+constraint violation: Column 'c' cannot be null
+insert into common_key(g,h,c) values(3,null,0);
+select * from common_key where g=3;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+3  ¦  null  ¦  0
+create table ordinary as select g,count(*) c from src group by g;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='ordinary' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  NO  𝄀
+c  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+insert into ordinary(g,c) values(null,0);
+constraint violation: Column 'g' cannot be null
+create view grouped_view as select g,h,count(*) c from src group by g,h with rollup;
+select * from grouped_view order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='grouped_view' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  YES  𝄀
+h  ¦  YES  𝄀
+c  ¦  NO
+create table view_result as select * from grouped_view;
+select * from view_result order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+with grouped as (select g,h,count(*) c from src group by cube(g,h))
+select (select count(*) from grouped) a,(select count(*) from grouped) b;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  𝄀
+8  ¦  8
+prepare grouping_stmt from 'select g,h,count(*) c from src group by g,h with rollup order by g,h';
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+execute grouping_stmt;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  3  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  1
+deallocate prepare grouping_stmt;
+select g,h,sum(v) s from src group by g,h with rollup having sum(v)>7 order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+1  ¦  null  ¦  12  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+create table pruned as select 1 k from src group by g,h with rollup;
+select count(*) from pruned;
+➤ count(*)[-5,64,0]  𝄀
+6
+create table empty_src(g int not null,h int not null,v int not null);
+create table empty_rollup as select g,h,count(*) c from empty_src group by g,h with rollup;
+select * from empty_rollup order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]
+select count(*) from empty_rollup;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table empty_cube as select g,h,count(*) c from empty_src group by cube(g,h);
+select * from empty_cube order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  c[-5,64,0]
+select count(*) from empty_cube;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table empty_duplicates as select count(*) c from empty_src group by grouping sets ((),());
+select * from empty_duplicates order by c;
+➤ c[-5,64,0]  𝄀
+0  𝄀
+0
+create table nullable_src(g int,h int,v int);
+insert into nullable_src values(null,10,5),(1,null,7);
+select g,h,sum(v) s,grouping(g,h) flag from nullable_src group by g,h with rollup order by g,h,flag;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  null  ¦  5  ¦  1  𝄀
+null  ¦  null  ¦  12  ¦  3  𝄀
+null  ¦  10  ¦  5  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  1
+create table nullable_result as select g,h,sum(v) s,grouping(g,h) flag
+from nullable_src group by g,h with rollup;
+select * from nullable_result order by g,h,flag;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  null  ¦  5  ¦  1  𝄀
+null  ¦  null  ¦  12  ¦  3  𝄀
+null  ¦  10  ¦  5  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  0  𝄀
+1  ¦  null  ¦  7  ¦  1
+select g from src group by grouping sets ((g),(g)) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+2
+select distinct g from src group by grouping sets ((g),(g)) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+create table repeated_keys as select g from src group by grouping sets ((g),(g));
+select * from repeated_keys order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+2
+create table distinct_keys as select distinct g from src group by grouping sets ((g),(g));
+select * from distinct_keys order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+create table distinct_limit as select distinct g from src group by grouping sets ((g),(g),()) order by g limit 2;
+select * from distinct_limit order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+select distinct g from src group by g,h with rollup order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select g,h+1 hh,sum(v) s from src group by cube(g,h+1) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+create table expression_cube as select g,h+1 hh,sum(v) s from src group by cube(g,h+1);
+select * from expression_cube order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+select g,h+1 hh,sum(v) s from src group by grouping sets ((g,h+1),(h+1),()) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  11  ¦  9
+create table expression_sets as select g,h+1 hh,sum(v) s
+from src group by grouping sets ((g,h+1),(h+1),());
+select * from expression_sets order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  11  ¦  9
+select g,abs(h) hh,sum(v) s from src group by cube(g,abs(h)) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  10  ¦  14  𝄀
+null  ¦  20  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  10  ¦  9
+select g,h+1 hh,sum(v) s from src group by cube(1,2) order by g,hh;
+➤ g[4,32,0]  ¦  hh[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  21  𝄀
+null  ¦  11  ¦  14  𝄀
+null  ¦  21  ¦  7  𝄀
+1  ¦  null  ¦  12  𝄀
+1  ¦  11  ¦  5  𝄀
+1  ¦  21  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+2  ¦  11  ¦  9
+create table pk_src(id int primary key);
+insert into pk_src values(1),(2);
+select id from pk_src group by id order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from pk_src group by id with rollup order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_rollup as select id from pk_src group by id with rollup;
+select * from pk_rollup order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_rollup' and column_name='id';
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  YES
+insert into pk_rollup values(null);
+select count(*) from pk_rollup where id is null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select id from pk_src group by cube(id) order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_cube as select id from pk_src group by cube(id);
+select * from pk_cube order by id;
+➤ id[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+create table pk_ordinary as select id from pk_src group by id;
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='pk_ordinary' and column_name='id';
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  NO
+insert into pk_ordinary values(null);
+constraint violation: Column 'id' cannot be null
+select 1 k from src group by grouping sets (());
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+create table constant_empty_sets as select 1 k from src group by grouping sets ((),());
+select * from constant_empty_sets order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select 1 k from empty_src group by grouping sets (());
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from empty_src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+create table constant_empty_input as select 1 k from empty_src group by grouping sets ((),());
+select * from constant_empty_input order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select distinct 1 k from src group by grouping sets ((),());
+➤ k[-5,64,0]  𝄀
+1
+create table distinct_empty_sets as select distinct 1 k from empty_src group by grouping sets ((),());
+select * from distinct_empty_sets;
+➤ k[-5,64,0]  𝄀
+1
+select 1 k from src order by k;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+1
+select 1 k from empty_src;
+➤ k[-5,64,0]
+select 1 k from src group by grouping sets (()) having 1=0;
+➤ k[-5,64,0]
+select 1 k from empty_src group by grouping sets (()) having 1=0;
+➤ k[-5,64,0]
+select g from src group by grouping sets (());
+SQL syntax error: column "src.g" must appear in the GROUP BY clause or be used in an aggregate function
+select g from (select g from src group by g with rollup) t where g=1;
+➤ g[4,32,0]  𝄀
+1
+create table filtered_rollup as select g from (select g from src group by g with rollup) t where g=1;
+select * from filtered_rollup;
+➤ g[4,32,0]  𝄀
+1
+select g from (select g from src group by g with rollup) t where g is null;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g from src group by g with rollup) t where g is not null order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select g from (select g from src group by g with rollup) t where coalesce(g,-1)=-1;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g from src group by g with rollup) t where g in (1,2) order by g;
+➤ g[4,32,0]  𝄀
+1  𝄀
+2
+select g from src where g=1 group by g with rollup order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1
+select g,h from (select g,h from src group by grouping sets ((g,h),(g))) t where g=1 order by h;
+➤ g[4,32,0]  ¦  h[4,32,0]  𝄀
+1  ¦  null  𝄀
+1  ¦  10  𝄀
+1  ¦  20
+select k from (select g+1 k from src group by g+1 with rollup) t where k=2;
+➤ k[-5,64,0]  𝄀
+2
+select * from (select 1 k from src group by grouping sets (())) t where k=0;
+➤ k[-5,64,0]
+create table filtered_empty_set as select * from (select 1 k from src group by grouping sets (())) t where k=0;
+select * from filtered_empty_set;
+➤ k[-5,64,0]
+select * from (select 1 k from empty_src group by grouping sets (())) t where k=0;
+➤ k[-5,64,0]
+select * from (select 1 k from src group by grouping sets ((),())) t where k=0;
+➤ k[-5,64,0]
+select * from (select 1 k from src group by grouping sets ((),())) t where k=1;
+➤ k[-5,64,0]  𝄀
+1  𝄀
+1
+select count(*) from src having 1=0;
+➤ count(*)[-5,64,0]
+select * from (select count(*) k from src) t where false;
+➤ k[-5,64,0]
+select g,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+create table global_window as select g,count(*) over() n from src group by g with rollup;
+select * from global_window order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+select g,row_number() over(order by g) rn from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  rn[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+select g,count(g) over() present_keys,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  present_keys[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  2  ¦  3  𝄀
+1  ¦  2  ¦  3  𝄀
+2  ¦  2  ¦  3
+select g,sum(v) s,sum(sum(v)) over() total,count(*) over() n from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  21  ¦  42  ¦  3  𝄀
+1  ¦  12  ¦  42  ¦  3  𝄀
+2  ¦  9  ¦  42  ¦  3
+select g,sum(v) s,sum(sum(v)) over(order by g rows between unbounded preceding and current row) running
+from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  running[-5,64,0]  𝄀
+null  ¦  21  ¦  21  𝄀
+1  ¦  12  ¦  33  𝄀
+2  ¦  9  ¦  42
+select g,count(*) over(partition by g) n from src group by grouping sets ((g),(g),()) order by g,n;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  2  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+2  ¦  2
+select g,count(*) over() n from src group by g with rollup having sum(v)>10 order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  2  𝄀
+1  ¦  2
+select distinct count(*) over() n from src group by g with rollup;
+➤ n[-5,64,0]  𝄀
+3
+create table distinct_window as select distinct count(*) over() n from src group by g with rollup;
+select * from distinct_window;
+➤ n[-5,64,0]  𝄀
+3
+select g from src group by g with rollup order by count(*) over(),g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select g,count(*) over() n from src group by g with rollup order by g limit 2;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3
+select * from (select g,count(*) over() n from src group by g with rollup) t where g=1;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  3
+select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+➤ k[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+create table empty_window as select 1 k,count(*) over() n from empty_src group by grouping sets ((),());
+select * from empty_window;
+➤ k[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+select g,count(*) over() n from empty_src group by g with rollup;
+➤ g[4,32,0]  ¦  n[-5,64,0]
+select g,sum(v) s,grouping(g) flag,row_number() over(order by g,grouping(g)) rn
+from nullable_src group by g with rollup order by g,flag;
+➤ g[4,32,0]  ¦  s[-5,64,0]  ¦  flag[-5,64,0]  ¦  rn[-5,64,0]  𝄀
+null  ¦  5  ¦  0  ¦  1  𝄀
+null  ¦  12  ¦  1  ¦  2  𝄀
+1  ¦  7  ¦  0  ¦  3
+create view global_window_view as select g,count(*) over() n from src group by g with rollup;
+create table window_view_result as select * from global_window_view;
+select * from window_view_result order by g;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+prepare global_window_stmt from 'select g,count(*) over() n from src group by g with rollup order by g';
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+execute global_window_stmt;
+➤ g[4,32,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  3  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+deallocate prepare global_window_stmt;
+select g,g in (select id from pk_src) in_rhs,g not in (select id from pk_src) not_in_rhs,
+g>any(select id from pk_src) any_rhs,g<=all(select id from pk_src) all_rhs
+from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  in_rhs[-7,1,0]  ¦  not_in_rhs[-7,1,0]  ¦  any_rhs[-7,1,0]  ¦  all_rhs[-7,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  1  ¦  0
+create table quantified_group as select g,g in (select id from pk_src) in_rhs,
+g not in (select id from pk_src) not_in_rhs from src group by g with rollup;
+select * from quantified_group order by g;
+➤ g[4,32,0]  ¦  in_rhs[-7,1,0]  ¦  not_in_rhs[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  0
+select g from quantified_group where in_rhs is null;
+➤ g[4,32,0]  𝄀
+null
+select g,g in (select id from pk_src where id<0) in_empty,
+g not in (select id from pk_src where id<0) not_in_empty
+from src group by g with rollup order by g;
+➤ g[4,32,0]  ¦  in_empty[-7,1,0]  ¦  not_in_empty[-7,1,0]  𝄀
+null  ¦  0  ¦  1  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1
+select g,h,(g,h) in (select id,id+9 from pk_src) tuple_rhs
+from src group by g,h with rollup order by g,h;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  tuple_rhs[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  null  ¦  null  𝄀
+1  ¦  10  ¦  1  𝄀
+1  ¦  20  ¦  0  𝄀
+2  ¦  null  ¦  null  𝄀
+2  ¦  10  ¦  0
+select distinct (select 7) k from src group by g with rollup;
+➤ k[-5,64,0]  𝄀
+7
+create table distinct_scalar_group as select distinct (select 7) k from src group by g with rollup;
+select * from distinct_scalar_group;
+➤ k[-5,64,0]  𝄀
+7
+select distinct (select id from pk_src where id=1) k from src group by g with rollup;
+➤ k[4,32,0]  𝄀
+1
+select distinct (select id from pk_src where id<0) k from src group by g with rollup;
+➤ k[4,32,0]  𝄀
+null
+select distinct coalesce((select 7),9) k from src group by grouping sets ((g),(g));
+➤ k[-5,64,0]  𝄀
+7
+select distinct g in (select id from pk_src) flag from src group by g with rollup order by flag;
+➤ flag[-7,1,0]  𝄀
+null  𝄀
+1
+select distinct count(*) over() n,(select 7) k from src group by g with rollup;
+➤ n[-5,64,0]  ¦  k[-5,64,0]  𝄀
+3  ¦  7
+create table distinct_window_subquery as
+select distinct count(*) over() n,(select 7) k from src group by g with rollup;
+select * from distinct_window_subquery;
+➤ n[-5,64,0]  ¦  k[-5,64,0]  𝄀
+3  ¦  7
+select g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+1  ¦  7  𝄀
+2  ¦  9  𝄀
+2  ¦  9
+create table grouped_sample as select g,sample(v,100 percent) chosen
+from src group by grouping sets ((g),(g));
+select * from grouped_sample order by g,chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+1  ¦  7  𝄀
+2  ¦  9  𝄀
+2  ¦  9
+select g,h,sample(v,100 percent) chosen from src group by grouping sets ((),()) order by g,h,chosen;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  10  ¦  9  𝄀
+2  ¦  10  ¦  9
+select g,sample(h,v,100 percent) from src group by grouping sets ((g),(g)) order by g,h,v;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  10  ¦  9  𝄀
+2  ¦  10  ¦  9
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select g,sample(v,10 rows) chosen from src group by grouping sets ((g),(g)) order by g,chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+1  ¦  7  𝄀
+2  ¦  9  𝄀
+2  ¦  9
+select sample(v,100 percent) chosen from src group by grouping sets ((),()) order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+5  𝄀
+7  𝄀
+7  𝄀
+9  𝄀
+9
+create table empty_sets_sample as select sample(v,100 percent) chosen
+from src group by grouping sets ((),());
+select * from empty_sets_sample order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+5  𝄀
+7  𝄀
+7  𝄀
+9  𝄀
+9
+create table sample_null_union as
+select null z,sample(v,100 percent) chosen from src group by grouping sets ((),()) union all select 42,99;
+select * from sample_null_union order by z,chosen;
+➤ z[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+null  ¦  9  𝄀
+42  ¦  99
+select sample(v,100 percent) chosen from empty_src group by grouping sets ((),());
+➤ chosen[4,32,0]
+select g,sample(v,0 percent) chosen from src group by grouping sets ((g),(g));
+➤ g[4,32,0]  ¦  chosen[4,32,0]
+create table binary_key(k binary(4),v int not null);
+insert into binary_key values('a',1),('b',2),(null,4);
+create table varbinary_key(k varbinary(4),v int not null);
+insert into varbinary_key values('a',1),('b',2),(null,4);
+select k is null null_key,grouping(k) flag,sum(v) s from binary_key group by k with rollup order by flag,s;
+➤ null_key[-7,1,0]  ¦  flag[-5,64,0]  ¦  s[-5,64,0]  𝄀
+0  ¦  0  ¦  1  𝄀
+0  ¦  0  ¦  2  𝄀
+1  ¦  0  ¦  4  𝄀
+1  ¦  1  ¦  7
+create table binary_markers as
+select k is null null_key,grouping(k) flag,sum(v) s from binary_key group by k with rollup;
+select * from binary_markers order by flag,s;
+➤ null_key[-7,1,0]  ¦  flag[-5,64,0]  ¦  s[-5,64,0]  𝄀
+0  ¦  0  ¦  1  𝄀
+0  ¦  0  ¦  2  𝄀
+1  ¦  0  ¦  4  𝄀
+1  ¦  1  ¦  7
+create table varbinary_markers as
+select hex(k) hk,grouping(k) flag,sum(v) s from varbinary_key group by k with rollup;
+select * from varbinary_markers order by flag,s;
+➤ hk[12,-1,0]  ¦  flag[-5,64,0]  ¦  s[-5,64,0]  𝄀
+61  ¦  0  ¦  1  𝄀
+62  ¦  0  ¦  2  𝄀
+null  ¦  0  ¦  4  𝄀
+null  ¦  1  ¦  7
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup order by flag,g,chosen;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+2  ¦  0  ¦  9  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9
+create table sampled_rollup as
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup;
+select * from sampled_rollup order by flag,g,chosen;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+2  ¦  0  ¦  9  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='sampled_rollup' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+g  ¦  YES  𝄀
+flag  ¦  NO  𝄀
+chosen  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+select g,h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h) order by flag,g,h,chosen;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10  ¦  0  ¦  5  𝄀
+1  ¦  20  ¦  0  ¦  7  𝄀
+2  ¦  10  ¦  0  ¦  9  𝄀
+1  ¦  null  ¦  1  ¦  5  𝄀
+1  ¦  null  ¦  1  ¦  7  𝄀
+2  ¦  null  ¦  1  ¦  9  𝄀
+null  ¦  10  ¦  2  ¦  5  𝄀
+null  ¦  10  ¦  2  ¦  9  𝄀
+null  ¦  20  ¦  2  ¦  7  𝄀
+null  ¦  null  ¦  3  ¦  5  𝄀
+null  ¦  null  ¦  3  ¦  7  𝄀
+null  ¦  null  ¦  3  ¦  9
+create table sampled_cube as
+select g,h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h);
+select * from sampled_cube order by flag,g,h,chosen;
+➤ g[4,32,0]  ¦  h[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10  ¦  0  ¦  5  𝄀
+1  ¦  20  ¦  0  ¦  7  𝄀
+2  ¦  10  ¦  0  ¦  9  𝄀
+1  ¦  null  ¦  1  ¦  5  𝄀
+1  ¦  null  ¦  1  ¦  7  𝄀
+2  ¦  null  ¦  1  ¦  9  𝄀
+null  ¦  10  ¦  2  ¦  5  𝄀
+null  ¦  10  ¦  2  ¦  9  𝄀
+null  ¦  20  ¦  2  ¦  7  𝄀
+null  ¦  null  ¦  3  ¦  5  𝄀
+null  ¦  null  ¦  3  ¦  7  𝄀
+null  ¦  null  ¦  3  ¦  9
+select h,grouping(g,h) flag,sample(v,100 percent) chosen from src group by cube(g,h) order by flag,h,chosen;
+➤ h[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+10  ¦  0  ¦  5  𝄀
+10  ¦  0  ¦  9  𝄀
+20  ¦  0  ¦  7  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9  𝄀
+10  ¦  2  ¦  5  𝄀
+10  ¦  2  ¦  9  𝄀
+20  ¦  2  ¦  7  𝄀
+null  ¦  3  ¦  5  𝄀
+null  ¦  3  ¦  7  𝄀
+null  ¦  3  ¦  9
+select g,grouping(g) flag,sample(v,100 percent) chosen
+from src group by grouping sets ((g),(g),()) order by flag,g,chosen;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+1  ¦  0  ¦  7  𝄀
+2  ¦  0  ¦  9  𝄀
+2  ¦  0  ¦  9  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9
+select g,grouping(g) flag,sample(v,100 percent) chosen
+from nullable_src group by g with rollup order by flag,g,chosen;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7
+select g,grouping(g) flag,sample(v,100 percent) chosen from empty_src group by g with rollup;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]
+select first_value(g) over(order by g) f from src group by g with rollup;
+➤ f[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null
+create view first_group_value as select first_value(g) over(order by g) f from src group by g with rollup;
+select * from first_group_value;
+➤ f[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='first_group_value';
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+f  ¦  YES
+create table first_group_ctas as select first_value(g) over(order by g) f from src group by g with rollup;
+select * from first_group_ctas;
+➤ f[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null
+create table partition_group_ctas as
+select first_value(g) over(partition by h order by g) f from src group by g,h with rollup;
+select * from partition_group_ctas order by f;
+➤ f[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+1  𝄀
+1  𝄀
+1
+create table first_group_fallback as
+select coalesce(first_value(g) over(order by g),7) f,count(*) over() n from src group by g with rollup;
+select * from first_group_fallback;
+➤ f[-5,64,0]  ¦  n[-5,64,0]  𝄀
+7  ¦  3  𝄀
+7  ¦  3  𝄀
+7  ¦  3
+select column_name,is_nullable from information_schema.columns
+where table_schema='grouping_ctas_test' and table_name='first_group_fallback' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+f  ¦  NO  𝄀
+n  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+select distinct g from src group by g,h order by (g,h);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g from src group by g,h with rollup order by (g,h);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+create table rejected_tuple_order as select distinct g from src group by g,h with rollup order by (g,h);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_tuple_order';
+➤ count(*)[-5,64,0]  𝄀
+0
+select sum(c) from (select count(*) c from src group by g,h with rollup) t;
+➤ sum(c)[-5,64,0]  𝄀
+9
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by chosen+1;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+create table ordered_sample as
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by chosen+1;
+select * from ordered_sample order by chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select distinct g,sample(v,100 percent) chosen from src group by grouping sets ((g),(g)) order by h;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+create table hidden_grouping_order as select sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from hidden_grouping_order order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select g,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+create table visible_grouping_key_order as select g,sample(v,100 percent) chosen
+from src group by g with rollup order by grouping(g) desc,chosen limit 3;
+select * from visible_grouping_key_order order by chosen;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+select g,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g) desc,chosen limit 3;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(g)+0 desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by grouping sets ((g),(g),())
+order by grouping(g) desc,chosen limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(g) desc,chosen limit 2;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7
+create table sort_big_sample(g int not null,v bigint not null);
+insert into sort_big_sample select g,v from src;
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
+create table literal_zero_sample_order as
+select grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+select * from literal_zero_sample_order order by chosen,flag desc;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
+select grouping(g) flag,0 z,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  z[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  0  ¦  5  𝄀
+0  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7
+select distinct grouping(g) flag,sample(v,100 percent) chosen from sort_big_sample group by g with rollup
+order by chosen+0,flag desc limit 3;
+➤ flag[-5,64,0]  ¦  chosen[-5,64,0]  𝄀
+1  ¦  5  𝄀
+0  ¦  5  𝄀
+1  ¦  7
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+➤ g[4,32,0]
+create table compound_operand_filtered as
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+select * from compound_operand_filtered;
+➤ g[4,32,0]
+select count(*) from compound_operand_filtered;
+➤ count(*)[-5,64,0]  𝄀
+0
+select g from (select g,g+0 not in(select id from pk_src) flag from src group by g with rollup) t where flag;
+➤ g[4,32,0]
+select g from (select g,g+0 in(select id from pk_src) flag from src group by g with rollup) t where flag is null;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g,coalesce(g,0) in(select id from pk_src) flag from src group by g with rollup) t where not flag;
+➤ g[4,32,0]  𝄀
+null
+select g from (select g,g+0 in(select id from pk_src where id<0) flag from src group by g with rollup) t where not flag order by g;
+➤ g[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+➤ k[4,32,0]  𝄀
+2
+create table scalar_alias_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by k+1;
+select * from scalar_alias_order;
+➤ k[4,32,0]  𝄀
+2
+select distinct coalesce((select max(id) from pk_src),0) k from src group by g with rollup order by k+1;
+➤ k[-5,64,0]  𝄀
+2
+select distinct (select count(*) from pk_src) k from src group by g with rollup order by abs(k) desc limit 1;
+➤ k[-5,64,0]  𝄀
+2
+select distinct (select id from pk_src where id<0) k from src group by g with rollup order by k+1;
+➤ k[4,32,0]  𝄀
+null
+select distinct (select max(id) from pk_src) a,(select min(id) from pk_src) b
+from src group by g with rollup order by a+1,b+1;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  1
+create table rejected_scalar_order as
+select distinct (select max(id) from pk_src) k from src group by g with rollup order by g+1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_scalar_order';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table volatile_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b
+from src group by cube(g,h) order by concat(b,'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_alias_order) s
+where b<previous_b;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_alias_order;
+➤ count(*)[-5,64,0]  𝄀
+8
+create table volatile_sample_alias_order as
+select row_number() over() seq,t.* from (
+select distinct hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(reverse(b),'') limit 1000000) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_alias_order) s
+where reverse(b)<reverse(previous_b);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_sample_alias_order;
+➤ count(*)[-5,64,0]  𝄀
+12
+create table volatile_sample_limited as
+select row_number() over() seq,t.* from (
+select hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by cube(g,h) order by concat(b,'') desc limit 3) t;
+select count(*) from (select b,lag(b) over(order by seq) previous_b from volatile_sample_limited) s
+where b>previous_b;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_sample_limited;
+➤ count(*)[-5,64,0]  𝄀
+3
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+create table sample_mixed_order as
+select sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+select * from sample_mixed_order order by chosen;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when grouping(g)=1 then chosen-100 else chosen end limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by cube(g,h)
+order by chosen-100*grouping(g)-10*grouping(h) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by case when chosen in(select v from src) then chosen else 0 end-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select sample(v,100 percent) chosen from src group by g with rollup
+order by coalesce((select max(v) from src),0)+chosen-100*grouping(g) limit 3;
+➤ chosen[4,32,0]  𝄀
+5  𝄀
+7  𝄀
+9
+select distinct grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g) limit 3;
+➤ flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+1  ¦  9
+create table rejected_mixed_order as
+select distinct sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_mixed_order';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table volatile_mixed_order as
+select row_number() over() seq,t.* from (
+select g,hex(random_bytes(8)) a,hex(random_bytes(8)) b,sample(v,100 percent) chosen
+from src group by g with rollup order by concat(grouping(g),b) limit 1000000) t;
+select count(*) from (
+select concat(if(g is null,1,0),b) k,
+lag(concat(if(g is null,1,0),b)) over(order by seq) previous_k from volatile_mixed_order) s
+where k<previous_k;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from volatile_mixed_order;
+➤ count(*)[-5,64,0]  𝄀
+6
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+create table grouping_alias_order as
+select g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+select * from grouping_alias_order order by k,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select g v,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(v) desc,chosen;
+➤ v[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9  𝄀
+1  ¦  5  𝄀
+1  ¦  7  𝄀
+2  ¦  9
+select g `KeyAlias`,sample(v,100 percent) chosen from src group by g with rollup
+order by chosen-100*grouping(`KeyAlias`) limit 3;
+➤ KeyAlias[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  9
+select g k,h label,sample(v,100 percent) chosen from src group by cube(g,h)
+order by grouping(k,label) desc,chosen;
+➤ k[4,32,0]  ¦  label[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  null  ¦  5  𝄀
+null  ¦  null  ¦  7  𝄀
+null  ¦  null  ¦  9  𝄀
+null  ¦  10  ¦  5  𝄀
+null  ¦  20  ¦  7  𝄀
+null  ¦  10  ¦  9  𝄀
+1  ¦  null  ¦  5  𝄀
+1  ¦  null  ¦  7  𝄀
+2  ¦  null  ¦  9  𝄀
+1  ¦  10  ¦  5  𝄀
+1  ¦  20  ¦  7  𝄀
+2  ¦  10  ¦  9
+select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  5  𝄀
+null  ¦  1  ¦  7  𝄀
+null  ¦  1  ¦  9  𝄀
+1  ¦  0  ¦  5  𝄀
+1  ¦  0  ¦  7  𝄀
+2  ¦  0  ¦  9
+select distinct g k,grouping(g) flag,count(*) total from src group by g with rollup
+order by grouping(k) desc,k;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  1  ¦  3  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  1
+select g k,sample(v,100 percent) chosen from nullable_src group by g with rollup
+order by grouping(k) desc,chosen;
+➤ k[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  5  𝄀
+null  ¦  7  𝄀
+null  ¦  5  𝄀
+1  ¦  7
+create table rejected_grouping_alias as
+select distinct g k,sample(v,100 percent) chosen from src group by g with rollup
+order by grouping(k) desc,chosen;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables
+where table_schema='grouping_ctas_test' and table_name='rejected_grouping_alias';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table branch_source(g int not null,v int);
+insert into branch_source values(1,10);
+create table branch_rhs(x int not null);
+insert into branch_rhs values(2);
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+create table branch_having as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_having order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,count(*) c from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(cast(g as signed) in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having g+0<>all(select x from branch_rhs) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0=any(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10
+create table branch_fallback as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(coalesce(g,0) in(select x from branch_rhs));
+select * from branch_fallback order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+select g,sample(v,100 percent) chosen from branch_source group by grouping sets((g),(g)) having not(g+0 in(select x from branch_rhs)) order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
+delete from branch_rhs;
+create table branch_empty_rhs as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_rhs));
+select * from branch_empty_rhs order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+create table branch_null_rhs(x int);
+insert into branch_null_rhs values(null),(2);
+create table branch_unknown as select g,sample(v,100 percent) chosen from branch_source group by g with rollup having not(g+0 in(select x from branch_null_rhs));
+select * from branch_unknown order by g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]
+create table branch_types as select g+0 k,coalesce(g,0) fallback,sample(v,100 percent) chosen from src group by g with rollup;
+select * from branch_types order by k,chosen;
+➤ k[-5,64,0]  ¦  fallback[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  0  ¦  5  𝄀
+null  ¦  0  ¦  7  𝄀
+null  ¦  0  ¦  9  𝄀
+1  ¦  1  ¦  5  𝄀
+1  ¦  1  ¦  7  𝄀
+2  ¦  2  ¦  9
+select column_name,is_nullable from information_schema.columns where table_schema='grouping_ctas_test' and table_name='branch_types' order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+k  ¦  YES  𝄀
+fallback  ¦  NO  𝄀
+chosen  ¦  NO  𝄀
+__mo_fake_pk_col  ¦  NO
+create table distinct_lineage(g int,v int not null);
+insert into distinct_lineage values(null,10),(1,10);
+select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+create table rejected_lineage as select distinct g from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+create table rejected_sample_lineage as select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g) desc,g is null,g limit 1;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select count(*) from information_schema.tables where table_schema='grouping_ctas_test' and table_name in('rejected_lineage','rejected_sample_lineage');
+➤ count(*)[-5,64,0]  𝄀
+0
+select distinct g from branch_source group by grouping sets((g),(g)) order by grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g from branch_source group by g with rollup order by case when grouping(g)=1 then 0 else 1 end;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g from distinct_lineage group by cube(g) order by (g,grouping(g));
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1  ¦  0  𝄀
+null  ¦  0
+create table selected_lineage as select distinct g,grouping(g) flag from distinct_lineage group by g with rollup order by flag desc,g is null,g limit 1;
+select * from selected_lineage;
+➤ g[4,32,0]  ¦  flag[-5,64,0]  𝄀
+null  ¦  1
+create table selected_sample_lineage as select distinct g k,grouping(g) flag,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(k) desc,k is null,k limit 1;
+select * from selected_sample_lineage;
+➤ k[4,32,0]  ¦  flag[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  1  ¦  10
+create table selected_composite_lineage as select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_composite_lineage;
+➤ g[4,32,0]  ¦  marker[-5,64,0]  𝄀
+null  ¦  2
+create table selected_sample_composite as select distinct g,grouping(g)+1 marker,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by grouping(g)+1 desc,g is null,g limit 1;
+select * from selected_sample_composite;
+➤ g[4,32,0]  ¦  marker[-5,64,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  2  ¦  10
+select distinct g,grouping(g)+1 marker from distinct_lineage group by g with rollup order by grouping(g);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct g,sample(v,100 percent) chosen from distinct_lineage group by g with rollup order by chosen+1,g;
+➤ g[4,32,0]  ¦  chosen[4,32,0]  𝄀
+null  ¦  10  𝄀
+1  ¦  10
+drop database grouping_ctas_test;

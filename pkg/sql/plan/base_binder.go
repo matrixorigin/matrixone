@@ -1295,6 +1295,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				return nil, err
 			}
 
+			if name == "grouping" && b.ctx != nil && b.ctx.groupingStage != nil {
+				if col := expr.GetCol(); col != nil && col.RelPos == b.ctx.projectTag &&
+					col.ColPos >= 0 && int(col.ColPos) < len(b.ctx.projects) {
+					// GROUPING asks for the alias's grouping origin, not its
+					// selected value. Other ORDER BY functions keep the output
+					// reference so volatile aliases are not evaluated again.
+					expr = DeepCopyExpr(b.ctx.projects[col.ColPos])
+				}
+			}
 			args[idx] = expr
 		}
 	}

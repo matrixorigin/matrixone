@@ -43,6 +43,8 @@ const (
 	NoAlias ExpandAliasMode = iota
 	AliasBeforeColumn
 	AliasAfterColumn
+	// Preserve the alias AST for consumers that bind selected-output dependencies.
+	AliasAsOutput
 )
 
 type TableDefType = plan.TableDef_DefType
@@ -355,6 +357,9 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
+	// Expanded grouping branches stop before windows and final projection.
+	groupingStage *groupingStage
+
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
 	sampleByAst    map[string]int32
@@ -497,6 +502,11 @@ type HavingBinder struct {
 type ProjectionBinder struct {
 	baseBinder
 	havingBinder *HavingBinder
+
+	// Set only while binding grouping DISTINCT/SAMPLE ORDER BY. Aliases name
+	// exact selected-output references, never copies of their expression trees.
+	// Keep alias names in the source AST for CTAS/rebinding.
+	orderByProjects map[string]*plan.Expr
 }
 
 type OrderBinder struct {

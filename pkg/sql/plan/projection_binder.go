@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -32,6 +33,14 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 }
 
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if name, ok := astExpr.(*tree.UnresolvedName); ok && name.NumParts == 1 && len(b.orderByProjects) > 0 {
+		if project, ok := b.orderByProjects[name.ColName()]; ok {
+			if b.ctx.aliasFrequency[name.ColName()] > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name.ColName())
+			}
+			return DeepCopyExpr(project), nil
+		}
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
@@ -51,7 +60,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 
 	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
+			Typ: groupingOutputType(b.ctx.groups, b.ctx.groupingFlag, int(colPos)),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.groupTag,

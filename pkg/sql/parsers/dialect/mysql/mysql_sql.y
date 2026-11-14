@@ -12015,12 +12015,11 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+|   GROUPING '(' func_type_opt column_name_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         var columnList tree.Exprs
-        for _, columnStr := range $4{
-            column := tree.NewUnresolvedColName(string(columnStr))
+        for _, column := range $4{
             columnList = append(columnList, column)
         }
 
