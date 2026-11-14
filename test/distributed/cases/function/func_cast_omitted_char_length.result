@@ -1,0 +1,423 @@
+select length(concat(repeat('a', 50000), repeat('b', 50000))) as input_bytes,
+length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char)) as cast_bytes,
+length(convert(concat(repeat('a', 50000), repeat('b', 50000)), char)) as convert_bytes,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 99998, 3) as cast_tail,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 1, 3) as cast_head;
+➤ input_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  convert_bytes[-5,64,0]  ¦  cast_tail[12,0,0]  ¦  cast_head[12,0,0]  𝄀
+100000  ¦  100000  ¦  100000  ¦  bbb  ¦  aaa
+select length(cast(concat(repeat('a', 65534), 'x') as char)) as bytes_65535_fit,
+length(cast(concat(repeat('a', 65535), 'x') as char)) as bytes_65536_over;
+➤ bytes_65535_fit[-5,64,0]  ¦  bytes_65536_over[-5,64,0]  𝄀
+65535  ¦  65536
+select length(cast(concat(repeat('好', 21845), repeat('好', 21845),
+repeat('好', 21845), repeat('好', 21845)) as char)) as multibyte_bytes;
+➤ multibyte_bytes[-5,64,0]  𝄀
+262140
+select cast(null as char) is null as null_stays_null,
+length(cast('' as char)) as empty_len;
+➤ null_stays_null[-7,1,0]  ¦  empty_len[-5,64,0]  𝄀
+1  ¦  0
+select length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10))) as explicit_len,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10)), 8, 3) as explicit_tail;
+➤ explicit_len[-5,64,0]  ¦  explicit_tail[1,255,0]  𝄀
+10  ¦  aaa
+select length(repeat('a', 100000)) as repeat_null_len,
+length(cast(repeat('a', 100000) as char)) as repeat_null_cast_len;
+➤ repeat_null_len[-5,64,0]  ¦  repeat_null_cast_len[-5,64,0]  𝄀
+null  ¦  null
+drop table if exists func_cast_omit_char_t1;
+create table func_cast_omit_char_t1 (id int primary key, body longtext);
+insert into func_cast_omit_char_t1 values (1, concat(repeat('a', 50000), repeat('b', 50000)));
+select length(body) as stored_bytes,
+length(cast(body as char)) as cast_bytes,
+substring(cast(body as char), 99998, 3) as cast_tail
+from func_cast_omit_char_t1 order by id;
+➤ stored_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  cast_tail[12,0,0]  𝄀
+100000  ¦  100000  ¦  bbb
+drop table if exists func_cast_omit_char_t1;
+set @chunk = repeat('a', 10000);
+set @payload = concat(@chunk, @chunk, @chunk, @chunk, @chunk,
+@chunk, @chunk, @chunk, @chunk, @chunk);
+select length(@payload) as payload_bytes,
+length(cast(json_object('s', @payload) as char)) as cast_bytes,
+json_valid(cast(json_object('s', @payload) as char)) as valid_json,
+substring(cast(json_object('s', @payload) as char), 1, 6) as cast_prefix,
+substring(cast(json_object('s', @payload) as char),
+length(cast(json_object('s', @payload) as char)) - 2, 3) as cast_suffix;
+➤ payload_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  valid_json[-7,1,0]  ¦  cast_prefix[12,0,0]  ¦  cast_suffix[12,0,0]  𝄀
+100000  ¦  100009  ¦  1  ¦  {"s":   ¦  a"}
+drop table if exists func_cast_omit_json_t1;
+create table func_cast_omit_json_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_t1 values (1, json_object('s', @payload));
+select length(cast(doc as char)) as cast_bytes,
+json_valid(cast(doc as char)) as valid_json,
+substring(cast(doc as char), length(cast(doc as char)) - 2, 3) as cast_suffix
+from func_cast_omit_json_t1 order by id;
+➤ cast_bytes[-5,64,0]  ¦  valid_json[-7,1,0]  ¦  cast_suffix[12,0,0]  𝄀
+100009  ¦  1  ¦  a"}
+drop table if exists func_cast_omit_json_t1;
+select length(cast(cast('"aaaa"' as json) as char)) as scalar_small_len,
+json_valid(cast(cast('"aaaa"' as json) as char)) as scalar_small_valid,
+length(convert(cast('"aaaa"' as json), char)) as scalar_small_convert_len;
+➤ scalar_small_len[-5,64,0]  ¦  scalar_small_valid[-7,1,0]  ¦  scalar_small_convert_len[-5,64,0]  𝄀
+6  ¦  1  ¦  6
+set @scalar = concat('"', @payload, '"');
+select length(cast(cast(@scalar as json) as char)) as scalar_large_len,
+json_valid(cast(cast(@scalar as json) as char)) as scalar_large_valid,
+substring(cast(cast(@scalar as json) as char), 99998, 3) as scalar_tail,
+substring(cast(cast(@scalar as json) as char),
+length(cast(cast(@scalar as json) as char)) - 1, 2) as scalar_closing_quote,
+length(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$'))) as scalar_roundtrip_len,
+hex(substring(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$')),
+length(@payload), 1)) as scalar_roundtrip_last;
+➤ scalar_large_len[-5,64,0]  ¦  scalar_large_valid[-7,1,0]  ¦  scalar_tail[12,0,0]  ¦  scalar_closing_quote[12,0,0]  ¦  scalar_roundtrip_len[-5,64,0]  ¦  scalar_roundtrip_last[12,-1,0]  𝄀
+100002  ¦  1  ¦  aaa  ¦  a"  ¦  100000  ¦  61
+set @esc = concat('a', '"', 'b');
+select length(cast(cast(json_quote(@esc) as json) as char)) as esc_len,
+json_valid(cast(cast(json_quote(@esc) as json) as char)) as esc_valid,
+hex(cast(cast(json_quote(@esc) as json) as char)) as esc_hex,
+json_unquote(json_extract(cast(cast(json_quote(@esc) as json) as char), '$')) as esc_roundtrip;
+➤ esc_len[-5,64,0]  ¦  esc_valid[-7,1,0]  ¦  esc_hex[12,-1,0]  ¦  esc_roundtrip[12,-1,0]  𝄀
+6  ¦  1  ¦  22615C226222  ¦  a"b
+drop table if exists func_cast_omit_json_scalar_t1;
+create table func_cast_omit_json_scalar_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_scalar_t1 values (1, cast(@scalar as json));
+select length(cast(doc as char)) as stored_scalar_len,
+json_valid(cast(doc as char)) as stored_scalar_valid,
+substring(cast(doc as char), length(cast(doc as char)) - 1, 2) as stored_scalar_tail
+from func_cast_omit_json_scalar_t1 order by id;
+➤ stored_scalar_len[-5,64,0]  ¦  stored_scalar_valid[-7,1,0]  ¦  stored_scalar_tail[12,0,0]  𝄀
+100002  ¦  1  ¦  a"
+drop table if exists func_cast_omit_json_scalar_t1;
+set @ctas_payload = concat(repeat('a', 50000), repeat('b', 50000));
+drop table if exists func_cast_omit_char_ctas;
+create table func_cast_omit_char_ctas
+as select cast(@ctas_payload as char) as casted_value;
+select length(casted_value) as ctas_bytes,
+substring(casted_value, 99998, 3) as ctas_tail
+from func_cast_omit_char_ctas;
+➤ ctas_bytes[-5,64,0]  ¦  ctas_tail[12,0,0]  𝄀
+100000  ¦  bbb
+show create table func_cast_omit_char_ctas;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas  ¦  CREATE TABLE `func_cast_omit_char_ctas` (
+  `casted_value` text DEFAULT NULL
+)
+drop table if exists func_cast_omit_char_ctas;
+drop table if exists func_cast_omit_json_ctas;
+create table func_cast_omit_json_ctas
+as select cast(json_object('s', @payload) as char) as doc_text;
+select json_valid(doc_text) as ctas_json_valid,
+substring(doc_text, length(doc_text) - 2, 3) as ctas_json_suffix,
+length(doc_text) as ctas_json_bytes
+from func_cast_omit_json_ctas;
+➤ ctas_json_valid[-7,1,0]  ¦  ctas_json_suffix[12,0,0]  ¦  ctas_json_bytes[-5,64,0]  𝄀
+1  ¦  a"}  ¦  100009
+drop table if exists func_cast_omit_json_ctas;
+select length(reverse(cast(repeat('a', 300) as char))) as reverse_cast_len,
+length(reverse(convert(repeat('a', 300), char))) as reverse_convert_len,
+length(reverse(cast(concat(repeat('a', 50000), repeat('b', 50000))
+as char))) as reverse_over_64k_len;
+➤ reverse_cast_len[-5,64,0]  ¦  reverse_convert_len[-5,64,0]  ¦  reverse_over_64k_len[-5,64,0]  𝄀
+300  ¦  300  ¦  100000
+select reverse(cast('你好a' as char)) as reverse_mb,
+reverse(cast(null as char)) is null as reverse_null_is_null;
+➤ reverse_mb[12,0,0]  ¦  reverse_null_is_null[-7,1,0]  𝄀
+a好你  ¦  1
+select least(convert('2024-01-01', char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as least_convert_json_date,
+greatest(convert('2024-01-01', char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as greatest_convert_json_date,
+least(cast('2024-01-01' as char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as least_cast_json_date,
+greatest(cast('2024-01-01' as char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as greatest_cast_json_date;
+➤ least_convert_json_date[12,-1,0]  ¦  greatest_convert_json_date[12,-1,0]  ¦  least_cast_json_date[12,-1,0]  ¦  greatest_cast_json_date[12,-1,0]  𝄀
+2024-01-01  ¦  2024-01-03  ¦  2024-01-01  ¦  2024-01-03
+select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"' as json))
+is null as least_null_peer_is_null;
+➤ least_null_peer_is_null[-7,1,0]  𝄀
+1
+select ceil(cast('1.2' as char)) as ceil_cast,
+floor(cast('1.2' as char)) as floor_cast,
+ceil(convert('-1.2', char)) as ceil_convert_neg,
+floor(convert('-1.2', char)) as floor_convert_neg;
+➤ ceil_cast[3,76,0]  ¦  floor_cast[3,76,0]  ¦  ceil_convert_neg[3,76,0]  ¦  floor_convert_neg[3,76,0]  𝄀
+2  ¦  1  ¦  -1  ¦  -2
+select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char)) as tsadd_convert,
+timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char)) as tsadd_cast;
+➤ tsadd_convert[12,-1,0]  ¦  tsadd_cast[12,-1,0]  𝄀
+2024-01-01 13:34:56  ¦  2024-01-01 13:34:56
+select timestamp(cast('2024-01-01 12:34:56' as char)) as ts_cast,
+timestamp(convert('2024-01-01 12:34:56', char)) as ts_convert;
+➤ ts_cast[93,64,0]  ¦  ts_convert[93,64,0]  𝄀
+2024-01-01 12:34:56  ¦  2024-01-01 12:34:56
+select extract(minute from cast('10:11:12' as char)) as extract_cast_minute,
+extract(minute from convert('10:11:12', char)) as extract_convert_minute;
+➤ extract_cast_minute[12,-1,0]  ¦  extract_convert_minute[12,-1,0]  𝄀
+11  ¦  11
+select extract(year from cast('10:11:12' as char)) as extract_cast_year;
+➤ extract_cast_year[12,-1,0]  𝄀
+2010
+select str_to_date('2024-01-02', convert('%Y-%m-%d', char)) as str_to_date_convert,
+str_to_date('2024-01-02', cast('%Y-%m-%d' as char)) as str_to_date_cast,
+to_date('2024-01-02', convert('%Y-%m-%d', char)) as to_date_convert,
+to_date('2024-01-02', cast('%Y-%m-%d' as char)) as to_date_cast;
+➤ str_to_date_convert[91,64,0]  ¦  str_to_date_cast[91,64,0]  ¦  to_date_convert[91,64,0]  ¦  to_date_cast[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-02  ¦  2024-01-02
+select timestampdiff(hour, date('2024-01-01'), cast('2024-01-03 01:00:00' as char)) as tsdiff_date_cast,
+timestampdiff(hour, date('2024-01-01'), convert('2024-01-03 01:00:00', char)) as tsdiff_date_convert;
+➤ tsdiff_date_cast[-5,64,0]  ¦  tsdiff_date_convert[-5,64,0]  𝄀
+49  ¦  49
+select timestampdiff(hour, cast('2024-01-03 01:00:00' as char), date('2024-01-05')) as tsdiff_cast_date,
+timestampdiff(hour, convert('2024-01-03 01:00:00', char), date('2024-01-05')) as tsdiff_convert_date;
+➤ tsdiff_cast_date[-5,64,0]  ¦  tsdiff_convert_date[-5,64,0]  𝄀
+47  ¦  47
+select timestampdiff(hour, cast('2024-01-01 01:00:00' as char), cast('2024-01-03 00:30:00' as char)) as tsdiff_pair_cast,
+timestampdiff(hour, convert('2024-01-01 01:00:00', char), convert('2024-01-03 00:30:00', char)) as tsdiff_pair_convert;
+➤ tsdiff_pair_cast[-5,64,0]  ¦  tsdiff_pair_convert[-5,64,0]  𝄀
+47  ¦  47
+select cast('2024-01-01' as char) + interval 1 day as add_day_cast,
+convert('2024-01-01', char) + interval 1 day as add_day_convert;
+➤ add_day_cast[12,0,0]  ¦  add_day_convert[12,0,0]  𝄀
+2024-01-02  ¦  2024-01-02
+select interval 1 day + cast('2024-01-01 12:34:56' as char) as add_rev_cast,
+interval 1 day + convert('2024-01-01 12:34:56', char) as add_rev_convert;
+➤ add_rev_cast[12,0,0]  ¦  add_rev_convert[12,0,0]  𝄀
+2024-01-02 12:34:56  ¦  2024-01-02 12:34:56
+select cast('2024-03-31' as char) - interval 1 day as sub_day_cast,
+convert('2024-03-31', char) - interval 1 day as sub_day_convert;
+➤ sub_day_cast[12,0,0]  ¦  sub_day_convert[12,0,0]  𝄀
+2024-03-30  ¦  2024-03-30
+select cast('a' as char) + 'b' as concat_text_varchar_cast,
+convert('a', char) + 'b' as concat_text_varchar_convert,
+'a' + cast('b' as char) as concat_varchar_text_cast,
+'a' + convert('b', char) as concat_varchar_text_convert;
+➤ concat_text_varchar_cast[12,-1,0]  ¦  concat_text_varchar_convert[12,-1,0]  ¦  concat_varchar_text_cast[12,-1,0]  ¦  concat_varchar_text_convert[12,-1,0]  𝄀
+ab  ¦  ab  ¦  ab  ¦  ab
+select cast('a' as char) + cast('b' as char) as concat_two_cast,
+convert('a', char) + convert('b', char) as concat_two_convert;
+➤ concat_two_cast[12,-1,0]  ¦  concat_two_convert[12,-1,0]  𝄀
+ab  ¦  ab
+select dayofmonth(cast('0000-01-01' as char)) as dayofmonth_cast,
+dayofmonth(convert('2024-00-15', char)) as dayofmonth_convert;
+➤ dayofmonth_cast[-6,8,0]  ¦  dayofmonth_convert[-6,8,0]  𝄀
+1  ¦  15
+select quarter(cast('0000-01-01' as char)) as quarter_cast,
+dayname(cast('0000-01-01' as char)) as dayname_cast,
+monthname(cast('0000-01-01' as char)) as monthname_cast,
+weekofyear(cast('0000-01-01' as char)) as weekofyear_cast;
+➤ quarter_cast[-6,8,0]  ¦  dayname_cast[12,-1,0]  ¦  monthname_cast[12,-1,0]  ¦  weekofyear_cast[-5,64,0]  𝄀
+1  ¦  Sunday  ¦  January  ¦  52
+select quarter(convert('0000-01-01', char)) as quarter_convert,
+dayname(convert('0000-01-01', char)) as dayname_convert,
+monthname(convert('0000-01-01', char)) as monthname_convert,
+weekofyear(convert('0000-01-01', char)) as weekofyear_convert;
+➤ quarter_convert[-6,8,0]  ¦  dayname_convert[12,-1,0]  ¦  monthname_convert[12,-1,0]  ¦  weekofyear_convert[-5,64,0]  𝄀
+1  ¦  Sunday  ¦  January  ¦  52
+select year(cast('2024-06-05' as char)) as year_valid_cast,
+year(convert('2024-06-05', char)) as year_valid_convert;
+➤ year_valid_cast[-5,64,0]  ¦  year_valid_convert[-5,64,0]  𝄀
+2024  ¦  2024
+select month(cast('2024-06-05' as char)) as month_valid_cast,
+month(convert('2024-06-05', char)) as month_valid_convert;
+➤ month_valid_cast[-6,8,0]  ¦  month_valid_convert[-6,8,0]  𝄀
+6  ¦  6
+select bin(cast('256' as char)) as bin_text,
+bin(convert('256', char)) as bin_convert,
+bin(cast('256' as varchar(10))) as bin_varchar_control;
+➤ bin_text[12,-1,0]  ¦  bin_convert[12,-1,0]  ¦  bin_varchar_control[12,-1,0]  𝄀
+100000000  ¦  100000000  ¦  100000000
+select round(cast('-1' as char)) as round_text,
+round(cast('-1' as char), 0) as round2_text,
+round(cast('-1' as varchar(10))) as round_varchar_control;
+➤ round_text[3,38,0]  ¦  round2_text[3,38,0]  ¦  round_varchar_control[-5,64,0]  𝄀
+-1  ¦  -1  ¦  -1
+select truncate(cast('-1' as char), 0) as truncate_text;
+➤ truncate_text[3,38,0]  𝄀
+-1
+select space(cast('-1' as char)) as space_text,
+length(space(cast('2' as char))) as space_len_text;
+➤ space_text[12,-1,0]  ¦  space_len_text[-5,64,0]  𝄀
+  ¦  2
+select ceil(cast('-1' as char), 0) as ceil2_text,
+floor(cast('-1' as char), 0) as floor2_text,
+ceil(cast('-1.2' as char)) as ceil_onearg_text;
+➤ ceil2_text[3,38,0]  ¦  floor2_text[3,38,0]  ¦  ceil_onearg_text[3,76,0]  𝄀
+-1  ¦  -1  ¦  -1
+select -cast('300' as char) as neg_text,
+cast('300' as char) << 1 as shiftl_text;
+➤ neg_text[-5,64,0]  ¦  shiftl_text[-5,64,0]  𝄀
+-300  ¦  600
+select date(cast('20240102123456' as char)) as date_compact_cast,
+date(convert('20240102123456', char)) as date_compact_convert;
+➤ date_compact_cast[91,64,0]  ¦  date_compact_convert[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02
+select date(cast('20240102' as char)) as date_ymd_cast,
+date(cast('2024-01-02 12:34:56' as char)) as date_full_cast,
+date(cast('2024-01-02 12:34:56' as varchar(32))) as date_varchar_control;
+➤ date_ymd_cast[91,64,0]  ¦  date_full_cast[91,64,0]  ¦  date_varchar_control[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-02
+select hex(cast('256' as char)) as hex_text,
+hex(convert('256', char)) as hex_convert,
+hex(cast('256' as varchar(10))) as hex_varchar_control,
+hex(4660) as hex_int_control;
+➤ hex_text[12,-1,0]  ¦  hex_convert[12,-1,0]  ¦  hex_varchar_control[12,-1,0]  ¦  hex_int_control[12,-1,0]  𝄀
+323536  ¦  323536  ¦  323536  ¦  1234
+select length(hex(cast(concat(repeat('a',50000), repeat('b',50000)) as char))) as hex_len_text;
+➤ hex_len_text[-5,64,0]  𝄀
+200000
+select round(cast('9223372036854775808' as text)) as round_upper,
+round(cast('9223372036854775808' as text), 0) as round2_upper,
+round(cast('9223372036854775808' as char), 0) as round2_char_comp;
+➤ round_upper[3,38,0]  ¦  round2_upper[3,38,0]  ¦  round2_char_comp[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808  ¦  9223372036854775808
+select round(cast('9223372036854775808' as text), -1) as round2_upper_dm1;
+➤ round2_upper_dm1[3,38,0]  𝄀
+9223372036854775810
+select round(cast('18446744073709551615' as text)) as round_umax;
+➤ round_umax[3,38,0]  𝄀
+18446744073709551615
+select round(cast('9223372036854775807' as text)) as round_imax,
+round(cast('-9223372036854775808' as text)) as round_imin;
+➤ round_imax[3,38,0]  ¦  round_imin[3,38,0]  𝄀
+9223372036854775807  ¦  -9223372036854775808
+select round(cast('9223372036854775807' as text), -1) as round_imax_dm1,
+round(cast('9223372036854775804' as text), -1) as round_imax_dm1_ctrl,
+ceil(cast('9223372036854775807' as text), -1) as ceil_imax_dm1,
+ceil(cast('9223372036854775807' as text), -2) as ceil_imax_dm2,
+floor(cast('9223372036854775807' as text), -1) as floor_imax_dm1,
+truncate(cast('9223372036854775807' as text), -2) as trunc_imax_dm2;
+➤ round_imax_dm1[3,38,0]  ¦  round_imax_dm1_ctrl[3,38,0]  ¦  ceil_imax_dm1[3,38,0]  ¦  ceil_imax_dm2[3,38,0]  ¦  floor_imax_dm1[3,38,0]  ¦  trunc_imax_dm2[3,38,0]  𝄀
+9223372036854775810  ¦  9223372036854775800  ¦  9223372036854775810  ¦  9223372036854775900  ¦  9223372036854775800  ¦  9223372036854775800
+select round(cast('18446744073709551615' as text), -1);
+Data truncation: data out of range: data type uint64, ROUND
+select round(cast('9000000000000000000' as text), -19) as round_dm19,
+round(cast('9223372036854775807' as text), -19) as round_dm19_imax,
+round(cast('4999999999999999999' as text), -19) as round_dm19_ctrl,
+ceil(cast('9000000000000000000' as text), -19) as ceil_dm19,
+floor(cast('9000000000000000000' as text), -19) as floor_dm19,
+truncate(cast('9000000000000000000' as text), -19) as trunc_dm19;
+➤ round_dm19[3,38,0]  ¦  round_dm19_imax[3,38,0]  ¦  round_dm19_ctrl[3,38,0]  ¦  ceil_dm19[3,38,0]  ¦  floor_dm19[3,38,0]  ¦  trunc_dm19[3,38,0]  𝄀
+10000000000000000000  ¦  10000000000000000000  ¦  0  ¦  10000000000000000000  ¦  0  ¦  0
+select round(cast('9000000000000000000' as text), -20) as round_dm20;
+➤ round_dm20[3,38,0]  𝄀
+0
+select truncate(cast('9223372036854775808' as text), 0) as truncate_upper,
+truncate(cast('18446744073709551615' as text), 0) as truncate_umax,
+truncate(cast('9223372036854775808' as text), -2) as truncate_upper_dm2;
+➤ truncate_upper[3,38,0]  ¦  truncate_umax[3,38,0]  ¦  truncate_upper_dm2[3,38,0]  𝄀
+9223372036854775808  ¦  18446744073709551615  ¦  9223372036854775800
+select ceil(cast('9223372036854775808' as text), 0) as ceil2_upper,
+floor(cast('9223372036854775808' as text), 0) as floor2_upper;
+➤ ceil2_upper[3,38,0]  ¦  floor2_upper[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808
+select ceil(cast('9223372036854775808' as text), -2) as ceil2_upper_dm2,
+ceil(cast('18446744073709551615' as text), -1) as ceil2_umax_dm1,
+floor(cast('18446744073709551615' as text), -1) as floor2_umax_dm1;
+➤ ceil2_upper_dm2[3,38,0]  ¦  ceil2_umax_dm1[3,38,0]  ¦  floor2_umax_dm1[3,38,0]  𝄀
+9223372036854775900  ¦  0  ¦  18446744073709551610
+drop table if exists func_cast_omit_char_ub;
+create table func_cast_omit_char_ub (a text);
+insert into func_cast_omit_char_ub values ('9223372036854775808'),
+('18446744073709551615'),
+('-1'),
+('9223372036854775807');
+select round(a) from func_cast_omit_char_ub;
+➤ round(a)[3,38,0]  𝄀
+9223372036854775808  𝄀
+18446744073709551615  𝄀
+-1  𝄀
+9223372036854775807
+select truncate(a, 0) from func_cast_omit_char_ub;
+➤ truncate(a, 0)[3,38,0]  𝄀
+9223372036854775808  𝄀
+18446744073709551615  𝄀
+-1  𝄀
+9223372036854775807
+select ceil(a, 0), floor(a, 0) from func_cast_omit_char_ub;
+➤ ceil(a, 0)[3,38,0]  ¦  floor(a, 0)[3,38,0]  𝄀
+9223372036854775808  ¦  9223372036854775808  𝄀
+18446744073709551615  ¦  18446744073709551615  𝄀
+-1  ¦  -1  𝄀
+9223372036854775807  ¦  9223372036854775807
+select round(a, -1) from func_cast_omit_char_ub where a <> '18446744073709551615';
+➤ round(a, -1)[3,38,0]  𝄀
+9223372036854775810  𝄀
+-10  𝄀
+9223372036854775810
+select round(cast('2.5' as text), 0);
+invalid argument cast to int, bad value 2.5
+select truncate(cast('2.5' as text), 0);
+invalid argument cast to int, bad value 2.5
+select ceil(cast('-1.2' as text), 0);
+invalid argument cast to int, bad value -1.2
+select floor(cast('-1.2' as text), 0);
+invalid argument cast to int, bad value -1.2
+select round(cast('99999999999999999999999' as text));
+Data truncation: data out of range: data type int64, value '99999999999999999999999'
+drop table if exists func_cast_omit_char_ub;
+select ceil(cast('9007199254740993' as text)) as ceil_2p53p1,
+floor(cast('9007199254740993' as text)) as floor_2p53p1,
+ceil(cast('9223372036854775807' as text)) as ceil_imax_1arg,
+floor(cast('9223372036854775807' as text)) as floor_imax_1arg,
+ceil(cast('9223372036854775808' as text)) as ceil_upper_1arg,
+floor(cast('9223372036854775808' as text)) as floor_upper_1arg,
+ceil(cast('18446744073709551615' as text)) as ceil_umax_1arg,
+floor(cast('18446744073709551615' as text)) as floor_umax_1arg,
+ceil(cast('-9223372036854775808' as text)) as ceil_imin_1arg,
+floor(cast(' 42 ' as text)) as floor_trim_1arg,
+ceil(cast('0x10' as text)) as ceil_hex_1arg;
+➤ ceil_2p53p1[3,76,0]  ¦  floor_2p53p1[3,76,0]  ¦  ceil_imax_1arg[3,76,0]  ¦  floor_imax_1arg[3,76,0]  ¦  ceil_upper_1arg[3,76,0]  ¦  floor_upper_1arg[3,76,0]  ¦  ceil_umax_1arg[3,76,0]  ¦  floor_umax_1arg[3,76,0]  ¦  ceil_imin_1arg[3,76,0]  ¦  floor_trim_1arg[3,76,0]  ¦  ceil_hex_1arg[3,76,0]  𝄀
+9007199254740993  ¦  9007199254740993  ¦  9223372036854775807  ¦  9223372036854775807  ¦  9223372036854775808  ¦  9223372036854775808  ¦  18446744073709551615  ¦  18446744073709551615  ¦  -9223372036854775808  ¦  42  ¦  16
+select ceil(cast('9007199254740993' as char)) as ceil_comp_2p53p1,
+floor(convert('9007199254740993', char)) as floor_comp_2p53p1;
+➤ ceil_comp_2p53p1[3,76,0]  ¦  floor_comp_2p53p1[3,76,0]  𝄀
+9007199254740993  ¦  9007199254740993
+drop table if exists func_cast_omit_char_unary;
+create table func_cast_omit_char_unary (v text);
+insert into func_cast_omit_char_unary values ('9007199254740993'), (null), ('1'), ('-1.2');
+select ceil(v) from func_cast_omit_char_unary;
+➤ ceil(v)[3,76,0]  𝄀
+9007199254740993  𝄀
+null  𝄀
+1  𝄀
+-1
+select floor(v) from func_cast_omit_char_unary;
+➤ floor(v)[3,76,0]  𝄀
+9007199254740993  𝄀
+null  𝄀
+1  𝄀
+-2
+select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
+➤ ceil(v)[3,76,0]  ¦  floor(v)[3,76,0]  𝄀
+9007199254740993  ¦  9007199254740993  𝄀
+1  ¦  1  𝄀
+-1  ¦  -2
+select ceil(cast('1e40' as char)) as ceil_comp_1e40,
+floor(convert('18446744073709551616', char)) as floor_comp_u64p1,
+ceil(cast('99999999999999999999999' as text)) as ceil_comp_23nines,
+floor(cast('1e40' as char)) as floor_comp_1e40,
+floor(cast('12345678901234567890123456789012345678901' as text)) as floor_comp_41d,
+ceil(cast('1.5e40' as char)) as ceil_comp_1p5e40,
+floor(cast('-1e40' as char)) as floor_comp_neg_1e40,
+ceil(cast('18446744073709551617' as text)) as ceil_comp_u64p2,
+ceil(cast('1e75' as char)) as ceil_comp_1e75;
+➤ ceil_comp_1e40[3,76,0]  ¦  floor_comp_u64p1[3,76,0]  ¦  ceil_comp_23nines[3,76,0]  ¦  floor_comp_1e40[3,76,0]  ¦  floor_comp_41d[3,76,0]  ¦  ceil_comp_1p5e40[3,76,0]  ¦  floor_comp_neg_1e40[3,76,0]  ¦  ceil_comp_u64p2[3,76,0]  ¦  ceil_comp_1e75[3,76,0]  𝄀
+10000000000000000000000000000000000000000  ¦  18446744073709552000  ¦  100000000000000000000000  ¦  10000000000000000000000000000000000000000  ¦  12345678901234568000000000000000000000000  ¦  15000000000000000000000000000000000000000  ¦  -10000000000000000000000000000000000000000  ¦  18446744073709552000  ¦  1000000000000000000000000000000000000000000000000000000000000000000000000000
+drop table if exists func_cast_omit_char_unary_wide;
+create table func_cast_omit_char_unary_wide (v text);
+insert into func_cast_omit_char_unary_wide values ('1e40'), (null), ('18446744073709551616');
+select ceil(v), floor(v) from func_cast_omit_char_unary_wide;
+➤ ceil(v)[3,76,0]  ¦  floor(v)[3,76,0]  𝄀
+10000000000000000000000000000000000000000  ¦  10000000000000000000000000000000000000000  𝄀
+null  ¦  null  𝄀
+18446744073709552000  ¦  18446744073709552000
+drop table if exists func_cast_omit_char_unary_wide;
+select ceil(cast('1e76' as text));
+invalid input: 1e+76 beyond the range, can't be converted to Decimal256(76,0).
+select ceil(cast('1e300' as text));
+invalid input: 1e+300 beyond the range, can't be converted to Decimal256(76,0).
+select ceil(cast('中文' as text));
+strconv.ParseFloat: parsing "中文": invalid syntax
+drop table if exists func_cast_omit_char_unary;

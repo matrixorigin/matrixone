@@ -206,6 +206,65 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// a fixed type match method with the T_text arguments of the overload table
+// kept exact: an overload position typed T_text only accepts an input that is
+// already T_text and never receives one through an implicit cast.
+//
+// ROUND/TRUNCATE/CEIL/FLOOR use it for their direct TEXT overloads: a bare
+// TEXT input still matches them directly and keeps the restored dual-domain
+// results, while sources that reach T_text only through an implicit cast
+// (DATE, DATETIME, ...) keep the bind-time rejection they had before those
+// overloads joined the tables, instead of migrating to the TEXT executors'
+// runtime cast errors. Matching against every non-TEXT overload keeps
+// fixedTypeMatch semantics, including the cost order.
+func fixedTypeMatchWithExactText(overloads []overload, inputs []types.Type) checkResult {
+	minIndex := -1
+	minCost := math.MaxInt
+	for i, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+
+		textArgsExact := true
+		for j := range ov.args {
+			if ov.args[j] == types.T_text && inputs[j].Oid != types.T_text {
+				textArgsExact = false
+				break
+			}
+		}
+		if !textArgsExact {
+			continue
+		}
+
+		sta, cos := tryToMatch(inputs, ov.args)
+		if sta == matchFailed {
+			continue
+		} else if sta == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		} else {
+			if cos < minCost {
+				minIndex = i
+				minCost = cos
+			}
+		}
+	}
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	castType := make([]types.Type, len(inputs))
+	ov := overloads[minIndex]
+	for i := range castType {
+		if ov.args[i] == inputs[i].Oid {
+			castType[i] = inputs[i]
+		} else {
+			castType[i] = ov.args[i].ToType()
+			SetTargetScaleFromSource(&inputs[i], &castType[i])
+		}
+	}
+	return newCheckResultWithCast(minIndex, castType)
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
@@ -2434,7 +2493,22 @@ func initFixed3() {
 				{toType: types.T_int8, preferLevel: 2},
 				{toType: types.T_int16, preferLevel: 2},
 				{toType: types.T_int32, preferLevel: 2},
-				{toType: types.T_int64, preferLevel: 2},
+				// TEXT shares the CHAR/VARCHAR string-number coercion domain:
+				// the omitted-length CAST/CONVERT-to-CHAR target is TEXT
+				// (#32336, #32374), and without the preference every integer
+				// overload resolves at the same cost, keeping the first listed
+				// one. BIN('256'), SPACE and unary +/- would then coerce
+				// through UINT8/UINT64 and reject inputs the signed INT64
+				// path accepts. ROUND, TRUNCATE and the two-argument
+				// CEIL/FLOOR keep BOTH domains through direct dual-domain
+				// TEXT overloads in list_builtIn.go: signed rows keep this
+				// INT64 route's results, and the upper unsigned range
+				// [2^63, 2^64) that explicit TEXT inputs previously accepted
+				// through the first-listed UINT64 overloads keeps the UINT64
+				// core values. Functions with both string and integer
+				// overloads (HEX) keep their string domain through a direct
+				// TEXT overload there too.
+				{toType: types.T_int64, preferLevel: 1},
 				{toType: types.T_uint8, preferLevel: 2},
 				{toType: types.T_uint16, preferLevel: 2},
 				{toType: types.T_uint32, preferLevel: 2},

@@ -172,7 +172,11 @@ select greatest(json_extract('2020', '$'), cast(2019 as year)) as greatest_json_
 select greatest(json_extract('1', '$'), cast('1' as blob));
 select greatest(json_extract('1', '$'), cast('1' as binary));
 select greatest(json_extract('1', '$'), cast('1' as varbinary));
+-- JSON+temporal compositions treat TEXT exactly like the CHAR/VARCHAR peers:
+-- the mixed call binds in the packed-date branch and an invalid date string
+-- fails parsedate under both peer spellings.
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('x' as text));
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), 'x');
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('2020-01-03' as blob));
 select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as datetime)) as greatest_json_datetime;
 select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as timestamp)) as greatest_json_timestamp;

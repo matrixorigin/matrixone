@@ -504,58 +504,17 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	// Evaluate through the shared string-to-fixed template (the same shape
+	// CeilStr uses): its row loop skips NULL rows instead of falling through
+	// to ParseFloat with an empty value, so mixed nullable batches keep the
+	// NULL results the pre-widening implicitly-cast routes returned.
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
@@ -690,6 +649,219 @@ func truncateInt64(x int64, digits int64) int64 {
 
 func TruncateInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return generalMathMulti("truncate", ivecs, result, proc, length, truncateInt64, selectList)
+}
+
+// dualDomainMathText evaluates one widened-TEXT value of round/truncate/ceil/
+// floor through both numeric domains these functions accepted before the
+// omitted-length CAST/CONVERT-to-CHAR widening (#32336, #32374, PR #32438).
+// The pre-widening VARCHAR spelling coerced through the signed parser
+// (parseSignedCastString, the INT64-overload route), while explicit TEXT
+// inputs tied onto the first-listed UINT64 overloads whose unsigned parser
+// (parseUnsignedCastString) keeps accepting magnitudes up to 2^64-1. Parsing
+// per row keeps both: values in [-2^63, 2^63) keep the INT64 core results,
+// except the round-up corridor where a positive value's digit arithmetic
+// crosses int64's ceiling (the INT64 kernel then panics or wraps while the
+// pre-widening UINT64 route returned the true value, so signedCrossesLimit
+// redirects just those rows through the UINT64 core); the upper unsigned
+// range keeps the UINT64 core values
+// (ROUND(CAST('9223372036854775808' AS TEXT)) returns 9223372036854775808),
+// and anything both parsers reject keeps the INT64 implicit-cast error.
+// Results carry as scale-0 DECIMAL128, which is exact for both domains and
+// renders like the UINT64 and INT64 displays.
+func dualDomainMathText(
+	ctx context.Context,
+	s string,
+	digits int64,
+	signedCore func(int64, int64) int64,
+	unsignedCore func(uint64, int64) uint64,
+	signedCrossesLimit func(int64, int64) bool,
+) (types.Decimal128, error) {
+	v, err := parseSignedCastString(s, 64)
+	if err == nil {
+		if signedCrossesLimit != nil && signedCrossesLimit(v, digits) {
+			return types.Decimal128{B0_63: unsignedCore(uint64(v), digits), B64_127: 0}, nil
+		}
+		return types.Decimal128FromInt64(signedCore(v, digits)), nil
+	}
+	if un, uerr := parseUnsignedCastString(s, 64); uerr == nil {
+		// Only magnitudes at or above 2^63 reach the unsigned parser here;
+		// smaller non-negative values parsed above. The UINT64 core keeps
+		// the domain's exact math (including its digit arithmetic), and
+		// Decimal128{un, 0} keeps the uint64 bit pattern verbatim as a
+		// positive scale-0 decimal.
+		return types.Decimal128{B0_63: unsignedCore(un, digits), B64_127: 0}, nil
+	}
+	// Mirror the implicit TEXT->INT64 cast (strToSigned) for error parity.
+	if strings.Contains(err.Error(), "value out of range") {
+		return types.Decimal128{}, moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
+	}
+	return types.Decimal128{}, moerr.NewInvalidArg(ctx, "cast to int", s)
+}
+
+// roundTextCrossesInt64Limit mirrors roundInt64's positive branch: it reports
+// whether rounding the positive int64 value v at the given digits produces a
+// value int64 cannot hold, which makes roundInt64 panic with out-of-range (or
+// collapse to its zero fallback at the digit-table boundary, where even the
+// 1e19 scale overflows int64). The pre-widening TEXT route computed those rows
+// through roundUint64, whose scale table runs one digit further, and returned
+// the true value (ROUND('9223372036854775807', -1) => 9223372036854775810;
+// ROUND('9000000000000000000', -19) => 10000000000000000000), so
+// dualDomainMathText redirects them to the UINT64 core instead of the failing
+// INT64 core.
+func roundTextCrossesInt64Limit(v int64, digits int64) bool {
+	if v <= 0 || digits >= 0 || digits < -MaxInt64digits {
+		return false
+	}
+	if digits == -MaxInt64digits {
+		// Every positive int64 is below the 1e19 unit, so rounding
+		// crosses int64 exactly in the upper half of that unit.
+		return uint64(v) >= ScaleTable[-digits]/2
+	}
+	scale := int64(ScaleTable[-digits])
+	step1 := v / scale * scale
+	step2 := v % scale
+	return step2 >= scale/2 && uint64(step1)+uint64(scale) > math.MaxInt64
+}
+
+// ceilTextCrossesInt64Limit mirrors ceilInt64's positive branch: it reports
+// whether ceiling the positive int64 value v at the given digits produces a
+// value int64 cannot hold, which makes ceilInt64 wrap to a negative result (or
+// collapse to its zero fallback at the digit-table boundary, where even the
+// 1e19 scale overflows int64). The pre-widening TEXT route computed those rows
+// through ceilUint64, whose scale table runs one digit further, and returned
+// the true value (CEIL('9223372036854775807', -1) => 9223372036854775810;
+// CEIL('9000000000000000000', -19) => 10000000000000000000), so
+// dualDomainMathText redirects them to the UINT64 core. floorInt64 and
+// truncateInt64 can only move positive values toward zero, so FLOOR and
+// TRUNCATE need no such limit check and their digit-table boundary results
+// already coincide.
+func ceilTextCrossesInt64Limit(v int64, digits int64) bool {
+	if v <= 0 || digits >= 0 || digits < -floor.MaxInt64digits {
+		return false
+	}
+	if digits == -floor.MaxInt64digits {
+		// Every positive int64 is below the 1e19 unit with a nonzero
+		// remainder, so ceiling crosses int64 for all of them.
+		return true
+	}
+	scale := int64(floor.ScaleTable[-digits])
+	t := v % scale
+	if t == 0 {
+		return false
+	}
+	s := v - t
+	return uint64(s)+uint64(scale) > math.MaxInt64
+}
+
+// textDualDomainMathMulti runs a dual-domain TEXT executor for the
+// one-argument and two-argument spellings of round/truncate/ceil/floor,
+// following generalMathMulti's contract: the second argument must be a
+// const INT64 (defaulting the digits to 0 when absent).
+func textDualDomainMathMulti(
+	funcName string,
+	signedCore func(int64, int64) int64,
+	unsignedCore func(uint64, int64) uint64,
+	signedCrossesLimit func(int64, int64) bool,
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	digits := int64(0)
+	if len(ivecs) > 1 {
+		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+		}
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
+	}
+	return opUnaryStrToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v string) (types.Decimal128, error) {
+		return dualDomainMathText(proc.Ctx, strings.TrimSpace(v), digits, signedCore, unsignedCore, signedCrossesLimit)
+	}, selectList)
+}
+
+// RoundText executes ROUND's direct TEXT overloads (one- and two-argument).
+func RoundText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return textDualDomainMathMulti("round", roundInt64, roundUint64, roundTextCrossesInt64Limit, ivecs, result, proc, length, selectList)
+}
+
+// TruncateText executes TRUNCATE's direct TEXT overloads (one- and
+// two-argument).
+func TruncateText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return textDualDomainMathMulti("truncate", truncateInt64, truncateUint64, nil, ivecs, result, proc, length, selectList)
+}
+
+// CeilText executes CEIL's two-argument direct TEXT overload; the
+// one-argument TEXT overload keeps the exact integer domain through
+// CeilTextUnary.
+func CeilText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return textDualDomainMathMulti("ceil", ceilInt64, ceilUint64, ceilTextCrossesInt64Limit, ivecs, result, proc, length, selectList)
+}
+
+// FloorText executes FLOOR's two-argument direct TEXT overload; the
+// one-argument TEXT overload keeps the exact integer domain through
+// FloorTextUnary.
+func FloorText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return textDualDomainMathMulti("floor", floorInt64, floorUint64, nil, ivecs, result, proc, length, selectList)
+}
+
+// dualDomainUnaryMathText evaluates one TEXT row of the single-argument CEIL
+// and FLOOR spellings. The two spellings have no digits argument, so an
+// integer's ceiling and floor are the integer itself: integer strings keep
+// the exact INT64 and UINT64 values the pre-widening UINT64 tie produced
+// (CEIL(CAST('9007199254740993' AS TEXT)) stays 9007199254740993, whose
+// float64 rounding used to return 9007199254740992; magnitudes up to
+// 18446744073709551615 stay exact too). Everything else — tokens the
+// integer parsers reject at syntax, integer tokens beyond the uint64 domain
+// and every decimal or exponent string — falls back to the pre-widening
+// string parser (strconv.ParseFloat), keeping the numeric domain the prior
+// CHAR composition accepted through the VARCHAR overload's FLOAT64 route
+// (mo-bot review: the scale-0 DECIMAL128(38,0) intermediate raised a
+// decimal conversion error for CEIL(CAST('1e40' AS CHAR)) and a UINT64
+// range error for FLOOR(CONVERT('18446744073709551616', CHAR)), both
+// previously successful). Both integer domains and every float fallback
+// result pack into the scale-0 DECIMAL256(76,0) the one-argument TEXT
+// overloads return — the widest integral numeric the type system provides:
+// integer rows render exactly and float rows keep the FLOAT64 route's
+// shortest-digit display digit for digit for every magnitude within 76
+// integral digits; wider magnitudes exceed any numeric type and keep the
+// decimal conversion error.
+func dualDomainUnaryMathText(
+	v string,
+	fractionalCore func(float64) float64,
+) (types.Decimal256, error) {
+	s := strings.TrimSpace(v)
+	if iv, err := parseSignedCastString(s, 64); err == nil {
+		return types.Decimal256FromInt64(iv), nil
+	}
+	un, uerr := parseUnsignedCastString(s, 64)
+	if uerr == nil {
+		return types.Decimal256{B0_63: un, B64_127: 0, B128_191: 0, B192_255: 0}, nil
+	}
+	// Integer tokens out of the uint64 domain and every decimal or exponent
+	// string reach the float fallback with the pre-widening accepted
+	// domain: DECIMAL256FromFloat64 parses the shortest round-trip float
+	// digits, so every magnitude that fits the 76-integral-digit width
+	// renders exactly like the VARCHAR route did.
+	f, ferr := strconv.ParseFloat(v, 64)
+	if ferr != nil {
+		return types.Decimal256{}, ferr
+	}
+	return types.Decimal256FromFloat64(fractionalCore(f), 76, 0)
+}
+
+// CeilTextUnary executes CEIL's one-argument direct TEXT overload.
+func CeilTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Decimal256](ivecs, result, proc, length, func(v string) (types.Decimal256, error) {
+		return dualDomainUnaryMathText(v, math.Ceil)
+	}, selectList)
+}
+
+// FloorTextUnary executes FLOOR's one-argument direct TEXT overload.
+func FloorTextUnary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Decimal256](ivecs, result, proc, length, func(v string) (types.Decimal256, error) {
+		return dualDomainUnaryMathText(v, math.Floor)
+	}, selectList)
 }
 
 func truncateFloat64(x float64, digits int64) float64 {

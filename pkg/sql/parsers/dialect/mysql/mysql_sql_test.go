@@ -1955,8 +1955,11 @@ var (
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
 		}, {
+			// CAST(x AS CHAR) with an omitted length maps to the unbounded
+			// TEXT type instead of VARCHAR(65535) (issues #32336, #32374);
+			// the canonical "text" rendering must re-parse (CTAS relies on it).
 			input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-			output: "select (cast(0x7fffffffffffffff as varchar))",
+			output: "select (cast(0x7fffffffffffffff as text))",
 		}, {
 			input:  "select cast(-19999999999999999999 as signed);",
 			output: "select cast(-19999999999999999999 as signed)",

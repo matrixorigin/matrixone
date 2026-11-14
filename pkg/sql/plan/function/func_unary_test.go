@@ -5736,6 +5736,31 @@ func TestReverse(t *testing.T) {
 	}
 }
 
+// REVERSE keeps omitted-length CAST/CONVERT-to-CHAR results intact: the TEXT
+// overload binds directly, so no width-narrowing CHAR cast is inserted before
+// the reversal, and the result stays in the unbounded string family (#32336).
+func TestReverseTextKeepsOmittedLengthCastValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	get, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.T_text.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_text, get.GetReturnType().Oid)
+	_, shouldCast := get.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast, "reverse(text) must match directly, a by-cast match would narrow to CHAR(%d)", types.T_char.ToType().Width)
+
+	longInput := strings.Repeat("a", 300)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(),
+			[]string{longInput, "好你", ""},
+			[]bool{false, false, false})},
+		NewFunctionTestResult(types.T_text.ToType(), false,
+			[]string{longInput, "你好", ""},
+			[]bool{false, false, false}),
+		Reverse)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'reverse text length', err info is '%s'", info))
+}
+
 // Oct
 
 func initOctUint8TestCase() []tcTemp {

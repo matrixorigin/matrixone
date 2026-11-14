@@ -331,6 +331,16 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// Character and binary casts are semantic boundaries even though the
+		// value conversion is shared with ordinary overload-coercion casts:
+		// an explicit CAST/CONVERT serializes a JSON value into its JSON
+		// text (scalar strings keep their enclosing quotes and escaping),
+		// while implicit conversions keep exposing the payload (#32374).
+		return true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
 	case defines.MYSQL_TYPE_LONGLONG:
@@ -3351,6 +3361,17 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
 }
 
+// isVarcharOrTextExprType reports whether an expression type is one of the
+// string kinds the "+" and "-" operator rewrites treat as a date operand or
+// concatenate: VARCHAR plus the unbounded TEXT target of omitted-length
+// CAST/CONVERT-to-CHAR (#32336, #32374). The widened cast results must keep
+// these rewrites or composed statements like
+// CAST('2024-01-01' AS CHAR) + INTERVAL 1 DAY stop binding. CHAR literals
+// are unchanged: they never matched these rewrites before the widening.
+func isVarcharOrTextExprType(id int32) bool {
+	return id == int32(types.T_varchar) || id == int32(types.T_text)
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
@@ -3490,10 +3511,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].Typ.Id == int32(types.T_interval) && isVarcharOrTextExprType(args[1].Typ.Id) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -3508,7 +3529,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && isVarcharOrTextExprType(args[1].Typ.Id) {
 			name = "concat"
 		}
 		if err != nil {
@@ -3534,7 +3555,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -3636,7 +3657,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 
-		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+		// Omitted-length CAST/CONVERT-to-CHAR results widen to TEXT (#32336,
+		// #32374); the format argument accepts them just like its VARCHAR/
+		// CHAR peers, with the same constant-format return type inference.
+		formatId := args[1].Typ.Id
+		isValidFormatType := formatId == int32(types.T_varchar) ||
+			formatId == int32(types.T_char) ||
+			formatId == int32(types.T_text)
+		if isValidFormatType {
 			var tp = types.T_date
 			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
@@ -5470,7 +5498,7 @@ func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
 	}
 	return fn.Args[0].GetLit() != nil &&
 		fn.Args[0].GetLit().IsBin &&
-		types.T(expr.Typ.Id) == types.T_varchar
+		(types.T(expr.Typ.Id) == types.T_varchar || types.T(expr.Typ.Id) == types.T_text)
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {

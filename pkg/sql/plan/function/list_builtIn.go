@@ -478,6 +478,23 @@ var supportedStringBuiltIns = []FuncNew{
 					return ExtractFromTimestamp
 				},
 			},
+			{
+				// TEXT must bind directly: EXTRACT's DATETIME overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATETIME, whose ParseDateCast
+				// reading of a short colon string like '10:11:12' discards
+				// the time. The string parsing path preserves the
+				// pre-widening VARCHAR behavior.
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromVarchar
+				},
+			},
 		},
 	},
 
@@ -2850,6 +2867,20 @@ var supportedStringBuiltIns = []FuncNew{
 				args:       []types.T{types.T_blob},
 				retType: func(parameter []types.Type) types.Type {
 					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Reverse
+				},
+			},
+			{
+				// TEXT must bind directly: REVERSE's CHAR overload is listed
+				// first, so a by-cast tie from TEXT would otherwise insert a
+				// width-255 implicit cast and truncate before reversing
+				// (#32336: CAST/CONVERT ... AS CHAR results are TEXT).
+				overloadId: 3,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return Reverse
@@ -7545,7 +7576,9 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: CEIL,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// the two-argument TEXT overload stays reachable for TEXT inputs
+		// only, matching ROUND's rule for the widened sources.
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -7678,6 +7711,47 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilStr
 				},
 			},
+			{
+				// One-argument CEIL binds TEXT directly with a dual-domain
+				// executor: integer strings keep the exact INT64 and UINT64
+				// values the pre-widening UINT64 tie produced
+				// (CEIL(CAST('9007199254740993' AS TEXT)) and the FLOOR
+				// spelling stay exact instead of silently rounding through
+				// float64), while every other numeric token keeps the
+				// accepted domain and shortest-digit display of the VARCHAR
+				// route's string parser (mo-bot review: the DECIMAL128(38,0)
+				// intermediate rejected CEIL(CAST('1e40' AS CHAR)) and
+				// FLOOR(CONVERT('18446744073709551616', CHAR))). Scale-0
+				// DECIMAL256 — the widest integral numeric — carries the
+				// exact integer domains and every wide float fallback the
+				// widened omitted-length CAST/CONVERT-to-CHAR results need
+				// (#32336, #32374).
+				overloadId: 13,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal256.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilTextUnary
+				},
+			},
+			{
+				// Two-argument CEIL binds TEXT directly so both numeric
+				// domains keep working (see the ROUND TEXT overloads): the
+				// signed INT64 coercion keeps CEIL(CAST('-1' AS CHAR), 0) ->
+				// -1 from the review fix, while the unsigned core keeps the
+				// upper range existing TEXT inputs previously accepted
+				// (CEIL(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 14,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilText
+				},
+			},
 		},
 	},
 
@@ -7775,7 +7849,9 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: FLOOR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// the two-argument TEXT overload stays reachable for TEXT inputs
+		// only, matching ROUND's rule for the widened sources.
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -7908,6 +7984,44 @@ var supportedMathBuiltIns = []FuncNew{
 					return FloorStr
 				},
 			},
+			{
+				// One-argument FLOOR binds TEXT directly with a dual-domain
+				// executor: integer strings keep the exact INT64 and UINT64
+				// values the pre-widening UINT64 tie produced, while every
+				// other numeric token keeps the accepted domain and
+				// shortest-digit display of the VARCHAR route's string
+				// parser (mo-bot review: the DECIMAL128(38,0) intermediate
+				// rejected the wide compositions), and NULL rows keep NULL
+				// results. Scale-0 DECIMAL256 — the widest integral numeric —
+				// carries both integer domains and every wide float fallback
+				// the widened omitted-length CAST/CONVERT-to-CHAR results
+				// need (#32336, #32374).
+				overloadId: 13,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal256.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorTextUnary
+				},
+			},
+			{
+				// Two-argument FLOOR binds TEXT directly so both numeric
+				// domains keep working (see the ROUND TEXT overloads): the
+				// signed rows keep FLOOR(CAST('-1' AS CHAR), 0) -> -1 from
+				// the review fix, while the unsigned core keeps the upper
+				// range existing TEXT inputs previously accepted
+				// (FLOOR(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 14,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorText
+				},
+			},
 		},
 	},
 
@@ -7997,6 +8111,24 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return HexArray
+				},
+			},
+			{
+				// TEXT must bind directly: now that T_text's implicit-cast
+				// rule prefers INT64 like its CHAR/VARCHAR peers (for the
+				// omitted-length CAST/CONVERT-to-CHAR target, #32336,
+				// #32374), a by-cast resolution for HEX would otherwise
+				// pick the cheaper BIGINT overload and encode the input
+				// as an integer instead of keeping the string encoding of
+				// the pre-widening VARCHAR composition. The same string
+				// executor as the VARCHAR overload preserves both domains.
+				overloadId: 8,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexString
 				},
 			},
 		},
@@ -8381,7 +8513,10 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ROUND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// the direct TEXT overloads stay reachable for TEXT inputs only,
+		// so DATE/DATETIME/... keep rejecting at bind time as before
+		// those overloads joined (ci: func_coalesce.test rows 133/144).
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -8502,6 +8637,37 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return RoundDecimal256
+				},
+			},
+			{
+				// TEXT binds directly so both numeric domains keep working
+				// (#32336, #32374, PR review): the cheaper INT64 coercion
+				// restored the signed composition results (ROUND(CAST('-1'
+				// AS CHAR)) -> -1), but its parseSignedCastString rejects the
+				// positive magnitudes that explicit TEXT inputs previously
+				// accepted through the first-listed UINT64 overload
+				// (ROUND(CAST('9223372036854775808' AS TEXT)) -> 9223372036854775808,
+				// TRUNCATE alike). RoundText parses per row: signed rows keep
+				// the INT64 core, the upper unsigned range [2^63, 2^64) keeps
+				// the UINT64 core values, and the scale-0 DECIMAL128 result
+				// renders like both.
+				overloadId: 12,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundText
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundText
 				},
 			},
 		},
@@ -8512,7 +8678,9 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: TRUNCATE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// same TEXT-exact rule as ROUND: temporal sources keep the bind-time
+		// rejection they had before the TEXT overloads joined.
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -8633,6 +8801,34 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TruncateDecimal256
+				},
+			},
+			{
+				// TEXT binds directly so both numeric domains keep working
+				// (see the ROUND TEXT overloads above): the signed INT64
+				// coercion keeps the CHAR composition results
+				// (TRUNCATE(CAST('-1' AS CHAR), 0) -> -1) while the
+				// unsigned core keeps the upper range existing TEXT inputs
+				// accepted before the widening
+				// (TRUNCATE(CAST('9223372036854775808' AS TEXT), 0) ->
+				// 9223372036854775808).
+				overloadId: 12,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateText
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateText
 				},
 			},
 		},
@@ -9016,6 +9212,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToDate
 				},
 			},
+			{
+				// TEXT must bind directly: DATE's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose ParseDateCast rejects
+				// the compact yyyymmddhhmmss datetime spelling and NULLs it.
+				// The string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both spellings.
+				overloadId: 5,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDate
+				},
+			},
 		},
 	},
 
@@ -9262,6 +9475,33 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
+			{
+				// TEXT third argument must bind directly: TIMESTAMPADD's DATE
+				// overload is listed first, so a by-cast tie from the
+				// omitted-length CAST/CONVERT-to-CHAR TEXT target (#32336,
+				// #32374) would otherwise cast TEXT to DATE, whose parse
+				// discards the time-of-day before the interval is applied.
+				// The string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both unit spellings.
+				overloadId: 8,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_char, types.T_int64, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_datetime.ToType()
 				},
@@ -9926,6 +10166,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToQuarter
 				},
 			},
+			{
+				// TEXT must bind directly: QUARTER's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose components the string
+				// path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToQuarter
+				},
+			},
 		},
 	},
 
@@ -10018,6 +10274,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToDayName
 				},
 			},
+			{
+				// TEXT must bind directly: DAYNAME's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose calendar weekday the
+				// string path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDayName
+				},
+			},
 		},
 	},
 
@@ -10069,6 +10341,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToMonthName
 				},
 			},
+			{
+				// TEXT must bind directly: MONTHNAME's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose month name the string
+				// path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToMonthName
+				},
+			},
 		},
 	},
 
@@ -10113,6 +10401,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
+				},
+			},
+			{
+				// TEXT must bind directly: DAYOFMONTH's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose day component the
+				// string path deliberately preserves (0000-01-01 keeps day
+				// 1 and 2024-00-15 keeps day 15 instead of NULLing).
+				overloadId: 4,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -10512,6 +10817,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToTimestamp
 				},
 			},
+			{
+				// TEXT must bind directly: TIMESTAMP's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, returning midnight instead
+				// of preserving the datetime string's time-of-day. The
+				// string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both spellings.
+				overloadId: 5,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToTimestamp
+				},
+			},
 		},
 	},
 
@@ -10641,6 +10963,47 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampDiffDateTimestamp
+				},
+			},
+			{
+				// TEXT operands must bind directly: converting TEXT to
+				// DATE, DATETIME, TIMESTAMP or VARCHAR costs the same, so
+				// a by-cast tie from the omitted-length CAST/CONVERT-to-CHAR
+				// TEXT target (#32336, #32374) would keep the first DATE
+				// overload, whose strToDate cast discards the string's
+				// time-of-day. These mirrors keep the string parsing
+				// overloads the pre-widening VARCHAR compositions selected.
+				overloadId: 12,
+				args:       []types.T{types.T_varchar, types.T_text, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffString
+				},
+			},
+			{
+				// See overload 12: mixed DATE/TEXT compositions must keep
+				// the date-and-string executor, not fall back to the DATE
+				// pair overload through an equal-cost cast tie.
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_date, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDateString
+				},
+			},
+			{
+				// See overload 12: the reversed string-then-DATE mix.
+				overloadId: 14,
+				args:       []types.T{types.T_varchar, types.T_text, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffStringDate
 				},
 			},
 		},
@@ -10947,6 +11310,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToWeekOfYear
+				},
+			},
+			{
+				// TEXT must bind directly: WEEKOFYEAR's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose calendar week number
+				// the string path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},

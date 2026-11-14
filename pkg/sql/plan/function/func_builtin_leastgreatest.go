@@ -429,7 +429,11 @@ func leastGreatestTemporalRank(oid types.T) int {
 func leastGreatestJSONDateTemporalType(inputs []types.Type) (types.Type, bool) {
 	for i := range inputs {
 		switch inputs[i].Oid {
-		case types.T_json, types.T_char, types.T_varchar,
+		// TEXT joins CHAR/VARCHAR here: CAST/CONVERT to an omitted-length CHAR
+		// targets TEXT (#32336), and these compositions bound before that
+		// mapping change. Non-temporal string peers still converge on the
+		// VARCHAR packed-date comparison target.
+		case types.T_json, types.T_char, types.T_varchar, types.T_text,
 			types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
 		default:
 			if !inputs[i].IsNumeric() {

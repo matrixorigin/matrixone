@@ -309,7 +309,9 @@ invalid argument function greatest, bad value [JSON BINARY]
 select greatest(json_extract('1', '$'), cast('1' as varbinary));
 invalid argument function greatest, bad value [JSON VARBINARY]
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('x' as text));
-invalid argument function greatest, bad value [JSON DATE TEXT]
+invalid argument parsedate, bad value x
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), 'x');
+invalid argument parsedate, bad value x
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('2020-01-03' as blob));
 invalid argument function greatest, bad value [JSON DATE BLOB]
 select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as datetime)) as greatest_json_datetime;

@@ -164,8 +164,11 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 		{name: "grouped set", sql: "select s from enum_order_t group by s order by s", typ: types.T_uint64},
 		{name: "derived grouped set", sql: "select s from (select s from enum_order_t group by s) d order by s", typ: types.T_uint64},
 		{name: "grouped enum expression stays lexical", sql: "select concat(e, '') as e from enum_order_t group by concat(e, '') order by e", typ: types.T_varchar},
-		{name: "mixed union cast clears provenance", sql: "select e from enum_order_t union all select cast(e as char) from enum_order_t order by e", typ: types.T_varchar},
-		{name: "explicit cast null union clears provenance", sql: "select e from enum_order_t union all select cast(null as char) order by e", typ: types.T_varchar},
+		// Omitted-length CAST...AS CHAR results bind the unbounded string type
+		// (T_text, issues #32336/#32374); a text key still orders lexically
+		// and the provenance rules below are unchanged.
+		{name: "mixed union cast clears provenance", sql: "select e from enum_order_t union all select cast(e as char) from enum_order_t order by e", typ: types.T_text},
+		{name: "explicit cast null union clears provenance", sql: "select e from enum_order_t union all select cast(null as char) order by e", typ: types.T_text},
 		{name: "different union definitions clear provenance", sql: "select e from enum_order_t union all select e from enum_other_order_t order by e", typ: types.T_varchar},
 		{name: "direct set", sql: "select s from enum_order_t order by s", typ: types.T_uint64},
 		{name: "cte set", sql: "with c as (select s from enum_order_t) select s from c order by s", typ: types.T_uint64},
@@ -173,9 +176,9 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 		{name: "nested set desc nullable", sql: "select s from (select s from (select s from enum_order_t) d1) d2 order by s desc", typ: types.T_uint64},
 		{name: "union set", sql: "select s from enum_order_t union all select s from enum_order_t order by s", typ: types.T_uint64},
 		{name: "derived union set", sql: "select s from (select s from enum_order_t union all select s from enum_order_t) u order by s", typ: types.T_uint64},
-		{name: "explicit enum cast stays lexical", sql: "select cast(e as char) as value from (select e from enum_order_t) d order by value", typ: types.T_varchar},
-		{name: "explicit set cast stays lexical", sql: "select cast(s as char) as value from (select s from enum_order_t) d order by value", typ: types.T_varchar},
-		{name: "inner enum cast stays lexical", sql: "select e from (select cast(e as char) as e from enum_order_t) d order by e", typ: types.T_varchar},
+		{name: "explicit enum cast stays lexical", sql: "select cast(e as char) as value from (select e from enum_order_t) d order by value", typ: types.T_text},
+		{name: "explicit set cast stays lexical", sql: "select cast(s as char) as value from (select s from enum_order_t) d order by value", typ: types.T_text},
+		{name: "inner enum cast stays lexical", sql: "select e from (select cast(e as char) as e from enum_order_t) d order by e", typ: types.T_text},
 		{name: "enum string expression stays lexical", sql: "select concat(e, '') as value from (select e from enum_order_t) d order by value", typ: types.T_varchar},
 		{name: "ordinary string stays lexical", sql: "select v from (select v from enum_order_t) d order by v", typ: types.T_varchar},
 	}
@@ -204,7 +207,7 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 		{name: "cte set window", sql: "with c as (select s from enum_order_t) select row_number() over (order by s desc) from c", typ: types.T_uint64},
 		{name: "derived set window", sql: "select row_number() over (order by s) from (select s from enum_order_t) d", typ: types.T_uint64},
 		{name: "derived union set window", sql: "select row_number() over (order by s) from (select s from enum_order_t union all select s from enum_order_t) u", typ: types.T_uint64},
-		{name: "explicit cast window stays lexical", sql: "select row_number() over (order by cast(e as char)) from (select e from enum_order_t) d", typ: types.T_varchar},
+		{name: "explicit cast window stays lexical", sql: "select row_number() over (order by cast(e as char)) from (select e from enum_order_t) d", typ: types.T_text},
 	}
 	for _, tc := range windowCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -272,7 +275,7 @@ func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {
 		{name: "derived enum", sql: "select group_concat(e order by e) from (select e from enum_order_t) d", typ: types.T_enum},
 		{name: "derived enum ordinal", sql: "select group_concat(e order by 1) from (select e from enum_order_t) d", typ: types.T_enum},
 		{name: "cte set", sql: "with c as (select s from enum_order_t) select group_concat(s order by s) from c", typ: types.T_uint64},
-		{name: "derived explicit cast stays lexical", sql: "select group_concat(e order by cast(e as char)) from (select e from enum_order_t) d", typ: types.T_varchar},
+		{name: "derived explicit cast stays lexical", sql: "select group_concat(e order by cast(e as char)) from (select e from enum_order_t) d", typ: types.T_text},
 		{name: "derived expression stays lexical", sql: "select group_concat(e order by concat(e, '')) from (select e from enum_order_t) d", typ: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

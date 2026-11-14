@@ -1,0 +1,431 @@
+-- Issue group #32336/#32374: CAST and CONVERT to CHAR with the length
+-- omitted never truncate the value. MySQL infers the result length for the
+-- omitted-length CHAR target, so strings and serialized JSON larger than
+-- 64 KiB survive the cast intact. Explicit CHAR(N) keeps width truncation.
+-- Content assertions use LENGTH/SUBSTRING/JSON_VALID; REVERSE takes the
+-- unbounded TEXT cast target natively (no width-narrowing cast), and
+-- LEAST/GREATEST keep binding it in JSON and temporal compositions.
+
+-- concat result above the 65,535-byte varchar default, expression cast
+select length(concat(repeat('a', 50000), repeat('b', 50000))) as input_bytes,
+       length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char)) as cast_bytes,
+       length(convert(concat(repeat('a', 50000), repeat('b', 50000)), char)) as convert_bytes,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 99998, 3) as cast_tail,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 1, 3) as cast_head;
+
+-- boundary sizes around the 65,535-byte default
+select length(cast(concat(repeat('a', 65534), 'x') as char)) as bytes_65535_fit,
+       length(cast(concat(repeat('a', 65535), 'x') as char)) as bytes_65536_over;
+
+-- multibyte content beyond 65,535 characters keeps its full byte length
+select length(cast(concat(repeat('好', 21845), repeat('好', 21845),
+                          repeat('好', 21845), repeat('好', 21845)) as char)) as multibyte_bytes;
+
+-- null and empty inputs behave as before
+select cast(null as char) is null as null_stays_null,
+       length(cast('' as char)) as empty_len;
+
+-- explicit-length truncation is unchanged
+select length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10))) as explicit_len,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10)), 8, 3) as explicit_tail;
+
+-- oversized REPEAT still returns NULL (issue #28103) and the cast keeps NULL
+select length(repeat('a', 100000)) as repeat_null_len,
+       length(cast(repeat('a', 100000) as char)) as repeat_null_cast_len;
+
+-- stored longtext read through the cast keeps every byte
+drop table if exists func_cast_omit_char_t1;
+create table func_cast_omit_char_t1 (id int primary key, body longtext);
+insert into func_cast_omit_char_t1 values (1, concat(repeat('a', 50000), repeat('b', 50000)));
+select length(body) as stored_bytes,
+       length(cast(body as char)) as cast_bytes,
+       substring(cast(body as char), 99998, 3) as cast_tail
+from func_cast_omit_char_t1 order by id;
+drop table if exists func_cast_omit_char_t1;
+
+-- serialized JSON beyond 65,535 bytes stays complete and valid
+set @chunk = repeat('a', 10000);
+set @payload = concat(@chunk, @chunk, @chunk, @chunk, @chunk,
+                      @chunk, @chunk, @chunk, @chunk, @chunk);
+select length(@payload) as payload_bytes,
+       length(cast(json_object('s', @payload) as char)) as cast_bytes,
+       json_valid(cast(json_object('s', @payload) as char)) as valid_json,
+       substring(cast(json_object('s', @payload) as char), 1, 6) as cast_prefix,
+       substring(cast(json_object('s', @payload) as char),
+                 length(cast(json_object('s', @payload) as char)) - 2, 3) as cast_suffix;
+
+-- stored JSON column read through the cast keeps its full serialization
+drop table if exists func_cast_omit_json_t1;
+create table func_cast_omit_json_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_t1 values (1, json_object('s', @payload));
+select length(cast(doc as char)) as cast_bytes,
+       json_valid(cast(doc as char)) as valid_json,
+       substring(cast(doc as char), length(cast(doc as char)) - 2, 3) as cast_suffix
+from func_cast_omit_json_t1 order by id;
+drop table if exists func_cast_omit_json_t1;
+
+-- explicit CAST serializes the JSON value (MySQL's JSON conversion rule):
+-- a scalar string keeps its enclosing quotes, stays valid JSON, keeps every
+-- byte, and round-trips back to the original payload
+select length(cast(cast('"aaaa"' as json) as char)) as scalar_small_len,
+       json_valid(cast(cast('"aaaa"' as json) as char)) as scalar_small_valid,
+       length(convert(cast('"aaaa"' as json), char)) as scalar_small_convert_len;
+set @scalar = concat('"', @payload, '"');
+select length(cast(cast(@scalar as json) as char)) as scalar_large_len,
+       json_valid(cast(cast(@scalar as json) as char)) as scalar_large_valid,
+       substring(cast(cast(@scalar as json) as char), 99998, 3) as scalar_tail,
+       substring(cast(cast(@scalar as json) as char),
+                 length(cast(cast(@scalar as json) as char)) - 1, 2) as scalar_closing_quote,
+       length(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$'))) as scalar_roundtrip_len,
+       hex(substring(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$')),
+                     length(@payload), 1)) as scalar_roundtrip_last;
+
+-- escaped scalar content serializes with JSON escaping intact and round-trips
+set @esc = concat('a', '"', 'b');
+select length(cast(cast(json_quote(@esc) as json) as char)) as esc_len,
+       json_valid(cast(cast(json_quote(@esc) as json) as char)) as esc_valid,
+       hex(cast(cast(json_quote(@esc) as json) as char)) as esc_hex,
+       json_unquote(json_extract(cast(cast(json_quote(@esc) as json) as char), '$')) as esc_roundtrip;
+
+-- stored scalar JSON column read through the cast keeps its serialized form
+drop table if exists func_cast_omit_json_scalar_t1;
+create table func_cast_omit_json_scalar_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_scalar_t1 values (1, cast(@scalar as json));
+select length(cast(doc as char)) as stored_scalar_len,
+       json_valid(cast(doc as char)) as stored_scalar_valid,
+       substring(cast(doc as char), length(cast(doc as char)) - 1, 2) as stored_scalar_tail
+from func_cast_omit_json_scalar_t1 order by id;
+drop table if exists func_cast_omit_json_scalar_t1;
+
+-- CREATE TABLE ... AS SELECT rewrites the source select into an
+-- INSERT ... SELECT by re-rendering and re-parsing it, so the omitted-length
+-- cast must render as a plain re-parseable text target; the derived column
+-- is a TEXT-family column and keeps every byte.
+set @ctas_payload = concat(repeat('a', 50000), repeat('b', 50000));
+drop table if exists func_cast_omit_char_ctas;
+create table func_cast_omit_char_ctas
+  as select cast(@ctas_payload as char) as casted_value;
+select length(casted_value) as ctas_bytes,
+       substring(casted_value, 99998, 3) as ctas_tail
+from func_cast_omit_char_ctas;
+show create table func_cast_omit_char_ctas;
+drop table if exists func_cast_omit_char_ctas;
+
+-- the JSON cast travels the same CTAS re-parse path and stays complete
+drop table if exists func_cast_omit_json_ctas;
+create table func_cast_omit_json_ctas
+  as select cast(json_object('s', @payload) as char) as doc_text;
+select json_valid(doc_text) as ctas_json_valid,
+       substring(doc_text, length(doc_text) - 2, 3) as ctas_json_suffix,
+       length(doc_text) as ctas_json_bytes
+from func_cast_omit_json_ctas;
+drop table if exists func_cast_omit_json_ctas;
+
+-- REVERSE consumed the pre-change VARCHAR cast target without any narrowing
+-- cast; the TEXT target must keep that length-preserving path for both CAST
+-- and CONVERT, below and above 64 KiB, multibyte, and NULL.
+select length(reverse(cast(repeat('a', 300) as char))) as reverse_cast_len,
+       length(reverse(convert(repeat('a', 300), char))) as reverse_convert_len,
+       length(reverse(cast(concat(repeat('a', 50000), repeat('b', 50000))
+                           as char))) as reverse_over_64k_len;
+select reverse(cast('你好a' as char)) as reverse_mb,
+       reverse(cast(null as char)) is null as reverse_null_is_null;
+
+-- LEAST and GREATEST keep binding omitted-length CHAR casts together with
+-- JSON and temporal arguments: the string peers compare as packed dates,
+-- matching the pre-change CHAR/VARCHAR behavior in both syntaxes.
+select least(convert('2024-01-01', char), cast('2024-01-02' as date),
+             cast('"2024-01-03"' as json)) as least_convert_json_date,
+       greatest(convert('2024-01-01', char), cast('2024-01-02' as date),
+                cast('"2024-01-03"' as json)) as greatest_convert_json_date,
+       least(cast('2024-01-01' as char), cast('2024-01-02' as date),
+             cast('"2024-01-03"' as json)) as least_cast_json_date,
+       greatest(cast('2024-01-01' as char), cast('2024-01-02' as date),
+                cast('"2024-01-03"' as json)) as greatest_cast_json_date;
+select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"' as json))
+         is null as least_null_peer_is_null;
+
+-- CEIL and FLOOR keep the string/numeric parsing semantics for the TEXT cast
+-- results: decimal and negative strings parse as floating-point values on
+-- the direct TEXT overloads, for both CAST and CONVERT spellings. The
+-- one-argument overloads carry scale-0 DECIMAL256 (see the exact-integer
+-- and wide-domain sections below), so the values render in the integer
+-- domain without the old FLOAT64 display's trailing ".0".
+select ceil(cast('1.2' as char)) as ceil_cast,
+       floor(cast('1.2' as char)) as floor_cast,
+       ceil(convert('-1.2', char)) as ceil_convert_neg,
+       floor(convert('-1.2', char)) as floor_convert_neg;
+
+-- TIMESTAMPADD keeps the string temporal path for the TEXT cast results: a
+-- datetime string keeps its time-of-day before the interval is applied, for
+-- both spellings, instead of going through DATE as midnight.
+select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char)) as tsadd_convert,
+       timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char)) as tsadd_cast;
+
+-- TIMESTAMP keeps the string temporal path for the TEXT cast results: the
+-- datetime string's time-of-day is preserved for both spellings.
+select timestamp(cast('2024-01-01 12:34:56' as char)) as ts_cast,
+       timestamp(convert('2024-01-01 12:34:56', char)) as ts_convert;
+
+-- EXTRACT keeps the string parsing path for the TEXT cast results: the short
+-- colon-separated string parses as TIME for time units (not as a colon date
+-- whose minutes read zero) and as the colon date for date units.
+select extract(minute from cast('10:11:12' as char)) as extract_cast_minute,
+       extract(minute from convert('10:11:12', char)) as extract_convert_minute;
+select extract(year from cast('10:11:12' as char)) as extract_cast_year;
+
+-- STR_TO_DATE and TO_DATE accept the widened TEXT cast results as format
+-- strings and keep parsing the date for both spellings.
+select str_to_date('2024-01-02', convert('%Y-%m-%d', char)) as str_to_date_convert,
+       str_to_date('2024-01-02', cast('%Y-%m-%d' as char)) as str_to_date_cast,
+       to_date('2024-01-02', convert('%Y-%m-%d', char)) as to_date_convert,
+       to_date('2024-01-02', cast('%Y-%m-%d' as char)) as to_date_cast;
+
+-- TIMESTAMPDIFF keeps the string temporal overloads for the TEXT cast
+-- results: compositions next to a DATE operand keep the string parsing
+-- executor, so the HOUR differences preserve the string's time-of-day
+-- (49 and 47 hours) instead of the DATE-truncated 48, for both spellings.
+select timestampdiff(hour, date('2024-01-01'), cast('2024-01-03 01:00:00' as char)) as tsdiff_date_cast,
+       timestampdiff(hour, date('2024-01-01'), convert('2024-01-03 01:00:00', char)) as tsdiff_date_convert;
+select timestampdiff(hour, cast('2024-01-03 01:00:00' as char), date('2024-01-05')) as tsdiff_cast_date,
+       timestampdiff(hour, convert('2024-01-03 01:00:00', char), date('2024-01-05')) as tsdiff_convert_date;
+select timestampdiff(hour, cast('2024-01-01 01:00:00' as char), cast('2024-01-03 00:30:00' as char)) as tsdiff_pair_cast,
+       timestampdiff(hour, convert('2024-01-01 01:00:00', char), convert('2024-01-03 00:30:00', char)) as tsdiff_pair_convert;
+
+-- The "+" and "-" operator rewrites keep firing for the TEXT cast results:
+-- composed date arithmetic reaches DATE_ADD/DATE_SUB's string overloads and
+-- string pairs reach CONCAT, for both spellings, instead of failing to bind.
+select cast('2024-01-01' as char) + interval 1 day as add_day_cast,
+       convert('2024-01-01', char) + interval 1 day as add_day_convert;
+select interval 1 day + cast('2024-01-01 12:34:56' as char) as add_rev_cast,
+       interval 1 day + convert('2024-01-01 12:34:56', char) as add_rev_convert;
+select cast('2024-03-31' as char) - interval 1 day as sub_day_cast,
+       convert('2024-03-31', char) - interval 1 day as sub_day_convert;
+select cast('a' as char) + 'b' as concat_text_varchar_cast,
+       convert('a', char) + 'b' as concat_text_varchar_convert,
+       'a' + cast('b' as char) as concat_varchar_text_cast,
+       'a' + convert('b', char) as concat_varchar_text_convert;
+select cast('a' as char) + cast('b' as char) as concat_two_cast,
+       convert('a', char) + convert('b', char) as concat_two_convert;
+
+-- DAYOFMONTH, QUARTER, DAYNAME, MONTHNAME and WEEKOFYEAR keep their string
+-- semantics for the TEXT cast results: year-zero and incomplete dates
+-- preserve their components the way their VARCHAR string overloads do,
+-- instead of NULLing through the DATE cast.
+select dayofmonth(cast('0000-01-01' as char)) as dayofmonth_cast,
+       dayofmonth(convert('2024-00-15', char)) as dayofmonth_convert;
+select quarter(cast('0000-01-01' as char)) as quarter_cast,
+       dayname(cast('0000-01-01' as char)) as dayname_cast,
+       monthname(cast('0000-01-01' as char)) as monthname_cast,
+       weekofyear(cast('0000-01-01' as char)) as weekofyear_cast;
+select quarter(convert('0000-01-01', char)) as quarter_convert,
+       dayname(convert('0000-01-01', char)) as dayname_convert,
+       monthname(convert('0000-01-01', char)) as monthname_convert,
+       weekofyear(convert('0000-01-01', char)) as weekofyear_convert;
+
+-- YEAR stays on its pre-widening DATE-overload binding for TEXT results: its
+-- prepared statements pin the temporal parameter domain in the numeric-context
+-- plan tests, so a direct TEXT overload is out of scope here. Under the
+-- composed cast spelling that means unparseable strings NULL where the
+-- literal VARCHAR spelling still parses to an error; valid dates are
+-- unaffected. MONTH's string path is result-identical either way (NULL on
+-- unparseable strings), so both just get composed-cast controls here.
+select year(cast('2024-06-05' as char)) as year_valid_cast,
+       year(convert('2024-06-05', char)) as year_valid_convert;
+select month(cast('2024-06-05' as char)) as month_valid_cast,
+       month(convert('2024-06-05', char)) as month_valid_convert;
+
+-- [review round] Preserve the signed INT64 coercion domain for the widened
+-- CHAR results: after the omitted-length CAST/CONVERT-to-CHAR target became
+-- TEXT, every TEXT-to-integer conversion had equal cost, so BIN, ROUND,
+-- TRUNCATE, SPACE and the two-argument CEIL/FLOOR kept their first listed
+-- (unsigned) overloads and rejected values like '256' and '-1' that the
+-- pre-widening VARCHAR-to-INT64 path accepted. TEXT prefers the INT64 cast
+-- like its CHAR/VARCHAR peers again, for both spellings.
+select bin(cast('256' as char)) as bin_text,
+       bin(convert('256', char)) as bin_convert,
+       bin(cast('256' as varchar(10))) as bin_varchar_control;
+select round(cast('-1' as char)) as round_text,
+       round(cast('-1' as char), 0) as round2_text,
+       round(cast('-1' as varchar(10))) as round_varchar_control;
+select truncate(cast('-1' as char), 0) as truncate_text;
+select space(cast('-1' as char)) as space_text,
+       length(space(cast('2' as char))) as space_len_text;
+select ceil(cast('-1' as char), 0) as ceil2_text,
+       floor(cast('-1' as char), 0) as floor2_text,
+       ceil(cast('-1.2' as char)) as ceil_onearg_text;
+select -cast('300' as char) as neg_text,
+       cast('300' as char) << 1 as shiftl_text;
+
+-- DATE keeps its string parsing overload for the widened CHAR results: the
+-- compact yyyymmddhhmmss spelling still parses the way the pre-widening
+-- VARCHAR composition did, for both spellings, instead of NULLing through a
+-- DATE cast whose parser rejects 14-digit datetimes.
+select date(cast('20240102123456' as char)) as date_compact_cast,
+       date(convert('20240102123456', char)) as date_compact_convert;
+select date(cast('20240102' as char)) as date_ymd_cast,
+       date(cast('2024-01-02 12:34:56' as char)) as date_full_cast,
+       date(cast('2024-01-02 12:34:56' as varchar(32))) as date_varchar_control;
+
+-- HEX carries both string and integer overloads: with the restored TEXT
+-- preference the widened CHAR result keeps the string encoding domain of
+-- its VARCHAR peer ('323536', not the numeric '100'), and the complete
+-- untruncated TEXT reaches the string encoder.
+select hex(cast('256' as char)) as hex_text,
+       hex(convert('256', char)) as hex_convert,
+       hex(cast('256' as varchar(10))) as hex_varchar_control,
+       hex(4660) as hex_int_control;
+select length(hex(cast(concat(repeat('a',50000), repeat('b',50000)) as char))) as hex_len_text;
+
+-- [review round] Preserve the accepted unsigned range of existing TEXT
+-- inputs in ROUND, TRUNCATE and the two-argument CEIL/FLOOR: the restored
+-- TEXT->INT64 preference rejected positive magnitudes at or above 2^63
+-- that explicit AS-TEXT casts and existing TEXT columns used to accept
+-- through their UINT64 overloads. The direct dual-domain TEXT overloads
+-- keep both domains: the signed rows keep the CHAR-composition results
+-- above, and the upper unsigned range keeps its previous exact values.
+-- Outcomes below match the base binary's UINT64-overload outputs for the
+-- unsigned rows and the INT64-route outputs for the signed rows. The
+-- widened omitted-length AS-CHAR composition feeds the same TEXT argument,
+-- so it takes the direct route too (fourth column; on the base binary the
+-- pre-widening VARCHAR spelling failed that row through the INT64 cast).
+select round(cast('9223372036854775808' as text)) as round_upper,
+       round(cast('9223372036854775808' as text), 0) as round2_upper,
+       round(cast('9223372036854775808' as char), 0) as round2_char_comp;
+select round(cast('9223372036854775808' as text), -1) as round2_upper_dm1;
+select round(cast('18446744073709551615' as text)) as round_umax;
+select round(cast('9223372036854775807' as text)) as round_imax,
+       round(cast('-9223372036854775808' as text)) as round_imin;
+-- The largest signed-domain value is the round-up corridor: with digits < 0
+-- its ROUND/CEIL results cross int64's ceiling, where the base binary's
+-- UINT64 overload returned the true values (9223372036854775810 at -1,
+-- 9223372036854775900 at -2 for CEIL) while the INT64 core panics (ROUND)
+-- or silently wraps (CEIL). The corridor keeps the base outputs; FLOOR and
+-- TRUNCATE only move positive values toward zero, so they never cross.
+select round(cast('9223372036854775807' as text), -1) as round_imax_dm1,
+       round(cast('9223372036854775804' as text), -1) as round_imax_dm1_ctrl,
+       ceil(cast('9223372036854775807' as text), -1) as ceil_imax_dm1,
+       ceil(cast('9223372036854775807' as text), -2) as ceil_imax_dm2,
+       floor(cast('9223372036854775807' as text), -1) as floor_imax_dm1,
+       truncate(cast('9223372036854775807' as text), -2) as trunc_imax_dm2;
+-- The uint64 maximum still overflows uint64's ROUND digit arithmetic with
+-- digits < 0, keeping the base binary's diagnostics instead of the INT64
+-- cast error the restored preference previously produced
+select round(cast('18446744073709551615' as text), -1);
+-- The UINT64 kernels' digit tables also reach one digit further than the
+-- INT64 kernels' (uint64 numbers have 20 digits, int64 numbers 19), so the
+-- base binary kept rounding and ceiling TEXT inputs at digits -19; the
+-- corridor routes those rows through the UINT64 core as well. FLOOR and
+-- TRUNCATE collapse to zero in both kernels there, and digits <= -20
+-- zero in both.
+select round(cast('9000000000000000000' as text), -19) as round_dm19,
+       round(cast('9223372036854775807' as text), -19) as round_dm19_imax,
+       round(cast('4999999999999999999' as text), -19) as round_dm19_ctrl,
+       ceil(cast('9000000000000000000' as text), -19) as ceil_dm19,
+       floor(cast('9000000000000000000' as text), -19) as floor_dm19,
+       truncate(cast('9000000000000000000' as text), -19) as trunc_dm19;
+select round(cast('9000000000000000000' as text), -20) as round_dm20;
+select truncate(cast('9223372036854775808' as text), 0) as truncate_upper,
+       truncate(cast('18446744073709551615' as text), 0) as truncate_umax,
+       truncate(cast('9223372036854775808' as text), -2) as truncate_upper_dm2;
+select ceil(cast('9223372036854775808' as text), 0) as ceil2_upper,
+       floor(cast('9223372036854775808' as text), 0) as floor2_upper;
+select ceil(cast('9223372036854775808' as text), -2) as ceil2_upper_dm2,
+       ceil(cast('18446744073709551615' as text), -1) as ceil2_umax_dm1,
+       floor(cast('18446744073709551615' as text), -1) as floor2_umax_dm1;
+-- existing TEXT columns in the upper unsigned range keep working per row
+drop table if exists func_cast_omit_char_ub;
+create table func_cast_omit_char_ub (a text);
+insert into func_cast_omit_char_ub values ('9223372036854775808'),
+                                           ('18446744073709551615'),
+                                           ('-1'),
+                                           ('9223372036854775807');
+select round(a) from func_cast_omit_char_ub;
+select truncate(a, 0) from func_cast_omit_char_ub;
+select ceil(a, 0), floor(a, 0) from func_cast_omit_char_ub;
+-- The near-2^63 rows above keep their values. With digits < 0 the two
+-- rows crossing int64's ceiling keep the base outputs and the negative row
+-- keeps its signed result; the uint64-maximum row keeps the base binary's
+-- uint64-ROUND failure, pinned by the scalar statement above, so it is
+-- excluded here.
+select round(a, -1) from func_cast_omit_char_ub where a <> '18446744073709551615';
+-- inputs both numeric domains reject keep the INT64 cast diagnostics
+select round(cast('2.5' as text), 0);
+select truncate(cast('2.5' as text), 0);
+select ceil(cast('-1.2' as text), 0);
+select floor(cast('-1.2' as text), 0);
+select round(cast('99999999999999999999999' as text));
+drop table if exists func_cast_omit_char_ub;
+
+-- [review round] Preserve the exact integer domain of the single-argument
+-- CEIL/FLOOR on TEXT: the FLOAT64 string parser the one-argument overloads
+-- first used parsed through float64, silently returning 9007199254740992
+-- for 9007199254740993 (the FLOOR spelling equally) and shrinking
+-- 18446744073709551615 to 18446744073709552000. The one-argument TEXT
+-- overloads now parse the same dual integer domains as their two-argument
+-- siblings and carry scale-0 DECIMAL256: every integer string keeps the
+-- exact value the base binary's UINT64 tie produced, decimal and negative
+-- strings keep the string parser's values, and base-prefixed or
+-- space-padded integers parse like the implicit cast did.
+select ceil(cast('9007199254740993' as text)) as ceil_2p53p1,
+       floor(cast('9007199254740993' as text)) as floor_2p53p1,
+       ceil(cast('9223372036854775807' as text)) as ceil_imax_1arg,
+       floor(cast('9223372036854775807' as text)) as floor_imax_1arg,
+       ceil(cast('9223372036854775808' as text)) as ceil_upper_1arg,
+       floor(cast('9223372036854775808' as text)) as floor_upper_1arg,
+       ceil(cast('18446744073709551615' as text)) as ceil_umax_1arg,
+       floor(cast('18446744073709551615' as text)) as floor_umax_1arg,
+       ceil(cast('-9223372036854775808' as text)) as ceil_imin_1arg,
+       floor(cast(' 42 ' as text)) as floor_trim_1arg,
+       ceil(cast('0x10' as text)) as ceil_hex_1arg;
+-- the widened omitted-length composition feeds the same direct overload
+select ceil(cast('9007199254740993' as char)) as ceil_comp_2p53p1,
+       floor(convert('9007199254740993', char)) as floor_comp_2p53p1;
+
+-- [review round] Handle the NULL rows of TEXT columns before the string
+-- executor: FLOOR over a mixed nullable TEXT batch used to append the NULL
+-- result and still parse the NULL row's empty value through
+-- strconv.ParseFloat, failing the whole query instead of returning 1 and
+-- NULL like the pre-widening NULL-preserving UINT64 route. NULL rows keep
+-- NULL results and every non-NULL row keeps its own value.
+drop table if exists func_cast_omit_char_unary;
+create table func_cast_omit_char_unary (v text);
+insert into func_cast_omit_char_unary values ('9007199254740993'), (null), ('1'), ('-1.2');
+select ceil(v) from func_cast_omit_char_unary;
+select floor(v) from func_cast_omit_char_unary;
+select ceil(v), floor(v) from func_cast_omit_char_unary where v is not null;
+
+-- [mo-bot P2 review round] Restore the pre-widening numeric domain of the
+-- one-argument CEIL/FLOOR on the omitted-length CHAR compositions: the
+-- DECIMAL128(38,0) intermediate rejected every float magnitude the prior
+-- FLOAT64 route displayed (CEIL(CAST('1e40' AS CHAR)) raised a decimal
+-- conversion error) and every integer token beyond uint64 (FLOOR(CONVERT(
+-- '18446744073709551616', CHAR)) raised a UINT64 range error), both
+-- previously successful on the base. The one-argument executors now carry
+-- scale-0 DECIMAL256, the widest integral numeric: integer tokens keep the
+-- exact dual-domain values and every other numeric token keeps the VARCHAR
+-- route's accepted domain and shortest-digit display for magnitudes within
+-- 76 integral digits.
+select ceil(cast('1e40' as char)) as ceil_comp_1e40,
+       floor(convert('18446744073709551616', char)) as floor_comp_u64p1,
+       ceil(cast('99999999999999999999999' as text)) as ceil_comp_23nines,
+       floor(cast('1e40' as char)) as floor_comp_1e40,
+       floor(cast('12345678901234567890123456789012345678901' as text)) as floor_comp_41d,
+       ceil(cast('1.5e40' as char)) as ceil_comp_1p5e40,
+       floor(cast('-1e40' as char)) as floor_comp_neg_1e40,
+       ceil(cast('18446744073709551617' as text)) as ceil_comp_u64p2,
+       ceil(cast('1e75' as char)) as ceil_comp_1e75;
+-- NULL-row safety holds at the widened domain too: a wide mixed batch keeps
+-- every row's own result, including the NULL row.
+drop table if exists func_cast_omit_char_unary_wide;
+create table func_cast_omit_char_unary_wide (v text);
+insert into func_cast_omit_char_unary_wide values ('1e40'), (null), ('18446744073709551616');
+select ceil(v), floor(v) from func_cast_omit_char_unary_wide;
+drop table if exists func_cast_omit_char_unary_wide;
+-- magnitudes whose display needs more than 76 integral digits exceed
+-- DECIMAL256, the widest scale-0 numeric, and keep the decimal conversion
+-- error; non-numeric strings keep the string parser's error.
+select ceil(cast('1e76' as text));
+select ceil(cast('1e300' as text));
+select ceil(cast('中文' as text));
+drop table if exists func_cast_omit_char_unary;
