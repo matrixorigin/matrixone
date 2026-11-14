@@ -32,7 +32,7 @@ async def test_export_removes_terminator_before_trailing_whitespace(asynchronous
         output = await output
     assert output is result
     expected_format = 'jsonline' if format == 'jsonl' else 'csv'
-    expected = f"SELECT 'semi;colon' AS value INTO OUTFILE '/tmp/output' FORMAT '{expected_format}'"
+    expected = f"SELECT 'semi;colon' AS value\nINTO OUTFILE '/tmp/output' FORMAT '{expected_format}'"
     if format == 'csv':
         expected += " fields terminated by ','"
     execute.assert_called_once_with(expected)
