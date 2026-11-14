@@ -1682,9 +1682,21 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 		require.NotNil(t, args[1].GetCol())
 	})
 
-	t.Run("string literal remains rejected", func(t *testing.T) {
-		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
-		require.Error(t, err)
+	// Issue #31121 removed the jsonOrderingWithStringNotSupported rejection for
+	// character literals: the mixed JSON/string ordering overload now binds like
+	// MySQL (a character operand is a JSON string scalar), instead of failing the
+	// whole statement. The adaptive rows against MySQL 8.0.44 are in the round
+	// receipts cited with the issue's comparison fixes.
+	t.Run("string literal binds the mixed ordering comparison", func(t *testing.T) {
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
+		require.NotNil(t, args[0].GetCol())
+		require.Equal(t, int32(types.T_varchar), args[1].Typ.Id)
+		require.NotNil(t, args[1].GetLit())
 	})
 
 	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {

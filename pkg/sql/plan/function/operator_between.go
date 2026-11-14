@@ -16,8 +16,11 @@ package function
 
 import (
 	"sort"
+	"strconv"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +33,18 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	if isMixedDatetimeTimestampTypes(parameters) {
 		return opBetweenDatetimeTimestamp(parameters, rs, proc, length)
+	}
+	if mixedJSONBooleanBetweenVectors(parameters) {
+		// The JSON/BOOL scalar domain admits these legs through the same
+		// comparison identities as the binary ordering operators, so the
+		// plain and lowered NOT BETWEEN forms agree row for row.
+		return opBetweenJSONBoolean(parameters, rs, proc, length, selectList)
+	}
+	if mixedJSONNumericBetweenVectors(parameters) {
+		// The JSON/numeric scalar domain admits these legs through the same
+		// comparison identities as the binary ordering operators, so the
+		// plain and lowered NOT BETWEEN forms agree row for row.
+		return opBetweenJSONNumeric(parameters, rs, proc, length, selectList)
 	}
 	switch paramType.Oid {
 	case types.T_bool:
@@ -90,6 +105,487 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	panic("unreached code")
+}
+
+// mixedJSONBooleanBetweenVectors recognizes the runtime shape admitted by
+// isMixedJSONBooleanBetweenInputs: every operand is JSON or SQL BOOL, with
+// both domains present.
+func mixedJSONBooleanBetweenVectors(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasJSON, hasBool := false, false
+	for _, parameter := range parameters {
+		switch parameter.GetType().Oid {
+		case types.T_json:
+			hasJSON = true
+		case types.T_bool:
+			hasBool = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasBool
+}
+
+// betweenJSONBooleanOperand is one BETWEEN operand in the mixed JSON/BOOL
+// scalar domain, invocation-owned. JSON bytes are borrowed from the input
+// vector or the kernel's constant cache.
+type betweenJSONBooleanOperand struct {
+	isJSON    bool
+	sqlNull   bool
+	boolValue bool
+	json      bytejson.ByteJson
+}
+
+func readBetweenJSONBooleanJSON(proc *process.Process, vec *vector.Vector, row int) (betweenJSONBooleanOperand, error) {
+	bj, isNull, err := comparisonJSONAt(proc, vec, row)
+	if err != nil {
+		return betweenJSONBooleanOperand{isJSON: true, sqlNull: true}, err
+	}
+	return betweenJSONBooleanOperand{isJSON: true, sqlNull: isNull, json: bj}, nil
+}
+
+// compareBetweenJSONBooleanOperands returns the ordering of left against
+// right for the per-domain legs: JSON/BOOL pairs rank by the JSON scalar
+// category exactly like the binary ordering kernels, JSON/JSON pairs by the
+// trusted byte ordering, and BOOL/BOOL pairs by the boolean total order.
+// A JSON scalar null-out (the legacy era fold) reports through jsonNull.
+func compareBetweenJSONBooleanOperands(
+	proc *process.Process, left, right betweenJSONBooleanOperand,
+) (comparison int, jsonNull bool, err error) {
+	if left.isJSON && right.isJSON {
+		return bytejson.CompareByteJsonTrusted(left.json, right.json), false, nil
+	}
+	if !left.isJSON && !right.isJSON {
+		switch {
+		case !left.boolValue && right.boolValue:
+			return -1, false, nil
+		case left.boolValue && !right.boolValue:
+			return 1, false, nil
+		default:
+			return 0, false, nil
+		}
+	}
+	if left.isJSON {
+		comparison, jsonNull, err := compareJSONScalarWithBoolean(proc.Ctx, left.json, right.boolValue)
+		return comparison, jsonNull, err
+	}
+	comparison, jsonNull, err = compareJSONScalarWithBoolean(proc.Ctx, right.json, left.boolValue)
+	return -comparison, jsonNull, err
+}
+
+// opBetweenJSONBoolean evaluates `x BETWEEN lo AND hi` as
+// `lo <= x AND x <= hi` with each leg in its own comparison domain, exactly
+// like the binary ordering operators the NOT BETWEEN lowering produces.
+// The legs combine under SQL AND: a definitive false leg answers the row
+// FALSE even when the other leg is unknown, and only undecided rows stay
+// NULL, so `NOT (x BETWEEN lo AND hi)` and the lowered
+// `x < lo OR x > hi` agree on every row. A JSON literal null stays a
+// comparable value that ranks below the boolean peer; only the legacy
+// DUMP/LOAD fold keeps an unknown leg like a SQL NULL operand.
+func opBetweenJSONBoolean(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+
+	var boolColumns [3][]bool
+	for i, parameter := range parameters {
+		if parameter.GetType().Oid != types.T_json && !parameter.IsConstNull() {
+			boolColumns[i] = vector.MustFixedColNoTypeCheck[bool](parameter)
+		}
+	}
+	readOperand := func(index, row int) (betweenJSONBooleanOperand, error) {
+		if parameters[index].GetType().Oid == types.T_json {
+			if parameters[index].IsConst() {
+				row = 0
+			}
+			return readBetweenJSONBooleanJSON(proc, parameters[index], row)
+		}
+		boolRow := row
+		if parameters[index].IsConst() {
+			boolRow = 0
+		}
+		if parameters[index].IsNull(uint64(row)) {
+			return betweenJSONBooleanOperand{sqlNull: true}, nil
+		}
+		return betweenJSONBooleanOperand{boolValue: boolColumns[index][boolRow]}, nil
+	}
+
+	// Constant operands only need one validating decode per invocation.
+	constCache := [3]betweenJSONBooleanOperand{}
+	constReady := [3]bool{}
+	for index, parameter := range parameters {
+		if parameter.GetType().Oid == types.T_json && parameter.IsConst() {
+			operand, err := readOperand(index, 0)
+			if err != nil {
+				return err
+			}
+			constCache[index], constReady[index] = operand, true
+		}
+	}
+
+	for row := 0; row < length; row++ {
+		rss[row] = false
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		operands := [3]betweenJSONBooleanOperand{}
+		for index := range parameters {
+			operand := constCache[index]
+			if !constReady[index] {
+				var err error
+				operand, err = readOperand(index, row)
+				if err != nil {
+					return err
+				}
+			}
+			operands[index] = operand
+		}
+		// Each leg is unknown when either operand is SQL NULL (or, in the
+		// legacy era, a folded JSON literal null); every decided leg reaches
+		// its own comparison kernel like the lowered comparison pair does.
+		lowerKnown := !operands[0].sqlNull && !operands[1].sqlNull
+		upperKnown := !operands[0].sqlNull && !operands[2].sqlNull
+		lowerIn, upperIn := false, false
+		if lowerKnown {
+			comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[1], operands[0])
+			if err != nil {
+				return err
+			}
+			lowerKnown = !jsonNull
+			lowerIn = comparison <= 0
+		}
+		if upperKnown {
+			comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[0], operands[2])
+			if err != nil {
+				return err
+			}
+			upperKnown = !jsonNull
+			upperIn = comparison <= 0
+		}
+		switch {
+		case lowerKnown && !lowerIn, upperKnown && !upperIn:
+			// SQL AND: FALSE dominates UNKNOWN, so one definitive leg
+			// answers the row FALSE instead of NULL, exactly like the
+			// `lo <= x AND x <= hi` lowered form.
+		case !lowerKnown || !upperKnown:
+			resultNulls.Add(uint64(row))
+		default:
+			rss[row] = lowerIn && upperIn
+		}
+	}
+	return nil
+}
+
+// mixedJSONNumericBetweenVectors recognizes the runtime shape admitted by
+// isMixedJSONNumericBetweenInputs: every operand is JSON or one of the JSON
+// comparison numeric peers, with both domains present.
+func mixedJSONNumericBetweenVectors(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasJSON, hasNumeric := false, false
+	for _, parameter := range parameters {
+		switch {
+		case parameter.GetType().Oid == types.T_json:
+			hasJSON = true
+		case isJSONComparisonNumericType(parameter.GetType().Oid):
+			hasNumeric = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasNumeric
+}
+
+// betweenJSONNumericOperand is one BETWEEN operand in the mixed JSON/numeric
+// scalar domain, invocation-owned. JSON bytes are borrowed from the input
+// vector or comparisonJSONAt's decode; a numeric operand keeps only its
+// validated adapter peer, whose scratch bytes the peer's own slice keeps
+// reachable, plus its typed DECIMAL value when the DOUBLE-coercion leg has
+// to convert through the ordinary per-type cast.
+type betweenJSONNumericOperand struct {
+	isJSON  bool
+	sqlNull bool
+	json    bytejson.ByteJson
+	peer    jsonNumericPeer
+	scratch [8]byte
+	decimal betweenJSONNumericDecimal
+}
+
+// betweenJSONNumericDecimal keeps a DECIMAL operand's exact typed value and
+// scale so the DOUBLE-coercion leg can follow the ordinary comparison
+// channel's own DECIMAL->DOUBLE cast for its width: DECIMAL64/128 data
+// converts through a Format->ParseFloat reparse (func_cast.go decimalToFloat)
+// while DECIMAL256 data converts arithmetically through Decimal256ToFloat64
+// (func_cast.go decimal256ToFloat).
+type betweenJSONNumericDecimal struct {
+	present bool
+	scale   int32
+	d64     types.Decimal64
+	d128    types.Decimal128
+	d256    types.Decimal256
+}
+
+func readBetweenJSONNumericOperand(
+	proc *process.Process, vec *vector.Vector, row int, oid types.T,
+) (betweenJSONNumericOperand, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	if oid == types.T_json {
+		bj, isNull, err := comparisonJSONAt(proc, vec, row)
+		if err != nil {
+			return betweenJSONNumericOperand{isJSON: true, sqlNull: true}, err
+		}
+		return betweenJSONNumericOperand{isJSON: true, sqlNull: isNull, json: bj}, nil
+	}
+	if vec.IsNull(uint64(row)) {
+		return betweenJSONNumericOperand{sqlNull: true}, nil
+	}
+	operand := betweenJSONNumericOperand{}
+	switch oid {
+	case types.T_decimal64:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d64:     vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row),
+		}
+	case types.T_decimal128:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d128:    vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row),
+		}
+	case types.T_decimal256:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d256:    vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row),
+		}
+	}
+	adapter := comparisonNumericAt(vec, row, &operand.scratch)
+	peer, err := makeJSONNumericPeer(proc.Ctx, adapter, oid, vector.PrepareParamNone)
+	if err != nil {
+		return betweenJSONNumericOperand{}, err
+	}
+	operand.peer = peer
+	return operand, nil
+}
+
+// jsonNumericPeerFloatCoercionDomain reports whether a numeric/numeric
+// BETWEEN leg with this peer must compare in the DOUBLE domain: the ordinary
+// comparison coercion folds a pair with a FLOAT operand (a prepared
+// float-kind ANY parameter included) to DOUBLE before comparing, and the
+// ternary leg follows the same coercion so every spelling of the range
+// agrees at the precision boundary.
+func jsonNumericPeerFloatCoercionDomain(peer *jsonNumericPeer) bool {
+	return peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat
+}
+
+// betweenJSONDoubleCoercion returns the DOUBLE-domain value of a numeric
+// BETWEEN operand exactly the way the ordinary comparison casts it there:
+// a DECIMAL-typed operand converts through its own width's ordinary
+// DECIMAL->DOUBLE cast - the DECIMAL64 and DECIMAL128 casts reparse the
+// operand's rendered text (func_cast.go decimalToFloat: Format then
+// strconv.ParseFloat), while the DECIMAL256 cast converts arithmetically
+// (func_cast.go decimal256ToFloat : Decimal256ToFloat64) - and every other
+// operand keeps the scalar decode the ranked domain uses.
+// The receiver underpins mixed JSON/numeric and unmixable-lower leg parity:
+// substituting either width's conversion for the other breaks a hard decimal
+// boundary. Beside the DOUBLE bound 90071992547409.92 the DECIMAL(16,2) and
+// DECIMAL(20,2) subject 90071992547409.93 keeps its correctly rounded
+// ...9375 through the reparse (above the bound, so the ordinary binary legs
+// reject the row), while the arithmetic coefficient conversion rounds the
+// coefficient 2^53+1 one ULP down into the bound; the DECIMAL(39,2) neighbor
+// answers the opposite way because its own ordinary cast is the arithmetic
+// one and the reparse of its rendered text rounds it above the bound.
+// Following each width's own cast keeps BETWEEN equal to the binary
+// `x <= hi` legs on all of them.
+func betweenJSONDoubleCoercion(operand *betweenJSONNumericOperand) (float64, bool) {
+	if operand.decimal.present {
+		switch operand.peer.typ {
+		case types.T_decimal64:
+			value, err := strconv.ParseFloat(
+				operand.decimal.d64.Format(operand.decimal.scale), 64)
+			if err != nil {
+				return 0, false
+			}
+			return value, true
+		case types.T_decimal128:
+			value, err := strconv.ParseFloat(
+				operand.decimal.d128.Format(operand.decimal.scale), 64)
+			if err != nil {
+				return 0, false
+			}
+			return value, true
+		case types.T_decimal256:
+			return types.Decimal256ToFloat64(operand.decimal.d256, operand.decimal.scale), true
+		}
+	}
+	value, _, ok := jsonToScalar(operand.peer.value)
+	return value, ok
+}
+
+// compareBetweenJSONNumericOperands returns the ordering of left against
+// right for the per-domain legs: JSON/JSON pairs rank by the trusted byte
+// ordering exactly like the binary JSON pair, JSON/numeric pairs by the
+// shared compareJSONNumeric kernel with the numeric peer built from the
+// numeric operand, and numeric/numeric pairs in the comparison domain that
+// the ordinary binary operator binds for that pair - a float-typed peer keeps
+// the pair in the DOUBLE domain exactly like type_check.go's comparison
+// coercion (so a BIGINT 2^53+1 subject compares equal to the DOUBLE 2^53
+// bound), while every other pair keeps the same exact numeric taxonomy the
+// ranking domain uses (JSON ranking already decides an encoded number
+// against an integer adapter through bytejson.CompareNumeric).
+// A JSON scalar null-out (the legacy era fold) reports through jsonNull.
+func compareBetweenJSONNumericOperands(
+	proc *process.Process, left, right betweenJSONNumericOperand,
+) (comparison int, jsonNull bool, err error) {
+	if left.isJSON && right.isJSON {
+		return bytejson.CompareByteJsonTrusted(left.json, right.json), false, nil
+	}
+	if !left.isJSON && !right.isJSON {
+		if jsonNumericPeerFloatCoercionDomain(&left.peer) ||
+			jsonNumericPeerFloatCoercionDomain(&right.peer) {
+			// The ordinary BIGINT/DOUBLE (or DECIMAL/float, or unsigned
+			// integer/float) comparison coerces both operands to DOUBLE, so
+			// the lowered `x <= hi` leg rounds the subject before comparing
+			// and this leg answers from the same domain. A DECIMAL operand
+			// converts through its own width's ordinary cast - the rendered-
+			// text reparse for DECIMAL64/128, the arithmetic per-type cast
+			// for DECIMAL256 - so a hard decimal boundary answers identically
+			// in both spellings.
+			leftFloat, ok := betweenJSONDoubleCoercion(&left)
+			rightFloat, okRight := betweenJSONDoubleCoercion(&right)
+			if !ok || !okRight {
+				return 0, false, moerr.NewInvalidInput(
+					proc.Ctx, "invalid encoded numeric BETWEEN operand")
+			}
+			return compareFloat64Total(leftFloat, rightFloat), false, nil
+		}
+		comparison, ok := bytejson.CompareNumeric(left.peer.value, right.peer.value)
+		if !ok {
+			// Only a malformed internal adapter payload reaches this path;
+			// operands built by comparisonNumericAt are validated members of
+			// the numeric taxonomy.
+			return 0, false, moerr.NewInvalidInput(proc.Ctx, "invalid encoded numeric BETWEEN operand")
+		}
+		return comparison, false, nil
+	}
+	if left.isJSON {
+		return compareJSONNumeric(proc.Ctx, left.json, &right.peer)
+	}
+	comparison, jsonNull, err = compareJSONNumeric(proc.Ctx, right.json, &left.peer)
+	return -comparison, jsonNull, err
+}
+
+// opBetweenJSONNumeric evaluates `x BETWEEN lo AND hi` as
+// `lo <= x AND x <= hi` with each leg in its own comparison domain, exactly
+// like the binary ordering operators the NOT BETWEEN lowering produces.
+// The legs combine under SQL AND: a definitive false leg answers the row
+// FALSE even when the other leg is unknown (a SQL NULL operand, or the
+// legacy DUMP/LOAD JSON literal null fold), and only undecided rows stay
+// NULL, so `NOT (x BETWEEN lo AND hi)` and the lowered `x < lo OR x > hi`
+// agree on every row. Otherwise a JSON literal null stays a comparable value
+// that ranks below the numeric peer.
+func opBetweenJSONNumeric(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+
+	oids := [3]types.T{}
+	for i, parameter := range parameters {
+		oids[i] = parameter.GetType().Oid
+	}
+	// Constant operands only need one validating decode and one peer parse
+	// per invocation; a column operand reads and validates per row.
+	constCache := [3]betweenJSONNumericOperand{}
+	constReady := [3]bool{}
+	for index, parameter := range parameters {
+		if parameter.IsConst() && !parameter.IsConstNull() {
+			operand, err := readBetweenJSONNumericOperand(proc, parameter, 0, oids[index])
+			if err != nil {
+				return err
+			}
+			constCache[index], constReady[index] = operand, true
+		} else if parameter.IsConstNull() {
+			constCache[index], constReady[index] = betweenJSONNumericOperand{sqlNull: true}, true
+		}
+	}
+
+	for row := 0; row < length; row++ {
+		rss[row] = false
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		operands := [3]betweenJSONNumericOperand{}
+		for index := range parameters {
+			operand := constCache[index]
+			if !constReady[index] {
+				var err error
+				operand, err = readBetweenJSONNumericOperand(proc, parameters[index], row, oids[index])
+				if err != nil {
+					return err
+				}
+			}
+			operands[index] = operand
+		}
+		// Each leg is unknown when either operand is SQL NULL (or, in the
+		// legacy era, a folded JSON literal null); every decided leg reaches
+		// its own comparison kernel like the lowered comparison pair does.
+		lowerKnown := !operands[0].sqlNull && !operands[1].sqlNull
+		upperKnown := !operands[0].sqlNull && !operands[2].sqlNull
+		lowerIn, upperIn := false, false
+		if lowerKnown {
+			comparison, jsonNull, err := compareBetweenJSONNumericOperands(proc, operands[1], operands[0])
+			if err != nil {
+				return err
+			}
+			lowerKnown = !jsonNull
+			lowerIn = comparison <= 0
+		}
+		if upperKnown {
+			comparison, jsonNull, err := compareBetweenJSONNumericOperands(proc, operands[0], operands[2])
+			if err != nil {
+				return err
+			}
+			upperKnown = !jsonNull
+			upperIn = comparison <= 0
+		}
+		switch {
+		case lowerKnown && !lowerIn, upperKnown && !upperIn:
+			// SQL AND: FALSE dominates UNKNOWN, so one definitive leg
+			// answers the row FALSE instead of NULL, exactly like the
+			// `lo <= x AND x <= hi` lowered form.
+		case !lowerKnown || !upperKnown:
+			resultNulls.Add(uint64(row))
+		default:
+			rss[row] = lowerIn && upperIn
+		}
+	}
+	return nil
 }
 
 func isMixedDatetimeTimestampTypes(parameters []*vector.Vector) bool {

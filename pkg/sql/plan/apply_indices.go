@@ -762,6 +762,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersAtPhase(nodeID int32, node *p
 					goto END0
 				}
 			case "between":
+				// A mixed JSON scalar BETWEEN (BOOL or numeric peer) keeps its
+				// per-domain ranking, so a serialized master-index range
+				// cannot answer either leg.
+				if isMixedJSONScalarBetweenArgs(fn.Args) {
+					goto END0
+				}
 			case "in":
 
 			default:
@@ -1218,7 +1224,7 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 	tag := scanNode.BindingTags[0]
 	for _, filter := range scanNode.FilterList {
 		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || isJSONNumericComparisonArgs(fn.Args) {
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || isMixedJSONScalarComparisonArgs(fn.Args) {
 			continue
 		}
 		leftCol := fn.Args[0].GetCol()
@@ -2816,7 +2822,8 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 
 		fn := node.FilterList[i].GetF()
 		col := regularIndexBackfillResidualColumn(node.FilterList[i])
-		if col == nil || col.RelPos != node.BindingTags[0] {
+		if col == nil || col.RelPos != node.BindingTags[0] ||
+			(fn != nil && isMixedJSONScalarComparisonArgs(fn.Args)) {
 			continue
 		}
 		colArgIdx := 0
@@ -2904,7 +2911,7 @@ func regularIndexBoundColumn(fn *plan.Function) *plan.ColRef {
 
 func regularIndexBackfillResidualColumn(expr *plan.Expr) *plan.ColRef {
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || isJSONNumericComparisonArgs(fn.Args) || containsVolatileFunction(expr) || function.ContainsRowScopedConversion(expr) {
+	if fn == nil || fn.Func == nil || isMixedJSONScalarComparisonArgs(fn.Args) || containsVolatileFunction(expr) || function.ContainsRowScopedConversion(expr) {
 		return nil
 	}
 	if fn.Func.ObjName == "like" {
@@ -2946,7 +2953,7 @@ func regularIndexResidualValue(expr *plan.Expr) bool {
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil || isJSONNumericComparisonArgs(fn.Args) {
+	if fn == nil || isMixedJSONScalarComparisonArgs(fn.Args) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -2973,6 +2980,11 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		}
 
 	case "in", "between":
+		if fn.Func.ObjName == "between" && isMixedJSONScalarBetweenArgs(fn.Args) {
+			// A mixed JSON scalar BETWEEN stays a typed residual: the serialized
+			// index key domain cannot reproduce the per leg scalar ranking.
+			return UnsupportedIndexCondition, nil
+		}
 		col := fn.Args[0].GetCol()
 		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
 			return NonEqualIndexCondition, col
@@ -5408,7 +5420,7 @@ func isUpperBoundOp(name string) bool {
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
 	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil ||
-		isJSONNumericComparisonArgs(fn.Args) {
+		isMixedJSONScalarComparisonArgs(fn.Args) {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)

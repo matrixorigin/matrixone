@@ -50,7 +50,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
-	if queryHasMixedJSONNumericAsof(qry) {
+	if queryHasMixedJSONScalarAsof(qry) {
 		// This pass runs after the first scheduling pass and before scopes
 		// are compiled. Replace both execution type and the worker list.
 		c.execType = plan2.ExecTypeAP_ONECN

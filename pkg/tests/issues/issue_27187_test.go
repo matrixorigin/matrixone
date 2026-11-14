@@ -66,7 +66,10 @@ func TestIssue27187JSONExtractBooleanComparison(t *testing.T) {
 			{id: 1, value: sql.NullBool{Bool: true, Valid: true}},
 			{id: 2, value: sql.NullBool{Bool: false, Valid: true}},
 			{id: 3, value: sql.NullBool{}},
-			{id: 4, value: sql.NullBool{}},
+			// Issue #31121: the JSON literal null at '$.enabled' is a comparable
+			// value in the boolean mixed domain, so the equality is a valid
+			// false; only the missing path on id 3 keeps SQL NULL semantics.
+			{id: 4, value: sql.NullBool{Bool: false, Valid: true}},
 		} {
 			require.True(t, rows.Next())
 			var id int

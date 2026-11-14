@@ -346,14 +346,123 @@ func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	return types.New(oid, int32(min(int64(leftWidth)+int64(rightWidth), int64(min(oid.ToType().Width, 65)))), scale)
 }
 
-// isJSONBooleanComparison identifies equality predicates whose result depends
-// on the JSON scalar category. Letting the generic cast rule turn both operands
-// into BOOL would make a JSON string such as "true" indistinguishable from the
-// JSON boolean true. Equality evaluates this pair directly instead; explicit
-// JSON-to-BOOL casts retain their independent public conversion contract.
-func isJSONBooleanComparison(left, right types.Type) bool {
-	return left.Oid == types.T_json && right.Oid == types.T_bool ||
-		left.Oid == types.T_bool && right.Oid == types.T_json
+// IsJSONBooleanComparison identifies equality and ordering predicates whose
+// result depends on the JSON scalar category. Letting the generic cast rule
+// turn both operands into BOOL would make a JSON string such as "true"
+// indistinguishable from the JSON boolean true, and a JSON null would be
+// folded into SQL NULL by the SQL boolean cast instead of ranking below the
+// boolean peer. Both operator families evaluate this pair in the JSON domain
+// directly; explicit JSON-to-BOOL casts retain their independent public
+// conversion contract.
+func IsJSONBooleanComparison(left, right types.T) bool {
+	return left == types.T_json && right == types.T_bool ||
+		left == types.T_bool && right == types.T_json
+}
+
+// isMixedJSONBooleanBetweenInputs identifies a BETWEEN whose expression and
+// bound operands all live in the JSON/BOOL scalar comparison domain. Every
+// leg (expression, lower bound) and (expression, upper bound) then resolves
+// like the binary ordering operators admitted above: the generic cast rule
+// must not fold the JSON operand into BOOL, because `x BETWEEN lo AND hi` is
+// `lo <= x AND x <= hi` and the lowered NOT BETWEEN form (x < lo OR x > hi)
+// already binds those legs in the JSON domain. An all-BOOL or all-JSON
+// triple keeps its historical domains.
+func isMixedJSONBooleanBetweenInputs(inputs []types.Type) bool {
+	hasJSON, hasBool := false, false
+	for _, input := range inputs {
+		switch input.Oid {
+		case types.T_json:
+			hasJSON = true
+		case types.T_bool:
+			hasBool = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasBool
+}
+
+// isMixedJSONNumericBetweenInputs identifies a BETWEEN whose expression and
+// bound operands all live in the JSON/numeric scalar comparison domain (the
+// same peer set IsJSONNumericComparison admits). Exactly like the JSON/BOOL
+// form above, `x BETWEEN lo AND hi` is `lo <= x AND x <= hi`, and the lowered
+// NOT BETWEEN form (x < lo OR x > hi) already binds each of those legs in the
+// JSON ranking domain. The historical check instead folded the JSON operand
+// through the comparison cast rule, so a JSON literal null became SQL NULL
+// (and a JSON string was parsed as numeric text) in the positive range while
+// the negated range ranked both by category: the two forms could disagree on
+// the same non-null row. An all-JSON or all-numeric triple stays in its own
+// historical domain.
+func isMixedJSONNumericBetweenInputs(inputs []types.Type) bool {
+	hasJSON, hasNumeric := false, false
+	for _, input := range inputs {
+		switch {
+		case input.Oid == types.T_json:
+			hasJSON = true
+		case isJSONComparisonNumericType(input.Oid):
+			hasNumeric = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasNumeric
+}
+
+// betweenTypeCheck admits the mixed JSON scalar comparison domains — JSON/BOOL
+// and JSON/numeric — directly; every other shape keeps the historical
+// cast-based check.
+func betweenTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 3 && (isMixedJSONBooleanBetweenInputs(inputs) ||
+		isMixedJSONNumericBetweenInputs(inputs)) {
+		return newCheckResultWithSuccess(0)
+	}
+	return betweenLegacyCheckTail(overloads, inputs)
+}
+
+// betweenLegacyCheckTail is the pre-#31121 BETWEEN type check. The DUMP/LOAD
+// era rebinds predecessor persisted expressions through this tail so their
+// implicit CAST(JSON AS BOOL) folds stay verifiable, cell for cell.
+func betweenLegacyCheckTail(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
+		jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if target, ok := integerComparisonDomain(inputs); ok {
+		for _, input := range inputs {
+			if input.Oid != target.Oid {
+				return newCheckResultWithCast(0, []types.Type{target, target, target})
+			}
+		}
+		return newCheckResultWithSuccess(0)
+	}
+
+	has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
+	has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
+	if t01.Oid != t02.Oid {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
+		if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	if has0 || has1 {
+		if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+			return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+		}
+	} else {
+		if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+			return newCheckResultWithSuccess(0)
+		}
+	}
+
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
 // decimalComparisonSource exposes BIT's full unsigned numeric domain without
@@ -449,8 +558,16 @@ func equalityTypeCheck(_ []overload, inputs []types.Type) checkResult {
 	if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 		return newCheckResultWithSuccess(1)
 	}
-	if isJSONBooleanComparison(inputs[0], inputs[1]) {
+	if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+		return newCheckResultWithSuccess(1)
+	}
+	if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
 		return newCheckResultWithSuccess(0)
+	}
+	if jsonBinaryStringComparisonNotSupported(inputs[0].Oid, inputs[1].Oid) {
+		// A binary peer is an opaque byte domain, not a JSON string scalar:
+		// reject it exactly like the ordering gate does, both operand orders.
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	hasCast, left, right := comparisonTypeCastRule(inputs[0], inputs[1])
 	if !equalAndNotEqualOperatorSupports(left, right) {
@@ -536,6 +653,15 @@ var supportedOperators = []FuncNew{
 				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(1)
 				}
+				if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
+					// Ordering stays in the JSON domain too: the generic cast
+					// rule would fold the JSON operand into BOOL and collapse
+					// a JSON literal null into SQL NULL before comparison.
+					return newCheckResultWithSuccess(0)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -582,6 +708,15 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
+					// Ordering stays in the JSON domain too: the generic cast
+					// rule would fold the JSON operand into BOOL and collapse
+					// a JSON literal null into SQL NULL before comparison.
+					return newCheckResultWithSuccess(0)
 				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -630,6 +765,15 @@ var supportedOperators = []FuncNew{
 				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(1)
 				}
+				if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
+					// Ordering stays in the JSON domain too: the generic cast
+					// rule would fold the JSON operand into BOOL and collapse
+					// a JSON literal null into SQL NULL before comparison.
+					return newCheckResultWithSuccess(0)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -677,6 +821,15 @@ var supportedOperators = []FuncNew{
 				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(1)
 				}
+				if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
+					// Ordering stays in the JSON domain too: the generic cast
+					// rule would fold the JSON operand into BOOL and collapse
+					// a JSON literal null into SQL NULL before comparison.
+					return newCheckResultWithSuccess(0)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -718,48 +871,7 @@ var supportedOperators = []FuncNew{
 		functionId: BETWEEN,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BETWEEN_AND_EXPRESSION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
-				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if target, ok := integerComparisonDomain(inputs); ok {
-				for _, input := range inputs {
-					if input.Oid != target.Oid {
-						return newCheckResultWithCast(0, []types.Type{target, target, target})
-					}
-				}
-				return newCheckResultWithSuccess(0)
-			}
-
-			has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
-			has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
-			if t01.Oid != t02.Oid {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-
-			if has0 || has1 {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
-				}
-			} else {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithSuccess(0)
-				}
-			}
-
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    betweenTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -785,8 +897,17 @@ var supportedOperators = []FuncNew{
 				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(1)
 				}
-				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+				if IsJSONStringComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
+				if IsJSONBooleanComparison(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(0)
+				}
+				if jsonBinaryStringComparisonNotSupported(inputs[0].Oid, inputs[1].Oid) {
+					// A binary peer is an opaque byte domain, not a JSON string
+					// scalar: reject it exactly like the ordering gate does, in
+					// both operand orders.
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
 				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {

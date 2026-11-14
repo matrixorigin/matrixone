@@ -445,4 +445,16 @@ func TestEquiJoinConditionChecksAllOperands(t *testing.T) {
 	require.True(t, isRowCountOnlyInnerEquiJoin(&plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{key}}))
 	require.False(t, IsEquiJoinCondition(bind("=", col(0), col(0))))
 	require.False(t, IsEquiJoinCondition(bind("=", col(0), makePlan2Int64ConstExprWithType(1))))
+
+	// A bound mixed JSON/BOOL equality keeps its physical operand types (the
+	// comparison identity requires no cast), but it never becomes a hash key:
+	// JSON hashes through its canonical encoding while the SQL boolean hashes
+	// as its own 0/1 value, so it stays a typed residual condition everywhere.
+	jsonCol := &plan.Expr{Typ: plan.Type{Id: int32(types.T_json)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0}}}
+	boolCol := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+	jsonBoolKey := bind("=", jsonCol, boolCol)
+	require.Equal(t, int32(types.T_json), jsonBoolKey.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bool), jsonBoolKey.GetF().Args[1].Typ.Id)
+	require.False(t, IsEquiJoinCondition(jsonBoolKey))
+	require.False(t, isRowCountOnlyInnerEquiJoin(&plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{key, jsonBoolKey}}))
 }

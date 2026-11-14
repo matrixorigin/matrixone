@@ -71,7 +71,11 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{id: 2, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Bool: true, Valid: true}},
 			{id: 3, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Valid: true}},
 			{id: 4, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Valid: true}},
-			{id: 5},
+			// Issue #31121: the JSON literal null at '$.active' is a comparable
+			// value in the boolean mixed domain, not SQL NULL. It type-ranks
+			// below both TRUE and FALSE, so both equalities are valid false.
+			// Only the missing path on id 6 keeps SQL NULL semantics here.
+			{id: 5, equalTrue: sql.NullBool{Bool: false, Valid: true}, equalFalse: sql.NullBool{Bool: false, Valid: true}},
 			{id: 6},
 		}
 		for _, expected := range expectedComparisons {
@@ -221,7 +225,11 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{name: "explicit cast converts numeric JSON string", query: `select cast(json_extract(json_array('7'), '$[0]') as signed) = ?`, arg: int64(7), expected: true},
 			{name: "float parameter preserves typed literal parity", query: `select json_extract(json_array(1.25), '$[0]') = ?`, arg: float64(1.25), expected: true},
 			{name: "null-safe equality JSON right boolean", query: `select ? <=> json_extract(json_object('v', true), '$.v')`, arg: true, expected: true},
-			{name: "null-safe equality boolean coerces to string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: true},
+			// Issue #31121: a character parameter is a JSON string scalar
+			// ('"true"' with quotes), never parsed into the JSON boolean
+			// document, so bool and string stay distinct JSON categories and
+			// <=> is false like the equivalent literal comparison.
+			{name: "null-safe equality string parameter stays a JSON string scalar", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: false},
 			{name: "null-safe equality string matches string parameter", query: `select ? <=> json_extract(json_object('v', 'true'), '$.v')`, arg: "true", expected: true},
 			{name: "null-safe equality distinguishes JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') <=> ?`, arg: true, expected: false},
 			{name: "null-safe equality missing JSON and SQL NULL", query: `select json_extract(json_object('v', true), '$.missing') <=> ?`, arg: nil, expected: true},
@@ -266,6 +274,11 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		require.ErrorContains(t, db.QueryRowContext(ctx,
 			`select cast(json_extract('18446744073709551615', '$') as signed)`).Scan(new(int64)), "JSON -> BIGINT")
 
+		// Issue #31121: objects and arrays are comparable JSON categories
+		// that rank below the boolean peer (MySQL receipts in
+		// json_bool_ordering_comparison_test.go), so the comparison returns
+		// false instead of a JSON->BOOLEAN cast error.
+		var containerEqual bool
 		for _, query := range []string{
 			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
 			`select json_extract(json_object('v', json_array(true)), '$.v') = ?`,
@@ -273,7 +286,8 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			stmt, err = db.PrepareContext(ctx, query)
 			require.NoError(t, err)
 			defer stmt.Close()
-			require.Error(t, stmt.QueryRowContext(ctx, true).Scan(new(bool)))
+			require.NoError(t, stmt.QueryRowContext(ctx, true).Scan(&containerEqual))
+			require.False(t, containerEqual)
 		}
 		var health int
 		require.NoError(t, db.QueryRowContext(ctx, "select 1").Scan(&health))

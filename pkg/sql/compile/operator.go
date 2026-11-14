@@ -1561,7 +1561,7 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	conditions := node.OnList
-	mixedAsof := isMixedJSONNumericAsof(node)
+	mixedAsof := isMixedJSONScalarAsof(node)
 	if mixedAsof {
 		conditions = colexec.SplitAndExprs(conditions)
 	}

@@ -112,7 +112,16 @@ not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);
 Field 'j1' is of a not allowed type for this type of partitioning
 select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
-invalid argument operator >, bad value [JSON VARCHAR]
+j1
+{"key10": "value1", "key2": "value2"}
+{"key1": "@#$_%^&*()!@", "key123456": 223}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"": "", "12_key": "中文mo"}
+{"13key4": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"d1": [true, false]}
+{}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
 create table json_table_61(j1 json,a varchar(25),b int);
 insert into json_table_61 values('{"010": "beijing", "021": "shanghai"}','apple',345),('{"phonenum":"17290839029","age":"45"}','pear',0);
 select * from json_table_61;

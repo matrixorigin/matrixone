@@ -85,9 +85,9 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 		return moerr.NewInternalError(proc.Ctx, "existence mode requires MARK join")
 	}
 	hashJoin.ctr.asofResidualEquality = hashJoin.IsAsof() &&
-		colexec.HasMixedJSONNumericEquality(hashJoin.NonEqCond)
+		colexec.HasMixedJSONScalarEquality(hashJoin.NonEqCond)
 	if hashJoin.AsofBuildLeft && hashJoin.ctr.asofResidualEquality {
-		return moerr.NewInternalError(proc.Ctx, "ASOF mixed JSON/numeric equality requires build-right")
+		return moerr.NewInternalError(proc.Ctx, "ASOF mixed JSON scalar equality requires build-right")
 	}
 	if hashJoin.IsAsof() {
 		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||

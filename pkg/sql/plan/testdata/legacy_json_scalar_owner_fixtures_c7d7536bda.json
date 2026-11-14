@@ -1,0 +1,22 @@
+{
+  "check_json_bool_between": {
+    "sql": "create table archived (id int primary key, j json, constraint chk_1 check (j between true and true))",
+    "table_def": "EghhcmNoaXZlZCIiEgJpZCABKg8IFiAgKP///////////wEwAToAaAGaAQJpZCITCAESAWogASoCCD46AhgBmgEBaloIIgJpZCoCaWR6fAoFY2hrXzESWAoCCAo6UgoPIICAgIBgQgdiZXR3ZWVuEicKAggKOiEKDSCAgICA0AJCBGNhc3QSCAoCCD4qAhABEgYKAggKWgASCgoECAoQARICYAESCgoECAoQARICYAEaGWBqYCBiZXR3ZWVuIHRydWUgYW5kIHRydWXKAZoBCpcBCgwKB3JlbGtpbmQSAXIKhgEKDXJlbF9jcmVhdGVzcWwSdWNyZWF0ZSB0YWJsZSBgYXJjaGl2ZWRgIChgaWRgIGludCBwcmltYXJ5IGtleSwgYGpgIGpzb24sIGNvbnN0cmFpbnQgY2hrXzEgY2hlY2sgKGBqYCBiZXR3ZWVuIHRydWUgYW5kIHRydWUpIGVuZm9yY2VkKbgCAw=="
+  },
+  "check_json_string_eq": {
+    "sql": "create table archived (id int primary key, j json, constraint chk_1 check (j = 'x'))",
+    "table_def": "EghhcmNoaXZlZCIiEgJpZCABKg8IFiAgKP///////////wEwAToAaAGaAQJpZCITCAESAWogASoCCD46AhgBmgEBaloIIgJpZCoCaWR6aAoFY2hrXzESVAoCCAo6TgoDQgE9EjMKCAg9IP//A0ADOicKDSCAgICA0AJCBGNhc3QSCAoCCD4qAhABEgwKCAg9IP//A0ADWgASEgoICD0QASABQAMSBloBeOABARoJYGpgID0gJ3gnygGJAQqGAQoMCgdyZWxraW5kEgFyCnYKDXJlbF9jcmVhdGVzcWwSZWNyZWF0ZSB0YWJsZSBgYXJjaGl2ZWRgIChgaWRgIGludCBwcmltYXJ5IGtleSwgYGpgIGpzb24sIGNvbnN0cmFpbnQgY2hrXzEgY2hlY2sgKGBqYCA9ICd4JykgZW5mb3JjZWQpuAID"
+  },
+  "control_check_not_json": {
+    "sql": "create table archived (id int primary key, constraint chk_1 check (id \u003e 0))",
+    "table_def": "EghhcmNoaXZlZCIiEgJpZCABKg8IFiAgKP///////////wEwAToAaAGaAQJpZFoIIgJpZCoCaWR6ggEKBWNoa18xEm8KAggKOmkKCSCAgICAIEIBPhITCg8IFiAgKP///////////wEqABJHChEIFhABICAo////////////AToyCg0ggICAgNACQgRjYXN0EgoKBAgXEAESAigAEhUKEQgWEAEgICj///////////8BWgAaCGBpZGAgPiAwygF9CnsKDAoHcmVsa2luZBIBcgprCg1yZWxfY3JlYXRlc3FsElpjcmVhdGUgdGFibGUgYGFyY2hpdmVkYCAoYGlkYCBpbnQgcHJpbWFyeSBrZXksIGNvbnN0cmFpbnQgY2hrXzEgY2hlY2sgKGBpZGAgPiAwKSBlbmZvcmNlZCm4AgM="
+  },
+  "control_generated_not_json": {
+    "sql": "create table archived (id int primary key, g bigint generated always as (id * 2 + 1) stored)",
+    "table_def": "EghhcmNoaXZlZCIiEgJpZCABKg8IFiAgKP///////////wEwAToAaAGaAQJpZCLeAQgBEgFnIAEqDwgXIEAo////////////AToCGAGaAQFnogG6AQqnAQoPCBcgQCj///////////8BOpMBCgoggICAgKABQgErEnkKDwgXIEAo////////////ATpmCgoggICAgMABQgEqEkwKDwgXIEAo////////////ATo5Cg0ggICAgNACQgRjYXN0EhMKDwgWICAo////////////ASoAEhMKDwgXIEAo////////////AVoAEgoKBAgXEAESAigCEgoKBAgXEAESAigBEgwoaWQgKiAyICsgMSkYAVoIIgJpZCoCaWTKAYgBCoUBCgwKB3JlbGtpbmQSAXIKdQoNcmVsX2NyZWF0ZXNxbBJkY3JlYXRlIHRhYmxlIGBhcmNoaXZlZGAgKGBpZGAgaW50IHByaW1hcnkga2V5LCBgZ2AgYmlnaW50IGdlbmVyYXRlZCBhbHdheXMgYXMgKGBpZGAgKiAyICsgMSkgc3RvcmVkKbgCAw=="
+  },
+  "generated_json_string_bool": {
+    "sql": "create table archived (id int primary key, j json, g bool generated always as (j = 'x') stored)",
+    "table_def": "EghhcmNoaXZlZCIiEgJpZCABKg8IFiAgKP///////////wEwAToAaAGaAQJpZCITCAESAWogASoCCD46AhgBmgEBaiJ5CAISAWcgASoCCAo6AhgBmgEBZ6IBYwpUCgIICjpOCgNCAT0SMwoICD0g//8DQAM6JwoNIICAgIDQAkIEY2FzdBIICgIIPioCEAESDAoICD0g//8DQANaABISCggIPRABIAFAAxIGWgF44AEBEgkoaiA9ICd4JykYAVoIIgJpZCoCaWTKAY0BCooBCgwKB3JlbGtpbmQSAXIKegoNcmVsX2NyZWF0ZXNxbBJpY3JlYXRlIHRhYmxlIGBhcmNoaXZlZGAgKGBpZGAgaW50IHByaW1hcnkga2V5LCBgamAganNvbiwgYGdgIGJvb2wgZ2VuZXJhdGVkIGFsd2F5cyBhcyAoYGpgID0gJ3gnKSBzdG9yZWQpuAID"
+  }
+}

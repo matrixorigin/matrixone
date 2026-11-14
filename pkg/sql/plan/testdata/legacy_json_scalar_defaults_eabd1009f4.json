@@ -1,0 +1,58 @@
+{
+  "coalesce_json_legacy_float": {
+    "sql": "create table t(a varchar(64) default (coalesce(cast('2.0' as json), 'y')))",
+    "table_def": "EgF0IrICEgFhIAEqBgg9IEBAAzqeAgrzAQoICD0QASBAQAM65gEKFCCAgICA0ENCC2Nhc3Rfc3RyaWN0Er8BCgoIRxABQANQAlgBOrABChEgl4CAgKAJQghjb2FsZXNjZRJgCgYIRxABQAM6VgoNIICAgIDQAkIEY2FzdBI5CgQIPhABOjEKDSCAgICA0AJCBGNhc3QSFAoICD0QASADQAMSCFoDMi4w4AEBEggKBAg+EAFaACgBEgoKBghHEAFAA1oAEjkKBghHEAFAAzovCg0ggICAgNACQgRjYXN0EhIKCAg9EAEgAUADEgZaAXngAQESCgoGCEcQAUADWgASDAoICD0QASBAQANaABIkKGNvYWxlc2NlKGNhc3QoJzIuMCcgYXMganNvbiksICd5JykpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAXIKcAoMCgdyZWxraW5kEgFyCmAKDXJlbF9jcmVhdGVzcWwST2NyZWF0ZSB0YWJsZSBgdGAgKGBhYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChjb2FsZXNjZShjYXN0KCcyLjAnIGFzIGpzb24pLCAneScpKSm4AgM="
+  },
+  "coalesce_json_string": {
+    "sql": "create table t(a varchar(64) default (coalesce(cast('\"x\"' as json), 'y')))",
+    "table_def": "EgF0IrICEgFhIAEqBgg9IEBAAzqeAgrzAQoICD0QASBAQAM65gEKFCCAgICA0ENCC2Nhc3Rfc3RyaWN0Er8BCgoIRxABQANQAlgBOrABChEgl4CAgKAJQghjb2FsZXNjZRJgCgYIRxABQAM6VgoNIICAgIDQAkIEY2FzdBI5CgQIPhABOjEKDSCAgICA0AJCBGNhc3QSFAoICD0QASADQAMSCFoDIngi4AEBEggKBAg+EAFaACgBEgoKBghHEAFAA1oAEjkKBghHEAFAAzovCg0ggICAgNACQgRjYXN0EhIKCAg9EAEgAUADEgZaAXngAQESCgoGCEcQAUADWgASDAoICD0QASBAQANaABIkKGNvYWxlc2NlKGNhc3QoJyJ4IicgYXMganNvbiksICd5JykpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAXIKcAoMCgdyZWxraW5kEgFyCmAKDXJlbF9jcmVhdGVzcWwST2NyZWF0ZSB0YWJsZSBgdGAgKGBhYCB2YXJjaGFyKDY0KSBkZWZhdWx0IChjb2FsZXNjZShjYXN0KCcieCInIGFzIGpzb24pLCAneScpKSm4AgM="
+  },
+  "compound_case_null_and_string_bool": {
+    "sql": "create table t(a varchar(64) default (case when cast('null' as json) = 1 then 'eqnull' else cast(cast('\"true\"' as json) \u003c false as char) end))",
+    "table_def": "EgF0IosFEgFhIAEqBgg9IEBAAzr3BAqFBAoICD0QASBAQAM6+AMKFCCAgICA0ENCC2Nhc3Rfc3RyaWN0EtEDCg4IPRABIP//A0ADUAJYATq+AwoNIICAgIDwCEIEY2FzZRKwAQoECAoQATqnAQoDQgE9EmkKCgg9EAEg//8DQAM6WwoNIICAgIDQAkIEY2FzdBI6CgQIPhABOjIKDSCAgICA0AJCBGNhc3QSFQoICD0QASAEQAMSCVoEbnVsbOABARIICgQIPhABWgAoARIOCgoIPRABIP//A0ADWgASNQoICD0QASBAQAM6KQoNIICAgIDQAkIEY2FzdBIKCgQIFxABEgIoARIMCggIPRABIEBAA1oAEkYKCgg9EAEg//8DQAM6OAoNIICAgIDQAkIEY2FzdBIXCggIPRABIAZAAxILWgZlcW51bGzgAQESDgoKCD0QASD//wNAA1oAErEBCgoIPRABIP//A0ADOqIBCg0ggYCAgNACQgRjYXN0EoABCgQIChABOngKCSCAgICAQEIBPBJfCgQIChABOlcKDSCAgICA0AJCBGNhc3QSPAoECD4QATo0Cg0ggICAgNACQgRjYXN0EhcKCAg9EAEgBkADEgtaBiJ0cnVlIuABARIICgQIPhABWgAoARIICgQIChABWgASCgoECAoQARICYAASDgoKCD0QASD//wNAA1oAEgwKCAg9EAEgQEADWgASayhjYXNlIHdoZW4gY2FzdCgnbnVsbCcgYXMganNvbikgPSAxIHRoZW4gJ2VxbnVsbCcgZWxzZSBjYXN0KGNhc3QoJyJ0cnVlIicgYXMganNvbikgPCBmYWxzZSBhcyB2YXJjaGFyKSBlbmQpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAbwBCrkBCgwKB3JlbGtpbmQSAXIKqAEKDXJlbF9jcmVhdGVzcWwSlgFjcmVhdGUgdGFibGUgYHRgIChgYWAgdmFyY2hhcig2NCkgZGVmYXVsdCAoY2FzZSB3aGVuIGNhc3QoJ251bGwnIGFzIGpzb24pID0gMSB0aGVuICdlcW51bGwnIGVsc2UgY2FzdChjYXN0KCcidHJ1ZSInIGFzIGpzb24pIDwgZmFsc2UgYXMgdmFyY2hhcikgZW5kKSm4AgM="
+  },
+  "compound_coalesce_or_null_bool": {
+    "sql": "create table t(a varchar(64) default (coalesce(cast(cast('null' as json) \u003e false as char), 'retained')))",
+    "table_def": "EgF0IncSAWEgASoGCD0gQEADOmQKGQoICD0QASBAQAMSDVoIcmV0YWluZWToAQESRShjb2FsZXNjZShjYXN0KGNhc3QoJ251bGwnIGFzIGpzb24pID4gZmFsc2UgYXMgdmFyY2hhciksICdyZXRhaW5lZCcpKRgBmgEBYSIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygGVAQqSAQoMCgdyZWxraW5kEgFyCoEBCg1yZWxfY3JlYXRlc3FsEnBjcmVhdGUgdGFibGUgYHRgIChgYWAgdmFyY2hhcig2NCkgZGVmYXVsdCAoY29hbGVzY2UoY2FzdChjYXN0KCdudWxsJyBhcyBqc29uKSA+IGZhbHNlIGFzIHZhcmNoYXIpLCAncmV0YWluZWQnKSkpuAID"
+  },
+  "json_null_bool_ordering": {
+    "sql": "create table t(a bool default (cast('null' as json) \u003c FALSE))",
+    "table_def": "EgF0IkASAWEgASoCCAo6MQoNCgQIChABEgUIAegBARIeKGNhc3QoJ251bGwnIGFzIGpzb24pIDwgZmFsc2UpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWUKYwoMCgdyZWxraW5kEgFyClMKDXJlbF9jcmVhdGVzcWwSQmNyZWF0ZSB0YWJsZSBgdGAgKGBhYCBib29sIGRlZmF1bHQgKGNhc3QoJ251bGwnIGFzIGpzb24pIDwgZmFsc2UpKbgCAw=="
+  },
+  "json_null_boolean": {
+    "sql": "create table t(a bool default (cast('null' as json) = false))",
+    "table_def": "EgF0Ij4SAWEgASoCCAo6LwoLCgIIChIFCAHoAQESHihjYXN0KCdudWxsJyBhcyBqc29uKSA9IGZhbHNlKRgBmgEBYSIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFlCmMKDAoHcmVsa2luZBIBcgpTCg1yZWxfY3JlYXRlc3FsEkJjcmVhdGUgdGFibGUgYHRgIChgYWAgYm9vbCBkZWZhdWx0IChjYXN0KCdudWxsJyBhcyBqc29uKSA9IGZhbHNlKSm4AgM="
+  },
+  "json_null_equal": {
+    "sql": "create table t(a bool default (cast('null' as json) = 1))",
+    "table_def": "EgF0IjoSAWEgASoCCAo6KwoLCgIIChIFCAHoAQESGihjYXN0KCdudWxsJyBhcyBqc29uKSA9IDEpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWEKXwoMCgdyZWxraW5kEgFyCk8KDXJlbF9jcmVhdGVzcWwSPmNyZWF0ZSB0YWJsZSBgdGAgKGBhYCBib29sIGRlZmF1bHQgKGNhc3QoJ251bGwnIGFzIGpzb24pID0gMSkpuAID"
+  },
+  "json_null_less": {
+    "sql": "create table t(a bool default (cast('null' as json) \u003c 1))",
+    "table_def": "EgF0IjoSAWEgASoCCAo6KwoLCgIIChIFCAHoAQESGihjYXN0KCdudWxsJyBhcyBqc29uKSA8IDEpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWEKXwoMCgdyZWxraW5kEgFyCk8KDXJlbF9jcmVhdGVzcWwSPmNyZWF0ZSB0YWJsZSBgdGAgKGBhYCBib29sIGRlZmF1bHQgKGNhc3QoJ251bGwnIGFzIGpzb24pIDwgMSkpuAID"
+  },
+  "json_null_nullsafe_control": {
+    "sql": "create table t(a bool default (cast('null' as json) \u003c=\u003e 1))",
+    "table_def": "EgF0Ij4SAWEgASoCCAo6LwoNCgQIChABEgVgAOgBARIcKGNhc3QoJ251bGwnIGFzIGpzb24pIDw9PiAxKRgBmgEBYSIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFjCmEKDAoHcmVsa2luZBIBcgpRCg1yZWxfY3JlYXRlc3FsEkBjcmVhdGUgdGFibGUgYHRgIChgYWAgYm9vbCBkZWZhdWx0IChjYXN0KCdudWxsJyBhcyBqc29uKSA8PT4gMSkpuAID"
+  },
+  "json_number_equal_text": {
+    "sql": "create table t(a bool default (cast('1' as json) = '1'))",
+    "table_def": "EgF0IroBEgFhIAEqAggKOqoBCooBCgQIChABOoEBCgNCAT0SZgoKCD0QASD//wNAAzpYCg0ggICAgNACQgRjYXN0EjcKBAg+EAE6LwoNIICAgIDQAkIEY2FzdBISCggIPRABIAFAAxIGWgEx4AEBEggKBAg+EAFaACgBEg4KCgg9EAEg//8DQANaABISCggIPRABIAFAAxIGWgEx4AEBEhkoY2FzdCgnMScgYXMganNvbikgPSAnMScpGAGaAQFhIiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAWAKXgoMCgdyZWxraW5kEgFyCk4KDXJlbF9jcmVhdGVzcWwSPWNyZWF0ZSB0YWJsZSBgdGAgKGBhYCBib29sIGRlZmF1bHQgKGNhc3QoJzEnIGFzIGpzb24pID0gJzEnKSm4AgM="
+  },
+  "json_pretty_control": {
+    "sql": "create table t(a varchar(64) default (json_pretty('1.0')))",
+    "table_def": "EgF0IkESAWEgASoGCD0gQEADOi4KFAoICD0QASBAQAMSCFoDMS4w6AEBEhQoanNvbl9wcmV0dHkoJzEuMCcpKRgBmgEBYSIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFiCmAKDAoHcmVsa2luZBIBcgpQCg1yZWxfY3JlYXRlc3FsEj9jcmVhdGUgdGFibGUgYHRgIChgYWAgdmFyY2hhcig2NCkgZGVmYXVsdCAoanNvbl9wcmV0dHkoJzEuMCcpKSm4AgM="
+  },
+  "json_string_bool_equal_control": {
+    "sql": "create table t(a bool default (cast('\"true\"' as json) = TRUE))",
+    "table_def": "EgF0Ij8SAWEgASoCCAo6MAoLCgIIChIFYADoAQESHyhjYXN0KCcidHJ1ZSInIGFzIGpzb24pID0gdHJ1ZSkYAZoBAWEiIggBEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBZgpkCgwKB3JlbGtpbmQSAXIKVAoNcmVsX2NyZWF0ZXNxbBJDY3JlYXRlIHRhYmxlIGB0YCAoYGFgIGJvb2wgZGVmYXVsdCAoY2FzdCgnInRydWUiJyBhcyBqc29uKSA9IHRydWUpKbgCAw=="
+  },
+  "json_string_bool_ordering_less": {
+    "sql": "create table t(a bool default (cast('\"true\"' as json) \u003c FALSE))",
+    "table_def": "EgF0IkISAWEgASoCCAo6MwoNCgQIChABEgVgAOgBARIgKGNhc3QoJyJ0cnVlIicgYXMganNvbikgPCBmYWxzZSkYAZoBAWEiIggBEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBZwplCgwKB3JlbGtpbmQSAXIKVQoNcmVsX2NyZWF0ZXNxbBJEY3JlYXRlIHRhYmxlIGB0YCAoYGFgIGJvb2wgZGVmYXVsdCAoY2FzdCgnInRydWUiJyBhcyBqc29uKSA8IGZhbHNlKSm4AgM="
+  },
+  "json_string_equal_shape": {
+    "sql": "create table t(a bool default (cast('\"x\"' as json) = 'x'))",
+    "table_def": "EgF0Ir4BEgFhIAEqAggKOq4BCowBCgQIChABOoMBCgNCAT0SaAoKCD0QASD//wNAAzpaCg0ggICAgNACQgRjYXN0EjkKBAg+EAE6MQoNIICAgIDQAkIEY2FzdBIUCggIPRABIANAAxIIWgMieCLgAQESCAoECD4QAVoAKAESDgoKCD0QASD//wNAA1oAEhIKCAg9EAEgAUADEgZaAXjgAQESGyhjYXN0KCcieCInIGFzIGpzb24pID0gJ3gnKRgBmgEBYSIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFiCmAKDAoHcmVsa2luZBIBcgpQCg1yZWxfY3JlYXRlc3FsEj9jcmVhdGUgdGFibGUgYHRgIChgYWAgYm9vbCBkZWZhdWx0IChjYXN0KCcieCInIGFzIGpzb24pID0gJ3gnKSm4AgM="
+  }
+}

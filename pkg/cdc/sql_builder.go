@@ -394,6 +394,12 @@ const (
 		`now(),` + // create_at
 		`null` + // drop_at
 		`)`
+	// The LSN compare-and-swap leg must compare SQL text with SQL text:
+	// JSON_UNQUOTE of the JSON number yields its digit text, while a bare
+	// mixed JSON/character comparison treats the literal as a JSON string
+	// scalar, so the differently-ranked JSON number never matches
+	// (#31121 contract). A missing path stays SQL NULL and still declines
+	// the update.
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_state = %d,` +
 		`watermark = '%s',` +
@@ -407,7 +413,7 @@ const (
 		`AND job_name = '%s'` +
 		`AND job_id = %d ` +
 		`AND job_state != 4 ` +
-		`AND JSON_EXTRACT(job_status, '$.LSN') = '%d' ` +
+		`AND JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) = '%d' ` +
 		`AND (%d = 4 OR ` +
 		`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d)`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
@@ -1125,7 +1131,8 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 
 // ISCPLogAdvanceWatermarkSQL advances progress without replacing job_status.
 // Lifecycle fields such as Stage belong to the iteration state machine and
-// must survive this maintenance-only update.
+// must survive this maintenance-only update. The LSN leg compares through
+// JSON_UNQUOTE for the same mixed-domain reason as the result template above.
 func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(
 	accountID uint32,
 	tableID uint64,
@@ -1148,7 +1155,7 @@ func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(
 			"AND job_name = '%s'"+
 			"AND job_id = %d "+
 			"AND job_state != 4 "+
-			"AND JSON_EXTRACT(job_status, '$.LSN') = '%d'",
+			"AND JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) = '%d'",
 		jobState,
 		newWatermark.ToString(),
 		nextLSN,

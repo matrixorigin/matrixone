@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMixedJSONNumericEquality(t *testing.T) {
+func TestMixedJSONScalarEquality(t *testing.T) {
 	col := func(typ types.T) *plan.Expr {
 		return &plan.Expr{Typ: typ.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
 	}
@@ -40,19 +40,27 @@ func TestMixedJSONNumericEquality(t *testing.T) {
 	}{
 		{"nil", nil, false}, {"mixed", mixed, true}, {"reversed", expr(function.EQUAL, col(types.T_float32), col(types.T_json)), true},
 		{"same_json", expr(function.EQUAL, col(types.T_json), col(types.T_json)), false},
-		{"json_string", expr(function.EQUAL, col(types.T_json), col(types.T_varchar)), false},
+		{"json_string", expr(function.EQUAL, col(types.T_json), col(types.T_varchar)), true},
+		{"json_char", expr(function.EQUAL, col(types.T_json), col(types.T_char)), true},
+		{"json_text", expr(function.EQUAL, col(types.T_json), col(types.T_text)), true},
+		{"json_string_reversed", expr(function.EQUAL, col(types.T_varchar), col(types.T_json)), true},
+		// The JSON/boolean pair hashes through the JSON canonical encoding on
+		// one side and the raw 0/1 SQL boolean on the other, so it follows the
+		// same typed-residual rule as the string and numeric peers.
+		{"json_bool", expr(function.EQUAL, col(types.T_json), col(types.T_bool)), true},
+		{"json_bool_reversed", expr(function.EQUAL, col(types.T_bool), col(types.T_json)), true},
 		{"not_equality", expr(function.GREAT_EQUAL, col(types.T_json), col(types.T_int64)), false},
 		{"nested_and", expr(function.AND, expr(function.EQUAL, col(types.T_int64), col(types.T_int64)), mixed), true},
 		{"prepared", expr(function.EQUAL, col(types.T_json), adapter), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, HasMixedJSONNumericEquality(tc.e))
+			require.Equal(t, tc.want, HasMixedJSONScalarEquality(tc.e))
 			if tc.e != nil {
 				data, err := tc.e.Marshal()
 				require.NoError(t, err)
 				var decoded plan.Expr
 				require.NoError(t, decoded.Unmarshal(data))
-				require.Equal(t, tc.want, HasMixedJSONNumericEquality(&decoded))
+				require.Equal(t, tc.want, HasMixedJSONScalarEquality(&decoded))
 			}
 		})
 	}

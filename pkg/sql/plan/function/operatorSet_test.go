@@ -2742,8 +2742,16 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 			}
 			require.Len(t, castTypes, len(tt.inputs))
 			for i := range castTypes {
-				require.Equal(t, tt.wantReturn, castTypes[i].Oid)
-				if tt.wantReturn == types.T_text {
+				// A JSON branch keeps its JSON identity: the executor
+				// serializes the selected document with its own text
+				// representation, so an implicit JSON -> TEXT cast never
+				// unquotes a string scalar on the way in (issue #30934).
+				wantCastType := tt.wantReturn
+				if tt.inputs[i].Oid == types.T_json {
+					wantCastType = types.T_json
+				}
+				require.Equal(t, wantCastType, castTypes[i].Oid)
+				if wantCastType == types.T_text {
 					require.Zero(t, castTypes[i].Width)
 				}
 			}
