@@ -481,7 +481,9 @@ func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
 }
 
 func TestCommitQueueStageMetricsFollowExecutedWork(t *testing.T) {
-	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+	// Stopping the producer cannot drain heartbeat work already in the queues;
+	// WaitEmpty tracks ordinary transactions, not those heartbeat operations.
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
 	mgr.Start(context.Background())
 	defer mgr.Stop()
 	mgr.StopHeartbeat()

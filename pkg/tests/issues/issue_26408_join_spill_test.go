@@ -82,7 +82,9 @@ func TestIssue26408JoinSpillSQLRegression(t *testing.T) {
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists `"+dbName+"`")
+			if _, err := conn.ExecContext(cleanupCtx, "drop database if exists `"+dbName+"`"); err != nil {
+				t.Errorf("drop join-spill fixture database: %v", err)
+			}
 		}()
 		execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
 		execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
