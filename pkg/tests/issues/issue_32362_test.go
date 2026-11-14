@@ -113,6 +113,9 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 		}()
 		_, err = admin.ExecContext(ctx, "create table "+dbName+".t (id int primary key, v int)")
 		require.NoError(t, err)
+		var tableID uint64
+		require.NoError(t, admin.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t'", dbName).Scan(&tableID))
 		_, err = admin.ExecContext(ctx, "insert into "+dbName+".t values (1,0)")
 		require.NoError(t, err)
 		visible := func(t *testing.T, marker string) {
@@ -123,12 +126,107 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 			}, 10*time.Second, 50*time.Millisecond, "statement must be running before the connection changes")
 		}
 
-		t.Run("reset rolls back and releases the lock", func(t *testing.T) {
+		for _, mode := range []struct {
+			name  string
+			reset bool
+		}{
+			{name: "reset rolls back and releases the lock", reset: true},
+			{name: "FIN rolls back and releases the lock"},
+		} {
+			t.Run(mode.name, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(ctx)
+				defer cancel()
+				holder, raw := issue32362Conn(t, ctx, addr)
+				var holderID uint32
+				require.NoError(t, holder.QueryRowContext(ctx, "select connection_id()").Scan(&holderID))
+				needKill := true
+				t.Cleanup(func() {
+					if !needKill {
+						return
+					}
+					cleanup, done := context.WithTimeout(context.Background(), 5*time.Second)
+					defer done()
+					_, _ = admin.ExecContext(cleanup, fmt.Sprintf("kill query %d", holderID))
+				})
+				_, err = holder.ExecContext(ctx, "begin")
+				require.NoError(t, err)
+				_, err = holder.ExecContext(ctx, "update "+dbName+".t set v=1 where id=1")
+				require.NoError(t, err)
+				holderDone := make(chan error, 1)
+				holderStarted := time.Now()
+				go func() {
+					var sleep, marker int
+					holderDone <- holder.QueryRowContext(ctx, "select sleep(60),323620993").Scan(&sleep, &marker)
+				}()
+				visible(t, "323620993")
+				waiter, _ := issue32362Conn(t, ctx, addr)
+				_, err = waiter.ExecContext(ctx, "begin")
+				require.NoError(t, err)
+				type result struct {
+					value int
+					err   error
+				}
+				waiterDone := make(chan result, 1)
+				go func() {
+					var r result
+					r.err = waiter.QueryRowContext(ctx, "select v from "+dbName+".t where id=1 and 323620994=323620994 for update").Scan(&r.value)
+					waiterDone <- r
+				}()
+				visible(t, "323620994")
+				// A running statement may still be planning. Observe a queued lock
+				// waiter before disconnecting the holder so this exercises wakeup.
+				waitDeadline := time.Now().Add(10 * time.Second)
+				for {
+					var queued int
+					require.NoError(t, admin.QueryRowContext(ctx,
+						"select count(*) from mo_catalog.mo_locks where table_id=? and lock_wait<>''", fmt.Sprint(tableID)).Scan(&queued))
+					if queued > 0 {
+						break
+					}
+					if time.Now().After(waitDeadline) {
+						t.Fatal("waiter did not enter the table's lock queue")
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+				select {
+				case r := <-waiterDone:
+					t.Fatalf("waiter finished before disconnect: %+v", r)
+				default:
+				}
+				if mode.reset {
+					require.NoError(t, raw.SetLinger(0))
+				}
+				require.NoError(t, raw.Close())
+				beforeLegacy := time.NewTimer(time.Until(holderStarted.Add(25 * time.Second)))
+				defer beforeLegacy.Stop()
+				select {
+				case err = <-holderDone:
+					require.Error(t, err)
+				case <-time.After(8 * time.Second):
+					t.Fatal("disconnected client did not terminate")
+				}
+				select {
+				case r := <-waiterDone:
+					require.NoError(t, r.err)
+					require.Equal(t, 0, r.value, "the disconnected transaction must roll back")
+					needKill = false
+				case <-beforeLegacy.C:
+					t.Fatal("disconnected connection retained its transaction lock until the legacy grace")
+				}
+				_, err = waiter.ExecContext(ctx, "rollback")
+				require.NoError(t, err)
+				var durable int
+				require.NoError(t, admin.QueryRowContext(ctx, "select v from "+dbName+".t where id=1").Scan(&durable))
+				require.Equal(t, 0, durable, "an independent session must observe the rolled-back value")
+			})
+		}
+
+		t.Run("write half close cancels the active request", func(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			holder, raw := issue32362Conn(t, ctx, addr)
-			var holderID uint32
-			require.NoError(t, holder.QueryRowContext(ctx, "select connection_id()").Scan(&holderID))
+			conn, raw := issue32362Conn(t, ctx, addr)
+			var connID uint32
+			require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
 			needKill := true
 			t.Cleanup(func() {
 				if !needKill {
@@ -136,64 +234,32 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 				}
 				cleanup, done := context.WithTimeout(context.Background(), 5*time.Second)
 				defer done()
-				_, _ = admin.ExecContext(cleanup, fmt.Sprintf("kill query %d", holderID))
+				_, _ = admin.ExecContext(cleanup, fmt.Sprintf("kill query %d", connID))
 			})
-			_, err = holder.ExecContext(ctx, "begin")
-			require.NoError(t, err)
-			_, err = holder.ExecContext(ctx, "update "+dbName+".t set v=1 where id=1")
-			require.NoError(t, err)
-			holderDone := make(chan error, 1)
-			holderStarted := time.Now()
+			done := make(chan error, 1)
 			go func() {
 				var sleep, marker int
-				holderDone <- holder.QueryRowContext(ctx, "select sleep(60),323620993").Scan(&sleep, &marker)
+				done <- conn.QueryRowContext(ctx, "select sleep(60),323620995").Scan(&sleep, &marker)
 			}()
-			visible(t, "323620993")
-			waiter, _ := issue32362Conn(t, ctx, addr)
-			_, err = waiter.ExecContext(ctx, "begin")
-			require.NoError(t, err)
-			type result struct {
-				value int
-				err   error
-			}
-			waiterDone := make(chan result, 1)
-			go func() {
-				var r result
-				r.err = waiter.QueryRowContext(ctx, "select v from "+dbName+".t where id=1 and 323620994=323620994 for update").Scan(&r.value)
-				waiterDone <- r
-			}()
-			visible(t, "323620994")
+			visible(t, "323620995")
+			require.NoError(t, raw.CloseWrite())
 			select {
-			case r := <-waiterDone:
-				t.Fatalf("waiter finished before disconnect: %+v", r)
-			default:
-			}
-			require.NoError(t, raw.SetLinger(0))
-			require.NoError(t, raw.Close())
-			beforeLegacy := time.NewTimer(time.Until(holderStarted.Add(25 * time.Second)))
-			defer beforeLegacy.Stop()
-			select {
-			case err = <-holderDone:
+			case err := <-done:
 				require.Error(t, err)
-			case <-time.After(8 * time.Second):
-				t.Fatal("reset client did not terminate")
+			case <-time.After(15 * time.Second):
+				t.Fatal("half-closed client was not canceled before the legacy grace")
 			}
-			select {
-			case r := <-waiterDone:
-				require.NoError(t, r.err)
-				require.Equal(t, 0, r.value, "the disconnected transaction must roll back")
-				needKill = false
-			case <-beforeLegacy.C:
-				t.Fatal("reset connection retained its transaction lock until the legacy grace")
-			}
-			_, err = waiter.ExecContext(ctx, "rollback")
-			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				found, queryErr := issue32362QueryVisible(ctx, admin, "323620995")
+				return queryErr == nil && !found
+			}, 10*time.Second, 50*time.Millisecond, "cancellation must remove the server-side query")
+			needKill = false
 		})
 
-		t.Run("write half close preserves the result", func(t *testing.T) {
+		t.Run("connected client survives scanning and reuses the session", func(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			conn, raw := issue32362Conn(t, ctx, addr)
+			conn, _ := issue32362Conn(t, ctx, addr)
 			type result struct {
 				sleep, marker int
 				err           error
@@ -201,19 +267,21 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 			done := make(chan result, 1)
 			go func() {
 				var r result
-				r.err = conn.QueryRowContext(ctx, "select sleep(6),323620995").Scan(&r.sleep, &r.marker)
+				r.err = conn.QueryRowContext(ctx, "select sleep(6),323620996").Scan(&r.sleep, &r.marker)
 				done <- r
 			}()
-			visible(t, "323620995")
-			require.NoError(t, raw.CloseWrite())
+			visible(t, "323620996")
 			select {
 			case r := <-done:
 				require.NoError(t, r.err)
 				require.Equal(t, 0, r.sleep)
-				require.Equal(t, 323620995, r.marker)
+				require.Equal(t, 323620996, r.marker)
 			case <-time.After(15 * time.Second):
-				t.Fatal("half-closed client did not receive its result")
+				t.Fatal("connected client did not receive its result")
 			}
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&value))
+			require.Equal(t, 1, value)
 		})
 	})
 }
