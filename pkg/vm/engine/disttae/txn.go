@@ -510,6 +510,12 @@ func (txn *Transaction) checkWorkspaceAccountingLocked() error {
 }
 
 func (txn *Transaction) assertWorkspaceAccountingLocked() {
+	if txn.engine != nil && txn.engine.config.checkWorkspaceAccounting {
+		if err := txn.checkWorkspaceAccountingLocked(); err != nil {
+			panic(err)
+		}
+		return
+	}
 	common.DoIfDebugEnabled(func() {
 		if err := txn.checkWorkspaceAccountingLocked(); err != nil {
 			panic(err)

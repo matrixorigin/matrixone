@@ -180,3 +180,66 @@ set save_query_result = off;
 drop account acc_save;
 -- reset to default(off)
 set save_query_result = off;
+
+-- PR32727 maintained regression: saved-result CTAS with current source
+-- privileges. The allowed population path is asserted first; a live revoke
+-- then removes only the source read privilege while the target CREATE
+-- privilege stays granted, and reusing the same saved queryID must be
+-- denied before any denied target is created.
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+set global enable_privilege_cache = off;
+drop database if exists db_save_ctas;
+create database db_save_ctas;
+use db_save_ctas;
+create table ctas_priv_src(a int, b varchar(20));
+insert into ctas_priv_src values (1, 'alpha'), (2, 'beta'), (3, 'gamma');
+drop role if exists r_ctas_src;
+create role r_ctas_src;
+drop user if exists u_ctas;
+create user u_ctas identified by '111' default role r_ctas_src;
+grant connect on account * to r_ctas_src;
+grant show databases on account * to r_ctas_src;
+grant show tables on database db_save_ctas to r_ctas_src;
+grant create table on database db_save_ctas to r_ctas_src;
+grant select on table db_save_ctas.ctas_priv_src to r_ctas_src;
+-- @session:id=201&user=sys:u_ctas:r_ctas_src&password=111
+use db_save_ctas;
+set save_query_result = on;
+/* save_result */select a, b from ctas_priv_src order by a desc;
+-- allowed CTAS populated from the really saved result while the source is
+-- readable; the queryID is embedded into the prepared statement text with
+-- concat because the populate phase runs in the internal executor where
+-- last_query_id() is not visible and would resolve to the zero query id.
+set @saved_qid = last_query_id();
+set @ctas_sql = concat('create table ctas_priv_ok as select a, b from result_scan(''', @saved_qid, ''') as t');
+prepare ctas_priv_p from @ctas_sql;
+execute ctas_priv_p;
+deallocate prepare ctas_priv_p;
+-- re-save the same producer so it stays the ring top for the deny phase
+/* save_result */select a, b from ctas_priv_src order by a desc;
+-- @session
+-- live revoke of the source read privilege only; the target CREATE stays granted
+revoke select on table db_save_ctas.ctas_priv_src from r_ctas_src;
+-- @session:id=201&user=sys:u_ctas:r_ctas_src&password=111
+-- reusing the saved queryID must be denied by the current source privilege
+-- @ignore:0
+create table ctas_priv_denied as select a, b from result_scan(last_query_id()) t;
+-- witness after the revoke: the same live role keeps target CREATE
+create table ctas_priv_probe(a int);
+-- the direct source read is denied in this live session
+-- @ignore:0
+select a from ctas_priv_src;
+select count(*) from ctas_priv_ok;
+select a, b from ctas_priv_ok order by a;
+show create table ctas_priv_ok;
+-- no leftover denied target exists
+show tables;
+set save_query_result = off;
+-- @session
+drop user if exists u_ctas;
+drop role if exists r_ctas_src;
+drop database if exists db_save_ctas;
+-- restore the genuine original global value captured at case start
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+-- equality with the case-start snapshot is the restoration oracle, valid for any initial value
+select @@global.enable_privilege_cache = @saved_enable_privilege_cache as cache_snapshot_restored;
