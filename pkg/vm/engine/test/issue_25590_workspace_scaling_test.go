@@ -676,7 +676,12 @@ func TestIssue25590DumpFailureCommitPreservesEveryStatement(t *testing.T) {
 func issue25590DeletedBlocksEntries(dtxn *disttae.Transaction) int {
 	reflectDB := reflect.ValueOf(dtxn).
 		Elem().FieldByName("deletedBlocks").Elem().FieldByName("offsets")
-	return reflectDB.Len()
+	entries := 0
+	iter := reflectDB.MapRange()
+	for iter.Next() {
+		entries += iter.Value().Len()
+	}
+	return entries
 }
 
 // issue25590ArmEngineFault armors a process-global fault point for the

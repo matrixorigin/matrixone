@@ -97,7 +97,7 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, hdr.isOffHeap())
 	require.True(t, hdr.isAccounted())
-	require.Same(t, account, lease.account)
+	require.Same(t, account, lease.account())
 	require.Equal(t, testAllocationOwner, lease.owner)
 	require.Equal(t, testAllocationSite, lease.site)
 
