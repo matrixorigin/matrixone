@@ -16,6 +16,7 @@ package timewin
 
 import (
 	"bytes"
+	"math"
 	"testing"
 	"time"
 
@@ -1500,4 +1501,56 @@ func TestTimeWindowBoundsBudgetFailureAndReuse(t *testing.T) {
 			require.Equal(t, uint64(32), budget.Used())
 		}()
 	}
+}
+
+func TestMakeIntervalAndSlidingRejectsOverflowingScaledInterval(t *testing.T) {
+	intervalExpr := func(val int64, unit string) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: val}}}},
+						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: unit}}}},
+					},
+				},
+			},
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		unit string
+		val  int64
+	}{
+		{name: "minute", unit: "minute", val: math.MaxInt64/(types.SecsPerMinute*types.MicroSecsPerSec) + 1},
+		{name: "hour", unit: "hour", val: math.MaxInt64/(types.SecsPerHour*types.MicroSecsPerSec) + 1},
+		{name: "day", unit: "day", val: math.MaxInt64/(types.SecsPerDay*types.MicroSecsPerSec) + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arg := NewArgument()
+			defer arg.Release()
+
+			err := arg.MakeIntervalAndSliding(intervalExpr(tc.val, tc.unit), nil)
+			require.ErrorContains(t, err, "interval")
+			require.Zero(t, arg.Interval)
+		})
+	}
+}
+
+func TestMakeIntervalAndSlidingKeepsRepresentableInterval(t *testing.T) {
+	arg := NewArgument()
+	defer arg.Release()
+
+	err := arg.MakeIntervalAndSliding(&plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*plan.Expr{
+					{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 5}}}},
+					{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "day"}}}},
+				},
+			},
+		},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.Datetime(5*types.SecsPerDay*types.MicroSecsPerSec), arg.Interval)
 }

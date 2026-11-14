@@ -2525,20 +2525,27 @@ func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	if err != nil {
 		return num, err
 	}
+	factor := int64(1)
 	switch iTyp {
 	case types.MicroSecond:
-		num = diff
 	case types.Second:
-		num = diff * types.MicroSecsPerSec
+		factor = types.MicroSecsPerSec
 	case types.Minute:
-		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
+		factor = types.SecsPerMinute * types.MicroSecsPerSec
 	case types.Hour:
-		num = diff * types.SecsPerHour * types.MicroSecsPerSec
+		factor = types.SecsPerHour * types.MicroSecsPerSec
 	case types.Day:
-		num = diff * types.SecsPerDay * types.MicroSecsPerSec
+		factor = types.SecsPerDay * types.MicroSecsPerSec
 	default:
 		return num, moerr.NewNotSupported(proc.Ctx, "now support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
+	// JudgeIntervalNumOverflow bounds diff on its own, which keeps SECOND
+	// inside int64 but still lets MINUTE, HOUR and DAY wrap once diff is
+	// scaled to microseconds.
+	if diff > math.MaxInt64/factor {
+		return num, moerr.NewInvalidArg(proc.Ctx, "interval", diff)
+	}
+	num = diff * factor
 	return num, nil
 }
 
