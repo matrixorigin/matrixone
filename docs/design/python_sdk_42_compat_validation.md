@@ -10,7 +10,7 @@ containing these native changes is required to ship the corrected behavior.
 | Closure | Implementation and retained oracles |
 |---|---|
 | Buffered TLS and peer shutdown | Backport #29996 and retain the review follow-up that unwraps only owned buffered/TLS connections. Coalesced ClientHello, payload, reset, FIN grace, timeout/cancel, certificate/authentication rejection and pool release remain checked. |
-| SQL schema metadata | Adapt #29893 to the 4.2 type family. BOOLEAN and widthless numeric display names preserve storage OIDs, decimal/string/vector dimensions, ENUM/SET values and MySQL view provenance. Retain the legacy DUMP type renderer and checksums. Short type headers fail without mutating the receiver. |
+| SQL schema metadata | Adapt #29893 to the 4.2 type family. Keep existing valid 4.2 metadata spellings, including signed integers, decimal, string and temporal columns; correct BOOL and types whose old spellings were invalid or lost information. Preserve storage OIDs, dimensions, ENUM/SET values and MySQL view provenance. Retain the legacy DUMP type renderer and checksums. Short type headers fail without mutating the receiver. |
 | FULLTEXT identifiers | Adapt #31953 across planner/post-DML/ISCP: quote each identifier atomically and preserve async parser parameters. Exact identifier, async gojieba, values and rollback checks remain. |
 | Numeric scanner | Adapt #27010/#31137 without promoting a dotted or signed-exponent token into an identifier. Retain identifier/hex controls and malformed-input errors. 4.2 DOUBLE metadata and PREPARE error wrappers remain specific to 4.2. |
 | Stage and SQL mode | Adapt the relevant #31774 paths: literal/credential quoting, logical-name/URI equivalence, combined ALTER rollback, and response NO_BACKSLASH_ESCAPES status. CREATE also persists explicit ENABLE false/true; no option is silently ignored. |
@@ -61,12 +61,16 @@ Work remains linear in database/table definitions with existing receipt batches.
 
 ## Oracle adaptations
 
-The existing metadata result audit compares parsed commands, result shapes,
-headers, values and errors, rather than line counts. In 104 files it preserves
-18,606 original commands and 71,428 result cells; the allowed changes are 3,590
-SQL type cells and 18 BOOL-DDL cells. A further 22 Boolean commands extend the
-executable bool.test. No planner/explain query, table count, row count, statistics
-or expected data result is reduced. Test-script discovery includes .sql and .test.
+The metadata result audit compares parsed commands, result shapes, headers,
+values and errors, rather than line counts. The original audit covered 18,606
+commands and 71,428 result cells in 104 files. The compatibility follow-up
+restores the old 4.2 spellings for valid signed-integer, string, decimal,
+temporal, bit, YEAR(4), safe unscaled float and ENUM/SET metadata while
+retaining corrections for BOOL, invalid unsigned spellings, scaled floats and
+other malformed or unfaithful types. The executable bool.test
+also checks an exact legacy INT(32) comparison. No planner/explain query, table
+count, row count, statistics or expected data result is reduced. Test-script
+discovery includes .sql and .test.
 
 Four new branch identity headers use 4.2's dat_type width (-1), rather than main's
 32. Sequence-only source coverage retains 4.2's existing clone filter, which
@@ -81,10 +85,9 @@ tables. Only that expected header changes. The original DDL bound, empty row set
 permissions and rejected local-file operations are retained. Combined ALTER now
 succeeds; only its five obsolete rejection rows are removed from the existing
 Stage/snapshot goldens, with all SQL and subsequent catalog assertions preserved.
-The original metadata audit did not include four saved `result_scan` expectations:
-three `INT(32)` cells and one `bool` DDL string now match the direct SHOW output
-(`int` and `boolean`, respectively). The SQL and remaining result checks are
-unchanged.
+The saved `result_scan` expectations remain aligned with direct SHOW output:
+the three signed-integer cells retain `INT(32)`, while the corrected BOOL DDL
+uses `boolean`. The SQL and remaining result checks are unchanged.
 
 ## Upgrade and release limits
 
@@ -113,8 +116,8 @@ joins already included upstream merges. No code or fixture is changed by it.
 
 | Proof | Result |
 |---|---|
-| Types/plan/function metadata owners and standard MySQL/SQLAlchemy clients | Owning suites, scoped vet/lint and four actual positive reflection cases passed. |
-| Metadata BVT | Eight real tester files: 1,435 comparisons passed; Boolean same-instance full-metadata repeat: 67 passed. |
+| Metadata owners and clients before the legacy-spelling follow-up | Owning suites, scoped vet/lint and four positive SQLAlchemy reflection cases passed for the earlier canonical metadata output. They do not certify the follow-up output. |
+| Metadata BVT before the legacy-spelling follow-up | Eight real tester files: 1,435 comparisons passed; Boolean same-instance full-metadata repeat: 67 passed. These results predate the follow-up and do not certify its changed output. |
 | FULLTEXT/numeric | Owning packages and focused regressions passed; 30 normal BVT comparisons passed twice; 53 public SDK FULLTEXT/numeric/TLS checks passed. |
 | Stage/Parquet/SQL mode | Four owning packages, scoped vet/lint and native build passed; all 35 difficult scalar cases and the complete 335-case analytics collection passed without skips. |
 | Branch/restore final owners | Frontend and compile owning suites, frontend/compile/issues vet and incremental lint passed after the cross-account preflight fix. The new account-source regression fails before and passes after. |
@@ -123,15 +126,35 @@ joins already included upstream merges. No code or fixture is changed by it.
 | Concurrency | Complete frontend race suite, four exact buffered-TLS/SQL-mode roots at 100 repetitions each, and the embedded deterministic branch DDL lifecycle root under race all passed. These proofs use a5a1705b70; the raced resource/lock owners are unchanged by the later stateless restore-query fix. |
 | Physical upgrade | Pinned official v4.2.8 data copy, legacy receipts, table/view values, empty-target protection, per-statement identity and snapshot/restore marker all passed. |
 
+For the later legacy-metadata follow-up, the full affected function package passed
+normal and race tests with `-short -tags matrixone_test`; go vet, pinned molint
+and pinned golangci-lint also passed. A CPU-only isolated 4.2 service verified
+exact legacy signed, string, decimal, temporal, unscaled float and year metadata,
+plus BOOL, unsigned and scaled-float controls. Three real tester cases passed:
+72 Boolean/metadata, 200 array and 64 SHOW comparisons, with zero skips or
+failures. Four current Python cases passed for standard table reflection, exact
+view SQL metadata and ENUM/SET replay. They do not assert that unmodified
+SQLAlchemy can reflect a view: the original positive view assertions are retained
+in the reproduction linked from [#32746](https://github.com/matrixorigin/matrixone/issues/32746),
+and the unmodified earlier suite had two passes and two view failures.
+
+After the three tester cases completed, the isolated service required a forced
+stop after a 30-second shutdown wait; the cause is not established. A subsequent
+restart and minimal view reproduction shut down normally. Test results above
+were observed before shutdown and do not certify shutdown behavior.
+
 The eight issue-marked statements are unchanged existing coverage exclusions,
 not eight newly certified permission behaviors. The exact positive and negative
 privilege oracles in the 258-statement script and focused unit tests remain.
-The complete SDK online/analytics qualification and its final source identities
+The complete SDK online/analytics qualification and its source identities
 are recorded on [PR #32671](https://github.com/matrixorigin/matrixone/pull/32671).
+That earlier qualification predates the legacy-spelling follow-up. Standard
+SQLAlchemy view reflection with uppercase legacy types remains a known issue,
+tracked separately in [#32746](https://github.com/matrixorigin/matrixone/issues/32746).
 No runner was added. Local build/link time is not claimed as a case-speed benefit.
 
 Final implementation self-review: Codex `/root`, self/delivery review. Each closure
 above maps its producer, consumers, compatibility limits and unhappy paths;
 previous valid evidence is reused only where those inputs remain unchanged.
-No unresolved implementation blockers remain for this native change. This is
-not independent external review or a claim that a skipped/pending CI job passed.
+The independently tracked SQLAlchemy view limitation remains open. This is not
+independent external review or a claim that a skipped/pending CI job passed.

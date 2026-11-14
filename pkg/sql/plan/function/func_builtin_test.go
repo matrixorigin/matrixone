@@ -1031,8 +1031,8 @@ func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
 		oid  types.T
 		want string
 	}{
-		{types.T_enum, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
-		{types.T_uint64, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_enum, `ENUM('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_uint64, `SET('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
 	} {
 		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
 		require.NoError(t, err)
@@ -1070,23 +1070,35 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "tinyint"},
+		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "TINYINT(0)"},
 		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "tinyint unsigned"},
-		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "smallint"},
+		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "SMALLINT(0)"},
 		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "smallint unsigned"},
-		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "int"},
+		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "INT(0)"},
 		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "int unsigned"},
-		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "bigint"},
+		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "BIGINT(0)"},
 		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "bigint unsigned"},
-		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "int"},
+		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "INT(32)"},
+		{name: "invalid negative int width stays canonical", typ: types.New(types.T_int32, -1, 0), want: "int"},
+		{name: "tinyint with physical width", typ: types.New(types.T_int8, 8, 0), want: "TINYINT(8)"},
+		{name: "smallint with physical width", typ: types.New(types.T_int16, 16, 0), want: "SMALLINT(16)"},
+		{name: "bigint with physical width", typ: types.New(types.T_int64, 64, 0), want: "BIGINT(64)"},
 		{name: "uint physical width", typ: types.New(types.T_uint64, 64, 0), want: "bigint unsigned"},
 		{name: "date", typ: types.New(types.T_date, 0, 0), want: "date"},
 		{name: "json", typ: types.New(types.T_json, 0, 0), want: "json"},
+		{name: "float without explicit scale", typ: types.New(types.T_float32, 0, -1), want: "FLOAT(0)"},
+		{name: "float physical width cannot be replayed", typ: types.New(types.T_float32, 32, -1), want: "float"},
+		{name: "double without explicit scale", typ: types.New(types.T_float64, 0, -1), want: "DOUBLE(0)"},
+		{name: "year default width", typ: types.New(types.T_year, 4, 0), want: "YEAR(4)"},
 		{name: "float precision and scale", typ: types.New(types.T_float32, 5, 2), want: "float(5,2)"},
-		{name: "datetime precision", typ: types.New(types.T_datetime, 3, 3), want: "datetime(3)"},
-		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "bit(0)"},
-		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "decimal(10,2)"},
-		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "varchar(20)"},
+		{name: "datetime precision", typ: types.New(types.T_datetime, 3, 3), want: "DATETIME(3)"},
+		{name: "timestamp no fractional precision", typ: types.New(types.T_timestamp, 0, 0), want: "TIMESTAMP(0)"},
+		{name: "time no fractional precision", typ: types.New(types.T_time, 0, 0), want: "TIME(0)"},
+		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "BIT(0)"},
+		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "DECIMAL(10,2)"},
+		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "VARCHAR(20)"},
+		{name: "char keeps length", typ: types.New(types.T_char, 20, 0), want: "CHAR(20)"},
+		{name: "varbinary keeps length", typ: types.New(types.T_varbinary, 20, 0), want: "VARBINARY(20)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -2962,7 +2974,7 @@ func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
 		want []string
 	}{
 		{typNormal, []string{"BOOL", "BOOL", "BOOL", "INT", "DECIMAL", "ENUM", "", ""}},
-		{typWithLen, []string{"boolean", "boolean", "boolean", "int", "decimal(10,2)", "enum('')", "", ""}},
+		{typWithLen, []string{"boolean", "boolean", "boolean", "INT(32)", "DECIMAL(10,2)", "enum('')", "", ""}},
 	} {
 		t.Run(fmt.Sprint(tc.mode), func(t *testing.T) {
 			inputs := []FunctionTestInput{
