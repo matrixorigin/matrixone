@@ -198,9 +198,9 @@ day  ¦  date  ¦  NO  ¦    ¦  null
 select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
 ➤ COLUMN_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  COLUMN_DEFAULT[12,65535,0]  𝄀
 id  ¦  int  ¦  int  ¦  NO  ¦  null  𝄀
-flag  ¦  tinyint  ¦  boolean  ¦  YES  ¦  null  𝄀
-enabled  ¦  tinyint  ¦  boolean  ¦  NO  ¦  true  𝄀
-disabled  ¦  tinyint  ¦  boolean  ¦  YES  ¦  false
+flag  ¦  tinyint  ¦  tinyint(1)  ¦  YES  ¦  null  𝄀
+enabled  ¦  tinyint  ¦  tinyint(1)  ¦  NO  ¦  true  𝄀
+disabled  ¦  tinyint  ¦  tinyint(1)  ¦  YES  ¦  false
 select attname,mo_show_visible_bin(atttyp,2) as native_type from mo_catalog.mo_columns where att_database=database() and att_relname='bool_metadata' and att_is_hidden=0 order by attnum;
 ➤ attname[12,256,0]  ¦  native_type[12,65535,0]  𝄀
 id  ¦  INT  𝄀
@@ -221,8 +221,8 @@ create table bool_width_alias(flag bool(1));
 create table boolean_width_alias(flag boolean(1));
 select TABLE_NAME,COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_width_alias','boolean_width_alias') order by TABLE_NAME;
 ➤ TABLE_NAME[12,256,0]  ¦  COLUMN_TYPE[12,65535,0]  𝄀
-bool_width_alias  ¦  boolean  𝄀
-boolean_width_alias  ¦  boolean
+bool_width_alias  ¦  tinyint(1)  𝄀
+boolean_width_alias  ¦  tinyint(1)
 drop table bool_width_alias;
 drop table boolean_width_alias;
 drop view bool_metadata_view;
