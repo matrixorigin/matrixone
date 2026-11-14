@@ -327,7 +327,7 @@ func (zma ZoneMapArea) GetZoneMap(idx uint16, BlockID uint32) ZoneMap {
 	blockOff := types.DecodeUint32(zma[offStart:offEnd])
 	blockLength := types.DecodeUint32(zma[offStart+blockLen : offEnd+blockLen])
 	offset := blockOff + uint32(idx)*ZoneMapSize
-	return ZoneMap(zma[offset : offset+blockLength])
+	return persistedZoneMapView(ZoneMap(zma[offset : offset+blockLength]))
 
 }
 
