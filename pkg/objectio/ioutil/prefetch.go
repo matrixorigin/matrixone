@@ -92,7 +92,7 @@ func Prefetch(
 // PrefetchSkipped reports whether the whole-object preload of blk's object is
 // skipped for a read under policy.
 func PrefetchSkipped(ctx context.Context, service fileservice.FileService, policy fileservice.Policy, blk *objectio.BlockInfo) bool {
-	if !policy.Any(fileservice.SkipFullFilePreloads, fileservice.NarrowRead) {
+	if !policy.Any(fileservice.SkipFullFilePreloads, fileservice.NarrowRead, fileservice.IndexFileObject) {
 		return false
 	}
 	return fileservice.FullFilePreloadSkipped(ctx, service, policy, blk.MetaLocation().Name().String())
