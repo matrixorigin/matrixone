@@ -38,12 +38,13 @@ type replayAObjectCreateObserver interface {
 
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
-	Cmd            *txnbase.TxnCmd
-	Observer       wal.ReplayObserver
-	catalog        *catalog.Catalog
-	ctx            context.Context
-	preparedTables map[uint64]*catalog.TableEntry
-	preparedTxnID  string
+	Cmd                   *txnbase.TxnCmd
+	Observer              wal.ReplayObserver
+	catalog               *catalog.Catalog
+	ctx                   context.Context
+	preparedTables        map[uint64]*catalog.TableEntry
+	preparedLogicalTables map[uint64]*catalog.TableEntry
+	preparedTxnID         string
 }
 
 func MakeReplayTxn(
@@ -88,6 +89,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		store.prepareCmd(command)
 	}
 	store.registerPreparedDMLTables(txn)
+	store.registerPreparedLogicalDMLTables(txn)
 	return
 }
 
@@ -95,12 +97,14 @@ func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
 	visibilityTS := txn.GetCommitTS()
 	store.resolvePreparedDMLTables(&visibilityTS)
+	store.resolvePreparedLogicalDMLTables(&visibilityTS)
 	return
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
 	store.resolvePreparedDMLTables(nil)
+	store.resolvePreparedLogicalDMLTables(nil)
 	return
 }
 
@@ -139,6 +143,33 @@ func (store *replayTxnStore) resolvePreparedDMLTables(visibilityTS *types.TS) {
 		table.ResolveReplayedPreparedDML(store.preparedTxnID, visibilityTS)
 	}
 	store.preparedTables = nil
+}
+
+func (store *replayTxnStore) registerPreparedLogicalDMLTables(txn txnif.AsyncTxn) {
+	memo := txn.GetMemo()
+	for id, table := range store.preparedTables {
+		if memo.LogicalDMLKnown() {
+			if database, ok := memo.LogicalDMLTables()[id]; !ok || database != table.GetDB().ID {
+				continue
+			}
+		}
+		// Legacy records have unknown classification, not a known-empty set.
+		// Their conservative bound is confined to recovery of older data.
+		if err := table.RegisterRebaseLogicalDML(txn.GetID()); err != nil {
+			panic(err)
+		}
+		if store.preparedLogicalTables == nil {
+			store.preparedLogicalTables = make(map[uint64]*catalog.TableEntry)
+		}
+		store.preparedLogicalTables[id] = table
+	}
+}
+
+func (store *replayTxnStore) resolvePreparedLogicalDMLTables(visibilityTS *types.TS) {
+	for _, table := range store.preparedLogicalTables {
+		table.ResolveRebaseLogicalDML(store.preparedTxnID, visibilityTS)
+	}
+	store.preparedLogicalTables = nil
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {

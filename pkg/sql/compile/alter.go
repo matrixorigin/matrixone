@@ -1643,7 +1643,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			c.proc.Ctx = replayCtx
 			defer func() { c.proc.Ctx = originalCtx }()
 			create := func() error {
-				run := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
+				run := func() error {
+					createReplica := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
+					if isTemp || !c.isLifecycleRC() {
+						return createReplica()
+					}
+					return c.withPrivateAlterCopyCreate(dbName, qry.CopyTableDef.Name, qry.CreateTmpTableSql, createReplica)
+				}
 				if scalarCandidate {
 					return c.withScalarAlterCopyCreate(dbName, qry.CopyTableDef, run)
 				}

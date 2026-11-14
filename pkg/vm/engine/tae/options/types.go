@@ -78,6 +78,7 @@ type Options struct {
 	BulkTomestoneTxnThreshold uint64
 	TransferTableTTL          time.Duration
 	IncrementalDedup          bool
+	EnableRebaseDataHistory   bool
 	IsStandalone              bool
 	GCTimeCheckerFactory      func(any) func(*types.TS) bool
 

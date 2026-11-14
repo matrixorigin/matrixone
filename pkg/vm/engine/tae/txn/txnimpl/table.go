@@ -153,6 +153,7 @@ type txnTable struct {
 	// its own ALTER TABLE.
 	expectedAutoIncrEpochs map[uint32]struct{}
 	autoIncrementAlter     bool
+	rebaseSnapshot         types.TS
 }
 
 func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
@@ -1399,6 +1400,30 @@ func (tbl *txnTable) UpdateObjectStats(
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
+	if req.Kind == apipb.AlterKind_ValidateRebaseSnapshot {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		guard := req.GetValidateRebaseSnapshot()
+		if guard == nil || guard.PhysicalTime <= 0 {
+			return moerr.NewInvalidInput(ctx, "invalid Rebase snapshot dependency")
+		}
+		if !tbl.store.txn.GetMemo().LogicalDMLTrackingEnabled() {
+			return moerr.NewNotSupported(ctx, "Rebase logical data history is disabled")
+		}
+		snapshot := types.BuildTS(guard.PhysicalTime, 0)
+		start := tbl.store.txn.GetStartTS()
+		if snapshot.GT(&start) {
+			return moerr.NewInvalidInput(ctx, "Rebase snapshot is newer than the transaction")
+		}
+		if err := tbl.store.IncreateWriteCnt("validate Rebase snapshot"); err != nil {
+			return err
+		}
+		if tbl.rebaseSnapshot.IsEmpty() || snapshot.LT(&tbl.rebaseSnapshot) {
+			tbl.rebaseSnapshot = snapshot
+		}
+		return nil
+	}
 	switch req.Kind {
 	case apipb.AlterKind_UpdateConstraint,
 		apipb.AlterKind_UpdateComment,
@@ -1951,12 +1976,43 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 	util.CoreDump()
 }
 
+type rebaseSnapshotValidationObserver func(uint64, types.TS, types.TS, bool)
+
+var rebaseSnapshotValidationHook atomic.Pointer[rebaseSnapshotValidationObserver]
+
+// SetRebaseSnapshotValidationHookForTest exposes the TN commit-validation
+// boundary. Exclusive fixtures must restore it after their transaction joins.
+func SetRebaseSnapshotValidationHookForTest(hook func(uint64, types.TS, types.TS, bool)) func() {
+	observer := rebaseSnapshotValidationObserver(hook)
+	previous := rebaseSnapshotValidationHook.Swap(&observer)
+	return func() { rebaseSnapshotValidationHook.Store(previous) }
+}
+
 func (tbl *txnTable) PrepareCommit() (err error) {
+	if !tbl.rebaseSnapshot.IsEmpty() {
+		reject := tbl.entry.HasRebaseLogicalDMLAfter(tbl.rebaseSnapshot)
+		if observer := rebaseSnapshotValidationHook.Load(); observer != nil && *observer != nil {
+			(*observer)(tbl.entry.ID, tbl.rebaseSnapshot, tbl.entry.RebaseLogicalDMLBound(), reject)
+		}
+		if reject {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
 	if err = tbl.validateAutoIncrEpoch(); err != nil {
 		return err
 	}
 	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {
 		return err
+	}
+	memo := tbl.store.txn.GetMemo()
+	if memo.LogicalDMLTrackingEnabled() && !memo.IsFlushOrMerge &&
+		len(tbl.expectedAutoIncrEpochs) > 0 && memo.HasTableDataChanges(tbl.entry.ID) {
+		if err = memo.RecordLogicalDML(tbl.entry.GetDB().ID, tbl.entry.ID); err != nil {
+			return err
+		}
+		if err = tbl.entry.RegisterRebaseLogicalDML(tbl.store.txn.GetID()); err != nil {
+			return err
+		}
 	}
 	nodeCount := len(tbl.txnEntries.entries)
 	for idx, node := range tbl.txnEntries.entries {
@@ -2012,6 +2068,8 @@ func (tbl *txnTable) PreApplyCommit() (err error) {
 func (tbl *txnTable) ApplyCommit() (err error) {
 	defer func() {
 		if err == nil {
+			committed := tbl.store.txn.GetCommitTS()
+			tbl.entry.ResolveRebaseLogicalDML(tbl.store.txn.GetID(), &committed)
 			tbl.transferredTombstoneObjects = nil
 			cleanupCtx, cancel := tbl.newTransferredTombstoneCleanupContext()
 			defer cancel()
@@ -2079,6 +2137,7 @@ func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {
+	defer tbl.entry.ResolveRebaseLogicalDML(tbl.store.txn.GetID(), nil)
 	tbl.transferredTombstoneRollback = true
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {

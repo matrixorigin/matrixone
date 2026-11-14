@@ -23,7 +23,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,9 +57,9 @@ func (s *service) MaybeUpgradeTenant(
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied()
 	// Release the planning transaction and account lock before the paged
-	// 4.0.7 walk, then recheck the committed account version before caching it.
+	// catalog walk, then recheck the committed account version before caching it.
 	for {
-		pendingV407 := false
+		var pendingPaged string
 		err = s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
@@ -132,12 +131,12 @@ func (s *service) MaybeUpgradeTenant(
 				for _, v := range s.handles {
 					if versions.Compare(v.Metadata().Version, from) > 0 &&
 						v.Metadata().CanDirectUpgrade(from) {
-						if v == v4_0_7.Handler {
+						if pagedTenantHandle(v) {
 							if txnOp == nil {
-								pendingV407 = true
+								pendingPaged = v.Metadata().Version
 								break // Release the planning transaction/account lock before paging.
 							}
-							_, err := v4_0_7.Handler.UpgradeTenant(ctx, tenantID, s.upgrade.catalogObjectLimit,
+							_, err := runPagedTenantHandle(ctx, v, tenantID, s.upgrade.catalogObjectLimit,
 								func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
 									err := work(txn)
 									if err != nil {
@@ -158,7 +157,7 @@ func (s *service) MaybeUpgradeTenant(
 						upgraded = true
 					}
 				}
-				if !pendingV407 && from != currentCN.Version {
+				if pendingPaged == "" && from != currentCN.Version {
 					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
 						from, currentCN.Version)
 				}
@@ -168,10 +167,10 @@ func (s *service) MaybeUpgradeTenant(
 		if err != nil {
 			return false, err
 		}
-		if !pendingV407 {
+		if pendingPaged == "" {
 			break
 		}
-		changed, err := s.upgradeV407TenantOnDemand(ctx, tenantID)
+		changed, err := s.upgradePagedTenantOnDemand(ctx, tenantID, pendingPaged)
 		if err != nil {
 			return false, err
 		}
@@ -322,7 +321,7 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 
 				hasUpgradeTenants = true
 				h := s.getVersionHandle(upgrade.ToVersion)
-				if h == v4_0_7.Handler {
+				if pagedTenantHandle(h) {
 					selected = &tenantUpgradeSelection{upgrade: upgrade, taskID: taskID, tenants: tenants}
 					return nil
 				}
@@ -415,7 +414,7 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 		}
 		cancel()
 		if selected != nil {
-			if err := s.upgradeV407TenantRange(passCtx, *selected); err != nil {
+			if err := s.upgradePagedTenantRange(passCtx, *selected); err != nil {
 				return false, err
 			}
 		}

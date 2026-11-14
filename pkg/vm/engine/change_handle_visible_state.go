@@ -44,6 +44,43 @@ type VisibleStateRecoveryResources interface {
 }
 
 type visibleStateStartRelationKey struct{}
+type visibleStateBoundaryComparisonKey struct{}
+type visibleStateStartAccountKey struct{}
+
+// WithVisibleStateStartAccount identifies the owner of the protected start relation.
+func WithVisibleStateStartAccount(ctx context.Context, account uint32) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, visibleStateStartAccountKey{}, account)
+}
+
+func VisibleStateStartAccountFromContext(ctx context.Context) (uint32, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	account, ok := ctx.Value(visibleStateStartAccountKey{}).(uint32)
+	return account, ok
+}
+
+// WithVisibleStateBoundaryComparison requests an exact net comparison against
+// the explicitly supplied protected start relation, rather than replaying the
+// range's physical events. It is intended for clone creation, where inherited
+// materialization and user writes can share the same commit timestamp.
+func WithVisibleStateBoundaryComparison(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, visibleStateBoundaryComparisonKey{}, true)
+}
+
+func VisibleStateBoundaryComparisonFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(visibleStateBoundaryComparisonKey{}).(bool)
+	return value
+}
 
 // WithVisibleStateStartRelation supplies the protected lineage boundary that
 // precedes a CollectChanges range. Data Branch uses the parent relation at a

@@ -486,6 +486,48 @@ func TestTxnCmdSingleTNMetadata(t *testing.T) {
 	require.Contains(t, cmd.VerboseString(), "LegacyParticipants=0")
 }
 
+func TestTxnCmdLogicalDMLWAL(t *testing.T) {
+	cmd := NewTxnCmd()
+	cmd.ID = "logical-wal"
+	cmd.StartTS = types.BuildTS(10, 1)
+	cmd.PrepareTS = types.BuildTS(20, 2)
+	cmd.Memo.AddTable(1, 10)
+	legacy, err := cmd.MarshalBinary()
+	require.NoError(t, err)
+	require.EqualValues(t, 5, types.DecodeUint16(legacy[2:4]), "default persisted format must stay V5")
+	old, err := BuildCommandFrom(legacy)
+	require.NoError(t, err)
+	require.False(t, old.(*TxnCmd).Memo.LogicalDMLKnown())
+	require.False(t, old.(*TxnCmd).Memo.LogicalDMLTrackingEnabled())
+	cmd.Memo.EnableLogicalDMLTracking()
+	require.NoError(t, cmd.Memo.RecordLogicalDML(1, 10))
+	data, err := cmd.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, IOET_WALTxnEntry_V6, types.DecodeUint16(data[2:4]))
+	require.Equal(t, legacy[4:], data[4:len(legacy)], "historical fields remain an identical prefix")
+	decoded, err := BuildCommandFrom(data)
+	require.NoError(t, err)
+	current := decoded.(*TxnCmd)
+	require.True(t, current.Memo.LogicalDMLKnown())
+	require.Equal(t, map[uint64]uint64{10: 1}, current.Memo.LogicalDMLTables())
+	require.Equal(t, cmd.ID, current.ID)
+	require.Equal(t, cmd.PrepareTS, current.PrepareTS)
+	require.Empty(t, current.Participants)
+	for size := len(legacy); size < len(data); size++ {
+		_, err = BuildCommandFrom(data[:size])
+		require.Error(t, err, "truncated extension length %d", size-len(legacy))
+	}
+	_, err = BuildCommandFrom(append(append([]byte(nil), data...), 0))
+	require.ErrorContains(t, err, "trailing")
+	old.(*TxnCmd).Memo.EnableLogicalDMLTracking()
+	unknown, err := old.(*TxnCmd).MarshalBinary()
+	require.NoError(t, err)
+	decoded, err = BuildCommandFrom(unknown)
+	require.NoError(t, err)
+	require.False(t, decoded.(*TxnCmd).Memo.LogicalDMLKnown(), "re-encoding cannot manufacture classification")
+	require.Empty(t, decoded.(*TxnCmd).Memo.LogicalDMLTables())
+}
+
 func TestTxnStateCmd_LegacyCodecRegistration(t *testing.T) {
 	require.Equal(t, txnif.TxnState(2), txnif.TxnStatePrepared)
 	require.Equal(t, txnif.TxnState(3), txnif.TxnStateCommittingFinished)

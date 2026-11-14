@@ -64,8 +64,13 @@ type Catalog struct {
 	// A nil pointer means that catalog notifications are detached. Use a
 	// pointer to the interface because atomic.Value cannot store nil, while
 	// replay/write-mode transitions intentionally clear the notifier.
-	mergeNotifier atomic.Pointer[MergeNotifierOnCatalog]
+	mergeNotifier     atomic.Pointer[MergeNotifierOnCatalog]
+	logicalDMLHistory bool
 }
+
+// EnableLogicalDMLHistory is set by the DB owner before recovery or workers start.
+func (catalog *Catalog) EnableLogicalDMLHistory()       { catalog.logicalDMLHistory = true }
+func (catalog *Catalog) LogicalDMLHistoryEnabled() bool { return catalog.logicalDMLHistory }
 
 func MockCatalog(dataFactory DataFactory) *Catalog {
 	catalog := &Catalog{

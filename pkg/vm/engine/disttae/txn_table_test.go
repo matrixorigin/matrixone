@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -1165,6 +1167,27 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
 			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			ctx := defines.AttachAccountId(context.Background(), 1)
+			injected := errors.New("catalog write after schema publication")
+			inventoryWrites := 0
+			sqlExecutor := &inventoryOwnerExecutor{exec: func(_ context.Context, _ string, opts executor.Options) (executor.Result, error) {
+				require.Same(t, workspace.op, opts.Txn())
+				inventoryWrites++
+				if inventoryWrites == 1 {
+					return executor.Result{AffectedRows: 1}, nil
+				}
+				return executor.Result{}, injected
+			}}
+			rt := runtime.ServiceRuntime(workspace.proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+				}
+			})
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
 			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
 			table.extraInfo = &api.SchemaExtra{Checks: []*planpb.CheckDef{original}, AutoIncrEpoch: 9, DefaultCharset: uint32(types.CharsetUTF8MB4Bin)}
@@ -1209,9 +1232,9 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 				require.True(t, proto.Equal(original, table.extraInfo.Checks[0]))
 				return
 			}
-			// This real failure boundary is after publication and before catalog I/O.
-			_, wantErr := defines.GetAccountId(context.Background())
-			require.EqualError(t, table.AlterTable(context.Background(), nil, requests), wantErr.Error())
+			// Admit the first inventory write, then fail catalog retirement after publication.
+			require.ErrorIs(t, table.AlterTable(ctx, nil, requests), injected)
+			require.Equal(t, 2, inventoryWrites)
 			require.Len(t, workspace.restoreTxnTableFunc, 1)
 			require.Len(t, table.extraInfo.Checks, len(expectedChecks))
 			for i, check := range expectedChecks {

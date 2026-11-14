@@ -308,6 +308,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
+			if err = initializeCreatedDatabaseCompatibility(execCtx.reqCtx, ses, st, execCtx.runResult); err != nil {
+				return
+			}
 			// must execute after run to get database id
 			err = grantDatabaseOwnershipAfterCreate(execCtx.reqCtx, ses, st, execCtx.runResult)
 			if err != nil {
@@ -501,22 +504,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				// back, which is what this statement left visible.
 				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
 			}
-		case *tree.CreateDatabase:
-			// CREATE DATABASE publishes one affected row only after the engine
-			// creates the database; IF NOT EXISTS no-ops stay at zero.
-			if databaseWasCreated(execCtx.runResult) {
-				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
-			}
-		case *tree.DropDatabase:
-			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
-			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
-				return execCtx.proc.Base.FileService.Delete(execCtx.reqCtx, path)
-			})
-			if err != nil {
-				return err
-			}
-			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
-
 		case *tree.Load:
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 			if res.lastInsertId != 0 {

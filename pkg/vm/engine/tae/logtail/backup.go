@@ -1121,6 +1121,15 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
+	logical, logicalErr := ReadCheckpointLogicalDML(ctx, version, loc, fs, common.CheckpointAllocator)
+	if logicalErr != nil {
+		return nil, nil, nil, logicalErr
+	}
+	if logical != nil {
+		capCheckpointLogicalDML(logical, ts)
+		newData.logicalDML = logical
+		defer logical.Clean(common.CheckpointAllocator)
+	}
 	location, checkpointFiles, err := newData.Sync(
 		ctx, dstFs,
 	)

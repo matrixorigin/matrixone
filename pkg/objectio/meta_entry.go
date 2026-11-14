@@ -37,5 +37,9 @@ func (e ObjectMeta) MustTombstoneMeta() ObjectDataMeta {
 }
 
 func (e ObjectMeta) SubMeta(pos uint16) (ObjectDataMeta, bool) {
-	return objectMetaV3(e[IOEntryHeaderSize:]).SubMeta(pos)
+	meta := objectMetaV3(e[IOEntryHeaderSize:])
+	if pos >= meta.SubMetaCount() {
+		return nil, false
+	}
+	return meta.SubMeta(pos)
 }

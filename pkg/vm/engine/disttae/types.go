@@ -75,6 +75,7 @@ const (
 	DELETE
 	ALTER              // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
 	SOFT_DELETE_OBJECT // soft delete object command for TN
+	REBASE_SNAPSHOT_DEPENDENCY
 )
 
 type NoteLevel string
@@ -87,10 +88,11 @@ const (
 
 var (
 	typesNames = map[int]string{
-		INSERT:             "insert",
-		DELETE:             "delete",
-		ALTER:              "alter",
-		SOFT_DELETE_OBJECT: "soft_delete_object",
+		INSERT:                     "insert",
+		DELETE:                     "delete",
+		ALTER:                      "alter",
+		SOFT_DELETE_OBJECT:         "soft_delete_object",
+		REBASE_SNAPSHOT_DEPENDENCY: "rebase_snapshot_dependency",
 	}
 )
 
@@ -739,13 +741,16 @@ type Transaction struct {
 	incrStatementCalled  bool
 	pkCount              int
 
-	haveDDL             atomic.Bool
-	isCloneTxn          bool
-	loadFiles           map[int]map[string]struct{}
-	loadCleanupTimeout  time.Duration
-	isCCPRTxn           bool
-	ccprTaskID          string
-	syncProtectionJobID string
+	haveDDL atomic.Bool
+	// Positive hint only: statement rollback can remove every dependency.
+	// Active entries remain authoritative when the hint is set.
+	hasRebaseSnapshotDependencies bool
+	isCloneTxn                    bool
+	loadFiles                     map[int]map[string]struct{}
+	loadCleanupTimeout            time.Duration
+	isCCPRTxn                     bool
+	ccprTaskID                    string
+	syncProtectionJobID           string
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
@@ -2099,8 +2104,9 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names       map[tableKey][]tableOp
-	creatdInTxn map[uint64]int // tableId -> statementId
+	names              map[tableKey][]tableOp
+	creatdInTxn        map[uint64]int // tableId -> statementId
+	privateInventories []privateInventoryObligation
 }
 
 type dbOp struct {

@@ -31,6 +31,10 @@ type TenantUpgradeRunner func(operation string, limit uint64, adjustable bool, w
 // upgrades. Supplied transactions retain atomicity; service-owned transactions
 // commit each operation. No durable progress exists beyond the account version.
 func (v *versionHandle) UpgradeTenant(ctx context.Context, accountID int32, objectLimit uint64, run TenantUpgradeRunner) (bool, error) {
+	active, err := versions.UpgradeDatabaseInventory(ctx, accountID, objectLimit, run)
+	if err != nil || !active {
+		return false, err
+	}
 	for index := 0; index < v.TenantUpgradeEntryCount(); index++ {
 		var cursor TenantPageCursor
 		for {

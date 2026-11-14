@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -55,6 +57,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// These reduced schemas support the database-retirement predicates in engine tests.
+const (
+	DatabaseRetirementProcedureDDL     = "create table mo_catalog.mo_stored_procedure (id bigint primary key, db varchar(100))"
+	DatabaseRetirementFunctionDDL      = "create table mo_catalog.mo_user_defined_function (id bigint primary key, db varchar(100))"
+	DatabaseRetirementCompatibilityDDL = "create table mo_catalog.mo_mysql_compatibility_mode (id bigint primary key, account_id int, dat_name varchar(5000))"
 )
 
 type TestDisttaeEngine struct {
@@ -242,6 +251,100 @@ func NewTestDisttaeEngine(
 	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
 		return de, err
 	}
+	fixtureReady := false
+	defer func() {
+		if !fixtureReady {
+			stopNotify()
+			de.Close(context.WithoutCancel(ctx))
+		}
+	}()
+
+	// This fixture skips frontend bootstrap. Build the real inventory definition
+	// without requiring mo_indexes, which individual engine tests own themselves.
+	systemCtx := context.WithValue(de.ctx, defines.TenantIDKey{}, catalog.System_Account)
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(systemCtx, time.Minute)
+	defer cancelBootstrap()
+	// The construction notifier only unblocks the pre-logtail transaction.
+	// Let the real logtail catch up before using its waiter for bootstrap.
+	initialFrontier := de.timestampWaiter.LatestTS()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !de.Engine.PushClient().LatestLogtailAppliedTime().GreaterEq(initialFrontier) {
+		select {
+		case <-bootstrapCtx.Done():
+			return de, bootstrapCtx.Err()
+		case <-ticker.C:
+		}
+	}
+	bootstrap, err := de.txnClient.New(bootstrapCtx, types.TS{}.ToTimestamp())
+	if err != nil {
+		return de, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(bootstrapCtx), 10*time.Second)
+			defer cancel()
+			_ = bootstrap.Rollback(rollbackCtx)
+		}
+	}()
+	if err = de.Engine.New(bootstrapCtx, bootstrap); err != nil {
+		return de, err
+	}
+	database, err := de.Engine.Database(bootstrapCtx, catalog.MO_CATALOG, bootstrap)
+	if err != nil {
+		return de, err
+	}
+	createFixture := func(name, temporaryName, ddl string) error {
+		temporaryDDL := strings.Replace(ddl, name, temporaryName, 1)
+		result, err := sqlExecutor.Exec(bootstrapCtx, temporaryDDL, executor.Options{}.WithTxn(bootstrap).
+			WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
+		if err != nil {
+			return err
+		}
+		result.Close()
+		temporary, err := database.Relation(bootstrapCtx, temporaryName, nil)
+		if err != nil {
+			return err
+		}
+		defs, err := temporary.TableDefs(bootstrapCtx)
+		if err != nil {
+			return err
+		}
+		for _, def := range defs {
+			if properties, ok := def.(*engine.PropertiesDef); ok {
+				for i := range properties.Properties {
+					if properties.Properties[i].Key == catalog.SystemRelAttr_CreateSQL {
+						properties.Properties[i].Value = ddl
+					}
+				}
+			}
+		}
+		if err = database.Create(bootstrapCtx, name, defs); err != nil {
+			return err
+		}
+		return database.Delete(bootstrapCtx, temporaryName)
+	}
+	if err = createFixture(catalog.MODatabaseInventory, "mo_indexes_inventory_fixture", catalog.MoDatabaseInventoryDDL); err != nil {
+		return de, err
+	}
+	// The raw engine fixture has no frontend catalog bootstrap. These reduced
+	// definitions provide only the predicates used when retiring a database;
+	// they are not a substitute for the full routine and compatibility schemas.
+	for _, fixture := range []struct{ name, temporary, ddl string }{
+		{"mo_stored_procedure", "mo_indexes_procedure_fixture", DatabaseRetirementProcedureDDL},
+		{"mo_user_defined_function", "mo_indexes_function_fixture", DatabaseRetirementFunctionDDL},
+		{"mo_mysql_compatibility_mode", "mo_indexes_compatibility_fixture", DatabaseRetirementCompatibilityDDL},
+	} {
+		if err = createFixture(fixture.name, fixture.temporary, fixture.ddl); err != nil {
+			return de, err
+		}
+	}
+	if err = bootstrap.Commit(bootstrapCtx); err != nil {
+		return de, err
+	}
+	committed = true
+	fixtureReady = true
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil

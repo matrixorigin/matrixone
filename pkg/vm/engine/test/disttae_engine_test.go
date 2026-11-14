@@ -197,42 +197,105 @@ func TestSystemDB1(t *testing.T) {
 
 	table, err = catalogDB.GetRelationByName(catalog.MO_TABLES)
 	require.Nil(t, err)
+	tableSchema = table.GetMeta().(*catalog2.TableEntry).GetLastestSchema(false)
 	it = table.MakeObjectIt(false)
+	tableRows := 0
 	for it.Next() {
 		blk := it.GetObject()
-		var view *containers.Batch
-		err := blk.Scan(p.Ctx, &view, 0, []int{
-			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
-		require.Nil(t, err)
-		require.Equal(t, 1, view.Length())
-		view.Close()
-		view = nil
-		err = blk.Scan(p.Ctx, &view, 0, []int{
-			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
-		require.NoError(t, err)
-		defer view.Close()
-		require.Equal(t, 1, view.Length())
+		matches := [2]int{}
+		for scan := range matches {
+			var view *containers.Batch
+			err := blk.Scan(p.Ctx, &view, 0, []int{
+				tableSchema.GetColIdx(catalog.SystemRelAttr_DBName),
+				tableSchema.GetColIdx(catalog.SystemRelAttr_Name)}, common.DefaultAllocator)
+			require.NoError(t, err)
+			dbs, names := view.GetVectorByName(catalog.SystemRelAttr_DBName), view.GetVectorByName(catalog.SystemRelAttr_Name)
+			for i := 0; i < view.Length(); i++ {
+				if string(dbs.Get(i).([]byte)) == "db2" && string(names.Get(i).([]byte)) == schema.Name {
+					matches[scan]++
+				}
+			}
+			view.Close()
+		}
+		require.Equal(t, matches[0], matches[1], "repeated catalog scans must agree")
+		tableRows += matches[0]
 	}
+	require.Equal(t, 1, tableRows)
 
 	table, err = catalogDB.GetRelationByName(catalog.MO_COLUMNS)
 	require.Nil(t, err)
 	tableSchema = table.GetMeta().(*catalog2.TableEntry).GetLastestSchema(false)
-	var bat *containers.Batch
 	it = table.MakeObjectIt(false)
+	var columnNames []string
 	for it.Next() {
 		blk := it.GetObject()
+		var bat *containers.Batch
 		err := blk.Scan(p.Ctx, &bat, 0, []int{
 			tableSchema.GetColIdx(catalog.SystemColAttr_DBName),
 			tableSchema.GetColIdx(catalog.SystemColAttr_RelName),
 			tableSchema.GetColIdx(catalog.SystemColAttr_Name)}, common.DefaultAllocator)
 		require.NoError(t, err)
+		dbs, names := bat.GetVectorByName(catalog.SystemColAttr_DBName), bat.GetVectorByName(catalog.SystemColAttr_RelName)
+		columns := bat.GetVectorByName(catalog.SystemColAttr_Name)
+		for i := 0; i < bat.Length(); i++ {
+			if string(dbs.Get(i).([]byte)) == "db2" && string(names.Get(i).([]byte)) == schema.Name {
+				columnNames = append(columnNames, string(columns.Get(i).([]byte)))
+			}
+		}
+		bat.Close()
 	}
-	require.Equal(t, 3, bat.Length())
-	t.Log(bat.PPString(10))
-	bat.Close()
+	expectedColumns := make([]string, 0, len(schema.ColDefs))
+	for _, column := range schema.ColDefs {
+		expectedColumns = append(expectedColumns, column.Name)
+	}
+	require.ElementsMatch(t, expectedColumns, columnNames)
 }
 
 type dummyCpkGetter struct{}
+
+// Object metadata entries are emitted only when they changed in the
+// requested interval; locate the required row changes by type instead.
+func requireLogtailRowChange(t *testing.T, resp api.SyncLogTailResp, typ api.Entry_EntryType) *api.Entry {
+	t.Helper()
+	var found *api.Entry
+	for _, entry := range resp.Commands {
+		require.NotNil(t, entry)
+		switch entry.EntryType {
+		case api.Entry_DataObject, api.Entry_TombstoneObject, api.Entry_Insert, api.Entry_Delete:
+		default:
+			t.Fatalf("unexpected logtail entry type %v", entry.EntryType)
+		}
+		if entry.EntryType == typ {
+			require.Nil(t, found, "multiple logtail entries of type %v", typ)
+			found = entry
+		}
+	}
+	require.NotNil(t, found, "missing logtail entry of type %v", typ)
+	require.NotNil(t, found.Bat)
+	return found
+}
+
+func requireLogtailColumn(t *testing.T, bat *api.Batch, name string) *vector.Vector {
+	t.Helper()
+	for i, attr := range bat.Attrs {
+		if attr == name {
+			col, err := vector.ProtoVectorToVector(bat.Vecs[i])
+			require.NoError(t, err)
+			return col
+		}
+	}
+	t.Fatalf("missing logtail column %s", name)
+	return nil
+}
+
+func registerLogtailClose(t *testing.T, fn func()) func() {
+	t.Helper()
+	require.NotNil(t, fn)
+	var once sync.Once
+	closeOnce := func() { once.Do(fn) }
+	t.Cleanup(closeOnce)
+	return closeOnce
+}
 
 func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error) {
 	return "", types.TS{}, nil
@@ -254,6 +317,7 @@ func TestLogtailBasic(t *testing.T) {
 	defer p.Close()
 	tae := p.T.GetDB()
 	logMgr := tae.LogtailMgr
+	catalogStart := types.TimestampToTS(p.D.Now())
 
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
@@ -362,62 +426,78 @@ func TestLogtailBasic(t *testing.T) {
 			require.Equal(t, expect, col.Length(), "columns %d", i)
 		}
 	}
-
 	// get db catalog change
 	resp, close, err := logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(minTs),
+		CnHave: totsp(catalogStart),
 		CnWant: &catalogDropTs,
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_DATABASE_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
-
-	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 db
-	datname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // datname column
-	require.NoError(t, err)
+	close = registerLogtailClose(t, close)
+	dbInsert := requireLogtailRowChange(t, resp, api.Entry_Insert)
+	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(dbInsert.Bat.Vecs))
+	check_same_rows(dbInsert.Bat, 2) // 2 db
+	datname := requireLogtailColumn(t, dbInsert.Bat, catalog.SystemDBAttr_Name)
 	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
 	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
-	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs))
-	check_same_rows(resp.Commands[3].Bat, 1) // 1 drop db
+	dbDelete := requireLogtailRowChange(t, resp, api.Entry_Delete)
+	require.Equal(t, fixedColCnt+2, len(dbDelete.Bat.Vecs))
+	check_same_rows(dbDelete.Bat, 1) // 1 drop db
 
 	close()
 
 	// get table catalog change
 	resp, close, err = logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(minTs),
+		CnHave: totsp(catalogStart),
 		CnWant: &catalogDropTs,
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
-	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 tables
-	relname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // relname column
-	require.NoError(t, err)
-	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
-	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
+	close = registerLogtailClose(t, close)
+	tableInsert := requireLogtailRowChange(t, resp, api.Entry_Insert)
+	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(tableInsert.Bat.Vecs))
+	check_same_rows(tableInsert.Bat, 2) // 2 tables
+	relname := requireLogtailColumn(t, tableInsert.Bat, catalog.SystemRelAttr_Name)
+	reldb := requireLogtailColumn(t, tableInsert.Bat, catalog.SystemRelAttr_DBName)
+	require.ElementsMatch(t, []string{"todrop." + schema.Name, "db." + schema.Name}, []string{
+		reldb.UnsafeGetStringAt(0) + "." + relname.UnsafeGetStringAt(0),
+		reldb.UnsafeGetStringAt(1) + "." + relname.UnsafeGetStringAt(1),
+	})
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
-	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
-	check_same_rows(resp.Commands[3].Bat, 1)                        // 1 drop table
+	tableDelete := requireLogtailRowChange(t, resp, api.Entry_Delete)
+	require.Equal(t, fixedColCnt+2, len(tableDelete.Bat.Vecs)) // rowid + commit_ts + delete_rowid + pk
+	check_same_rows(tableDelete.Bat, 1)                        // 1 drop table
 	close()
 
 	// get columns catalog change
 	resp, close, err = logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(minTs),
+		CnHave: totsp(catalogStart),
 		CnWant: &catalogDropTs,
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
-	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	close = registerLogtailClose(t, close)
+	columnInsert := requireLogtailRowChange(t, resp, api.Entry_Insert)
+	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(columnInsert.Bat.Vecs))
+	check_same_rows(columnInsert.Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	columnDB := requireLogtailColumn(t, columnInsert.Bat, catalog.SystemColAttr_DBName)
+	columnTable := requireLogtailColumn(t, columnInsert.Bat, catalog.SystemColAttr_RelName)
+	columnName := requireLogtailColumn(t, columnInsert.Bat, catalog.SystemColAttr_Name)
+	expectedColumns := make([]string, 0, len(schema.ColDefs)*2)
+	for _, db := range []string{"todrop", "db"} {
+		for _, def := range schema.ColDefs {
+			expectedColumns = append(expectedColumns, db+"."+schema.Name+"."+def.Name)
+		}
+	}
+	actualColumns := make([]string, 0, len(expectedColumns))
+	for i := 0; i < columnName.Length(); i++ {
+		actualColumns = append(actualColumns, columnDB.UnsafeGetStringAt(i)+"."+columnTable.UnsafeGetStringAt(i)+"."+columnName.UnsafeGetStringAt(i))
+	}
+	require.ElementsMatch(t, expectedColumns, actualColumns)
+	columnDelete := requireLogtailRowChange(t, resp, api.Entry_Delete)
+	require.Equal(t, fixedColCnt+2, len(columnDelete.Bat.Vecs))
+	check_same_rows(columnDelete.Bat, len(schema.ColDefs))
 	close()
 
 	// get user table change
@@ -427,11 +507,10 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
+	close = registerLogtailClose(t, close)
 
 	// check data change
-	insDataEntry := resp.Commands[2]
-	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
+	insDataEntry := requireLogtailRowChange(t, resp, api.Entry_Insert)
 	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
 	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
 	// test first user col, this is probably fragile, it depends on the details of MockSchema
@@ -440,8 +519,7 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	require.NoError(t, err)
 
-	delDataEntry := resp.Commands[3]
-	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
+	delDataEntry := requireLogtailRowChange(t, resp, api.Entry_Delete)
 	require.Equal(t, fixedColCnt+2, len(delDataEntry.Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
 	check_same_rows(delDataEntry.Bat, 10)
 
@@ -469,6 +547,7 @@ func TestAlterTableBasic(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
+	catalogStart := types.TimestampToTS(p.D.Now())
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -503,30 +582,43 @@ func TestAlterTableBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	resp, close, _ := logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(types.BuildTS(0, 0)),
+	resp, close, err := logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: totsp(catalogStart),
 		CnWant: totsp(types.MaxTs()),
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
-
-	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
-	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
+	require.NoError(t, err)
+	close = registerLogtailClose(t, close)
+	insert := requireLogtailRowChange(t, resp, api.Entry_Insert)
+	cstrCol := requireLogtailColumn(t, insert.Bat, catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
+	relDB := requireLogtailColumn(t, insert.Bat, catalog.SystemRelAttr_DBName)
+	relName := requireLogtailColumn(t, insert.Bat, catalog.SystemRelAttr_Name)
+	require.Equal(t, 3, relDB.Length())
+	require.Equal(t, 3, relName.Length())
+	for i := 0; i < 3; i++ {
+		require.False(t, cstrCol.IsNull(uint64(i)))
+		require.Equal(t, "db", relDB.UnsafeGetStringAt(i))
+		require.Equal(t, "test", relName.UnsafeGetStringAt(i))
+	}
 	c1, err := cstr1.MarshalBinary()
 	require.NoError(t, err)
 	c2, err := cstr2.MarshalBinary()
 	require.NoError(t, err)
-	require.Equal(t, []byte{}, cstrCol.Get(0).([]byte))
-	require.Equal(t, c1, cstrCol.Get(1).([]byte))
-	require.Equal(t, c2, cstrCol.Get(2).([]byte))
+	require.Empty(t, cstrCol.GetBytesAt(0))
+	require.Equal(t, c1, cstrCol.GetBytesAt(1))
+	require.Equal(t, c2, cstrCol.GetBytesAt(2))
 
-	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
-	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte(initComment), commetCol.Get(0).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+	commentCol := requireLogtailColumn(t, insert.Bat, catalog.SystemRelAttr_Comment)
+	require.Equal(t, 3, commentCol.Length())
+	for i := 0; i < 3; i++ {
+		require.False(t, commentCol.IsNull(uint64(i)))
+	}
+	require.Equal(t, []byte(initComment), commentCol.GetBytesAt(0))
+	require.Equal(t, []byte("comment version 1"), commentCol.GetBytesAt(1))
+	require.Equal(t, []byte("comment version 1"), commentCol.GetBytesAt(2))
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
+	requireLogtailRowChange(t, resp, api.Entry_Delete)
 
 	close()
 
@@ -535,15 +627,29 @@ func TestAlterTableBasic(t *testing.T) {
 	require.NoError(t, db.Delete(p.Ctx, "test"))
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	resp, close, _ = logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(types.BuildTS(0, 0)),
+	resp, close, err = logtail.HandleSyncLogTailReq(p.Ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: totsp(catalogStart),
 		CnWant: totsp(types.MaxTs()),
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
 	}, true)
-
-	require.Equal(t, 4, len(resp.Commands)) // create and drop
-	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
+	require.NoError(t, err)
+	close = registerLogtailClose(t, close)
+	insert = requireLogtailRowChange(t, resp, api.Entry_Insert)
+	columnDB := requireLogtailColumn(t, insert.Bat, catalog.SystemColAttr_DBName)
+	columnTable := requireLogtailColumn(t, insert.Bat, catalog.SystemColAttr_RelName)
+	columnName := requireLogtailColumn(t, insert.Bat, catalog.SystemColAttr_Name)
+	gotColumns := make(map[string]struct{}, len(schema.ColDefs))
+	for i := 0; i < columnName.Length(); i++ {
+		if columnDB.UnsafeGetStringAt(i) == "db" && columnTable.UnsafeGetStringAt(i) == "test" {
+			gotColumns[columnName.UnsafeGetStringAt(i)] = struct{}{}
+		}
+	}
+	wantColumns := make(map[string]struct{}, len(schema.ColDefs))
+	for _, def := range schema.ColDefs {
+		wantColumns[def.Name] = struct{}{}
+	}
+	require.Equal(t, wantColumns, gotColumns)
+	requireLogtailRowChange(t, resp, api.Entry_Delete)
 	close()
 }
 
@@ -819,6 +925,148 @@ func TestCacheGC(t *testing.T) {
 	require.Equal(t, 4, r.TStaleItem)
 	require.Equal(t, 2 /*test2 & test 4*/, r.TStaleCpk)
 
+}
+
+func TestPrivateAlterCopyRealInventoryFence(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	op := p.StartCNTxn()
+	p.CreateDB(op, "private_inventory_db")
+	require.NoError(t, op.Commit(p.Ctx))
+
+	defs, err := catalog2.SchemaToDefs(catalog2.MockSchemaAll(2, -1))
+	require.NoError(t, err)
+	op = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	handled, err := disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "unfenced", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
+	private, err := db.Relation(p.Ctx, "unfenced", nil)
+	require.NoError(t, err)
+	require.NoError(t, private.AlterTable(p.Ctx, nil, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(private.GetDBID(p.Ctx), private.GetTableID(p.Ctx), 7, 0),
+	}))
+	require.Error(t, op.Commit(p.Ctx), "a private CREATE cannot commit without the shared inventory fence")
+	_ = op.Rollback(p.Ctx)
+
+	op = p.StartCNTxn()
+	db, err = p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	_, err = db.Relation(p.Ctx, "unfenced", nil)
+	require.Error(t, err, "the rejected private relation must not become visible")
+	handled, err = disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "fenced", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
+	private, err = db.Relation(p.Ctx, "fenced", nil)
+	require.NoError(t, err)
+	require.NoError(t, private.AlterTable(p.Ctx, nil, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(private.GetDBID(p.Ctx), private.GetTableID(p.Ctx), 9, 0),
+	}))
+	handled, err = disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "fenced_index", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(p.Ctx, "public_fence", defs), "public CREATE advances the epoch in the same transaction")
+	require.NoError(t, op.Commit(p.Ctx))
+
+	op = p.StartCNTxn()
+	db, err = p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	for _, name := range []string{"fenced", "fenced_index", "public_fence"} {
+		rel, err := db.Relation(p.Ctx, name, nil)
+		require.NoError(t, err)
+		if name == "fenced" {
+			require.EqualValues(t, 9, rel.GetTableDef(p.Ctx).AutoIncrOffset)
+		}
+	}
+	require.NoError(t, op.Commit(p.Ctx))
+}
+
+func TestEngineInventoryFixture(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	op := p.StartCNTxn()
+	catalogDB, err := p.D.Engine.Database(p.Ctx, catalog.MO_CATALOG, op)
+	require.NoError(t, err)
+	inventory, err := catalogDB.Relation(p.Ctx, catalog.MODatabaseInventory, nil)
+	require.NoError(t, err)
+	key := inventory.GetTableDef(p.Ctx).Pkey
+	require.NotNil(t, key)
+	require.Equal(t, []string{"account_id", "database_id"}, key.Names)
+	require.Equal(t, catalog.CPrimaryKeyColName, key.PkeyColName)
+	for _, name := range []string{"mo_indexes_inventory_fixture", "mo_indexes_procedure_fixture", "mo_indexes_function_fixture", "mo_indexes_compatibility_fixture"} {
+		_, err = catalogDB.Relation(p.Ctx, name, nil)
+		require.Error(t, err, "bootstrap-only relation %s must be removed", name)
+	}
+	require.NoError(t, op.Commit(p.Ctx))
+
+	schema := catalog2.MockSchemaAll(2, -1)
+	schema.Name = "fixture_t"
+	op = p.StartCNTxn()
+	db, _ := p.CreateDBAndTable(op, "inventory_fixture_db", schema)
+	databaseID := db.GetDatabaseId(p.Ctx)
+	require.NoError(t, op.Commit(p.Ctx))
+
+	internal, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	sqlExecutor := internal.(executor.SQLExecutor)
+	epochs := func() []uint64 {
+		query := fmt.Sprintf("select epoch from mo_catalog.mo_database_inventory where account_id=0 and database_id=%s", databaseID)
+		result, err := sqlExecutor.Exec(p.Ctx, query, executor.Options{})
+		require.NoError(t, err)
+		defer result.Close()
+		var epochs []uint64
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				epochs = append(epochs, vector.GetFixedAtNoTypeCheck[uint64](cols[0], i))
+			}
+			return true
+		})
+		return epochs
+	}()
+	require.Equal(t, []uint64{2}, epochs, "create database initializes and create table advances the same row")
+
+	for _, query := range []string{
+		"insert into mo_catalog.mo_stored_procedure (id, db) values (1, 'inventory_fixture_db'), (2, 'other_db')",
+		"insert into mo_catalog.mo_user_defined_function (id, db) values (1, 'inventory_fixture_db'), (2, 'other_db')",
+		"insert into mo_catalog.mo_mysql_compatibility_mode (id, account_id, dat_name) values (1, 0, 'inventory_fixture_db'), (2, 0, 'other_db'), (3, 1, 'inventory_fixture_db')",
+	} {
+		result, err := sqlExecutor.Exec(p.Ctx, query, executor.Options{})
+		require.NoError(t, err)
+		result.Close()
+	}
+	op = p.StartCNTxn()
+	require.NoError(t, p.D.Engine.Delete(p.Ctx, "inventory_fixture_db", op))
+	require.NoError(t, op.Commit(p.Ctx))
+
+	for _, check := range []struct {
+		query string
+		want  int64
+	}{
+		{"select count(*) from mo_catalog.mo_stored_procedure where db = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_stored_procedure where db = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_user_defined_function where db = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_user_defined_function where db = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 0 and dat_name = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 0 and dat_name = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 1 and dat_name = 'inventory_fixture_db'", 1},
+	} {
+		func() {
+			result, err := sqlExecutor.Exec(p.Ctx, check.query, executor.Options{})
+			require.NoError(t, err)
+			defer result.Close()
+			var counts []int64
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					counts = append(counts, vector.GetFixedAtNoTypeCheck[int64](cols[0], i))
+				}
+				return true
+			})
+			require.Equal(t, []int64{check.want}, counts, check.query)
+		}()
+	}
 }
 
 func TestShowDatabasesInRestoreTxn(t *testing.T) {

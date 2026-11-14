@@ -22,6 +22,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateRebaseSnapshotRequestRoundTrip(t *testing.T) {
+	want := NewValidateRebaseSnapshotReq(7, 42, 123456)
+	data, err := proto.Marshal(want)
+	require.NoError(t, err)
+	var got AlterTableReq
+	require.NoError(t, proto.Unmarshal(data, &got))
+	require.Equal(t, uint64(7), got.DbId)
+	require.Equal(t, uint64(42), got.TableId)
+	require.Equal(t, AlterKind_ValidateRebaseSnapshot, got.Kind)
+	require.NotNil(t, got.GetValidateRebaseSnapshot())
+	require.Equal(t, int64(123456), got.GetValidateRebaseSnapshot().PhysicalTime)
+	require.Nil(t, got.GetUpdateAutoIncrement())
+}
+
 // alterTableRenameColV14 models the receiver before the checks field was added.
 // Protobuf compatibility permits that receiver to decode the request while its
 // generated type cannot expose the new field to the alter handler, which is why

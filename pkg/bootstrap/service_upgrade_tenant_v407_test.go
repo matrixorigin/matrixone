@@ -52,7 +52,7 @@ func TestV407TaskCompletionAfterLastAccountCommit(t *testing.T) {
 			case strings.HasPrefix(sql, "select account_id, create_version from mo_account"):
 				return ownRecoveryResult(t, buildUpgradeTenantAccountRows([]int32{1, 2}, accountVersions)), nil
 			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "for update"):
-				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, "4.0.6", "4.0.7", 41, 0, versions.Yes, versions.Yes, 2, 2)), nil
+				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, "4.0.6", "4.0.7", v4_0_7.Handler.Metadata().VersionOffset, 0, versions.Yes, versions.Yes, 2, 2)), nil
 			case strings.HasPrefix(sql, "update mo_upgrade_tenant set ready = 1"):
 				taskReady = versions.Yes
 				taskUpdates++
@@ -65,12 +65,12 @@ func TestV407TaskCompletionAfterLastAccountCommit(t *testing.T) {
 		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(*service) {})
 		t.Cleanup(s.stopper.Stop)
 		selected := tenantUpgradeSelection{upgrade: versions.VersionUpgrade{ID: 10, FromVersion: "4.0.6", ToVersion: "4.0.7"}, taskID: 20}
-		require.NoError(t, s.finishV407TenantTask(t.Context(), selected))
+		require.NoError(t, s.finishPagedTenantTask(t.Context(), selected))
 		require.Zero(t, taskUpdates, "matching counters must not publish a task containing an old account")
 		accountVersions[1] = "4.0.7"
-		require.NoError(t, s.finishV407TenantTask(t.Context(), selected))
+		require.NoError(t, s.finishPagedTenantTask(t.Context(), selected))
 		require.Equal(t, 1, taskUpdates, "a restart after the final account commit must finish the task")
-		require.NoError(t, s.finishV407TenantTask(t.Context(), selected))
+		require.NoError(t, s.finishPagedTenantTask(t.Context(), selected))
 		require.Equal(t, 1, taskUpdates, "a repeated completion must be a no-op")
 	})
 }
@@ -145,7 +145,7 @@ func TestV407AccountTransactionsOverrideCallingTenant(t *testing.T) {
 		t.Cleanup(s.stopper.Stop)
 		ctx := context.WithValue(t.Context(), defines.TenantIDKey{}, uint32(7))
 		worked := false
-		active, err := s.withV407Account(ctx, versions.VersionUpgrade{FromVersion: "4.0.6", ToVersion: "4.0.7"}, 7, func(executor.TxnExecutor) error { worked = true; return nil })
+		active, err := s.withPagedTenantAccount(ctx, versions.VersionUpgrade{FromVersion: "4.0.6", ToVersion: "4.0.7"}, 7, func(executor.TxnExecutor) error { worked = true; return nil })
 		require.NoError(t, err)
 		require.True(t, active)
 		require.True(t, worked)

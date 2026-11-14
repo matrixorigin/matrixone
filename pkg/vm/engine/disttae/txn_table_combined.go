@@ -471,6 +471,16 @@ func (t *combinedTxnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
+	if engine.VisibleStateBoundaryComparisonFromContext(ctx) {
+		start := engine.VisibleStateStartRelationFromContext(ctx)
+		resources := engine.VisibleStateRecoveryResourcesFromContext(ctx)
+		if t.primary == nil || start == nil || resources == nil || !from.EQ(&to) {
+			return nil, moerr.NewInternalErrorNoCtx("creation boundary comparison requires one timestamp, a protected parent and bounded resources")
+		}
+		// Compare logical tables once. Passing the whole parent to each child
+		// would classify rows in every other partition as deletions.
+		return NewVisibleStateChangesHandle(ctx, t.primary, from, to, skipDeletes, objectio.BlockMaxRows, mp, resources, start)
+	}
 	tables, err := t.tablesFunc()
 	if err != nil {
 		return nil, err

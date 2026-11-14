@@ -61,7 +61,12 @@ type TableEntry struct {
 	// epoch-aware DML. An AUTO_INCREMENT reset uses it to reject a snapshot
 	// that did not observe a later durable write.
 	latestKnownDMLPrepare atomic.Pointer[types.TS]
-	replayedPreparedDML   struct {
+	rebaseLogicalDML      struct {
+		sync.Mutex
+		committed types.TS
+		pending   map[string]struct{}
+	}
+	replayedPreparedDML struct {
 		sync.Mutex
 		txns map[string]struct{}
 	}

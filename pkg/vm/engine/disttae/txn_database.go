@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -178,7 +179,7 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
-	_, err := db.deleteTable(ctx, name, false, false)
+	_, err := db.deleteTable(ctx, name, false, false, false)
 	return err
 }
 
@@ -190,7 +191,14 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // 2. useAlterNote means that the batch sent to TN will be just used
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
-func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) ([]engine.TableDef, error) {
+func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool, privateInventory bool) ([]engine.TableDef, error) {
+	if !privateInventory {
+		if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+			return nil, err
+		}
+	} else if !forAlter || useAlterNote {
+		return nil, moerr.NewInternalError(ctx, "invalid private ALTER COPY metadata replacement")
+	}
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
@@ -227,6 +235,10 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	defs = toDelTbl.defs
 	id = toDelTbl.tableId
+	if privateInventory && (txn.tableOps == nil || accountId != db.accountId ||
+		!txn.tableOps.ownsPrivateInventory(accountId, db.databaseId, id)) {
+		return nil, moerr.NewInternalError(ctx, "private ALTER COPY metadata replacement has no matching owner")
+	}
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
@@ -369,6 +381,39 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	return db.create(ctx, name, defs, false)
+}
+
+// TryCreatePrivateAlterCopy is only for the compiler's validated,
+// transaction-private ALTER COPY replica. Commit is rejected unless a
+// subsequent real inventory update fences this database in the same owner.
+// Other engine implementations retain their ordinary Create path.
+func TryCreatePrivateAlterCopy(ctx context.Context, database engine.Database, owner client.TxnOperator, databaseName, name string, defs []engine.TableDef) (bool, error) {
+	db, ok := database.(*txnDatabase)
+	if !ok {
+		return false, nil
+	}
+	if db == nil {
+		return true, moerr.NewInternalError(ctx, "nil private ALTER COPY database")
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return true, err
+	}
+	if owner == nil || db.op != owner || owner.IsSnapOp() || db.databaseId == 0 ||
+		db.databaseName != databaseName || db.accountId != accountID || name == "" {
+		return true, moerr.NewInternalError(ctx, "invalid private ALTER COPY database owner")
+	}
+	if inventorySystemDatabase(databaseName) {
+		return false, nil
+	}
+	if _, err = txnIsValid(owner); err != nil {
+		return true, err
+	}
+	return true, db.create(ctx, name, defs, true)
+}
+
+func (db *txnDatabase) create(ctx context.Context, name string, defs []engine.TableDef, privateInventory bool) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
 	if db.op.IsSnapOp() {
@@ -399,7 +444,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		logicalId = logicalIdFromCtx.(uint64)
 		replaceLogicalIdIndex = true
 	}
-	return db.createWithID(ctx, name, tableId, logicalId, replaceLogicalIdIndex, defs, false, nil, nil)
+	return db.createWithID(ctx, name, tableId, logicalId, replaceLogicalIdIndex, defs, false, nil, nil, privateInventory)
 }
 
 type tableCatalogOwnership struct {
@@ -418,6 +463,7 @@ func (db *txnDatabase) createWithID(
 	useAlterNote bool,
 	extra *api.SchemaExtra,
 	preservedOwnership *tableCatalogOwnership,
+	privateInventory bool,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
@@ -428,6 +474,14 @@ func (db *txnDatabase) createWithID(
 	}
 	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
+	if privateInventory {
+		if txn.tableOps == nil {
+			return moerr.NewInternalError(ctx, "private ALTER COPY requires a transaction inventory owner")
+		}
+		txn.tableOps.addPrivateInventory(accountId, db.databaseId, tableId, txn.statementID)
+	} else if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+		return err
+	}
 	m := txn.proc.Mp()
 
 	// 1. inspect and **modify** defs, and construct columns

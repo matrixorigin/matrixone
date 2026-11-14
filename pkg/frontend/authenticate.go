@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	runutil "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -943,6 +944,7 @@ var (
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
 		catalog.MODatabaseDefaults:    0,
+		catalog.MODatabaseInventory:   0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
@@ -985,6 +987,7 @@ var (
 		"mo_stored_procedure":           0,
 		"mo_mysql_compatibility_mode":   0,
 		catalog.MODatabaseDefaults:      0,
+		catalog.MODatabaseInventory:     0,
 		catalog.MOAutoIncrTable:         0,
 		"mo_indexes":                    0,
 		"mo_table_partitions":           0,
@@ -1046,6 +1049,7 @@ var (
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		catalog.MoDatabaseDefaultsDDL,
+		catalog.MoDatabaseInventoryDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -1096,8 +1100,6 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
-		`drop table if exists mo_catalog.mo_user_defined_function;`,
-		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
@@ -1129,13 +1131,6 @@ var (
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 	dropPartitionMetadata           = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
 	dropPartitionTables             = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionTables)
-
-	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
-		account_id,
-		account_name,
-		dat_name,
-		variable_name,
-		variable_value, system_variables) values (%d, "%s", "%s", "%s", "%s", %v);`
 
 	insertIntoMoStages = `insert into mo_catalog.mo_stages(
 		stage_name,
@@ -1582,15 +1577,11 @@ const (
 
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
-	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
-
 	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s order by function_id;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
 	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
-
-	deleteProcedureUsingDB = `delete from mo_catalog.mo_stored_procedure where db = '%s';`
 
 	// delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d order by role_id;`
@@ -1635,9 +1626,6 @@ const (
 	// delete stored procedure from mo_user_defined_function
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
-	// delete a tuple from mo_mysql_compatibility_mode when drop a database
-	deleteMysqlCompatibilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
-
 	getSystemVariableValueWithDatabaseFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
 	getSystemVariablesWithAccountFormat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
@@ -1648,7 +1636,7 @@ const (
 
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
 
-	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
+	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_name = %s and dat_name = %s and variable_name = %s;`
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
@@ -1738,10 +1726,6 @@ func getSqlForCheckStage(ctx context.Context, stageName string) (string, error) 
 		return "", err
 	}
 	return fmt.Sprintf(checkStageFormat, sqlquote.String(stageName)), nil
-}
-
-func getSqlForCheckUdfWithDb(dbName string) string {
-	return fmt.Sprintf(checkUdfWithDb, dbName)
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
@@ -2305,10 +2289,6 @@ func getSqlForDeleteUser(userId int64) []string {
 	}
 }
 
-func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
-	return fmt.Sprintf(deleteMysqlCompatibilityModeFormat, dtname)
-}
-
 func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) string {
 	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, variable_name)
 }
@@ -2335,7 +2315,9 @@ func getSqlForupdateConfigurationByDbNameAndAccountName(ctx context.Context, var
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(updateConfigurationByDbNameAndAccountNameFormat, varValue, accountName, dbName, varName), nil
+	return fmt.Sprintf(updateConfigurationByDbNameAndAccountNameFormat,
+		quoteSQLStringLiteral(varValue), quoteSQLStringLiteral(accountName),
+		quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(varName)), nil
 }
 
 func getSqlForupdateConfigurationByAccount(ctx context.Context, varValue, accountName, varName string) (string, error) {
@@ -4441,6 +4423,20 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
+		// User database retirement still needs its inventory row. Remove the
+		// tenant-local catalog only after all user databases have been dropped.
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_user_defined_function")
+		if rtnErr != nil {
+			return rtnErr
+		}
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_stored_procedure")
+		if rtnErr != nil {
+			return rtnErr
+		}
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_inventory")
+		if rtnErr != nil {
+			return rtnErr
+		}
 		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
 		if rtnErr != nil {
 			return rtnErr
@@ -5037,6 +5033,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var matched bool
 	var funcId int64
 	var erArray []ExecResult
+	var retiredPaths []string
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -5054,6 +5051,13 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
+		// Keep imported bodies while rollback or an unknown commit can still
+		// leave their catalog references visible.
+		if err == nil && rm != nil {
+			for _, path := range retiredPaths {
+				_ = rm(path)
+			}
+		}
 	}()
 	if err != nil {
 		return err
@@ -5066,6 +5070,10 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	}
 	if !dbExists {
 		return moerr.NewBadDB(ctx, dbName)
+	}
+	inventory, err := readDatabaseInventory(ctx, bh, dbName)
+	if err != nil {
+		return err
 	}
 
 	// validate database name and signature (name + args)
@@ -5120,6 +5128,11 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					continue
 				}
 				handleArgMatch := func() (rtnErr error) {
+					if !matched {
+						if err := advanceRoutineDatabaseInventory(ctx, bh, inventory); err != nil {
+							return err
+						}
+					}
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 					rtnErr = bh.Exec(ctx, sql)
@@ -5128,7 +5141,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					}
 					u := &function.NonSqlUdfBody{}
 					if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-						rm(u.Body)
+						retiredPaths = append(retiredPaths, u.Body)
 					}
 
 					return rtnErr
@@ -5149,110 +5162,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		return nil
 	}
 	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
-}
-
-func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement, rm rmPkg) (err error) {
-	var sql string
-	var bodyStr string
-	var funcId int64
-	var erArray []ExecResult
-	var dbName string
-
-	switch st := stmt.(type) {
-	case *tree.DropDatabase:
-		dbName = string(st.Name)
-	default:
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// validate database name and signature (name + args)
-	bh.ClearExecResultSet()
-	sql = getSqlForCheckUdfWithDb(dbName)
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			funcId, err = erArray[0].GetInt64(ctx, i, 0)
-			if err != nil {
-				return err
-			}
-			bodyStr, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return err
-			}
-
-			handleArgMatch := func() (rtnErr error) {
-				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
-
-				rtnErr = bh.Exec(ctx, sql)
-				if rtnErr != nil {
-					return rtnErr
-				}
-
-				u := &function.NonSqlUdfBody{}
-				if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-					rm(u.Body)
-				}
-
-				return rtnErr
-			}
-
-			err = handleArgMatch()
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return err
-}
-
-func doDropProcedureWithDB(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
-	var dbName string
-	switch st := stmt.(type) {
-	case *tree.DropDatabase:
-		dbName = string(st.Name)
-	default:
-		return moerr.NewInternalErrorf(ctx, "unsupported statement type: %T", stmt)
-	}
-
-	// XXXSP
-	// Why do we need to start a transaction here?
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	bh.ClearExecResultSet()
-	sql := fmt.Sprintf(deleteProcedureUsingDB, dbName)
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -5281,6 +5190,16 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	if err != nil {
 		return err
 	}
+	inventory, err := readDatabaseInventory(ctx, bh, dbName)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			if dp.IfExists {
+				return nil
+			}
+			return moerr.NewNoUDFNoCtx(string(dp.Name.Name.ObjectName))
+		}
+		return err
+	}
 
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
@@ -5302,6 +5221,9 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 			return err
 		}
 		handleArgMatch := func() (rtnErr error) {
+			if err := advanceRoutineDatabaseInventory(ctx, bh, inventory); err != nil {
+				return err
+			}
 			sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
 
 			rtnErr = bh.Exec(ctx, sql)
@@ -7224,6 +7146,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.DataBranchMerge,
 		*tree.DataBranchDiff,
 		*tree.DataBranchPick,
+		*tree.DataBranchRebase,
 		*tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteDatabase:
 		objType = objectTypeNone
@@ -7235,6 +7158,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			appendWriteTableNameDatabaseName(&st.TableName)
 		case *tree.DataBranchCreateDatabase:
 			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
+		case *tree.DataBranchRebase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.Destination))
 		case *tree.DataBranchDeleteDatabase:
 			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
 		case *tree.DataBranchMerge:
@@ -9531,7 +9456,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			return true, stats, nil
 		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick, *tree.DataBranchRebase,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil
@@ -12366,6 +12291,10 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	if !dbExists {
 		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
+	inventory, err := readDatabaseInventory(execCtx.reqCtx, bh, dbName)
+	if err != nil {
+		return err
+	}
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
@@ -12472,11 +12401,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			return err
 		}
 		return persistUserDefinedFunction(
-			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id,
+			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id, inventory,
 		)
 	}
 	return persistUserDefinedFunction(
-		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
+		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil, inventory,
 	)
 }
 
@@ -12575,7 +12504,11 @@ func persistUserDefinedFunction(
 	ownerRoleID uint32,
 	definition userDefinedFunctionDefinition,
 	functionID *int64,
+	inventory databaseInventoryToken,
 ) error {
+	if err := advanceRoutineDatabaseInventory(ctx, bh, inventory); err != nil {
+		return err
+	}
 	body := escapeSQLStringForDoubleQuotes(definition.body)
 	sqlMode := plan2.EscapeFormat(definition.sqlMode)
 	if functionID != nil {
@@ -12660,11 +12593,15 @@ func upsertStoredProcedure(
 	definition storedProcedureDefinition,
 	replace bool,
 ) error {
+	inventory, err := readDatabaseInventory(ctx, bh, definition.dbName)
+	if err != nil {
+		return err
+	}
 	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, replace)
 	if err != nil {
 		return err
 	}
-	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray, inventory)
 }
 
 func prepareStoredProcedurePersistence(
@@ -12694,6 +12631,7 @@ func persistStoredProcedure(
 	tenant *TenantInfo,
 	definition storedProcedureDefinition,
 	erArray []ExecResult,
+	inventory databaseInventoryToken,
 ) error {
 	var persistSQL string
 	if execResultArrayHasData(erArray) {
@@ -12713,6 +12651,9 @@ func persistStoredProcedure(
 			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
+	if err := advanceRoutineDatabaseInventory(ctx, bh, inventory); err != nil {
+		return err
+	}
 	return bh.Exec(ctx, persistSQL)
 }
 
@@ -12724,10 +12665,6 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
-	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
-	if err != nil {
-		return err
-	}
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
@@ -12735,7 +12672,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
+	return upsertStoredProcedure(ctx, bh, tenant, definition, cp.Replace)
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
@@ -12801,6 +12738,18 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			}
 		}
 
+		databaseID, rtnErr := erArray[0].GetUint64(ctx, 0, 0)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		inventory, rtnErr := readDatabaseInventory(ctx, bh, dbName)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		if inventory.tracked && inventory.databaseID != databaseID {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+
 		// step2: update the databaseConfig of that database
 		switch configTyp {
 		case tree.MYSQL_COMPATIBILITY_MODE:
@@ -12809,7 +12758,10 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 				return rtnErr
 			}
 
-			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr = advanceRoutineDatabaseInventory(ctx, bh, inventory); rtnErr != nil {
+				return rtnErr
+			}
+			rtnErr = bh.ExecWithSQLMode(ctx, sql, "")
 		default:
 			panic("unknown database config type")
 		}
@@ -12881,100 +12833,38 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	return err
 }
 
-func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var sql string
-	var accountId uint32
-	var accountName string
-	var dbName string
-	var err error
-	variableName1 := "version_compatibility"
-	versionValue, _ := ses.GetSessionSysVar("version")
-	variableValue1 := getVariableValue(versionValue)
-
-	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
-		dbName = string(createDatabaseStmt.Name)
-		// if create sys database, do nothing
-		if _, ok = sysDatabases[dbName]; ok {
-			return nil
-		}
-
-		insertRecordFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-
-			rtnErr = bh.Exec(ctx, "begin")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			// step 1: get account_name and database_name
-			if ses.GetTenantInfo() != nil {
-				accountName = ses.GetTenantInfo().GetTenant()
-				accountId = ses.GetTenantInfo().GetTenantID()
-			} else {
-				return rtnErr
-			}
-
-			// step 2: check database name
-			if _, ok = bannedCatalogDatabases[dbName]; ok {
-				return nil
-			}
-
-			// step 3: insert the record
-			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
-
-			rtnErr = bh.Exec(ctx, sql)
-			return rtnErr
-		}
-		err = insertRecordFunc()
-		if err != nil {
-			return err
-		}
+// The engine has created this database in the statement owner. Persist its
+// compatibility value before that owner can commit; a response is not a second
+// catalog transaction. SessionInfo.Version identifies the catalog, not @@version.
+func initializeCreatedDatabaseCompatibility(ctx context.Context, ses *Session, stmt tree.Statement, result *runutil.RunResult) error {
+	create, ok := stmt.(*tree.CreateDatabase)
+	if !ok || !databaseWasCreated(result) {
+		return nil
 	}
-
-	return nil
-}
-
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-	var sql string
-	var err error
-
-	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
-		datname = string(deleteDatabaseStmt.Name)
-		// if delete sys database, do nothing
-		if _, ok = sysDatabases[datname]; ok {
-			return nil
-		}
-
-		deleteRecordFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-
-			rtnErr = bh.Exec(ctx, "begin")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-			sql = getSqlForDeleteMysqlCompatbilityMode(datname)
-
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			return rtnErr
-		}
-		err = deleteRecordFunc()
-		if err != nil {
-			return err
-		}
+	database := string(create.Name)
+	if _, system := bannedCatalogDatabases[strings.ToLower(database)]; system {
+		return nil
 	}
-	return nil
+	if ses == nil || ses.GetTenantInfo() == nil || ses.GetTenantInfo().GetTenant() == "" ||
+		ses.GetTxnHandler() == nil || ses.GetTxnHandler().GetTxn() == nil {
+		return moerr.NewInternalError(ctx, "database compatibility creation requires its authenticated transaction owner")
+	}
+	value, err := ses.GetSessionSysVar("version")
+	if err != nil {
+		return err
+	}
+	version, ok := value.(string)
+	if !ok || version == "" {
+		return moerr.NewInternalError(ctx, "database compatibility creation requires a session version")
+	}
+	tenant := ses.GetTenantInfo()
+	query := fmt.Sprintf("insert into mo_catalog.mo_mysql_compatibility_mode(account_id,account_name,dat_name,variable_name,variable_value,system_variables) values(%d,%s,%s,'version_compatibility',%s,false)",
+		tenant.GetTenantID(), quoteSQLStringLiteral(tenant.GetTenant()), quoteSQLStringLiteral(database), quoteSQLStringLiteral(version))
+	bh := NewShareTxnBackgroundExec(ctx, ses, false)
+	defer bh.Close()
+	// Literal quoting here uses the canonical scanner, independent of the
+	// caller's SQL mode. The shared executor cannot commit or roll back its owner.
+	return bh.ExecWithSQLMode(ctx, query, "")
 }
 
 func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (ret string, err error) {

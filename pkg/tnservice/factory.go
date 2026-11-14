@@ -191,6 +191,7 @@ func (s *store) newTAEStorage(
 		GCCfg:                   gcCfg,
 		MergeCfg:                mergeCfg,
 		IncrementalDedup:        s.cfg.Txn.IncrementalDedup == "true",
+		EnableRebaseDataHistory: s.cfg.Txn.EnableRebaseDataHistory,
 		IsStandalone:            s.cfg.InStandalone,
 		Ctx:                     ctx,
 		TaskServiceGetter:       s.GetTaskService,

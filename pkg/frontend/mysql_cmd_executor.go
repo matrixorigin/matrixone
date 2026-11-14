@@ -5459,6 +5459,8 @@ func canExecuteStatementInUncommittedTransaction(
 	}
 	if !can {
 		switch stmt.(type) {
+		case *tree.DataBranchRebase:
+			return moerr.NewNotSupported(reqCtx, "Rebase requires an independent transaction or explicit BEGIN")
 		case *tree.DataBranchMerge, *tree.DataBranchPick:
 			return moerr.NewInternalError(reqCtx, dataBranchMergePickTxnErrorInfo())
 		}

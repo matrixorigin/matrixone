@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,6 +40,7 @@ type scriptedReader struct {
 	idx        int
 	readErr    error
 	closeCount int
+	accounts   []uint32
 }
 
 type testVisibleStateStore struct {
@@ -130,7 +132,10 @@ func (r *scriptedReader) Close() error {
 	return nil
 }
 
-func (r *scriptedReader) Read(_ context.Context, _ []string, _ *pbplan.Expr, mp *mpool.MPool, dst *batch.Batch) (bool, error) {
+func (r *scriptedReader) Read(ctx context.Context, _ []string, _ *pbplan.Expr, mp *mpool.MPool, dst *batch.Batch) (bool, error) {
+	if account, err := defines.GetAccountId(ctx); err == nil {
+		r.accounts = append(r.accounts, account)
+	}
 	if r.readErr != nil {
 		err := r.readErr
 		r.readErr = nil
@@ -149,6 +154,22 @@ func (r *scriptedReader) Read(_ context.Context, _ []string, _ *pbplan.Expr, mp 
 	dst.SetRowCount(src.RowCount())
 	return false, nil
 }
+
+type accountContextMatcher struct {
+	account uint32
+	done    <-chan struct{}
+}
+
+func (m accountContextMatcher) Matches(value any) bool {
+	ctx, ok := value.(context.Context)
+	if !ok {
+		return false
+	}
+	account, err := defines.GetAccountId(ctx)
+	return err == nil && account == m.account && ctx.Done() == m.done
+}
+
+func (m accountContextMatcher) String() string { return "context with expected account" }
 
 func (r *scriptedReader) SetOrderBy([]*plan.OrderBySpec) {}
 
@@ -189,25 +210,30 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 	afterReader := &scriptedReader{batches: []*batch.Batch{after}}
 	tableDef := makeVisibleStateTableDef(true, true)
 	resources := newTestVisibleStateResources()
+	requestCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	beforeAccount := accountContextMatcher{account: 11, done: requestCtx.Done()}
+	afterAccount := accountContextMatcher{account: 22, done: requestCtx.Done()}
 
 	gomock.InOrder(
 		txnOp.EXPECT().CloneSnapshotOp(end.ToTimestamp()).Return(txnOp),
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", afterRel, nil),
-		beforeRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
-		afterRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
-		beforeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		beforeRel.EXPECT().GetTableDef(beforeAccount).Return(tableDef),
+		afterRel.EXPECT().GetTableDef(afterAccount).Return(tableDef),
+		beforeRel.EXPECT().Ranges(beforeAccount, gomock.Any()).Return(nil, nil),
 		beforeRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			beforeAccount, gomock.Any(), nil, gomock.Any(), 1, 0, false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{beforeReader}, nil),
-		afterRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		afterRel.EXPECT().Ranges(afterAccount, gomock.Any()).Return(nil, nil),
 		afterRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			afterAccount, gomock.Any(), nil, gomock.Any(), 1, 0, false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{afterReader}, nil),
 	)
 
-	ctx := engine.WithRetainRowID(context.Background(), true)
+	ctx := engine.WithRetainRowID(defines.AttachAccountId(requestCtx, 22), true)
+	ctx = engine.WithVisibleStateStartAccount(ctx, 11)
 	h, err := NewVisibleStateChangesHandle(ctx, tbl, start, end, false, 16, mp, resources, beforeRel)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -215,12 +241,20 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 		require.Equal(t, 1, afterReader.closeCount)
 	})
 	require.Equal(t, 1, beforeReader.closeCount)
+	require.NotEmpty(t, beforeReader.accounts)
+	for _, account := range beforeReader.accounts {
+		require.Equal(t, uint32(11), account)
+	}
 	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.beforeScan.attrs)
 	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.afterScan.attrs)
 	require.Equal(t, []string{"id", "v"}, h.dataAttrs)
 
 	data, tombstone, hint, err := h.Next(ctx, mp)
 	require.NoError(t, err)
+	require.NotEmpty(t, afterReader.accounts)
+	for _, account := range afterReader.accounts {
+		require.Equal(t, uint32(22), account)
+	}
 	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
 	require.Equal(t, []types.Rowid{afterRowID}, vector.MustFixedColWithTypeCheck[types.Rowid](data.Vecs[0]))
 	require.Equal(t, []types.Rowid{beforeRowID}, vector.MustFixedColWithTypeCheck[types.Rowid](tombstone.Vecs[0]))

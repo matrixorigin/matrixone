@@ -89,15 +89,20 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 		version                                       uint64
 		oldProtocol, subscription, missingDefaults    bool
 		lockErr, dbErr, readErr, deleteErr, insertErr error
+		inventoryErr                                  error
+		inventoryMissing                              bool
 		wantError                                     string
 		wantWrites                                    int
+		wantInventoryWrites                           int
 	}{
-		{name: "legacy first alter", current: "", wantWrites: 1},
-		{name: "replace pair atomically", current: "utf8mb4_general_ci", version: 3, wantWrites: 2},
+		{name: "legacy first alter", current: "", wantWrites: 1, wantInventoryWrites: 1},
+		{name: "replace pair atomically", current: "utf8mb4_general_ci", version: 3, wantWrites: 2, wantInventoryWrites: 1},
 		{name: "idempotent", current: "utf8mb4_bin", version: 3},
 		{name: "read failure", readErr: injected, wantError: "catalog failure"},
-		{name: "delete failure", current: "utf8mb4_general_ci", version: 3, deleteErr: injected, wantError: "catalog failure", wantWrites: 1},
-		{name: "insert failure", insertErr: injected, wantError: "catalog failure", wantWrites: 1},
+		{name: "delete failure", current: "utf8mb4_general_ci", version: 3, deleteErr: injected, wantError: "catalog failure", wantWrites: 1, wantInventoryWrites: 1},
+		{name: "insert failure", insertErr: injected, wantError: "catalog failure", wantWrites: 1, wantInventoryWrites: 1},
+		{name: "inventory failure", inventoryErr: injected, wantError: "catalog failure", wantInventoryWrites: 1},
+		{name: "inventory absent or exhausted", inventoryMissing: true, wantInventoryWrites: 1},
 		{name: "lock cancellation", lockErr: context.Canceled, wantError: "context canceled"},
 		{name: "unknown database", dbErr: moerr.GetOkExpectedEOB(), wantError: "Unknown database"},
 		{name: "storage error", dbErr: injected, wantError: "catalog failure"},
@@ -141,6 +146,7 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 				}
 			}
 			writes := []string{}
+			inventoryWrites := 0
 			exec := &databaseDefaultsExecutor{exec: func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 				require.True(t, locked)
 				require.Same(t, proc.Base.TxnOperator, opts.Txn())
@@ -148,6 +154,14 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 				accountID, err := defines.GetAccountId(ctx)
 				require.NoError(t, err)
 				require.Equal(t, uint32(7), accountID)
+				if strings.HasPrefix(sql, "update mo_catalog.mo_database_inventory ") {
+					inventoryWrites++
+					require.Equal(t, "update mo_catalog.mo_database_inventory set epoch=epoch+1 where account_id=7 and database_id=42 and epoch>0 and epoch<18446744073709551615", sql)
+					if tc.inventoryErr != nil || tc.inventoryMissing {
+						return executor.Result{}, tc.inventoryErr
+					}
+					return executor.Result{AffectedRows: 1}, nil
+				}
 				if strings.HasPrefix(sql, "select ") {
 					require.Equal(t, "select collation_id, collation_revision, version from mo_catalog.mo_database_defaults where account_id = 7 and database_id = 42", sql)
 					if tc.readErr != nil {
@@ -176,12 +190,15 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 			c := &Compile{e: eng, proc: proc, affectRows: new(atomic.Uint64)}
 			before := proc.Mp().CurrNB()
 			err := c.run(s)
-			if tc.wantError != "" {
+			if tc.inventoryMissing {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+			} else if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 			} else {
 				require.NoError(t, err)
 			}
 			require.Len(t, writes, tc.wantWrites)
+			require.Equal(t, tc.wantInventoryWrites, inventoryWrites)
 			require.Zero(t, c.getAffectedRows())
 			require.Equal(t, before, proc.Mp().CurrNB())
 		})

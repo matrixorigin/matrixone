@@ -769,3 +769,14 @@ func (opts StatementOption) WithDisableLock() StatementOption {
 func (opts StatementOption) DisableLock() bool {
 	return opts.disableLock
 }
+
+// WithRequireLock prevents a shared catalog mutation from inheriting a
+// lock-free private-preparation context.
+func (opts StatementOption) WithRequireLock() StatementOption {
+	opts.requireLock = true
+	return opts
+}
+
+func (opts StatementOption) RequireLock() bool {
+	return opts.requireLock
+}

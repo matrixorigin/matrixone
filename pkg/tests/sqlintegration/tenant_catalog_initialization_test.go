@@ -103,5 +103,17 @@ func TestCreateAccountCatalogInitialization(t *testing.T) {
 		require.True(t, strings.HasPrefix(strings.ToLower(definition), "select "), definition)
 		require.Equal(t, "LOCAL", checkOption)
 		require.Equal(t, "NO", updatable)
+
+		var accountID, epoch uint64
+		require.NoError(t, sys.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name=?", account).Scan(&accountID))
+		require.NoError(t, tenant.QueryRowContext(ctx, "select i.epoch from mo_catalog.mo_database d join mo_catalog.mo_database_inventory i on i.account_id=d.account_id and i.database_id=d.dat_id where d.account_id=? and d.datname='catalog_init'", accountID).Scan(&epoch))
+		require.Greater(t, epoch, uint64(1), "new tenant DDL must use its own durable inventory")
+		require.NoError(t, tenant.Close())
+		_, err = sys.ExecContext(ctx, "drop account "+account)
+		require.NoError(t, err, "retirement must keep inventory until user databases are removed")
+		require.NoError(t, sys.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where account_id=? and relname='mo_database_inventory'", accountID).Scan(&count))
+		require.Zero(t, count, "the retired tenant must not retain its inventory catalog")
+		require.NoError(t, sys.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where account_id=0 and relname='mo_database_inventory'").Scan(&count))
+		require.Equal(t, 1, count, "tenant retirement must not remove the system account inventory")
 	})
 }

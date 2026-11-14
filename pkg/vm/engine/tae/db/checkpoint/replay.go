@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -423,6 +425,9 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 	}
 
 	c.wg.Wait()
+	if err = c.restoreLogicalDML(ctx); err != nil {
+		return err
+	}
 	c.applyDuration += time.Since(t0)
 	r.source.Init(maxTS)
 	maxTableID, maxObjectCount := uint64(0), 0
@@ -444,6 +449,51 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 		zap.Int("read-count", c.readCount),
 	)
 	return
+}
+
+// Install durable logical bounds only after the entire catalog is reconstructed,
+// before WAL replay or SQL ingress. Missing legacy history is an upper bound at
+// the checkpoint end, never evidence that the table has not changed.
+func (c *CkpReplayer) restoreLogicalDML(ctx context.Context) error {
+	if !c.r.catalog.LogicalDMLHistoryEnabled() {
+		return nil
+	}
+	type identity struct{ database, table uint64 }
+	for _, entry := range c.ckpEntries {
+		bounds := make(map[identity]types.TS)
+		bat, err := logtail.ReadCheckpointLogicalDML(ctx, entry.GetVersion(), entry.GetLocation(), c.r.rt.Fs, common.CheckpointAllocator)
+		if err != nil {
+			return err
+		}
+		end := entry.GetEnd()
+		if bat != nil {
+			dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+			tables := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
+			values := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			if !values[0].Equal(&end) {
+				bat.Clean(common.CheckpointAllocator)
+				return moerr.NewInternalError(ctx, "logical DML checkpoint coverage does not match checkpoint end")
+			}
+			for i := 1; i < bat.RowCount(); i++ {
+				bounds[identity{dbs[i], tables[i]}] = values[i]
+			}
+			bat.Clean(common.CheckpointAllocator)
+		}
+		err = c.r.catalog.RecurLoop(&catalog.LoopProcessor{TableFn: func(table *catalog.TableEntry) error {
+			bound, known := bounds[identity{table.GetDB().ID, table.ID}]
+			if !known {
+				// Also conservative for tables not visited by the collector or
+				// created after this checkpoint. IDs, not names, define identity.
+				bound = end
+			}
+			table.RestoreRebaseLogicalDMLBound(bound)
+			return nil
+		}})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {

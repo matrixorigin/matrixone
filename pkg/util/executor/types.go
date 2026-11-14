@@ -127,6 +127,7 @@ type StatementOption struct {
 	hasKeepRelKind            bool
 	skipIndexTaskRegistration bool
 	disableLock               bool
+	requireLock               bool
 	allowMoColumnsUpdate      bool
 	optimizerHints            string
 	maxResultBytes            uint64

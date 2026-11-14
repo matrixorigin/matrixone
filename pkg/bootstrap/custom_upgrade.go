@@ -89,13 +89,15 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	defer cancel()
 
 	opts := executor.Options{}.
+		WithAccountID(catalog.System_Account).
+		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
 	// Release the planning transaction and account lock before the paged
-	// 4.0.7 walk, then recheck the committed account version before caching it.
+	// catalog walk, then recheck the committed account version before caching it.
 	for {
-		pendingV407 := false
+		var pendingPaged string
 		err := s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
@@ -179,11 +181,11 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				for _, v := range s.handles {
 					if versions.Compare(v.Metadata().Version, from) >= 0 &&
 						v.Metadata().CanDirectUpgrade(from) {
+						if pagedTenantHandle(v) && versions.Compare(from, v.Metadata().Version) < 0 {
+							pendingPaged = v.Metadata().Version
+							break // Release the planning transaction/account lock before paging.
+						}
 						if v == v4_0_7.Handler {
-							if versions.Compare(from, v.Metadata().Version) < 0 {
-								pendingV407 = true
-								break // Release the planning transaction/account lock before paging.
-							}
 							// The frozen consolidated terminal has no in-txn re-fire;
 							// skip it so forward handles beyond 4.0.7 still run for
 							// tenants already at 4.0.7.
@@ -200,9 +202,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				}
 				// A manual upgrade reports success only with the account at the
 				// cluster's final version. The re-planned loop below still takes
-				// over after a committed paged 4.0.7 stage, so only a non-pending
+				// over after a committed paged catalog stage, so only a non-pending
 				// shortfall is terminal here instead of being cached as success.
-				if !pendingV407 && from != currentCN.Version {
+				if pendingPaged == "" && from != currentCN.Version {
 					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
 						from, currentCN.Version)
 				}
@@ -212,10 +214,10 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		if err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
-		if !pendingV407 {
+		if pendingPaged == "" {
 			break
 		}
-		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
+		if _, err := s.upgradePagedTenantOnDemand(ctx, tenantID, pendingPaged); err != nil {
 			return err
 		}
 	}

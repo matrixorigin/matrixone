@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -2141,11 +2142,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
-	if err = dbSource.Create(
-		context.WithValue(c.proc.Ctx,
-			defines.SqlKey{}, c.sql), tblName,
-		append(exeCols, exeDefs...),
-	); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	defs := append(exeCols, exeDefs...)
+	handled := false
+	private, err := c.validatePrivateAlterCopyCreate(qry)
+	if err != nil {
+		return err
+	}
+	if private {
+		// Scalar preparations retain their stricter independent shape check.
+		if err = c.validateScalarAlterCopyCreate(qry); err != nil {
+			return err
+		}
+		handled, err = disttae.TryCreatePrivateAlterCopy(createCtx, dbSource, c.proc.GetTxnOperator(), dbName, tblName, defs)
+	}
+	if err == nil && !handled {
+		err = dbSource.Create(createCtx, tblName, defs)
+	}
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -2422,11 +2436,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		indexExtra.FeatureFlag |= features.IndexTable
 		indexExtra.ParentTableID = main.GetTableID(c.proc.Ctx)
 
-		if err := dbSource.Create(
-			context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId),
-			def.Name,
-			append(exeCols, exeDefs...),
-		); err != nil {
+		indexCtx := context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId)
+		indexDefs := append(exeCols, exeDefs...)
+		handled := false
+		if private {
+			// These definitions belong to the already certified private CREATE.
+			handled, err = disttae.TryCreatePrivateAlterCopy(indexCtx, dbSource, c.proc.GetTxnOperator(), dbName, def.Name, indexDefs)
+		}
+		if err == nil && !handled {
+			err = dbSource.Create(indexCtx, def.Name, indexDefs)
+		}
+		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
@@ -2601,8 +2621,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			c.getLower(),
 		)
 
+		partitionCtx := c.proc.Ctx
+		if private {
+			partitionCtx, err = defines.WithPrivateCopyPartitionParent(partitionCtx, dbName, tblName)
+			if err != nil {
+				return err
+			}
+		}
 		err = ps.Create(
-			c.proc.Ctx,
+			partitionCtx,
 			qry.TableDef.TblId,
 			stmt.(*tree.CreateTable),
 			c.proc.GetTxnOperator(),
