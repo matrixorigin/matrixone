@@ -1615,6 +1615,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		bat.Vecs[colIndex] = vector.NewVec(typ)
 		nsp := nulls.NewWithSize(cnt)
 
+		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
 		case types.T_varchar, types.T_text, types.T_varbinary:
 			// Byte-valued and vector-valued cells must save the exact bytes

@@ -48,7 +48,7 @@ pkg/frontend/databranchutils/branch_hashmap.go	encodeValue	float	1
 pkg/frontend/databranchutils/branch_hashmap.go	encodeValue	vector	1
 pkg/frontend/mysql_cmd_executor.go	estimatePreparedCursorArrayCopyBytes	vector	1
 pkg/frontend/user_var_migration.go	decodeUserDefinedVarValue	float	1
-pkg/frontend/util.go	convertRowsIntoBatchInLocation	float	1
+pkg/frontend/util.go	convertRowsIntoBatch	float	1
 pkg/iscp/cuvs_writer.go	NewCuvsCdcWriter	vector	1
 pkg/iscp/index_sqlwriter.go	NewHnswSqlWriter	vector	1
 pkg/iscp/index_sqlwriter.go	toIvfflatUpsert	vector chain	1
