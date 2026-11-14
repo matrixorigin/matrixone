@@ -245,7 +245,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
 		clone.Createsql = ""
-		canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, &clone, nil, false, nil)
+		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}

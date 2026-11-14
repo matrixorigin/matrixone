@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,11 +34,14 @@ import (
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-// ConstructCreateTableSQL used to build CREATE Table statement
+// ConstructCreateTableSQL renders CREATE TABLE for replay in the caller's
+// session mode. Internal DDL reconstruction uses constructCreateTableSQL.
 func ConstructCreateTableSQL(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
@@ -45,7 +49,11 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+	sqlMode := ""
+	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
+	}
+	return constructCreateTableSQLWithFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, true, false, sqlMode)
 }
 
 func constructCreateTableSQL(
@@ -56,8 +64,38 @@ func constructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 ) (string, tree.Statement, error) {
+	// CREATE LIKE and ALTER COPY reconstruct catalog metadata, not display
+	// text. Keep their SQL and parser in ordinary mode independently of
+	// the caller so ordinary-mode spellings keep their original meaning.
+	return constructCreateTableSQLWithFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, false, "")
+}
+
+// ConstructCreateTableSQLForSchemaHash preserves the 4.2 persisted DUMP
+// fingerprint. This is hash input, not executable DDL: its legacy default
+// escaping must not change when SHOW CREATE becomes replayable (#31066).
+func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
+	sql, _, err := constructCreateTableSQLWithFormat(nil, tableDef, nil, false, nil, true, true, "")
+	return sql, err
+}
+
+func constructCreateTableSQLWithFormat(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+	legacySchemaHash bool,
+	sqlMode string,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
+	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
+	// Match the parser to the rendering mode. In 4.2 getRewriteSQLStmt always
+	// parses ordinary mode, which would corrupt a NO_BACKSLASH_ESCAPES AST.
+	parseRenderedSQL := func(sql string) (tree.Statement, error) {
+		return mysql.ParseOneWithSQLMode(ctx.GetContext(), sql, 0, sqlMode)
+	}
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
@@ -142,7 +180,7 @@ func constructCreateTableSQL(
 			buf.WriteString(",\n")
 		}
 
-		typeStr := FormatColType(col.Typ)
+		typeStr := formatColType(col.Typ, !legacySchemaHash, noBackslashEscapes)
 		if strings.HasPrefix(typeStr, "ENUM") {
 			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
 		} else {
@@ -156,7 +194,16 @@ func constructCreateTableSQL(
 			if !col.Default.NullAbility {
 				buf.WriteString(" NOT NULL")
 			}
-			buf.WriteString(" GENERATED ALWAYS AS (" + col.GeneratedCol.OriginString + ")")
+			generatedSQL := col.GeneratedCol.OriginString
+			if noBackslashEscapes && strings.Contains(generatedSQL, "\\") {
+				// Catalog origins use ordinary escaping; format the expression
+				// for the session parser without changing its stored AST.
+				generatedSQL, err = formatDefaultWithoutBackslashEscapes(generatedSQL)
+				if err != nil {
+					return "", nil, err
+				}
+			}
+			buf.WriteString(" GENERATED ALWAYS AS (" + generatedSQL + ")")
 			if col.GeneratedCol.IsStored {
 				buf.WriteString(" STORED")
 			} else {
@@ -178,7 +225,16 @@ func constructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
+				defaultSQL := strings.TrimSpace(col.Default.OriginString)
+				if legacySchemaHash {
+					defaultSQL = formatDefaultExpr(col.Default.OriginString)
+				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
+					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
+					if err != nil {
+						return "", nil, err
+					}
+				}
+				buf.WriteString(" DEFAULT " + defaultSQL)
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -187,7 +243,13 @@ func constructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			buf.WriteString(" COMMENT ")
+			if legacySchemaHash {
+				// The persisted DUMP fingerprint uses the original spelling.
+				buf.WriteString("'" + col.Comment + "'")
+			} else {
+				buf.WriteString(formatDDLComment(col.Comment, noBackslashEscapes))
+			}
 		}
 		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
 			buf.WriteString(" MONGODB_PATH '")
@@ -568,7 +630,11 @@ func constructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					if legacySchemaHash {
+						comment = " COMMENT='" + kv.Value + "'"
+					} else {
+						comment = " COMMENT=" + formatDDLComment(kv.Value, noBackslashEscapes)
+					}
 				} else if kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
@@ -670,48 +736,48 @@ func constructCreateTableSQL(
 		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatIcebergTableOptionsForShowCreate(env)
+			createStr += formatIcebergTableOptionsForShowCreate(env, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
 		if len(mongoColumns) > 0 {
-			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
 		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg)
+			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
 		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatForeignTableOptionsForShowCreate(fCfg)
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
 		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
 			return "", nil, parseErr
 		} else if found {
-			createStr += formatKafkaTableOptionsForShowCreate(kCfg)
+			createStr += formatKafkaTableOptionsForShowCreate(kCfg, noBackslashEscapes)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -729,15 +795,19 @@ func constructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		createStr += formatExternalTableOptionsForShowCreate(param)
+		createStr += formatExternalTableOptionsForShowCreate(param, noBackslashEscapes)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
 			if param.Tail.Fields.Terminated != nil {
 				if param.Tail.Fields.Terminated.Value == "" {
-					fields += " TERMINATED BY \"\""
+					fields += " TERMINATED BY ''"
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					if noBackslashEscapes {
+						fields += " TERMINATED BY " + formatDDLString(param.Tail.Fields.Terminated.Value, true)
+					} else {
+						fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					}
 				}
 			}
 
@@ -748,31 +818,37 @@ func constructCreateTableSQL(
 				case '\\':
 					return "\\\\"
 				case '\'':
-					// The byte sits inside a single-quoted SQL literal. Use quote
-					// doubling rather than a backslash escape: the SHOW CREATE
-					// result embeds this string in a double-quoted SELECT literal
-					// that consumes one level of backslashes, and '' survives that
-					// round-trip displayable and re-executable.
+					// A single quote inside the emitted DDL literal is doubled.
 					return "''"
 				default:
 					return fmt.Sprintf("%c", value)
 				}
 			}
+			formatFieldByte := func(value byte) string {
+				if noBackslashEscapes && value != 0 {
+					return formatDDLString(string(value), true)
+				}
+				return "'" + escape(value) + "'"
+			}
 			if param.Tail.Fields.EnclosedBy != nil {
-				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
+				fields += " ENCLOSED BY " + formatFieldByte(param.Tail.Fields.EnclosedBy.Value)
 			}
 			if param.Tail.Fields.EscapedBy != nil {
-				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+				fields += " ESCAPED BY " + formatFieldByte(param.Tail.Fields.EscapedBy.Value)
 			}
 		}
 
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				if noBackslashEscapes {
+					line += " STARTING BY " + formatDDLString(param.Tail.Lines.StartingBy, true)
+				} else {
+					line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				}
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
+				line += " TERMINATED BY " + formatDDLString(param.Tail.Lines.TerminatedBy.Value, noBackslashEscapes)
 			}
 		}
 
@@ -795,7 +871,7 @@ func constructCreateTableSQL(
 		for _, pair := range rewritePairs {
 			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
 		}
-		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
+		stmt, err = parseRenderedSQL(rewriteStr)
 	}
 	return createStr, stmt, err
 }
@@ -1070,6 +1146,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	return formatColType(colType, false, false)
+}
+
+func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
@@ -1108,10 +1188,14 @@ func FormatColType(colType plan.Type) string {
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
-			e = EscapeFormat(e)
-			elems = append(elems, e)
+			if replayableEnum {
+				elems = append(elems, formatDDLString(e, noBackslashEscapes))
+			} else {
+				// Preserve the legacy type spelling used by the 4.2 hash.
+				elems = append(elems, "'"+EscapeFormat(e)+"'")
+			}
 		}
-		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
+		suffix = "(" + strings.Join(elems, ",") + ")"
 
 	case types.T_timestamp, types.T_datetime, types.T_time:
 		if colType.Width > 0 {
@@ -1137,43 +1221,43 @@ func FormatColType(colType plan.Type) string {
 }
 
 // formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
-// string literal. A single quote is written as two single quotes (doubling)
-// rather than backslash-escaped: the
-// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
-// consumes one level of backslashes, and quote doubling survives that
-// round-trip both displayable and re-executable.
+// string literal under ordinary mode.
 func formatStrInSingleQuotes(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, `'`, `''`)
 }
 
-// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
-// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
-// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
-// would be an unparseable embedded newline. The backslashes are doubled because
-// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
-// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
-// that already shipped). \n and \r\n must stay distinct so a CRLF table is
-// recreatable as CRLF, not silently downgraded to LF.
-func formatLinesTerminatedBy(value string) string {
-	switch value {
-	case "\n":
-		return `\\n`
-	case "\r\n":
-		return `\\r\\n`
-	default:
-		return formatStrInSingleQuotes(value)
+// formatDDLString quotes a raw value for the parser that will replay the DDL.
+func formatDDLString(value string, noBackslashEscapes bool) string {
+	if noBackslashEscapes {
+		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 	}
+	return formatStrLit(value)
 }
 
-func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+// Preserve ordinary-mode ENGINE WITH spelling (also used by the 4.2 schema
+// hash), but render literal backslashes for NO_BACKSLASH_ESCAPES replay.
+func formatEngineOptionValueForShowCreate(value string, noBackslashEscapes bool) string {
+	if noBackslashEscapes {
+		return formatDDLString(value, true)
+	}
+	return "'" + formatStrInSingleQuotes(value) + "'"
+}
+
+// The CREATE/ALTER parser stores comments with single quotes already doubled.
+// Undo that catalog spelling before quoting the value for the replay mode.
+func formatDDLComment(value string, noBackslashEscapes bool) string {
+	return formatDDLString(strings.ReplaceAll(value, "''", "'"), noBackslashEscapes)
+}
+
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	if param.ScanType == tree.S3 {
-		return formatS3ExternalOptionsForShowCreate(param)
+		return formatS3ExternalOptionsForShowCreate(param, noBackslashEscapes)
 	}
-	return formatInfileExternalOptionsForShowCreate(param)
+	return formatInfileExternalOptionsForShowCreate(param, noBackslashEscapes)
 }
 
-func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1193,15 +1277,14 @@ func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) st
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1227,15 +1310,14 @@ func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) st
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string {
+func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1257,9 +1339,8 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string 
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
@@ -1268,7 +1349,7 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string 
 // formatKafkaTableOptionsForShowCreate renders the ENGINE = KAFKA clause of
 // SHOW CREATE TABLE. No option carries a credential in v1, so everything is
 // emitted verbatim and the output round-trips through CREATE.
-func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config) string {
+func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config, noBackslashEscapes bool) string {
 	options := []struct {
 		key   string
 		value string
@@ -1291,15 +1372,14 @@ func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config) string {
 		}
 		builder.WriteString("\"")
 		builder.WriteString(option.key)
-		builder.WriteString("\" = '")
-		builder.WriteString(formatStrInSingleQuotes(option.value))
-		builder.WriteString("'")
+		builder.WriteString("\" = ")
+		builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 	}
 	builder.WriteString(")")
 	return builder.String()
 }
 
-func formatForeignTableOptionsForShowCreate(cfg foreignext.Config) string {
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, noBackslashEscapes bool) string {
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = ")
 	builder.WriteString(strings.ToUpper(cfg.Kind))
@@ -1328,16 +1408,15 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config) string {
 			}
 			builder.WriteString("\"")
 			builder.WriteString(option.key)
-			builder.WriteString("\" = '")
-			builder.WriteString(formatStrInSingleQuotes(option.value))
-			builder.WriteString("'")
+			builder.WriteString("\" = ")
+			builder.WriteString(formatEngineOptionValueForShowCreate(option.value, noBackslashEscapes))
 		}
 		builder.WriteString(")")
 	}
 	return builder.String()
 }
 
-func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	if pattern, writable := GetWriteFilePattern(param); writable {
 		// Writable external tables must be recreatable from their own DDL:
 		// snapshot/PITR restore replays SHOW CREATE output, so masking the
@@ -1345,15 +1424,15 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		// option validator rejects — e.g. 'JSONDATA'='') would silently
 		// produce a table that can write but not read its files.
 		parts := make([]string, 0, 6)
-		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
-		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
-		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
-		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
-		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, noBackslashEscapes)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern, noBackslashEscapes)
 		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
 		// encloses colliding first fields), so the marker affects readback and
 		// must round-trip; omitted when unset.
-		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), noBackslashEscapes)
 		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
 	filepath := ""
@@ -1361,61 +1440,61 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		filepath = param.Filepath
 	}
 	parts := []string{
-		"'FILEPATH'=" + formatStrLit(filepath),
-		"'COMPRESSION'=" + formatStrLit(param.CompressType),
-		"'FORMAT'=" + formatStrLit(param.Format),
-		"'JSONDATA'=" + formatStrLit(param.JsonData),
+		"'FILEPATH'=" + formatDDLString(filepath, noBackslashEscapes),
+		"'COMPRESSION'=" + formatDDLString(param.CompressType, noBackslashEscapes),
+		"'FORMAT'=" + formatDDLString(param.Format, noBackslashEscapes),
+		"'JSONDATA'=" + formatDDLString(param.JsonData, noBackslashEscapes),
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
-	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), noBackslashEscapes)
+	appendHivePartitionOptionsForShowCreate(&parts, param, true, noBackslashEscapes)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
 
 // appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
 // non-empty (the read-side option validators reject empty values for keys
 // like jsondata, so omitted is the recreatable form of "unset").
-func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+func appendInfileOptionForShowCreate(parts *[]string, key, value string, noBackslashEscapes bool) {
 	if value == "" {
 		return
 	}
-	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
+	*parts = append(*parts, "'"+key+"'="+formatDDLString(value, noBackslashEscapes))
 }
 
-func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, noBackslashEscapes bool) string {
 	parts := make([]string, 0, len(param.Option)/2+2)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
-		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false, noBackslashEscapes)
 		if hasExternalOption(param, "access_key_id") {
-			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true, noBackslashEscapes)
 		}
 		if hasExternalOption(param, "secret_access_key") {
-			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true, noBackslashEscapes)
 		}
-		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false, noBackslashEscapes)
 	}
-	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false, noBackslashEscapes)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
-		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
-		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false, noBackslashEscapes)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false, noBackslashEscapes)
 	}
-	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
-	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
-	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false, noBackslashEscapes)
 	if pattern, ok := GetWriteFilePattern(param); ok {
-		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false, noBackslashEscapes)
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
-	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false, noBackslashEscapes)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false, noBackslashEscapes)
 	return " URL s3option{" + strings.Join(parts, ",") + "}"
 }
 
-func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey, noBackslashEscapes bool) {
 	if !param.HivePartitioning {
 		return
 	}
@@ -1425,18 +1504,18 @@ func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.Extern
 		hivePartitioningKey = "HIVE_PARTITIONING"
 		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
 	}
-	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
-	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false, noBackslashEscapes)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false, noBackslashEscapes)
 }
 
-func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask, noBackslashEscapes bool) {
 	if value == "" && !mask {
 		return
 	}
 	if mask {
 		value = "******"
 	}
-	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+	*parts = append(*parts, formatDDLString(key, noBackslashEscapes)+"="+formatDDLString(value, noBackslashEscapes))
 }
 
 func hasExternalOption(param *tree.ExternParam, key string) bool {
@@ -1505,12 +1584,48 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
+// Historical 4.2 archive hashes include this exact policy. Do not use it for
+// replayable DDL, and do not replace it with main's newer fingerprint policy.
 func formatDefaultExpr(expr string) string {
 	trimmed := strings.TrimSpace(expr)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
 	}
 	return formatStr(expr)
+}
+
+// Catalog origins use ordinary backslash escaping regardless of the reader's
+// mode. Reformat the scalar AST without evaluating or rebinding its default.
+func formatDefaultWithoutBackslashEscapes(origin string) (string, error) {
+	stmt, err := mysql.ParseOne(context.Background(), "select "+origin, 1)
+	if err != nil {
+		return "", err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 || (clause.Exprs[0].As != nil && !clause.Exprs[0].As.Empty()) ||
+		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
+		selectStmt.With != nil || len(selectStmt.OrderBy) != 0 || selectStmt.Limit != nil {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	// A SELECT without FROM has a single implicit empty table name in this AST.
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	table, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	name, ok := table.Expr.(*tree.TableName)
+	if !ok || name.ObjectName != "" {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	return tree.StringWithOpts(clause.Exprs[0].Expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithNoBackslashEscape()), nil
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

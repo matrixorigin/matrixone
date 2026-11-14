@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -138,6 +139,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 }
 
 func Test_BasicS3InsertDelete(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -159,6 +161,20 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	fixtureCtx := ctx
+	rollback := func(t *testing.T, fn func(context.Context) error) {
+		t.Helper()
+		cleanupCtx, cancel := context.WithTimeout(fixtureCtx, 10*time.Second)
+		defer cancel()
+		if err := fn(cleanupCtx); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnClosed) {
+				// A prior terminal call may already own cleanup; this does not prove its outcome.
+				t.Logf("rollback not accepted; transaction may already be closed or owned: %v", err)
+				return
+			}
+			t.Errorf("rollback test transaction: %v", err)
+		}
+	}
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
@@ -171,12 +187,12 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
-		disttaeEngine.Close(ctx)
+		disttaeEngine.Close(fixtureCtx)
 		taeEngine.Close(true)
 		rpcAgent.Close()
 	}()
 
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	ctx, cancel = context.WithTimeout(fixtureCtx, time.Minute)
 	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
@@ -247,23 +263,98 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 
 	require.NoError(t, err)
-	reader, err := testutil.GetRelationReader(
-		ctx,
-		disttaeEngine,
-		txn,
-		relation,
-		nil,
-		mp,
-		t,
-	)
-	require.NoError(t, err)
-
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
-	require.NoError(t, err)
-
-	require.Equal(t, 5, ret.RowCount())
+	readCommitted := false
+	defer func() {
+		if !readCommitted {
+			rollback(t, txn.Rollback)
+		}
+	}()
+	func() {
+		reader, err := testutil.GetRelationReader(ctx, disttaeEngine, txn, relation, nil, mp, t)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, reader.Close()) }()
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		defer ret.Clean(mp)
+		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		require.Equal(t, 5, ret.RowCount())
+	}()
 	require.NoError(t, txn.Commit(ctx))
+	readCommitted = true
+	cancel()
+
+	// The varchar insert-only case uses the same engine and commit threshold,
+	// but a separate table and transaction from the int64 delete case above.
+	t.Run("varchar_insert_only_commit", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(fixtureCtx, time.Minute)
+		defer cancel()
+		const varcharDB = "test_varchar_database"
+		const varcharTable = "test_varchar_table"
+		const rows = 2
+		varcharSchema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+		varcharSchema.Name = varcharTable
+		_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, varcharDB, varcharTable, varcharSchema)
+		require.NoError(t, err)
+
+		bat := catalog2.MockBatch(varcharSchema, rows)
+		defer bat.Close()
+		_, table, writeTxn, err := disttaeEngine.GetTable(ctx, varcharDB, varcharTable)
+		require.NoError(t, err)
+		writeCommitted := false
+		defer func() {
+			if !writeCommitted {
+				rollback(t, writeTxn.Rollback)
+			}
+		}()
+		require.NoError(t, table.Write(ctx, containers.ToCNBatch(bat)))
+		dbID, tableID := table.GetDBID(ctx), table.GetTableID(ctx)
+		var inMemoryEntries, fileEntries int
+		writeTxn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(dbID, tableID, 1, func(entry disttae.Entry) {
+			if entry.Bat() == nil || entry.Bat().RowCount() == 0 {
+				return
+			}
+			if entry.FileName() == "" {
+				inMemoryEntries++
+			} else {
+				fileEntries++
+			}
+		})
+		require.Positive(t, inMemoryEntries, "the insert should be in memory before commit")
+		require.Zero(t, fileEntries, "the default write threshold should not dump this insert early")
+		require.NoError(t, writeTxn.Commit(ctx))
+		writeCommitted = true
+
+		_, readRelation, readTxn, err := disttaeEngine.GetTable(ctx, varcharDB, varcharTable)
+		require.NoError(t, err)
+		readCommitted := false
+		defer func() {
+			if !readCommitted {
+				rollback(t, readTxn.Rollback)
+			}
+		}()
+		func() {
+			varcharReader, err := testutil.GetRelationReader(ctx, disttaeEngine, readTxn, readRelation, nil, mp, t)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, varcharReader.Close()) }()
+			// Opening the reader subscribes the table before its partition state is inspected.
+			stats, err := disttaeEngine.GetPartitionStateStats(ctx, dbID, tableID)
+			require.NoError(t, err)
+			var cnRows uint32
+			for _, object := range stats.Details.DataObjectList.Visible {
+				if object.GetCNCreated() {
+					cnRows += object.Rows()
+				}
+			}
+			require.EqualValues(t, rows, cnRows, "the commit should dump the rows into a CN-created object")
+			result := testutil.EmptyBatchFromSchema(varcharSchema, primaryKeyIdx)
+			defer result.Clean(mp)
+			_, err = varcharReader.Read(ctx, result.Attrs, nil, mp, result)
+			require.NoError(t, err)
+			require.Equal(t, rows, result.RowCount())
+		}()
+		require.NoError(t, readTxn.Commit(ctx))
+		readCommitted = true
+	})
 }
 
 // Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility drives the full
@@ -1767,6 +1858,7 @@ func Test_RollbackDeleteAndDrop(t *testing.T) {
 // txn2 commit
 // read -> 10 rows
 func Test_MultiTxnRollbackStatement(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -2217,89 +2309,6 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
-	}
-}
-
-func Test_BigDeleteWriteS3(t *testing.T) {
-	var (
-		err          error
-		mp           *mpool.MPool
-		accountId    = catalog.System_Account
-		tableName    = "test_reader_table"
-		databaseName = "test_reader_database"
-
-		primaryKeyIdx = 3
-
-		taeEngine     *testutil.TestTxnStorage
-		rpcAgent      *testutil.MockRPCAgent
-		disttaeEngine *testutil.TestDisttaeEngine
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	// mock a schema with 4 columns and the 4th column as primary key
-	// the first column is the 9th column in the predefined columns in
-	// the mock function. Here we exepct the type of the primary key
-	// is types.T_char or types.T_varchar
-	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
-	schema.Name = tableName
-
-	{
-		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
-			ctx,
-			testutil.TestOptions{},
-			t,
-			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
-		)
-		defer func() {
-			disttaeEngine.Close(ctx)
-			taeEngine.Close(true)
-			rpcAgent.Close()
-		}()
-
-		ctx, cancel = context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
-		require.NoError(t, err)
-	}
-
-	insertCnt := 150
-	//deleteCnt := 100
-	//var bat2 *batch.Batch
-
-	{
-		// insert 150 rows
-		_, table, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
-		require.NoError(t, err)
-
-		bat := catalog2.MockBatch(schema, insertCnt)
-		err = table.Write(ctx, containers.ToCNBatch(bat))
-		require.NoError(t, err)
-
-		//delete 100 rows
-		//require.NoError(t, table.Delete(ctx, bat2, catalog.Row_ID))
-		require.NoError(t, txn.Commit(ctx))
-	}
-
-	{
-		_, _, reader, err := testutil.GetTableTxnReader(
-			ctx,
-			disttaeEngine,
-			databaseName,
-			tableName,
-			nil,
-			mp,
-			t,
-		)
-		require.NoError(t, err)
-
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
-		require.NoError(t, err)
-		//require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
 	}
 }
 

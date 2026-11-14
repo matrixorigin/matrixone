@@ -146,7 +146,7 @@ func TestForeignTVFParamRoundTrip(t *testing.T) {
 func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	got := formatForeignTableOptionsForShowCreate(foreignext.Config{
 		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u:pw@h/db"}`, DefaultQuery: "select 1",
-	})
+	}, false)
 	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "query" = 'select 1')`, got)
 	require.NotContains(t, got, "pw@h")
 
@@ -154,16 +154,16 @@ func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	// keeps showing exactly the options its owner wrote
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{
 		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u@h/db"}`, Pushdown: true,
-	})
+	}, false)
 	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "pushdown" = 'true')`, got)
 
 	// every config is redacted; the session-variable path needs no option
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{
 		Kind: "esql", ConfigJSON: `{"addresses":["http://h"]}`,
-	})
+	}, false)
 	require.Equal(t, ` ENGINE = ESQL WITH ("config" = '<redacted>')`, got)
 
-	got = formatForeignTableOptionsForShowCreate(foreignext.Config{Kind: "esql"})
+	got = formatForeignTableOptionsForShowCreate(foreignext.Config{Kind: "esql"}, false)
 	require.Equal(t, ` ENGINE = ESQL`, got)
 }
 

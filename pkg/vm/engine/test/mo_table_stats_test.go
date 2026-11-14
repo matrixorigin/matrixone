@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
@@ -333,6 +334,19 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 }
 
 func TestHandleGetChangedList(t *testing.T) {
+	// This integration test must not change the logger inherited by later tests.
+	originalLogger := logutil.GetGlobalLogger()
+	t.Cleanup(func() {
+		require.Same(t, originalLogger, logutil.GetGlobalLogger(), "test must restore the process-global logger")
+	})
+	var restoreLogger func() bool
+	// Register before fixture cleanup, so those cleanups still run with DEBUG.
+	t.Cleanup(func() {
+		if restoreLogger != nil && !restoreLogger() {
+			t.Error("the process-global logger was reconfigured during the test scope")
+		}
+	})
+
 	defer leaktest.AfterTest(t)()
 	var opts testutil.TestOptions
 
@@ -343,7 +357,8 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
 
-	rowsCnt := 8192 * 2
+	// Table identity and checkpoint timestamps, not block size, determine the result.
+	rowsCnt := 2
 
 	dbBatch := catalog.MockBatch(schema, rowsCnt)
 	defer dbBatch.Close()
@@ -366,11 +381,47 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
+		// CN-created multi-block coverage lives in TestChangesHandleStaleFiles2.
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
-		txn, _ := p.T.StartTxn()
-		ts := txn.GetStartTS()
-		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next()))
-		require.NoError(t, txn.Commit(p.Ctx))
+		func() {
+			readTxn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, readTxn.Rollback(p.Ctx)) }()
+			readTxn.BindAccessInfo(0, 0, 0)
+			readDB, err := readTxn.GetDatabase(dbName)
+			require.NoError(t, err)
+			readRel, err := readDB.GetRelationByName(schema.Name)
+			require.NoError(t, err)
+			flushed := false
+			for _, object := range testutil2.GetAllBlockMetas(readRel, false) {
+				if !object.IsAppendable() && !object.HasDropCommitted() {
+					flushed = true
+					break
+				}
+			}
+			require.True(t, flushed, "table %s must have a flushed object", schema.Name)
+		}()
+		func() {
+			checkpointTxn, err := p.T.StartTxn()
+			require.NoError(t, err)
+			committed := false
+			defer func() {
+				if !committed {
+					if err := checkpointTxn.Rollback(p.Ctx); err != nil {
+						t.Errorf("rollback checkpoint transaction: %v", err)
+					}
+				}
+			}()
+			checkpointTS := checkpointTxn.GetStartTS()
+			checkpointTS = checkpointTS.Next()
+			require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, checkpointTS))
+			require.NoError(t, checkpointTxn.Commit(p.Ctx))
+			committed = true
+			checkpoint := p.T.GetDB().BGCheckpointRunner.MaxCheckpoint()
+			require.NotNil(t, checkpoint, "forced checkpoint must be recorded")
+			checkpointEnd := checkpoint.GetEnd()
+			require.True(t, checkpointEnd.GE(&checkpointTS), "forced checkpoint must cover the requested timestamp")
+		}()
 
 		dbId = rel.GetDBID(p.Ctx)
 		tblIds = append(tblIds, rel.GetTableID(p.Ctx))
@@ -392,9 +443,10 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
 
-	logutil.SetupMOLogger(&logutil.LogConfig{
+	restoreLogger = logutil.SetupMOLoggerForTest(&logutil.LogConfig{
 		Level: "debug",
 	})
+	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel))
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)

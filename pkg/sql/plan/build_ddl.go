@@ -982,7 +982,7 @@ func buildCreateTable(
 
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
-		// current/default SQL mode, then restore the structured metadata below.
+		// ordinary SQL mode, then restore the structured metadata below.
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			tableDef,
