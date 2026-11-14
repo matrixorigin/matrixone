@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly']
+        options: ['off', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -53,6 +53,18 @@ permissions:
   contents: read
 
 jobs:
+  jed-shared-label-probe:
+    if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'jed-shared-probe'
+    runs-on: [cs-large-7c14g, cs-jed-large-7c14g]
+    timeout-minutes: 3
+    steps:
+      - name: Verify shared and JED labels select a JED runner
+        run: |
+          set -eu
+          case "$RUNNER_NAME" in
+            cs-jed-large-7c14g-*) echo 'Shared and JED labels selected a JED large runner.' ;;
+            *) echo 'Unexpected runner environment.'; exit 1 ;;
+          esac
   ruh-s3-readonly:
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && inputs.coverage_comparison == 'ruh-readonly'
     environment: ci
