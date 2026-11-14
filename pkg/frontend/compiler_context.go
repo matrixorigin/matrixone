@@ -786,14 +786,24 @@ func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, sna
 	if obj != nil && obj.ObjName != "" {
 		physical = obj.ObjName
 	}
-	if err = checkResolvedIndexRelation(tcc.execCtx, tableName, physical, def.TableType, def.FeatureFlag); err != nil &&
-		!tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
+	if err = tcc.checkUserRelationIndexAccess(tableName, physical, obj, def, snapshot); err != nil {
 		return nil, nil, err
 	}
 	if result != nil {
 		result.Borrow = resolved.Borrow
 	}
 	return obj, def, nil
+}
+
+// checkUserRelationIndexAccess tests the read exception before constructing a
+// denial. Constructing a moerr reports it, even if the caller later discards it.
+func (tcc *TxnCompilerContext) checkUserRelationIndexAccess(requested, physical string, obj *plan2.ObjectRef, def *plan2.TableDef, snapshot *plan2.Snapshot) error {
+	if (catalog.RequiresPrivilegedRelationAccess(requested, def.TableType, def.FeatureFlag) ||
+		catalog.RequiresPrivilegedRelationAccess(physical, def.TableType, def.FeatureFlag)) &&
+		tcc.mayReadOwnIndexForDirectSelect(obj, def, snapshot) {
+		return nil
+	}
+	return checkResolvedIndexRelation(tcc.execCtx, requested, physical, def.TableType, def.FeatureFlag)
 }
 
 // mayReadOwnIndexForDirectSelect admits only a real tenant administrator's
