@@ -195,13 +195,15 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	snapshot := response.MigrateConnFromResponse
 	require.NotNil(t, snapshot)
+	require.NotNil(t, snapshot.Principal)
 	require.Len(t, snapshot.PrepareStmts, 1)
 	require.Equal(t, "owner_handle", snapshot.PrepareStmts[0].Name)
 	require.True(t, snapshot.PreparedStmtLongDataChecked)
 	require.True(t, snapshot.PreparedStmtCursorsChecked)
 	request = client.NewRequest(query.CmdMethod_MigrateConnTo)
 	request.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID: targetID, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+		Principal: snapshot.Principal,
+		ConnID:    targetID, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
 		LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
 		LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
 		UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
@@ -214,6 +216,7 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	require.NotNil(t, response.MigrateConnToResponse)
 	require.True(t, response.MigrateConnToResponse.Success)
+	require.True(t, response.MigrateConnToResponse.PrincipalVerified)
 	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
 }
 

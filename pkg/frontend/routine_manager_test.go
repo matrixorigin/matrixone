@@ -1158,6 +1158,7 @@ func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {
 		},
 	}
 	proto.SetStr(DBNAME, "db1")
+	ses.SetTenantInfo(&TenantInfo{Tenant: "acc", User: "lock_owner", TenantID: 7, UserID: 8})
 	rt.setSession(ses)
 
 	resp := &query.MigrateConnFromResponse{}

@@ -1197,7 +1197,23 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 		stmt.Hostname = MO_DEFUALT_HOSTNAME
 	}
 	if stmt.Username == "" {
-		stmt.Username = ctx.GetUserName()
+		identity, ok := ctx.(interface{ GetCurrentUserID() (uint32, error) })
+		if !ok {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "current user identity is unavailable")
+		}
+		id, err := identity.GetCurrentUserID()
+		if err != nil {
+			return nil, err
+		}
+		currentUser, ok := ctx.(interface{ GetCurrentUserName() (string, error) })
+		if !ok {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "current user identity is unavailable")
+		}
+		userName, err := currentUser.GetCurrentUserName()
+		if err != nil {
+			return nil, err
+		}
+		return returnByRewriteSQL(ctx, buildShowGrantsCurrentUserSQL(accountId, id, userName), ddlType)
 	}
 	return returnByRewriteSQL(ctx, buildShowGrantsUserSQL(accountId, stmt.Username, stmt.Hostname), ddlType)
 }
@@ -1253,6 +1269,19 @@ func buildShowGrantsUserSQL(accountId uint32, username, hostname string) string 
 	return fmt.Sprintf(sql, sqlquote.String(" `"+username+"`"), sqlquote.String("`"+hostname+"`"),
 		sqlquote.Ident("Grants for "+username+"@localhost"), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME,
 		showGrantsObjectScopeJoins(accountId), sqlquote.String(username), sqlquote.String(hostname))
+}
+
+// buildShowGrantsCurrentUserSQL preserves the session's stable user identity
+// while resolving each grant's current object scope from the catalog.
+func buildShowGrantsCurrentUserSQL(accountId, userId uint32, userName string) string {
+	sql := "select concat('GRANT ', p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else " +
+		showGrantsObjectScope + " end, ' `', u.user_name, '`@`', u.user_host, '`') as %s from %s.mo_user as u join %s.mo_user_grant as g on g.user_id = u.user_id join %s.mo_role_privs as p on p.role_id = g.role_id %s where u.user_id = %d order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;"
+	return fmt.Sprintf(sql, currentUserShowGrantsColumnName(userName), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME,
+		showGrantsObjectScopeJoins(accountId), userId)
+}
+
+func currentUserShowGrantsColumnName(userName string) string {
+	return sqlquote.Ident(fmt.Sprintf("Grants for %s@localhost", userName))
 }
 
 func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error) {

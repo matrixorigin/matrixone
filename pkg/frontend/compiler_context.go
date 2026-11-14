@@ -1965,3 +1965,24 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
 }
+
+func (tcc *TxnCompilerContext) GetCurrentUserID() (uint32, error) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tenant := tcc.execCtx.ses.GetTenantInfo()
+	if tenant == nil {
+		return 0, moerr.NewInternalError(tcc.GetContext(), "current user identity is unavailable")
+	}
+	return tenant.GetUserID(), nil
+}
+
+// GetCurrentUserName returns the authenticated catalog user, not the raw protocol login.
+func (tcc *TxnCompilerContext) GetCurrentUserName() (string, error) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tenant := tcc.execCtx.ses.GetTenantInfo()
+	if tenant == nil {
+		return "", moerr.NewInternalError(tcc.GetContext(), "current user identity is unavailable")
+	}
+	return tenant.GetUser(), nil
+}

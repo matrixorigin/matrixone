@@ -856,3 +856,15 @@ func TestReadOnlyGateStampsProcessAccessMode(t *testing.T) {
 	require.Equal(t, true, proc.ReadOnlyTxnAccessMode())
 	ses.GetTxnHandler().txnReadOnly = false
 }
+
+// Retain fail-closed DELETE behavior when the classifier returns a disposition,
+// not the boolean used before UPDATE ownership was consolidated.
+func TestDeleteReadOnlyMissingSourceDisposition(t *testing.T) {
+	for _, sql := range []string{"delete missing from t", "delete d from (select 1 as a) as d"} {
+		t.Run(sql, func(t *testing.T) {
+			stmt := parseSingleStatement(t, sql)
+			defer stmt.Free()
+			require.Equal(t, writePersistent, classifyStatementWrite(nil, stmt, "testdb"))
+		})
+	}
+}

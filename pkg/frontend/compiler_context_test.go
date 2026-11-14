@@ -46,6 +46,20 @@ import (
 
 var _ plan2.ViewDependencyIdentityResolver = (*TxnCompilerContext)(nil)
 
+func TestTxnCompilerContextCurrentUserIdentity(t *testing.T) {
+	ses := &Session{tenant: &TenantInfo{User: "ru30467_a", UserID: 42}}
+	ctx := InitTxnCompilerContext("")
+	ctx.execCtx = &ExecCtx{ses: ses}
+
+	userID, err := ctx.GetCurrentUserID()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), userID)
+
+	userName, err := ctx.GetCurrentUserName()
+	require.NoError(t, err)
+	require.Equal(t, "ru30467_a", userName)
+}
+
 func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		for _, temporary := range []string{"", "temporary "} {

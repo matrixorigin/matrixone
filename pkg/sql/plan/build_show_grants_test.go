@@ -117,6 +117,19 @@ func Test_buildShowGrantsUserSQLScopeContract(t *testing.T) {
 			" and u.user_host = "+sqlquote.String("local'host")+" order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;")
 }
 
+func Test_buildShowGrantsCurrentUserSQLIdentityAndScope(t *testing.T) {
+	sql := buildShowGrantsCurrentUserSQL(9, 42, "u`1")
+	require.Contains(t, sql,
+		"as "+sqlquote.Ident("Grants for u`1@localhost")+" from mo_catalog.mo_user as u "+
+			"join mo_catalog.mo_user_grant as g on g.user_id = u.user_id "+
+			"join mo_catalog.mo_role_privs as p on p.role_id = g.role_id "+
+			"left join mo_catalog.mo_tables as rt on rt.account_id = 9 and rt.rel_logical_id = p.obj_id")
+	require.Contains(t, sql,
+		"where u.user_id = 42 order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;")
+	require.Contains(t, sql, "u.user_name, '`@`', u.user_host")
+	require.NotContains(t, sql, "u.user_name =")
+}
+
 // Test_buildShowGrantsRawShowArgumentsStillBuild proves unadmitted SHOW
 // GRANTS statement arguments cannot break the rewritten SQL: a role name
 // containing a backtick still builds a full plan, and a quoted username /
