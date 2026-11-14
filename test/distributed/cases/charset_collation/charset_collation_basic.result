@@ -145,12 +145,12 @@ Table    Create Table
 t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 DESC t_column_charset;
 Field    Type    Null    Key    Default    Extra    Comment
-id    int    NO    PRI    null        
-name_default    varchar(100)    YES        null        
-name_utf8    varchar(100)    YES        null        
-name_utf8mb4    varchar(100)    YES        null        
-name_utf8mb4_bin    varchar(100)    YES        null        
-name_utf8mb4_general    varchar(100)    YES        null        
+id    INT(32)    NO    PRI    null        
+name_default    VARCHAR(100)    YES        null        
+name_utf8    VARCHAR(100)    YES        null        
+name_utf8mb4    VARCHAR(100)    YES        null        
+name_utf8mb4_bin    VARCHAR(100)    YES        null        
+name_utf8mb4_general    VARCHAR(100)    YES        null        
 CREATE TABLE t_insert_test (
 id INT PRIMARY KEY,
 data VARCHAR(200)

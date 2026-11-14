@@ -1,7 +1,7 @@
 create table t1(a int, b uuid);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    YES        null        
+a    INT(32)    YES        null        
 b    uuid    YES        null        
 show create table t1;
 Table    Create Table

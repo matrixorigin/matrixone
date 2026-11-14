@@ -59,8 +59,8 @@ Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    YES        null        
-b    varchar(65535)    YES        null        
+a    INT(32)    YES        null        
+b    VARCHAR(65535)    YES        null        
 drop view v1;
 drop table t1;
 drop view v2;

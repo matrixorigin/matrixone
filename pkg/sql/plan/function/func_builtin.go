@@ -305,6 +305,43 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// formatLegacyColumnType preserves 4.2's already-valid public metadata spellings.
+// Types whose old spelling was invalid or lost type information use the common
+// SQL formatter instead (for example BOOL, unsigned integers, dates and scaled floats).
+func formatLegacyColumnType(typ types.Type) (string, bool) {
+	if typ.Width < 0 {
+		return "", false
+	}
+	// typeswitch:partial only families with a valid, faithful 4.2 spelling use the legacy form.
+	switch typ.Oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_timestamp, types.T_datetime, types.T_time:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return fmt.Sprintf("DECIMAL(%d,%d)", typ.Width, typ.Scale), true
+	case types.T_float32:
+		// FLOAT(24) and wider is parsed as DOUBLE; keep the legacy spelling
+		// only when replay preserves FLOAT and there is no omitted scale.
+		if typ.Scale == -1 && typ.Width < 24 {
+			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+		}
+		return "", false
+	case types.T_float64:
+		if typ.Scale == -1 {
+			return fmt.Sprintf("%s(%d)", typ.String(), typ.Width), true
+		}
+		return "", false
+	case types.T_year:
+		if typ.Width == 4 {
+			return "YEAR(4)", true
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -371,6 +408,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			// attr_enum, which represents the single empty-string member.
 			if typ.Oid == types.T_enum {
 				ret = "enum('')"
+			} else if formatted, ok := formatLegacyColumnType(*typ); ok {
+				ret = formatted
 			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
 				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
@@ -477,11 +516,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		typeName := "enum"
+		typeName := "ENUM"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
 		} else if typ.Oid == types.T_uint64 {
-			typeName = "set"
+			typeName = "SET"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
 			sridDefined := false

@@ -76,7 +76,7 @@ Tables_in_sub1
 sys_tbl_1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    NO    PRI    null        
+a    INT(32)    NO    PRI    null        
 select * from sys_tbl_1 order by a;
 a
 1
@@ -122,7 +122,7 @@ Tables_in_sub1
 sys_tbl_1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    NO    PRI    null        
+a    INT(32)    NO    PRI    null        
 select * from sys_tbl_1;
 a
 1
@@ -150,7 +150,7 @@ sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    NO    PRI    null        
+a    INT(32)    NO    PRI    null        
 select * from sys_tbl_1;
 a
 1
@@ -166,7 +166,7 @@ sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    NO    PRI    null        
+a    INT(32)    NO    PRI    null        
 select * from sys_tbl_1;
 a
 1
@@ -183,7 +183,7 @@ sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    int    NO    PRI    null        
+a    INT(32)    NO    PRI    null        
 desc sys_tbl_2;
 Field    Type    Null    Key    Default    Extra    Comment
 b    text    YES        null        
@@ -209,7 +209,7 @@ acc2_tbl_1
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    text    YES        null        
-c    int    NO    PRI    null    auto_increment    
+c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
 acc2    1
@@ -225,7 +225,7 @@ sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    text    YES        null        
-c    int    NO    PRI    null    auto_increment    
+c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
 acc2    1
