@@ -1,6 +1,6 @@
 # SDK contracts on released servers
 
-Revision: `PR32671-RELEASE-CONTRACT-2026-11-13-r1`.
+Revision: `PR32671-RELEASE-CONTRACT-2026-11-13-r2`.
 Implementation: [#32671](https://github.com/matrixorigin/matrixone/pull/32671).
 
 ## Problem and invariant
@@ -65,6 +65,14 @@ Existing Arrow-input Parquet staging and SDK BOOL/type-registry adaptation
 remain equivalent implementations. An unadopted MySQL engine remains owned by
 SQLAlchemy; document and test Client.from_engine as the SDK reflection entry.
 Do not patch MySQL's global registry or invent lost ENUM view provenance.
+An additional direct release probe found that SHOW CREATE lowercases SET member
+values while the native column catalog retains their original case. For SET
+columns on this exact release, get_columns reads attr_enum with bound database
+and table names on the same connection, and reconstructs the SET type preserving
+its other options. This is one read-only query per relevant reflection call,
+without a second checkout or cache. Failed lookups propagate. Old view domains
+already represented as native VARCHAR remain VARCHAR; document that limitation
+instead of claiming recovered ENUM/SET provenance.
 
 Alternatives considered: requiring an unreleased kernel leaves SDK users
 without a contract; swallowing native errors produces false success; automatic
