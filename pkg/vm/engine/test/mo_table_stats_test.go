@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
@@ -336,7 +337,14 @@ func TestHandleGetChangedList(t *testing.T) {
 	// This integration test must not change the logger inherited by later tests.
 	originalLogger := logutil.GetGlobalLogger()
 	t.Cleanup(func() {
-		require.True(t, originalLogger == logutil.GetGlobalLogger(), "test must not replace the process-global logger")
+		require.Same(t, originalLogger, logutil.GetGlobalLogger(), "test must restore the process-global logger")
+	})
+	var restoreLogger func() bool
+	// Register before fixture cleanup, so those cleanups still run with DEBUG.
+	t.Cleanup(func() {
+		if restoreLogger != nil && !restoreLogger() {
+			t.Error("the process-global logger was reconfigured during the test scope")
+		}
 	})
 
 	defer leaktest.AfterTest(t)()
@@ -373,6 +381,7 @@ func TestHandleGetChangedList(t *testing.T) {
 		require.NoError(t, rel.Write(p.Ctx, bat))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
+		// CN-created multi-block coverage lives in TestChangesHandleStaleFiles2.
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		func() {
 			readTxn, err := p.T.StartTxn()
@@ -433,6 +442,11 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
+
+	restoreLogger = logutil.SetupMOLoggerForTest(&logutil.LogConfig{
+		Level: "debug",
+	})
+	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel))
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
