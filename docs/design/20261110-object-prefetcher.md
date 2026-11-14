@@ -1,6 +1,6 @@
 # Object prefetcher
 
-Version: v4, 2026-11-13 (v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
+Version: v5, 2026-11-14 (v4, v3 and v2, 2026-11-13; v1, 2026-11-10). Scope: [PR #32382](https://github.com/matrixorigin/matrixone/pull/32382), issue [#32381](https://github.com/matrixorigin/matrixone/issues/32381). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) and [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
 ## Review status
 
@@ -92,10 +92,12 @@ The prefetcher has two queues of one type, run by the same code with the same nu
 workers: the prefetch queue, for downloads ahead of the reads, and the live queue, for
 downloads a read waits for. A read that reaches an object whose prefetch object still
 waits moves it to the live queue and waits until reads can join it. The prefetch queue
-starts nothing while the live queue waits. The live queue keeps a prefetch object whose
-scans all ended, as a read waits for it; the prefetch queue drops it.
+starts nothing while the live queue waits. Both queues drop a prefetch object that no read
+waits for and whose scans all ended: when it would start, and in the live queue as soon
+as the last read waiting for it leaves, by its start or by its context ending.
 
-The buffers of MemoryPrefetchObjects under way hold at most 10% of the memory available
+The buffers of MemoryPrefetchObjects, each counted from the start of its prefetch object
+until the last read copying from it releases it, hold at most 10% of the memory available
 on the node, measured at most once a second, and at least `disk-prefetch-memory-max`. A
 prefetch object past that bound waits until it fits, or until none is under way.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
@@ -178,8 +180,8 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
 A vector or fulltext index search (IVF-Flat, HNSW, IVF-PQ, CAGRA, fulltext, fulltext2)
 joins its candidates back to the base table by primary key. That base-table scan, the row
 fetch, reads a few rows of each object, and only the columns the query needs from the
-base table. The planner marks it; no other scan is marked. The full-table scan a
-pre-filter plan copies from it, and the exact branches of adaptive and scalar vector
+base table. The planner marks it, as it marks the scans below that read some of a table's
+columns. The full-table scan a pre-filter plan copies from it, and the exact branches of adaptive and scalar vector
 plans, are not marked. Master and regular secondary indexes are out of scope.
 
 A row fetch never downloads a whole object on a read. Ahead of the scan, for each object:
@@ -221,6 +223,21 @@ way each time.
   whole object takes over a queued request of ranges.
 - The index search keeps whole-object prefetch of its own tables.
 
+### A scan of some of a table's columns reads column ranges (decision 2026-11-12)
+
+The planner marks a table scan the same way as a row fetch when it reads a strict subset
+of the table's visible columns, and the target scan of each dedup join (INSERT, REPLACE,
+UPDATE and their IGNORE forms) to read its key columns only. Such a scan prefetches its
+columns' ranges and never downloads a whole object, as a row fetch does. A scan of every
+visible column, or of a table with one column, keeps whole-object prefetch. Reads that do
+not come from a planner scan keep their own policy: the IVF-Flat search's scan of its
+entries table, TN merge and compaction, checkpoint and GC.
+
+Measured on local object storage, cold, against the build before this rule: TPC-H SF10
+took 14.1 / 14.3 s and fetched 6.7 GB, against 41.8 / 42.0 s and 21 GB; an INSERT of
+duplicate keys into a table with a vector column fetched 0.15 MB against 29.9 MB; TPC-C
+tpmC was unchanged (15,754 / 15,793 against 15,719 / 16,887).
+
 ### Parallel range downloads of whole objects (decision)
 
 - A whole-object download of an object of at least `disk-prefetch-object-split-min`
@@ -248,7 +265,7 @@ way each time.
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
-| Buffers of MemoryPrefetchObjects under way | the disk cache | 10% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
+| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 10% of the memory available on the node, at least `disk-prefetch-memory-max`; past it a prefetch object, a read's included, waits until buffers are freed |
 | FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
@@ -267,9 +284,9 @@ way each time.
   objects a scan needed next aged out of the LRU. With partial cache, one traced TPC-H run filled
   54 GB into the disk cache against 29 GB for the parent build, and its first round
   took 49.4 s against 26.7–36.2 s for the parent build.
-- **Column ranges for every scan.** A scan that reads every block of an object reads a
-  large share of it, and TPC-H's whole-object prefetch is measured; changing it needs its
-  own measurement.
+- **Whole-object prefetch for a scan of some of a table's columns.** Measured worse
+  (above): cold TPC-H SF10 took about three times as long and fetched about three times
+  the bytes, as each object's unread columns were downloaded too.
 - **Whole object for a row fetch whose columns are half the object or more.** One whole
   download costs fewer requests, but downloads the columns the row fetch skips, such as
   the vector column when many scalar columns are read.
