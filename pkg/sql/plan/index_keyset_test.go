@@ -352,7 +352,7 @@ func TestKeySetCostGatePreservesUniqueEquality(t *testing.T) {
 	require.Equal(t, []int32{3, 4}, vector.MustFixedColWithTypeCheck[int32](decoded))
 	in, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "in", []*planpb.Expr{
 		GetColExpr(payloadType, tag, payloadPos),
-		{Typ: payloadType, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(len(data)), Data: data}}},
+		{Typ: payloadType, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(vec.Length()), Data: data}}},
 	})
 	require.NoError(t, err)
 	in.Selectivity = 1e-8
@@ -397,7 +397,7 @@ func TestIndexKeySetFailedLoweringDoesNotPublishScan(t *testing.T) {
 	}}}
 	in := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{ObjName: "in"}, Args: []*planpb.Expr{col(1), {
-			Typ: keyType, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(len(data)), Data: data}},
+			Typ: keyType, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(vec.Length()), Data: data}},
 		}},
 	}}}
 	limit, offset := &planpb.Expr{}, &planpb.Expr{}

@@ -112,23 +112,27 @@ func isFloatColumn(colDef *plan.ColDef) bool {
 	return oid == types.T_float32 || oid == types.T_float64
 }
 
-type temporalZoneMapMatch struct {
+type scalarZoneMapMatch struct {
 	matches    bool
 	comparable bool
 }
 
-func (m temporalZoneMapMatch) mayMatch() bool {
+func (m scalarZoneMapMatch) mayMatch() bool {
 	return !m.comparable || m.matches
 }
 
-func (m temporalZoneMapMatch) and(other temporalZoneMapMatch) temporalZoneMapMatch {
+func (m scalarZoneMapMatch) excludes() bool {
+	return m.comparable && !m.matches
+}
+
+func (m scalarZoneMapMatch) and(other scalarZoneMapMatch) scalarZoneMapMatch {
 	if m.comparable && !m.matches || other.comparable && !other.matches {
-		return temporalZoneMapMatch{comparable: true}
+		return scalarZoneMapMatch{comparable: true}
 	}
 	if m.comparable && other.comparable {
-		return temporalZoneMapMatch{matches: true, comparable: true}
+		return scalarZoneMapMatch{matches: true, comparable: true}
 	}
-	return temporalZoneMapMatch{}
+	return scalarZoneMapMatch{}
 }
 
 type temporalFilterRange struct {
@@ -190,7 +194,7 @@ func temporalFilterRangeFromValue(
 	return temporalFilterRange{min: timestamp, max: timestamp}, true
 }
 
-func temporalFilterMatch(op string, value, bound temporalFilterRange) temporalZoneMapMatch {
+func temporalFilterMatch(op string, value, bound temporalFilterRange) scalarZoneMapMatch {
 	var matches bool
 	switch op {
 	case "=":
@@ -204,9 +208,9 @@ func temporalFilterMatch(op string, value, bound temporalFilterRange) temporalZo
 	case ">=":
 		matches = value.max >= bound.min
 	default:
-		return temporalZoneMapMatch{}
+		return scalarZoneMapMatch{}
 	}
-	return temporalZoneMapMatch{matches: matches, comparable: true}
+	return scalarZoneMapMatch{matches: matches, comparable: true}
 }
 
 func makeTemporalFilterMatcher(
@@ -216,11 +220,11 @@ func makeTemporalFilterMatcher(
 	timestampScale int32,
 	zone *time.Location,
 	op string,
-) (func(objectio.ZoneMap) temporalZoneMapMatch, bool) {
+) (func(objectio.ZoneMap) scalarZoneMapMatch, bool) {
 	if columnType == valueType {
-		return func(zm objectio.ZoneMap) temporalZoneMapMatch {
+		return func(zm objectio.ZoneMap) scalarZoneMapMatch {
 			if !zm.IsInited() || zm.GetType() != columnType {
-				return temporalZoneMapMatch{}
+				return scalarZoneMapMatch{}
 			}
 			var matches bool
 			switch op {
@@ -235,9 +239,9 @@ func makeTemporalFilterMatcher(
 			case ">=":
 				matches = zm.AnyGEByValue(value)
 			default:
-				return temporalZoneMapMatch{}
+				return scalarZoneMapMatch{}
 			}
-			return temporalZoneMapMatch{matches: matches, comparable: true}
+			return scalarZoneMapMatch{matches: matches, comparable: true}
 		}, true
 	}
 	if !isMixedTemporalFilterTypes(columnType, valueType) {
@@ -248,10 +252,10 @@ func makeTemporalFilterMatcher(
 	if !ok {
 		return nil, false
 	}
-	return func(zm objectio.ZoneMap) temporalZoneMapMatch {
+	return func(zm objectio.ZoneMap) scalarZoneMapMatch {
 		valueRange, ok := temporalFilterRangeFromZoneMap(zm, timestampScale, zone)
 		if !ok {
-			return temporalZoneMapMatch{}
+			return scalarZoneMapMatch{}
 		}
 		return temporalFilterMatch(op, valueRange, bound)
 	}, true
@@ -297,7 +301,53 @@ func isMixedTemporalFilterTypes(typesToCheck ...types.T) bool {
 	return hasDatetime && hasTimestamp
 }
 
-func compileTemporalFilterExpr(
+// Decimal zonemaps store coefficients in the column's scale, while folded
+// bounds retain their own scale. Compare typed zonemaps instead of raw bytes.
+func makeDecimalFilterMatcher(
+	columnType types.T, value []byte, valueType plan.Type, op string,
+) func(objectio.ZoneMap) scalarZoneMapMatch {
+	if types.T(valueType.Id) != columnType || len(value) != columnType.FixedLength() {
+		return func(objectio.ZoneMap) scalarZoneMapMatch { return scalarZoneMapMatch{} }
+	}
+	bound := index.NewZM(columnType, valueType.Scale)
+	index.UpdateZM(bound, value)
+	return func(zm objectio.ZoneMap) scalarZoneMapMatch {
+		if !zm.IsInited() || zm.GetType() != columnType || !bound.IsInited() {
+			return scalarZoneMapMatch{}
+		}
+		var matches, ok bool
+		switch op {
+		case "=":
+			matches, ok = zm.Intersect(bound)
+		case "<":
+			matches, ok = zm.AnyLT(bound)
+		case "<=":
+			matches, ok = zm.AnyLE(bound)
+		case ">":
+			matches, ok = zm.AnyGT(bound)
+		case ">=":
+			matches, ok = zm.AnyGE(bound)
+		}
+		return scalarZoneMapMatch{matches: matches, comparable: ok}
+	}
+}
+
+// seekDecimalFilter skips only blocks proven not to match. An unknown
+// summary can occur anywhere, so it stops the search at that block.
+func seekDecimalFilter(meta objectio.ObjectDataMeta, seqNum uint16, match func(objectio.ZoneMap) scalarZoneMapMatch) int {
+	count := int(meta.BlockCount())
+	if count == 0 || !match(meta.MustGetColumn(seqNum).ZoneMap()).comparable {
+		return 0
+	}
+	for i := range count {
+		if match(meta.GetBlockMeta(uint32(i)).MustGetColumn(seqNum).ZoneMap()).mayMatch() {
+			return i
+		}
+	}
+	return count
+}
+
+func compileScalarDomainFilterExpr(
 	expr *plan.Expr,
 	exprImpl *plan.Expr_F,
 	tableDef *plan.TableDef,
@@ -314,7 +364,7 @@ func compileTemporalFilterExpr(
 	handled bool,
 ) {
 	op := exprImpl.F.Func.ObjName
-	if op != "=" && op != "<" && op != "<=" && op != ">" && op != ">=" && op != "between" {
+	if op != "=" && op != "<" && op != "<=" && op != ">" && op != ">=" && op != "between" && op != "in_range" {
 		return
 	}
 
@@ -323,8 +373,8 @@ func compileTemporalFilterExpr(
 	var columnPlanExpr *plan.Expr
 	var valueExprs []*plan.Expr
 	columnOnLeft := true
-	if op == "between" {
-		if len(args) != 3 {
+	if op == "between" || op == "in_range" {
+		if op == "between" && len(args) != 3 || op == "in_range" && len(args) != 4 {
 			return
 		}
 		var ok bool
@@ -332,7 +382,7 @@ func compileTemporalFilterExpr(
 			return
 		}
 		columnPlanExpr = args[0]
-		valueExprs = args[1:]
+		valueExprs = args[1:3]
 	} else {
 		if len(args) != 2 {
 			return
@@ -356,10 +406,25 @@ func compileTemporalFilterExpr(
 	for _, valueExpr := range valueExprs {
 		temporalTypes = append(temporalTypes, types.T(valueExpr.Typ.Id))
 	}
-	if !isMixedTemporalFilterTypes(temporalTypes...) {
+	mixedTemporal := isMixedTemporalFilterTypes(temporalTypes...)
+	columnType := types.T(columnPlanExpr.Typ.Id)
+	mixedDecimal := columnType == types.T_decimal64 || columnType == types.T_decimal128
+	if mixedDecimal {
+		mixedDecimal = false
+		for _, valueExpr := range valueExprs {
+			if valueExpr.Typ.Id != columnPlanExpr.Typ.Id || valueExpr.Typ.Scale != columnPlanExpr.Typ.Scale {
+				mixedDecimal = true
+				break
+			}
+		}
+	}
+	if !mixedTemporal && !mixedDecimal {
 		return
 	}
-	if zone == nil {
+	if mixedTemporal && op == "in_range" {
+		return
+	}
+	if mixedTemporal && zone == nil {
 		return nil, nil, nil, nil, nil, false, false, true
 	}
 
@@ -372,8 +437,16 @@ func compileTemporalFilterExpr(
 		op = reverseComparisonOperator(op)
 	}
 
-	matchers := make([]func(objectio.ZoneMap) temporalZoneMapMatch, len(values))
-	columnType := types.T(colDef.Typ.Id)
+	matchers := make([]func(objectio.ZoneMap) scalarZoneMapMatch, len(values))
+	columnType = types.T(colDef.Typ.Id)
+	var rangeFlag byte
+	if op == "in_range" {
+		flags, valid := getConstBytesFromExpr(args[3:4])
+		if !valid || len(flags[0]) == 0 || flags[0][0] > 3 {
+			return nil, nil, nil, nil, nil, false, false, true
+		}
+		rangeFlag = flags[0][0]
+	}
 	commonBetweenScale := int32(-1)
 	if op == "between" && columnType == types.T_datetime &&
 		types.T(valueExprs[0].Typ.Id) == types.T_timestamp &&
@@ -382,12 +455,22 @@ func compileTemporalFilterExpr(
 	}
 	for i := range values {
 		comparisonOp := op
-		if op == "between" {
+		if op == "between" || op == "in_range" {
 			if i == 0 {
 				comparisonOp = ">="
+				if rangeFlag&1 != 0 {
+					comparisonOp = ">"
+				}
 			} else {
 				comparisonOp = "<="
+				if rangeFlag&2 != 0 {
+					comparisonOp = "<"
+				}
 			}
+		}
+		if mixedDecimal {
+			matchers[i] = makeDecimalFilterMatcher(columnType, values[i], valueExprs[i].Typ, comparisonOp)
+			continue
 		}
 		timestampScale := valueExprs[i].Typ.Scale
 		if columnType == types.T_timestamp {
@@ -404,8 +487,8 @@ func compileTemporalFilterExpr(
 			return nil, nil, nil, nil, nil, false, false, true
 		}
 	}
-	match := func(zm objectio.ZoneMap) temporalZoneMapMatch {
-		if op == "between" {
+	match := func(zm objectio.ZoneMap) scalarZoneMapMatch {
+		if op == "between" || op == "in_range" {
 			return matchers[0](zm).and(matchers[1](zm))
 		}
 		return matchers[0](zm)
@@ -428,12 +511,40 @@ func compileTemporalFilterExpr(
 		}
 		return match(meta.MustDataMeta().MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
 	}
+	var stopMatch func(objectio.ZoneMap) scalarZoneMapMatch
+	if mixedDecimal && orderedBlockSearch(isSorted, colDef) {
+		switch op {
+		case "<", "<=":
+			stopMatch = matchers[0]
+		case "=":
+			// A block below the value cannot match, but later blocks still can.
+			stopMatch = makeDecimalFilterMatcher(columnType, values[0], valueExprs[0].Typ, "<=")
+		case "between", "in_range":
+			stopMatch = matchers[1]
+		}
+	}
 	blockFilterOp = func(
 		_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter,
 	) (bool, bool, error) {
-		return false, match(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
+		zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+		result := match(zm)
+		if stopMatch != nil {
+			return stopMatch(zm).excludes(), result.mayMatch(), nil
+		}
+		return false, result.mayMatch(), nil
 	}
-	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, nil, true, isPK, true
+	if mixedDecimal && orderedBlockSearch(isSorted, colDef) {
+		seekMatch := matchers[0]
+		if op == "=" {
+			seekMatch = makeDecimalFilterMatcher(columnType, values[0], valueExprs[0].Typ, ">=")
+		}
+		if op == "=" || op == ">" || op == ">=" || op == "between" || op == "in_range" {
+			seekOp = func(meta objectio.ObjectDataMeta) int {
+				return seekDecimalFilter(meta, uint16(seqNum), seekMatch)
+			}
+		}
+	}
+	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, true, isPK, true
 }
 
 func CompileFilterExprs(
@@ -612,13 +723,18 @@ func compileFilterExpr(
 		switch exprImpl.F.Func.ObjName {
 		case "=", "<", "<=", ">", ">=", "between", "in_range", "in":
 			for _, arg := range exprImpl.F.Args {
-				if arg.GetCol() != nil && types.T(arg.Typ.Id) == types.T_decimal256 {
-					// Raw DECIMAL256 min/max do not fit the persisted ZM layout;
-					// UpdateZM deliberately leaves these statistics uninitialized.
-					// An absent ZM cannot reject a block or seek past it. Keep an
-					// unknown branch true for OR/AND composition and let the row
-					// predicate (including runtime IN) do the exact filtering.
-					// Serialized compound keys are VARCHAR and remain prunable.
+				isDecimal := types.T(arg.Typ.Id).IsDecimal()
+				unsafeVector := false
+				if arg.GetCol() != nil && isDecimal && exprImpl.F.Func.ObjName == "in" {
+					colDef := getColDefByName(expr, arg.GetCol(), tableDef)
+					_, data, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
+					unsafeVector = !ok || !decimalVectorMatchesColumn(data, colDef.Typ)
+				}
+				if arg.GetCol() != nil && (types.T(arg.Typ.Id) == types.T_decimal256 || unsafeVector) {
+					// Raw DECIMAL256 has no persisted min/max, and an IN
+					// vector with another physical domain cannot be used as
+					// raw zonemap, Bloom or seek input. Keep this branch
+					// unknown for AND/OR; row evaluation remains authoritative.
 					fastFilterOp = func(*objectio.ObjectStats) (bool, error) { return true, nil }
 					objectFilterOp = func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error) {
 						return true, nil
@@ -630,7 +746,7 @@ func compileFilterExpr(
 				}
 			}
 		}
-		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
+		if op1, op2, op3, op4, op5, can, hsh, handled := compileScalarDomainFilterExpr(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {
 			return op1, op2, op3, op4, op5, can, hsh

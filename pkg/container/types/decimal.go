@@ -199,6 +199,9 @@ func CompareDecimal128(x Decimal128, y Decimal128) int {
 }
 
 func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int {
+	if scale1 == scale2 {
+		return x.Compare(y)
+	}
 	if x.Sign() != y.Sign() {
 		if x.Sign() {
 			return -1
@@ -208,25 +211,29 @@ func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int {
 	}
 	var err error
 	if scale1 < scale2 {
-		x, err = x.Scale(scale2 - scale1)
-		if err != nil {
-			if x.Sign() {
-				return -1
-			} else {
-				return 1
-			}
+		scaled := x
+		scaled, err = scaled.Scale(scale2 - scale1)
+		if err != nil || scaled.Sign() != x.Sign() {
+			return CompareDecimal128WithScale(
+				Decimal128FromDecimal64(x, scale1),
+				Decimal128FromDecimal64(y, scale2),
+				scale1,
+				scale2,
+			)
 		}
-		return x.Compare(y)
+		return scaled.Compare(y)
 	} else {
-		y, err = y.Scale(scale1 - scale2)
-		if err != nil {
-			if x.Sign() {
-				return 1
-			} else {
-				return -1
-			}
+		scaled := y
+		scaled, err = scaled.Scale(scale1 - scale2)
+		if err != nil || scaled.Sign() != y.Sign() {
+			return CompareDecimal128WithScale(
+				Decimal128FromDecimal64(x, scale1),
+				Decimal128FromDecimal64(y, scale2),
+				scale1,
+				scale2,
+			)
 		}
-		return x.Compare(y)
+		return x.Compare(scaled)
 	}
 }
 

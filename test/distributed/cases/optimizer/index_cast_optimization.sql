@@ -33,6 +33,12 @@ EXPLAIN SELECT * FROM t_int32 WHERE val = 9.5;
 SELECT * FROM t_int32 WHERE val = 9;
 SELECT * FROM t_int32 WHERE val = 9.0;
 SELECT * FROM t_int32 WHERE val = 9.5;
+-- The common decimal type must represent the full signed integer domain.
+INSERT INTO t_int32 VALUES (4,-2147483648),(5,2147483647);
+SELECT id FROM t_int32 WHERE val = -2147483648.0;
+SELECT id FROM t_int32 WHERE val = 2147483647.0;
+SELECT id FROM t_int32 WHERE val = 2147483647.5;
+SELECT id FROM t_int32 WHERE val <=> -2147483648.0;
 
 -- Test 2: FLOAT32 column with index
 CREATE TABLE t_float32 (
