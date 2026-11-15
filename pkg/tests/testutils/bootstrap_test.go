@@ -41,7 +41,7 @@ func TestWaitSystemBootstrapReturnsAfterAllTaskTablesExist(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestWaitSystemBootstrapRequiresCompleteObservation(t *testing.T) {
+func TestWaitSystemBootstrapRetriesAfterRowScanError(t *testing.T) {
 	allTables := func() *sqlmock.Rows {
 		return sqlmock.NewRows([]string{"table_name"}).
 			AddRow("sys_async_task").AddRow("sys_cron_task").

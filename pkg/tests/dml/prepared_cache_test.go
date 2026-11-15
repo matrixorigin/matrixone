@@ -137,15 +137,13 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 				return
 			}
 		}
-		if !t.Run("committed state", func(t *testing.T) {
+		func() {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 			defer cancel()
 			var sum int64
 			require.NoError(t, db.QueryRowContext(ctx, "select sum(id) from src").Scan(&sum))
 			require.Equal(t, int64(3), sum, "the uncommitted write must be rolled back")
-		}) {
-			return
-		}
+		}()
 
 		t.Run("ordered pagination across CNs", func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)

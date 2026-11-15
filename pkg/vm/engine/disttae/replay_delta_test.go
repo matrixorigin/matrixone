@@ -143,7 +143,11 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 				defer close(finished)
 				replayResult = e.pClient.replayCatalogCache(ctx, e)
 			}()
-			defer func() { close(blocker.release); <-finished }()
+			defer func() {
+				cancel()
+				close(blocker.release)
+				<-finished
+			}()
 			select {
 			case <-blocker.entered:
 				t.Fatal("catalog replay entered pessimistic lock cleanup before CN readiness")

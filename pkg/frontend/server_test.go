@@ -367,6 +367,30 @@ func Test_handshake(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestMOServerHandleRequestReturnsPeerEOF(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	allocator := NewLeakCheckAllocator()
+	setSessionAlloc(service, allocator)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	serverConn, peer := net.Pipe()
+	t.Cleanup(func() { _ = serverConn.Close(); _ = peer.Close() })
+	conn, err := NewIOSession(serverConn, pu, service)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	// net.Pipe rejects setting a new deadline after its peer closes. Arm the
+	// bounded read now and prevent ReadFromConn from resetting that deadline.
+	conn.timeout = 0
+	require.NoError(t, serverConn.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, peer.Close())
+	server := &MOServer{running: true}
+	require.Equal(t, io.EOF, server.handleRequest(conn))
+	require.NoError(t, conn.Close())
+	require.True(t, allocator.CheckBalance())
+}
+
 // TestMOServerTerminatesConnectionOnClientQuit proves the COM_QUIT contract
 // at the connection owner: the MySQL wire protocol makes the client send
 // COM_QUIT and wait for the server (not the client) to close the connection.
