@@ -59,6 +59,11 @@ var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterNormalSpecial1
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpecial1[types.Varlena]{}
 
 func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
+	if v.IsDictionary() {
+		backing := v.dictionaryState()
+		return &functionParameterDictionary[T]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
+			base: GenerateFunctionFixedTypeParameter[T](backing.base.vec)}
+	}
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[T]{
@@ -173,6 +178,18 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	if v.IsDictionary() {
+		r, ok := f.(*functionParameterDictionary[T])
+		if !ok {
+			return false
+		}
+		backing := v.dictionaryState()
+		if !ReuseFunctionFixedTypeParameter(backing.base.vec, r.base) {
+			r.base = GenerateFunctionFixedTypeParameter[T](backing.base.vec)
+		}
+		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
+		return true
+	}
 	// A different effective type must be rebuilt by the parameter conversion owner.
 	if f.GetType() != *v.GetType() {
 		return false
@@ -220,6 +237,11 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 }
 
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
+	if v.IsDictionary() {
+		backing := v.dictionaryState()
+		return &functionParameterDictionary[types.Varlena]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
+			base: GenerateFunctionStrParameter(backing.base.vec)}
+	}
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[types.Varlena]{
@@ -271,6 +293,18 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 }
 
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
+	if v.IsDictionary() {
+		r, ok := f.(*functionParameterDictionary[types.Varlena])
+		if !ok {
+			return false
+		}
+		backing := v.dictionaryState()
+		if !ReuseFunctionStrParameter(backing.base.vec, r.base) {
+			r.base = GenerateFunctionStrParameter(backing.base.vec)
+		}
+		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
+		return true
+	}
 	// A different effective type must be rebuilt by the parameter conversion owner.
 	if f.GetType() != *v.GetType() {
 		return false
@@ -636,6 +670,22 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
+	return fr.preExtendAndReset(targetSize, true)
+}
+
+// PreExtendAndResetNonNull prepares an evaluation proven to emit no NULLs.
+// The caller must audit the kernel and its current runtime arguments; unknown
+// or nullable evaluations must use PreExtendAndReset instead. Value storage
+// stays accounted. An empty implicit validity bitmap needs no reservation.
+// Existing bitmap capacity remains owned for a later nullable evaluation.
+func (fr *FunctionResult[T]) PreExtendAndResetNonNull(targetSize int) error {
+	if targetSize < 0 {
+		return moerr.NewInvalidInputNoCtx("negative function result length")
+	}
+	return fr.preExtendAndReset(targetSize, false)
+}
+
+func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) error {
 	if fr.vec == nil {
 		var err error
 		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
@@ -661,13 +711,15 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
-		return err
+	if nullable {
+		if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
+			return err
+		}
 	}
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
+	if nullBitmap := fr.vec.nsp.GetBitmap(); nullable && nullBitmap.HasExternalStorage() {
 		// Allocation-accounted storage can outlive several evaluations and be
 		// larger than this result. Publish the current row domain explicitly so
 		// NULL unions never infer it from a reused source or physical capacity.
