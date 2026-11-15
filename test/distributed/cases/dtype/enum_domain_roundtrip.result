@@ -143,6 +143,40 @@ select id,hex(e),e+0 from import_numeric order by id;
 ➤ id[4,32,0]  ¦  hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
 1  ¦  33  ¦  1  𝄀
 2  ¦  612C62  ¦  2
+create table setop_src(e enum('','x'));
+insert into setop_src values('');
+insert ignore into setop_src values('invalid');
+create table setop_dst like setop_src;
+select count(*) from (select e from setop_src union select e from setop_src where e+0=1) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into setop_dst select e from (select e from setop_src union select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+➤ hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+  ¦  1
+truncate table setop_dst;
+insert into setop_dst select e from (select e from setop_src union all select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+➤ hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+  ¦  0  𝄀
+  ¦  1  𝄀
+  ¦  1
+truncate table setop_dst;
+select count(*) from (select e from setop_src intersect select e from setop_src where e+0=1) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into setop_dst select e from (select e from setop_src intersect select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+➤ hex(e)[12,-1,0]  ¦  e + 0[-5,64,0]  𝄀
+  ¦  1
+truncate table setop_dst;
+select count(*) from (select e from setop_src minus select e from setop_src where e+0=1) q;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into setop_dst select e from (select e from setop_src minus select e from setop_src where e+0=1) q;
+select count(*) from setop_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
 data branch create table domain_branch from domain_src;
 insert ignore into domain_branch values(10,'invalid');
 data branch diff domain_branch against domain_src output as domain_diff;

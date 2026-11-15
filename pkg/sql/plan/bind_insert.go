@@ -3251,7 +3251,13 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 				}
 				return sameTypeMemberDomain(sourceDomain, typ)
 			}
-			if builder.isProjectedDisplayValueExpr(projExpr, compatibleSource, true, nil) {
+			// Display is not injective: error ordinal zero and a declared empty
+			// label have the same visible value. Hidden storage must not become
+			// an extra DISTINCT/intersection/difference key.
+			acceptSetOperation := func(node *plan.Node) bool {
+				return node.NodeType == plan.Node_UNION_ALL
+			}
+			if builder.isProjectedDisplayValueExpr(projExpr, compatibleSource, true, acceptSetOperation, nil) {
 				raw, ok := builder.materializeProjectedMySQLSpecialStorage(projExpr, nil)
 				if !ok {
 					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven ENUM storage projection")

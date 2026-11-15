@@ -78,6 +78,8 @@ A constant payload/tag is decoded at most once per batch when actually used. Reu
 
 Preserve Function_STRICT/null/selection behavior. Domain framing/tag errors are fatal even under INSERT IGNORE. Only invalid user label/ordinal conversion follows existing IGNORE -> ordinal 0 behavior. Ordinal 0 displays as the existing empty error member; valid empty label at ordinal 1 is distinct numerically.
 
+Raw storage may cross projections and UNION ALL only after proving one ordered source domain. UNION DISTINCT, INTERSECT and MINUS (including counted forms) compare visible values; hidden ordinal columns must not change those keys or multiplicities. At these boundaries use the existing visible-value assignment semantics instead of promoting storage provenance.
+
 Update every enum expression constructor: base_binder display wrappers, make.go assignment casts, mysql_special_types literal/IGNORE/order-key/AST wrappers. Shared structural unwrapping recognizes existing two-argument wrappers and generated three-argument wrappers, with validated constant tag, keeping operand index 1. Arbitrary malformed/dynamic three-argument calls must not be unwrapped to bypass domain errors.
 
 Known encoded constants are validated at their existing error-returning bind/metadata boundaries. Return malformed-domain errors normally; do not add panic paths or let a boolean optimization helper silently accept an invalid type.

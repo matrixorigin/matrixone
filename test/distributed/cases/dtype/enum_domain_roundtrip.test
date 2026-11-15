@@ -63,6 +63,26 @@ select id,hex(e),e+0 from import_json order by id;
 create table import_numeric(id int primary key,e enum('3','a,b'));
 load data inline format='csv', data='1,3\n2,"a,b"\n' into table import_numeric fields terminated by ',' optionally enclosed by '"';
 select id,hex(e),e+0 from import_numeric order by id;
+-- Set operations keep visible equality; UNION ALL can retain typed ordinals.
+create table setop_src(e enum('','x'));
+insert into setop_src values('');
+insert ignore into setop_src values('invalid');
+create table setop_dst like setop_src;
+select count(*) from (select e from setop_src union select e from setop_src where e+0=1) q;
+insert into setop_dst select e from (select e from setop_src union select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+insert into setop_dst select e from (select e from setop_src union all select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+select count(*) from (select e from setop_src intersect select e from setop_src where e+0=1) q;
+insert into setop_dst select e from (select e from setop_src intersect select e from setop_src where e+0=1) q;
+select hex(e),e+0 from setop_dst order by e+0;
+truncate table setop_dst;
+select count(*) from (select e from setop_src minus select e from setop_src where e+0=1) q;
+insert into setop_dst select e from (select e from setop_src minus select e from setop_src where e+0=1) q;
+select count(*) from setop_dst;
+
 -- Materialization consumes frozen typed values, including the error ordinal.
 data branch create table domain_branch from domain_src;
 insert ignore into domain_branch values(10,'invalid');

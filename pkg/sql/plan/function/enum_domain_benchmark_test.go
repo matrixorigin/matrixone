@@ -25,10 +25,21 @@ import (
 )
 
 func BenchmarkEnumDomainConversions(b *testing.B) {
+	benchmarkEnumDomainConversions(b, false)
+}
+
+func BenchmarkFramedEnumDomainConversions(b *testing.B) {
+	benchmarkEnumDomainConversions(b, true)
+}
+
+func benchmarkEnumDomainConversions(b *testing.B, framed bool) {
 	for _, labels := range []int{3, 8, 64} {
 		members := make([]string, labels)
 		for i := range members {
 			members[i] = fmt.Sprintf("value_%d", i)
+		}
+		if framed {
+			members[0] = "value,0"
 		}
 		for _, rows := range []int{1, 64, 1024} {
 			for _, constant := range []bool{true, false} {
@@ -36,6 +47,14 @@ func BenchmarkEnumDomainConversions(b *testing.B) {
 					b.Run(fmt.Sprintf("%d-labels/%d-rows/const-%t/%s", labels, rows, constant, op), func(b *testing.B) {
 						proc := testutil.NewProcess(b)
 						payload := strings.Join(members, ",")
+						if framed {
+							var text strings.Builder
+							fmt.Fprintf(&text, "%d#", len(members))
+							for _, member := range members {
+								fmt.Fprintf(&text, "%d:%s", len(member), member)
+							}
+							payload = text.String()
+						}
 						var domain *vector.Vector
 						if constant {
 							var err error
@@ -79,6 +98,14 @@ func BenchmarkEnumDomainConversions(b *testing.B) {
 						result := vector.NewFunctionResultWrapper(outputType.ToType(), proc.Mp())
 						defer result.Free()
 						parameters := []*vector.Vector{domain, input}
+						if framed {
+							encoding, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), rows, proc.Mp())
+							if err != nil {
+								b.Fatal(err)
+							}
+							defer encoding.Free(proc.Mp())
+							parameters = append(parameters, encoding)
+						}
 						b.ReportAllocs()
 						b.ResetTimer()
 						for range b.N {

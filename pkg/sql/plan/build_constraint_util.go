@@ -1353,7 +1353,7 @@ func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, s
 		return expr, false, nil
 	}
 	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
-		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
+		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil, nil) {
 		bitmap, ok := builder.materializeProjectedMySQLSpecialStorage(expr, nil)
 		if !ok {
 			return nil, false, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven SET bitmap projection")
@@ -1371,13 +1371,14 @@ func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, s
 }
 
 func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
-	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, visited)
+	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, nil, visited)
 }
 
 func (builder *QueryBuilder) isProjectedDisplayValueExpr(
 	expr *Expr,
 	isDisplayValue func(*Expr) bool,
 	requireAllSetInputs bool,
+	acceptSetOperation func(*plan.Node) bool,
 	visited map[[2]int32]struct{},
 ) bool {
 	if isDisplayValue(expr) {
@@ -1391,13 +1392,14 @@ func (builder *QueryBuilder) isProjectedDisplayValueExpr(
 	if !ok {
 		return false
 	}
-	return builder.isProjectedDisplayValueAtNode(nodeID, col.ColPos, isDisplayValue, requireAllSetInputs, visited)
+	return builder.isProjectedDisplayValueAtNode(nodeID, col.ColPos, isDisplayValue, requireAllSetInputs, acceptSetOperation, visited)
 }
 
 func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 	nodeID, colPos int32,
 	isDisplayValue func(*Expr) bool,
 	requireAllSetInputs bool,
+	acceptSetOperation func(*plan.Node) bool,
 	visited map[[2]int32]struct{},
 ) bool {
 	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
@@ -1421,24 +1423,27 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 	case plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL,
 		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if acceptSetOperation != nil && !acceptSetOperation(node) {
+			return false
+		}
 		if !requireAllSetInputs && node.NodeType != plan.Node_UNION && node.NodeType != plan.Node_UNION_ALL {
 			if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
 				return false
 			}
-			return builder.isProjectedDisplayValueAtNode(node.Children[0], colPos, isDisplayValue, requireAllSetInputs, visited)
+			return builder.isProjectedDisplayValueAtNode(node.Children[0], colPos, isDisplayValue, requireAllSetInputs, acceptSetOperation, visited)
 		}
 		if len(node.Children) == 0 {
 			return false
 		}
 		for _, childID := range node.Children {
-			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
+			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, acceptSetOperation, visited) {
 				return false
 			}
 		}
 		return true
 	}
 
-	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
+	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, acceptSetOperation, visited)
 }
 
 // materializeProjectedMySQLSpecialStorage carries proven storage values through
