@@ -18,6 +18,7 @@ import (
 	"bytes"
 	stdcmp "cmp"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -102,7 +103,7 @@ func ConstructBlockPKFilter(
 	)
 
 	for idx := range disjuncts {
-		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
+		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx], isFakePK)
 		if err != nil {
 			return objectio.BlockReadFilter{}, err
 		}
@@ -461,6 +462,7 @@ func combineOffsetFuncs(funcs []func(*vector.Vector) []int64) func(*vector.Vecto
 
 func buildBlockPKSearchFuncs(
 	basePKFilter BasePKFilter,
+	isFakePK bool,
 ) (
 	sortedSearchFunc func(*vector.Vector) []int64,
 	unSortedSearchFunc func(*vector.Vector) []int64,
@@ -468,6 +470,14 @@ func buildBlockPKSearchFuncs(
 ) {
 	if !validBlockPKSearchFilter(basePKFilter) {
 		return nil, nil, nil
+	}
+	// This interval is exact for a persisted block. Keep the memory/MVCC
+	// descriptor as IN so each key can seek directly to its snapshot.
+	if basePKFilter.Op == function.IN && len(basePKFilter.Disjuncts) == 0 {
+		if lower, upper, dense := denseIntegerPKBounds(basePKFilter.Vec); dense {
+			basePKFilter.Op, basePKFilter.Vec = function.BETWEEN, nil
+			basePKFilter.LB, basePKFilter.UB = lower, upper
+		}
 	}
 	switch basePKFilter.Op {
 	case function.EQUAL:
@@ -595,31 +605,31 @@ func buildBlockPKSearchFuncs(
 			unSortedSearchFunc = linearBoolSearchOffsetByValFactory(values)
 		case types.T_bit:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[uint64](vec), isFakePK)
 		case types.T_int8:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int8](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int8](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[int8](vec), isFakePK)
 		case types.T_int16:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int16](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int16](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[int16](vec), isFakePK)
 		case types.T_int32:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int32](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int32](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[int32](vec), isFakePK)
 		case types.T_int64:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int64](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[int64](vec), isFakePK)
 		case types.T_uint8:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint8](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint8](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[uint8](vec), isFakePK)
 		case types.T_uint16:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint16](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint16](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[uint16](vec), isFakePK)
 		case types.T_uint32:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint32](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint32](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[uint32](vec), isFakePK)
 		case types.T_uint64:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec), nil)
+			unSortedSearchFunc = unsortedIntegerINSearch(vector.MustFixedColNoTypeCheck[uint64](vec), isFakePK)
 		case types.T_float32:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float32](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float32](vec), nil)
@@ -1880,5 +1890,109 @@ func validBasePKMergeOperand(filter BasePKFilter) bool {
 			!basePKFilterHasNaN(filter)
 	default:
 		return true
+	}
+}
+
+// denseIntegerPKBounds recognizes an exact interval without relying on a sort
+// flag or allocating a lookup. Opaque and non-integral domains keep IN.
+func denseIntegerPKBounds(vec *vector.Vector) ([]byte, []byte, bool) {
+	if vec == nil || vec.IsConst() || vec.Length() < 2 || vec.GetNulls().Any() {
+		return nil, nil, false
+	}
+	dense := false
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		dense = denseIntegerPKValues[int8](vec)
+	case types.T_int16:
+		dense = denseIntegerPKValues[int16](vec)
+	case types.T_int32:
+		dense = denseIntegerPKValues[int32](vec)
+	case types.T_int64:
+		dense = denseIntegerPKValues[int64](vec)
+	case types.T_uint8:
+		dense = denseIntegerPKValues[uint8](vec)
+	case types.T_uint16:
+		dense = denseIntegerPKValues[uint16](vec)
+	case types.T_uint32:
+		dense = denseIntegerPKValues[uint32](vec)
+	case types.T_uint64, types.T_bit:
+		dense = denseIntegerPKValues[uint64](vec)
+	}
+	if !dense {
+		return nil, nil, false
+	}
+	size := vec.GetType().TypeSize()
+	data := vec.GetData()
+	last := (vec.Length() - 1) * size
+	return data[:size], data[last : last+size], true
+}
+
+func denseIntegerPKValues[T types.Ints | types.UInts](vec *vector.Vector) bool {
+	values := vector.MustFixedColNoTypeCheck[T](vec)
+	if len(values) < 2 || values[0] == values[len(values)-1] {
+		return false
+	}
+	previous := values[0]
+	for _, value := range values[1:] {
+		if value != previous && (value < previous || value-previous != 1) {
+			return false
+		}
+		previous = value
+	}
+	return true
+}
+
+// unsortedIntegerINSearch builds integer membership for reader-owned keys.
+// Fake PKs always use unsorted lookup, so bounded sets amortize a hash table.
+// Other larger sets use binary membership only after verifying actual key order.
+func unsortedIntegerINSearch[T types.Ints | types.UInts](keys []T, isFakePK bool) func(*vector.Vector) []int64 {
+	if len(keys) < 16 {
+		return vector.OrderedLinearSearchOffsetByValFactory(keys, nil)
+	}
+	if isFakePK && len(keys) <= objectio.BlockMaxRows {
+		members := make(map[T]struct{}, len(keys))
+		lower, upper := keys[0], keys[0]
+		for _, key := range keys {
+			members[key] = struct{}{}
+			lower, upper = min(lower, key), max(upper, key)
+		}
+		return func(vec *vector.Vector) []int64 {
+			rows := vector.MustFixedColNoTypeCheck[T](vec)
+			var sels []int64
+			for row, value := range rows {
+				if value < lower || value > upper {
+					continue
+				}
+				found := value == lower || value == upper
+				if !found {
+					_, found = members[value]
+				}
+				if found {
+					sels = append(sels, int64(row))
+				}
+			}
+			return sels
+		}
+	}
+	if !slices.IsSorted(keys) {
+		return vector.OrderedLinearSearchOffsetByValFactory(keys, nil)
+	}
+	lower, upper := keys[0], keys[len(keys)-1]
+	return func(vec *vector.Vector) []int64 {
+		rows := vector.MustFixedColNoTypeCheck[T](vec)
+		var sels []int64
+		for row, value := range rows {
+			if value < lower || value > upper {
+				continue
+			}
+			found := value == lower || value == upper
+			if !found {
+				_, found = slices.BinarySearch(keys, value)
+			}
+			if found {
+				sels = append(sels, int64(row))
+			}
+		}
+		return sels
 	}
 }

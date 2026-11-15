@@ -798,19 +798,13 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 			delete(colMap, ref)
 		}
 	}
-	filters := make([]*plan.Expr, 0, len(base.FilterList))
 	for _, filter := range base.FilterList {
 		if !exprUsesOnlyMappedCols(filter, colMap) || exprMayChangeWhenRepeated(filter) {
 			return
 		}
-		mapped := replaceColumnsForExpr(DeepCopyExpr(filter), colMap)
-		if !slices.ContainsFunc(index.FilterList, func(existing *plan.Expr) bool {
-			return exprStructuralEqual(existing, mapped)
-		}) {
-			filters = append(filters, mapped)
-		}
 	}
 	orders := make([]*plan.Expr, len(sortNode.OrderBy))
+	orderColumns := make([]int32, len(orders))
 	orderedColumns := make(map[int32]struct{}, len(orders))
 	for i, spec := range sortNode.OrderBy {
 		expr := spec.Expr
@@ -830,7 +824,8 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 			return
 		}
 		orderedColumns[col.ColPos] = struct{}{}
-		orders[i] = replaceColumnsForExpr(DeepCopyExpr(expr), colMap)
+		orders[i] = expr
+		orderColumns[i] = col.ColPos
 	}
 	for _, name := range base.TableDef.Pkey.Names {
 		pos, exists := base.TableDef.Name2ColIndex[name]
@@ -841,20 +836,43 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 			return
 		}
 	}
-	// All checks succeeded. Publish one ordinary Project/Top on the private
-	// build side, retaining the stored primary key for the existing INDEX join.
+	natural := canUseNaturalBackfillOrder(def, base, orderColumns, sortNode.OrderBy)
+	proven := matchingIndexPrefixEqualities(def, base, index)
+	allProven := proven != nil || len(base.FilterList) == 0
+	var filters []*plan.Expr
+	for i, filter := range base.FilterList {
+		if proven != nil && proven[i] {
+			continue
+		}
+		allProven = false
+		mapped := replaceColumnsForExpr(DeepCopyExpr(filter), colMap)
+		if !slices.ContainsFunc(index.FilterList, func(existing *plan.Expr) bool {
+			return exprStructuralEqual(existing, mapped)
+		}) {
+			filters = append(filters, mapped)
+		}
+	}
+	canLimit := allProven && (len(index.FilterList) == 0 ||
+		len(index.FilterList) == 1 && proven != nil)
+	// Publish ordinary Project/Top nodes, retaining the stored primary key.
+	// Natural ordering reuses the existing hidden-key/ordered-reader owner.
 	tag := builder.genNewBindTag()
 	exprs := []*plan.Expr{GetColExpr(index.TableDef.Cols[1].Typ, index.BindingTags[0], 1)}
-	specs := make([]*plan.OrderBySpec, len(orders))
-	for i, expr := range orders {
-		pos := int32(0)
-		col := expr.GetCol()
-		if col == nil || col.RelPos != index.BindingTags[0] || col.ColPos != 1 {
-			pos = int32(len(exprs))
-			exprs = append(exprs, expr)
+	var specs []*plan.OrderBySpec
+	if natural {
+		specs = []*plan.OrderBySpec{{Expr: GetColExpr(exprs[0].Typ, tag, 0), Flag: sortNode.OrderBy[0].Flag}}
+	} else {
+		specs = make([]*plan.OrderBySpec, len(orders))
+		for i, original := range orders {
+			expr := replaceColumnsForExpr(DeepCopyExpr(original), colMap)
+			pos := int32(0)
+			col := expr.GetCol()
+			if col == nil || col.RelPos != index.BindingTags[0] || col.ColPos != 1 {
+				pos = int32(len(exprs))
+				exprs = append(exprs, expr)
+			}
+			specs[i] = &plan.OrderBySpec{Expr: GetColExpr(expr.Typ, tag, pos), Flag: sortNode.OrderBy[i].Flag}
 		}
-		specs[i] = &plan.OrderBySpec{Expr: GetColExpr(expr.Typ, tag, pos), Flag: sortNode.OrderBy[i].Flag}
-		increaseRefCnt(specs[i].Expr, 1, colRefCnt)
 	}
 	projectID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{index.NodeId}, BindingTags: []int32{tag}, ProjectList: exprs,
@@ -862,7 +880,16 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 	sortID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT, Children: []int32{projectID}, OrderBy: specs, Limit: candidateLimit,
 	}, builder.ctxByNode[index.NodeId])
-	increaseRefCntForExprList(exprs, 1, colRefCnt)
+	if natural {
+		builder.applyRegularIndexTopSort(&regularIndexTopSortContext{
+			sortNode: builder.qry.Nodes[sortID], sortProjectNode: builder.qry.Nodes[projectID],
+			scanNode: index, pushOrderedLimit: canLimit,
+		})
+	}
+	for _, spec := range builder.qry.Nodes[sortID].OrderBy {
+		increaseRefCnt(spec.Expr, 1, colRefCnt)
+	}
+	increaseRefCntForExprList(builder.qry.Nodes[projectID].ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(join.OnList, -1, colRefCnt)
 	join.OnList[0] = replaceColumnsForExpr(DeepCopyExpr(join.OnList[0]), map[[2]int32]*plan.Expr{
 		{index.BindingTags[0], 1}: GetColExpr(index.TableDef.Cols[1].Typ, tag, 0),
@@ -871,6 +898,95 @@ func (builder *QueryBuilder) pushRegularIndexBackfillTop(projNode *plan.Node, co
 	increaseRefCntForExprList(filters, 1, colRefCnt)
 	index.FilterList = append(index.FilterList, filters...)
 	join.Children[1] = sortID
+}
+
+// canUseNaturalBackfillOrder proves the hidden key matches the complete SQL
+// order. It does not authorize truncation before residual predicates.
+func canUseNaturalBackfillOrder(def *plan.IndexDef, base *plan.Node, columns []int32, order []*plan.OrderBySpec) bool {
+	if !indexOrderColumnsMatch(def, base, columns) {
+		return false
+	}
+	for _, part := range def.Parts {
+		pos, ok := base.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok {
+			return false
+		}
+		expr := GetColExpr(base.TableDef.Cols[pos].Typ, base.BindingTags[0], pos)
+		if !types.T(expr.Typ.Id).IsFixedLen() || !encodedOrderMatchesSQLOrder(expr) {
+			return false
+		}
+	}
+	desc := order[0].Flag&plan.OrderBySpec_DESC != 0
+	for _, spec := range order {
+		if (spec.Flag&plan.OrderBySpec_DESC != 0) != desc ||
+			desc && spec.Flag&plan.OrderBySpec_NULLS_FIRST != 0 ||
+			!desc && spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// matchingIndexPrefixEqualities identifies SQL equalities already established
+// by an exact encoded prefix. Other SQL and index predicates remain in place.
+func matchingIndexPrefixEqualities(def *plan.IndexDef, base, index *plan.Node) []bool {
+	if len(base.FilterList) == 0 {
+		return nil
+	}
+	var prefix *plan.Function
+	for _, filter := range index.FilterList {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "prefix_eq" || len(fn.Args) != 2 {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		serial := fn.Args[1].GetF()
+		if col != nil && col.RelPos == index.BindingTags[0] && col.ColPos == 0 &&
+			serial != nil && serial.Func != nil && serial.Func.ObjName == "serial_full" {
+			prefix = serial
+			break
+		}
+	}
+	if prefix == nil || len(prefix.Args) == 0 || len(prefix.Args) > len(base.FilterList) || len(prefix.Args) > len(def.Parts) {
+		return nil
+	}
+	lengths, err := catalog.IndexPrefixLengthsFromParamsWithError(def.IndexAlgoParams)
+	if err != nil {
+		return nil
+	}
+	matched := make([]bool, len(base.FilterList))
+	for pos, value := range prefix.Args {
+		name := catalog.ResolveAlias(def.Parts[pos])
+		column, ok := base.TableDef.Name2ColIndex[name]
+		if !ok || lengths[name] > 0 || !isStableRegularIndexCursor(value) {
+			return nil
+		}
+		colExpr := GetColExpr(base.TableDef.Cols[column].Typ, base.BindingTags[0], column)
+		if !types.T(colExpr.Typ.Id).IsFixedLen() || !encodedOrderMatchesSQLOrder(colExpr) {
+			return nil
+		}
+		found := false
+		for i, filter := range base.FilterList {
+			eq := filter.GetF()
+			if matched[i] || eq == nil || eq.Func == nil || eq.Func.ObjName != "=" || len(eq.Args) != 2 {
+				continue
+			}
+			left, right := eq.Args[0], eq.Args[1]
+			if left.GetCol() == nil {
+				left, right = right, left
+			}
+			ref := left.GetCol()
+			if ref != nil && ref.RelPos == base.BindingTags[0] && ref.ColPos == column &&
+				exprStructuralEqual(right, value) {
+				matched[i], found = true, true
+				break
+			}
+		}
+		if !found {
+			return nil
+		}
+	}
+	return matched
 }
 
 func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node) *regularIndexTopSortContext {
@@ -1439,7 +1555,6 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		DirectView:   node.DirectView,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
-	forceScanNodeStatsTP(idxNodeID, builder)
 	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{node.NodeId, idxNodeID},
@@ -1526,7 +1641,6 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		DirectView:   node.DirectView,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
-	forceScanNodeStatsTP(idxNodeID, builder)
 	return idxNodeID, nil
 }
 
@@ -2142,13 +2256,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID
 			prepared, err := builder.prepareIndexJoinWithBudget(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot, reservation)
 			propagateKeySetControlError(builder.GetContext(), err)
 			if err == nil && prepared != nil {
-				retID, idxTableNodeID = builder.publishIndexJoin(prepared, node)
+				retID, idxTableNodeID = builder.publishIndexJoin(prepared, node, condType, filterIdx)
 			}
 		} else {
 			retID, idxTableNodeID = builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
 		}
 		if idxTableNodeID >= 0 {
-			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 			return retID
 		}
 		if keySetSize == 0 {
@@ -2183,7 +2296,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID
 		}
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
 		if idxTableNodeID >= 0 {
-			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 			return retID
 		}
 	}
@@ -2323,8 +2435,7 @@ func (builder *QueryBuilder) applyBoundedUniqueKeySetRanked(indexes []*IndexDef,
 		if count != c.count {
 			return -1, -1, false
 		}
-		retID, scanID := builder.publishIndexJoin(prepared, node)
-		builder.applyExtraFiltersOnIndex(c.index, node, builder.qry.Nodes[scanID], c.filters)
+		retID, scanID := builder.publishIndexJoin(prepared, node, KeySetIndexCondition, c.filters)
 		return retID, scanID, true
 	}
 	return -1, -1, true
@@ -2394,8 +2505,7 @@ func (builder *QueryBuilder) applyBoundedUniqueKeySetExhaustive(indexes []*Index
 	if best == nil {
 		return -1, -1
 	}
-	retID, idxTableNodeID := builder.publishIndexJoin(best, node)
-	builder.applyExtraFiltersOnIndex(best.idxDef, node, builder.qry.Nodes[idxTableNodeID], bestFilters)
+	retID, idxTableNodeID := builder.publishIndexJoin(best, node, KeySetIndexCondition, bestFilters)
 	return retID, idxTableNodeID
 }
 
@@ -3011,7 +3121,6 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
-	forceScanNodeStatsTP(idxTableNodeID, builder)
 	return idxTableNodeID
 }
 
@@ -3450,10 +3559,10 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	if prepared == nil {
 		return -1, -1
 	}
-	return builder.publishIndexJoin(prepared, node)
+	return builder.publishIndexJoin(prepared, node, filterType, filterIdx)
 }
 
-func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node *plan.Node) (int32, int32) {
+func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node *plan.Node, filterType int, filterIdx []int32) (int32, int32) {
 	idxDef, idxTag := prepared.idxDef, prepared.idxTag
 	idxObjRef, idxTableDef, idxFilter := prepared.idxObjRef, prepared.idxTableDef, prepared.idxFilter
 	builder.addNameByColRef(idxTag, idxTableDef)
@@ -3478,9 +3587,16 @@ func (builder *QueryBuilder) publishIndexJoin(prepared *preparedIndexJoin, node 
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
 	}
+	// appendNode derives statistics. Publish the complete access predicate so
+	// the scan and its parent join cannot retain a leading-prefix-only estimate.
+	if filterType != SpatialIndexCondition {
+		builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, filterIdx)
+	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
-	forceScanNodeStatsTP(idxTableNodeID, builder)
+	if filterType == SpatialIndexCondition {
+		forceScanNodeStatsTP(idxTableNodeID, builder)
+	}
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)

@@ -307,7 +307,11 @@ where a=1 and b in ('alpha','beta') order by payload;
 
 -- The index-side logical Top must keep NULL/ties/OFFSET before backfill.
 create table bounded_top (id int primary key, a int not null, b int, payload int, key ix_bounded(a,b));
-insert into bounded_top values (1,1,null,90),(2,1,null,80),(3,1,1,70),(4,1,1,60),(5,1,2,50),(6,1,2,40),(7,1,3,30),(8,1,3,20),(9,1,4,10),(10,1,4,0),(11,1,5,-10),(12,1,5,-20);
+insert into bounded_top values (3,1,1,70),(4,1,1,60),(5,1,2,50),(6,1,2,40),(7,1,3,30),(8,1,3,20),(9,1,4,10),(10,1,4,0),(11,1,5,-10),(12,1,5,-20);
+select mo_ctl('dn','flush','force_index_order.bounded_top');
+select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
+where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_bounded');
+insert into bounded_top values (1,1,null,90),(2,1,null,80);
 select mo_ctl('dn','flush','force_index_order.bounded_top');
 select mo_ctl('dn','flush',cast(rel_id as varchar(32))) from mo_catalog.mo_tables
 where relname in (select index_table_name from mo_catalog.mo_indexes where name='ix_bounded');
@@ -317,7 +321,7 @@ analyze table bounded_top;
 -- @separator:table
 -- @regex("Index Table Scan.*ix_bounded",true)
 -- @regex("Limit: 3(?![0-9])",true)
--- @regex("Index Reader Param",false)
+-- @regex("Index Reader Param",true)
 explain select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
 select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
@@ -325,6 +329,8 @@ select id,payload from bounded_top force index(ix_bounded) where a=1 order by b 
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
 select id,payload from bounded_top force index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b asc,id desc limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) order by a,b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) order by a,b,id limit 2 offset 1;
 -- An unmapped residual must retain all candidates until the base filter.
 select id,payload from bounded_top force index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 and payload<0 order by b,id limit 1;
@@ -332,17 +338,29 @@ select id,payload from bounded_top ignore index(ix_bounded) where a=1 and payloa
 -- @separator:table
 -- @regex("Index Table Scan.*ix_bounded",true)
 -- @regex("Limit: 3(?![0-9])",true)
+-- @regex("Index Reader Param",false)
 explain select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
 select id,payload from bounded_top force index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 and b>=2 order by b,id limit 2 offset 1;
 
+-- A mapped expression retains its residual before Top, without reader truncation.
+-- @separator:table
+-- @regex("Index Table Scan.*ix_bounded",true)
+-- @regex("Index Reader Param",false)
+explain select id,payload from bounded_top force index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 and mod(b,2)=0 order by b,id limit 2 offset 1;
+
 -- Workspace changes participate before the index-side Top; rollback restores it.
 begin;
 insert into bounded_top values (0,1,null,999);
+insert into bounded_top values (100,1,100,10000);
 update bounded_top set b=9,payload=42 where id=2;
 delete from bounded_top where id=1;
 select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
+select id,payload from bounded_top force index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
+select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b desc,id desc limit 2 offset 1;
 rollback;
 select id,payload from bounded_top force index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
 select id,payload from bounded_top ignore index(ix_bounded) where a=1 order by b,id limit 2 offset 1;
@@ -355,5 +373,24 @@ execute bounded_param using @p;
 set @p=1;
 execute bounded_param using @p;
 deallocate prepare bounded_param;
+-- Reuse one prepared access through dense, sparse, other-dense, empty and rebound keys.
+begin;
+update bounded_top set a=2 where id in (4,6,9);
+update bounded_top set a=3 where id in (10,11,12);
+prepare bounded_key from 'select id,payload from bounded_top force index(ix_bounded) where a=? order by b,id limit 2 offset 1';
+set @k=1;
+execute bounded_key using @k;
+set @k=2;
+execute bounded_key using @k;
+select id,payload from bounded_top ignore index(ix_bounded) where a=2 order by b,id limit 2 offset 1;
+set @k=3;
+execute bounded_key using @k;
+select id,payload from bounded_top ignore index(ix_bounded) where a=3 order by b,id limit 2 offset 1;
+set @k=null;
+execute bounded_key using @k;
+set @k=1;
+execute bounded_key using @k;
+deallocate prepare bounded_key;
+rollback;
 
 drop database force_index_order;

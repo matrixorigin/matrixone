@@ -424,6 +424,8 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 		want      uint64
 	}{
 		{"prefix", "where a=1 order by b,id limit 2", 2},
+		{"full index order", "order by a,b,id limit 2", 2},
+		{"wide trailing index value", "where a=1 order by b,id limit 2", 2},
 		{"descending", "where a=1 order by b desc,id desc limit 2", 2},
 		{"mixed", "where a=1 order by b asc,id desc limit 2", 2},
 		{"offset", "where a=1 order by b,id limit 2 offset 3", 5},
@@ -452,6 +454,17 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 			ctx := &backfillTopStatsContext{MockCompilerContext: &mock.ctxt, rows: 1000000}
 			selectList := "id,a,b,payload"
 			switch tc.name {
+			case "wide trailing index value":
+				table.Cols[4].Typ = planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+				for _, index := range table.Indexes {
+					if index.IndexName == "idx_ab" {
+						index.Parts = []string{"a", "b", "id", "payload", index.Parts[len(index.Parts)-1]}
+					}
+				}
+				other := int32(len(table.Cols))
+				table.Name2ColIndex["other"] = other
+				table.Cols = append(table.Cols, &planpb.ColDef{ColId: uint64(other), Name: "other", OriginName: "other", Typ: planpb.Type{Id: int32(types.T_int32)}, Default: &planpb.Default{NullAbility: true}})
+				selectList += ",other"
 			case "unknown cardinality":
 				ctx.rows = 0
 			case "small input":
@@ -471,6 +484,8 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 			require.NoError(t, err)
 			q := p.GetQuery()
 			var bound uint64
+			var readerLimit uint64
+			var hasReaderLimit bool
 			var joins int
 			seen := map[int32]bool{}
 			var walk func(int32)
@@ -480,12 +495,22 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 				}
 				seen[id] = true
 				n := q.Nodes[id]
+				if n.IndexScanInfo.IsIndexScan && n.IndexReaderParam != nil {
+					var ok bool
+					readerLimit, ok = getLiteralUint64(n.IndexReaderParam.Limit)
+					require.True(t, ok)
+					hasReaderLimit = true
+				}
 				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_INDEX {
 					joins++
 					var inspect func(int32)
 					inspect = func(s int32) {
 						v := q.Nodes[s]
 						if v.NodeType == planpb.Node_SORT {
+							if tc.name == "mapped residual" {
+								require.Len(t, v.OrderBy, 1)
+								require.Equal(t, int32(types.T_varchar), v.OrderBy[0].Expr.Typ.Id, "reuse the exact serialized order after residual evaluation")
+							}
 							x, ok := getLiteralUint64(v.Limit)
 							require.True(t, ok)
 							require.Nil(t, v.Offset)
@@ -506,9 +531,13 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 			}
 			if tc.name == "mapped residual" {
 				calls := 0
+				decoded := 0
 				var countModulo func(*planpb.Expr)
 				countModulo = func(expr *planpb.Expr) {
 					if f := expr.GetF(); f != nil {
+						if f.Func.ObjName == "serial_extract" {
+							decoded++
+						}
 						if f.Func.ObjName == "mod" || f.Func.ObjName == "%" {
 							calls++
 						}
@@ -525,9 +554,15 @@ func TestRegularIndexBackfillTop(t *testing.T) {
 					}
 				}
 				require.LessOrEqual(t, calls, 1, "an index-side SQL predicate must not be evaluated twice")
+				require.LessOrEqual(t, decoded, 1, "the exact encoded prefix already establishes a; only the residual needs b decoded")
 			}
 			require.GreaterOrEqual(t, joins, 1, "the control must exercise real index backfill")
 			require.Equal(t, tc.want, bound)
+			wantNatural := tc.name == "prefix" || tc.name == "descending" || tc.name == "offset" || tc.name == "full index order"
+			require.Equal(t, wantNatural, hasReaderLimit, "static limits require complete SQL predicate and natural-order proofs")
+			if wantNatural {
+				require.Equal(t, tc.want, readerLimit)
+			}
 		})
 	}
 }

@@ -2386,7 +2386,7 @@ func TestBuildBlockPKSearchFuncsRejectMalformedFilters(t *testing.T) {
 	}
 	for _, filter := range tests {
 		require.NotPanics(t, func() {
-			sorted, unsorted, err := buildBlockPKSearchFuncs(filter)
+			sorted, unsorted, err := buildBlockPKSearchFuncs(filter, false)
 			require.NoError(t, err)
 			require.Nil(t, sorted)
 			require.Nil(t, unsorted)
@@ -2531,7 +2531,7 @@ func TestBuildBlockPKSearchFuncsFailsOpenOnInputTypeMismatch(t *testing.T) {
 		Op:    function.IN,
 		Oid:   types.T_int64,
 		Vec:   values,
-	})
+	}, false)
 	require.NoError(t, err)
 	require.Nil(t, sorted)
 	require.Nil(t, unsorted)
@@ -3885,7 +3885,7 @@ func TestBuildBlockPKSearchFuncsAdditionalPrimaryKeyTypes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sorted, unsorted, err := buildBlockPKSearchFuncs(test.filter)
+			sorted, unsorted, err := buildBlockPKSearchFuncs(test.filter, false)
 			require.NoError(t, err)
 			require.NotNil(t, sorted)
 			require.NotNil(t, unsorted)
@@ -3902,7 +3902,7 @@ func TestBuildBlockPKSearchFuncsAdditionalPrimaryKeyTypes(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(vec, types.MoYear(2025), false, mp))
 			require.NoError(t, vector.AppendFixed(vec, types.MoYear(2026), false, mp))
 		}
-		sorted, unsorted, err := buildBlockPKSearchFuncs(BasePKFilter{Valid: true, Op: function.IN, Oid: oid, Vec: vec})
+		sorted, unsorted, err := buildBlockPKSearchFuncs(BasePKFilter{Valid: true, Op: function.IN, Oid: oid, Vec: vec}, false)
 		require.NoError(t, err)
 		require.NotNil(t, sorted)
 		require.NotNil(t, unsorted)
@@ -4033,7 +4033,7 @@ func TestBlockPKSearchFuncsExecuteAdditionalPrimaryKeyTypes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sortedSearch, unsortedSearch, err := buildBlockPKSearchFuncs(test.filter)
+			sortedSearch, unsortedSearch, err := buildBlockPKSearchFuncs(test.filter, false)
 			require.NoError(t, err)
 			sortedVec := test.buildVec(true)
 			unsortedVec := test.buildVec(false)
@@ -4598,5 +4598,99 @@ func TestDecimal256PrefixRangeNeverDropsQualifyingObjects(t *testing.T) {
 				}
 			}()
 		}
+	}
+}
+
+func TestDenseIntegerBlockPKSearch(t *testing.T) {
+	t.Run("int8", func(t *testing.T) { testDenseIntegerBlockPKSearch[int8](t, types.T_int8, math.MinInt8, math.MaxInt8) })
+	t.Run("int16", func(t *testing.T) {
+		testDenseIntegerBlockPKSearch[int16](t, types.T_int16, math.MinInt16, math.MaxInt16)
+	})
+	t.Run("int32", func(t *testing.T) {
+		testDenseIntegerBlockPKSearch[int32](t, types.T_int32, math.MinInt32, math.MaxInt32)
+	})
+	t.Run("int64", func(t *testing.T) {
+		testDenseIntegerBlockPKSearch[int64](t, types.T_int64, math.MinInt64, math.MaxInt64)
+	})
+	t.Run("uint8", func(t *testing.T) { testDenseIntegerBlockPKSearch[uint8](t, types.T_uint8, 0, math.MaxUint8) })
+	t.Run("uint16", func(t *testing.T) { testDenseIntegerBlockPKSearch[uint16](t, types.T_uint16, 0, math.MaxUint16) })
+	t.Run("uint32", func(t *testing.T) { testDenseIntegerBlockPKSearch[uint32](t, types.T_uint32, 0, math.MaxUint32) })
+	t.Run("uint64", func(t *testing.T) { testDenseIntegerBlockPKSearch[uint64](t, types.T_uint64, 0, math.MaxUint64) })
+	t.Run("bit", func(t *testing.T) { testDenseIntegerBlockPKSearch[uint64](t, types.T_bit, 0, math.MaxUint64) })
+}
+func testDenseIntegerBlockPKSearch[T types.Ints | types.UInts](t *testing.T, oid types.T, minimum, maximum T) {
+	t.Helper()
+	cases := []struct {
+		name  string
+		keys  []T
+		dense bool
+	}{
+		{"dense duplicates", []T{1, 2, 2, 3}, true},
+		{"lower boundary", []T{minimum, minimum + 1, minimum + 2}, true},
+		{"upper boundary", []T{maximum - 2, maximum - 1, maximum}, true},
+		{"hole", []T{1, 3}, false},
+		{"descending", []T{3, 2, 1}, false},
+		{"wraparound", []T{maximum, minimum}, false},
+		{"one value", []T{2}, false},
+		{"repeated value", []T{2, 2, 2}, false},
+	}
+	if minimum < T(0) {
+		zero := T(0)
+		cases = append(cases, struct {
+			name  string
+			keys  []T
+			dense bool
+		}{"cross zero", []T{zero - 2, zero - 1, zero, zero + 1}, true})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			keys := vector.NewVec(oid.ToType())
+			input := vector.NewVec(oid.ToType())
+			sortedInput := vector.NewVec(oid.ToType())
+			t.Cleanup(func() { keys.Free(mp); input.Free(mp); sortedInput.Free(mp); require.Zero(t, mp.CurrNB()) })
+			require.NoError(t, vector.AppendFixedList(keys, tc.keys, nil, mp))
+			if !slices.IsSorted(tc.keys) {
+				_, _, dense := denseIntegerPKBounds(keys)
+				require.False(t, dense)
+				return
+			}
+			before, err := keys.MarshalBinary()
+			require.NoError(t, err)
+			base := BasePKFilter{Valid: true, Op: function.IN, Oid: oid, Vec: keys}
+			sortedSearch, unsortedSearch, err := buildBlockPKSearchFuncs(base, false)
+			require.NoError(t, err)
+			require.NotNil(t, sortedSearch)
+			require.NotNil(t, unsortedSearch)
+			after, err := keys.MarshalBinary()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			require.Equal(t, function.IN, base.Op)
+			require.Same(t, keys, base.Vec)
+			if tc.dense {
+				// Range callbacks own their decoded endpoints, not the source vector.
+				keys.CleanOnlyData()
+				require.NoError(t, vector.AppendFixedList(keys, []T{maximum, maximum}, nil, mp))
+			}
+			samples := append([]T{maximum, minimum, 4, 0, 3, 1, 2, maximum - 1, minimum + 1}, tc.keys...)
+			ordered := slices.Clone(samples)
+			slices.Sort(ordered)
+			require.NoError(t, vector.AppendFixedList(input, samples, nil, mp))
+			require.NoError(t, vector.AppendFixedList(sortedInput, ordered, nil, mp))
+			want := func(values []T) []int64 {
+				var offsets []int64
+				for row, value := range values {
+					for _, key := range tc.keys {
+						if value == key {
+							offsets = append(offsets, int64(row))
+							break
+						}
+					}
+				}
+				return offsets
+			}
+			require.Equal(t, want(samples), unsortedSearch(input))
+			require.Equal(t, want(ordered), sortedSearch(sortedInput))
+		})
 	}
 }

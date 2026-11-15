@@ -5959,6 +5959,27 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 }
 
 // InplaceSortAndCompact @todo optimization in the future
+// varlenaSorter compares descriptors in place so each comparison does not
+// copy two 24-byte descriptors. The area remains owned by the vector.
+type varlenaSorter struct {
+	col  []types.Varlena
+	area []byte
+}
+
+func (s varlenaSorter) Len() int { return len(s.col) }
+
+func (s varlenaSorter) Less(i, j int) bool {
+	return bytes.Compare(s.col[i].GetByteSlice(s.area), s.col[j].GetByteSlice(s.area)) < 0
+}
+
+func (s varlenaSorter) Swap(i, j int) { s.col[i], s.col[j] = s.col[j], s.col[i] }
+
+func sortVarlena(col []types.Varlena, area []byte) {
+	if len(col) > 1 {
+		sort.Sort(varlenaSorter{col: col, area: area})
+	}
+}
+
 func (v *Vector) InplaceSortAndCompact() {
 	cleanDataNotResetArea := func() {
 		if v.data != nil {
@@ -6272,9 +6293,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
@@ -6509,9 +6528,7 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)

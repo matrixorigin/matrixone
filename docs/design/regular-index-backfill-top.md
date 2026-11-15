@@ -1,101 +1,157 @@
 # Bounded regular-index backfill
 
-Owner: pkg/sql/plan, applyIndicesForProject.
-Tracking: MatrixOne #32665, implementation PR #32675.
-Design revision: 7; reviewed before the corresponding implementation.
-Approval covers the planner design. Delivery still requires correctness and
-performance acceptance, including the original unlimited useful-index case.
+Owner: pkg/sql/plan, the existing regular-index rewrite.
+Tracking: MatrixOne #32665, PR #32675.
+Design revision: 10. Delivery requires correctness and performance acceptance;
+the original useful-index case and the regression budget remain gates.
 
-## Problem and invariant
+## Contract and existing responsibilities
 
-A forced regular index can generate many keys for a small ORDER BY LIMIT.
-Building a runtime filter and backfilling every key wastes work. The index can
-preselect keys only when it has every qualifying predicate and the complete SQL
-order. The final SQL Top and original base filters remain authoritative.
+A useful forced index must remain an index access. An unusable, unfiltered,
+noncovering index does not justify an extra lookup. Explicit FOR JOIN hints keep
+their existing priority and column-remapping owner.
 
-Invariant: every row eligible for the final LIMIT/OFFSET remains available.
-The negation is a missing or wrongly ordered row after key preselection.
+An index may preselect backfill keys only when it can evaluate every qualifying
+predicate and the complete SQL order. The final SQL Top, LIMIT/OFFSET and base
+filters remain authoritative. No eligible final row may disappear.
 
-## Existing owners and admission
+Reuse regularIndexColumnMap, predicate-stability checks, buildCandidateLimit,
+the existing ordering-domain checks, and ordinary Project/Top/IndexBuild nodes.
+The rewrite adds no executor, protocol, catalog representation or cache.
 
-Use the existing regular-index pass, regularIndexColumnMap, exprStructuralEqual, predicate-stability
-checks, buildCandidateLimit, isPositiveLiteralLimit, and ordinary Project/Top
-operators. No reader, protocol, catalog, cache or worker-topology changes.
+## Admission and key preselection
 
-Admit only SELECT without FOR UPDATE, with:
-- a direct SORT -> optional row-preserving PROJECT -> INDEX join;
-- two direct scans, a complete regular nonunique index, and private base/build access;
-- no intermediate JOIN filter, existing build/probe dependency or reader limit;
-- a positive bounded literal LIMIT+OFFSET and no rank option;
-- known base-scan cardinality estimating more than twice that candidate budget;
-- stable base predicates whose decoded column references are fully mapped and fixed-size, and stable projection expressions;
-- distinct direct fixed-size SQL order columns including every PK component;
-- the established safe scalar ordering domain, excluding float/spatial keys.
+Admit SELECT without FOR UPDATE, with:
 
-Check incoming references from reachable query steps for the INDEX join and both scans. Ignore orphan nodes left by earlier rewrites. Pruning a shared base scan would also restrict another consumer through its runtime filter.
+- SORT over an optional row-preserving PROJECT and a direct INDEX join;
+- direct base/index scans and a complete regular nonunique index;
+- no intervening filter, pagination, existing build/probe dependency or reader limit;
+- positive bounded literal LIMIT+OFFSET, without a rank option;
+- known base cardinality predicting more than twice the candidate budget;
+- stable predicates whose required decoded references are fully mapped and fixed-size;
+- stable projections and distinct direct fixed-size SQL order columns;
+- every PK component in that order, in the established safe ordering domain.
 
-Unknown statistics, unmapped/wide predicate references, generic joins, shared access, truncated
-required values, wide/repeated keys, volatile expressions and unsupported budgets
-decline without mutation. Default statistics are placeholders, not evidence.
-Admission is a cost preference; correctness never depends on an estimate.
+Reject floating-point/spatial ordering, truncated required values, wide keys,
+unmapped or volatile predicates, repeated order keys and unsupported budgets.
+Default statistics provide no cardinality evidence. Cost estimates only govern
+admission; they never establish result correctness.
 
-## Rewrite and proof
+Count references from reachable query steps to the INDEX join and both scans.
+An orphan node left by an earlier rewrite is not a consumer. A shared base scan
+cannot be pruned because another consumer would see the restrictive filter.
 
-1. Recheck the original stable predicates on decoded index values. Retain an existing equivalent recheck rather than evaluating it twice.
-2. Project the stored PK and mapped order values. Reuse the stored PK slot when
-   a scalar PK is also an order key; materialize each required value once.
-3. Add the existing logical Top with K=LIMIT+OFFSET and no OFFSET.
-4. Redirect only the INDEX join's right PK reference to that private projection.
-5. Retain the original final SQL comparator, LIMIT, OFFSET and base filters.
+Recheck all stable SQL predicates on decoded index values, reusing equivalent
+existing rechecks. Project the stored PK and required order values once; reuse
+the stored PK slot when possible. Add the ordinary Top with K=LIMIT+OFFSET and
+no OFFSET, and redirect only the private INDEX build reference. Keep the original
+transactional snapshots, base predicates and final SQL Top.
 
-Both scans retain the existing transactional snapshot and object references.
-Exact SQL rechecks reject encoded-prefix false positives before preselection.
-All PK components make the admitted logical SQL order total. The first K index
-rows therefore contain every row required by the final SQL Top. If runtime-filter
-admission returns PASS, the retained base filters and final Top still evaluate
-the complete original query correctly. No filter cardinality limit is weakened.
+These exact rechecks remove encoded-prefix false positives before preselection.
+The complete PK makes the admitted order total. The first K qualifying index
+rows therefore contain every row needed by the final SQL Top. Runtime-filter
+PASS still evaluates the original base predicates and final Top.
 
-The normal statistics, runtime-filter generation, remapping, projection removal
-and compiler consume ordinary plan nodes. Reapplication declines because the
-right child has become SORT.
+## Natural order and residuals
 
-## Resources, lifecycle and compatibility
+Prove natural order independently from predicate coverage. The SQL order must
+match the stored order after stable typed leading equalities, with the ordinary
+NULL placement and a uniform direction. Unsupported physical/logical ordering
+uses the decoded-key Top.
 
-The new Top retains at most K rows of fixed-size order values and stored PKs,
-charged to the existing memory pool. Composite PK components must also be
-fixed-size because every component occurs in the admitted order. Cost is
-O(index candidates * log K), with O(K * retained key width) extra storage.
-Backfill, key sorting and serialization can then handle at most K keys.
+When residual predicates are fully mapped, evaluate them before the inner Top.
+Skip a leading-equality recheck only after proving that it is the actual typed
+serialized lookup prefix. Keep every original predicate on the base scan.
+Residuals disable the static reader limit.
 
-Normal Project/Top/IndexBuild owners handle empty input, cancellation, expression
-or allocation failure, partial preparation, reset, reuse and Free. No new
-goroutine, queue, retry, metric cardinality or accumulating state is added.
-The wait graph remains index scan -> index Top -> filter build -> base scan ->
-final Top. Existing local/remote node encoding and operator lifecycle apply.
-No public API, persistent representation, tenant boundary or upgrade protocol
-changes.
+Without residuals, the existing reader may select K per sorted persisted block
+after PK filtering and tombstones. Unsorted blocks and workspace data retain full
+reads. The global index Top still selects K across all sources. The final SQL
+Top remains responsible for the complete result, including PASS.
 
-## Alternatives and cost evidence
+## Statistics and scheduling
 
-Retaining all keys remains the fallback. Static reader limits cannot implement
-the admitted mixed SQL ordering and complete predicate rechecks across generic
-joins. New cache or pipeline scheduling mechanisms have larger ownership costs.
+Finalize the selected index scan's complete filters before appendNode invokes
+the canonical statistics calculation. The parent join then consumes those
+complete statistics. Do not append residual/range filters after publishing a
+leading-only estimate.
 
-Paired prototypes improved OFFSET by about 59-62%, but also exposed 11-14%
-point-lookup and 17-35% oversized-LIMIT regressions. This requires known-cardinality
-admission and a majority estimated reduction before adding another Top.
-Projection-slot reuse avoids duplicating the PK. These decisions bound complexity
-and costs; they do not establish the overall PR's performance acceptance.
+A literal composite prefix/range bound carries the original finite range
+selectivity as well as its equality prefix. Dynamic or unknown values retain
+their established estimate. Keep the original SQL recheck.
 
-## Validation before delivery
+Regular-index scans retain real row/cost/block estimates; do not cap them to
+manufacture a TP schedule. Spatial policy stays in its existing owner.
+CalcNodeDOP remains the planner scheduling owner. Do not introduce separate
+literal-key boundaries or mutate planned worker/receiver counts at runtime.
 
-Typed public planner cases cover useful ordering, OFFSET, mapped predicates,
-and decline controls for residuals, missing PK, volatility, width, duplicates,
-unknown/small cardinality and invalid budgets. Public SQL compares exact rows
-against IGNORE INDEX with persisted data, NULL/ties, workspace changes, rollback,
-and prepared reuse. Existing one-/two-CN fixtures validate the execution boundary.
+The existing runtime reader scheduler can use actual pruned block counts,
+including ordered scans. IndexReaderParam and reused-shuffle paths retain their
+existing reader scheduling.
+Existing grouping transfers every backend reader to one worker and fills unused
+planned slots with EmptyReaders. Local Top thresholds and final MergeTop remain
+distinct. A runtime-filter DROP follows the empty-reader terminal path before
+acquiring a relation or backend readers.
 
-Owning UT, relevant race/static checks and paired real-target latency/resource
-measurements must pass. Include point and oversized-LIMIT controls, profitable
-prefix cases, automatic-plan controls, and the original unlimited VARCHAR case.
-Report pending or slower cases explicitly; no regression gate is waived here.
+## Hot-path costs and ownership
+
+Scalar decoding uses fixed local buffers and the existing byte order. Varlena
+sorting compares existing descriptors through the standard sort contract.
+Top/MergeTop sort retained row offsets through their authoritative comparator
+rather than rebuilding and draining a heap. Their privately owned batch can
+skip Shuffle only for the identity permutation; generic vector/batch Shuffle
+ownership is unchanged. Spill handling is unchanged.
+
+Reserve the existing vector key encoder's known result capacity once. Keep each
+encoded key independently owned; public encoding and storage formats do not
+change. IN remains a per-key MVCC lookup, including old snapshots with later
+versions.
+
+Only immutable persisted-block search may turn a sorted dense integer IN set
+into exact inclusive endpoints. Reject gaps, decreasing/wrapping values, NULL,
+constant and unsupported vectors. This optimization never changes memory-state
+iteration into a range.
+
+## Unsorted persisted-key membership
+
+Ordinary integer IN search uses exact binary membership for sorted search keys
+on unsorted blocks. Tiny sets and actually unsorted ordinary search keys retain
+the existing linear fallback. The caller's sorted flag alone does not establish
+this proof.
+Floating-point and custom comparison domains keep their existing search.
+
+Implicit primary keys are unsorted. For at most BlockMaxRows keys, their
+reader-local filter may build one immutable membership map. Larger key sets use
+binary search. The existing filter closure owns the map until reader close/reset;
+there is no global cache or new resource owner. This does not change MVCC memory
+iteration, key encoding, SQL predicates or result ordering.
+
+## Lifecycle and resource budget
+
+The added Top retains at most K rows of bounded order values and stored PKs,
+using existing memory ownership. Its selection work is O(candidates * log K);
+retained state is O(K * retained width). Complete PK components must be fixed-size.
+Reference maps live only for the query builder.
+
+Existing operator and reader owners close success, empty input, expression or
+allocation failure, cancellation, partial preparation, reset and reuse. The wait
+graph remains index scan -> index Top -> filter build -> base scan -> final Top.
+There is no new goroutine, queue, retry loop or accumulating state. API, wire,
+on-disk representation, tenant and upgrade boundaries retain their contracts.
+
+## Evidence required before delivery
+
+Typed controls prove admission, decline, private access, complete statistics,
+metadata fallback, byte ownership and worker/EOF invariants. Real SQL compares
+exact ordered rows with IGNORE INDEX over persisted data, NULL/ties, residuals,
+workspace changes, rollback and prepared reuse.
+
+Small BVT fixtures prove public result and lifecycle contracts. Typed plans and
+large real tables separately prove that cost-based preselection actually runs.
+Use the existing one-/two-CN fixtures and owning normal/race/static checks.
+
+Pair latency/resource measurements against the verified target with both data
+layouts and startup orders. Include point, oversized LIMIT, dense/sparse ranges,
+automatic plans, neighboring key counts, PASS, stale statistics and the original
+VARCHAR case. Recheck long-lived snapshot and larger-input behavior. Report any
+missing or slower case explicitly. No performance gate is waived by this design.

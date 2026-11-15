@@ -165,7 +165,14 @@ func (builder *QueryBuilder) secondaryIndexPrefixRanges(idx *plan.IndexDef, scan
 			propagateKeySetControlError(builder.GetContext(), err)
 			continue
 		}
-		bound.Selectivity = indexScan.FilterList[0].Selectivity // The original SQL residual remains on both scans.
+		// The bound covers both the equality prefix and this range. Keep the
+		// SQL recheck, while preserving its reduction in the access cost.
+		bound.Selectivity = indexScan.FilterList[0].Selectivity
+		if sel := filter.Selectivity; sel > 0 && sel <= 1 &&
+			bound.Selectivity > 0 && bound.Selectivity <= 1 &&
+			!containsDynamicParam(filter) && !containsDynamicParam(indexScan.FilterList[0]) {
+			bound.Selectivity *= sel
+		}
 		bounds = append(bounds, bound)
 	}
 	return bounds

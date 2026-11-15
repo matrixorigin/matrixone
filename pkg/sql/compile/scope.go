@@ -1714,6 +1714,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
+	if emptyScan {
+		s.NodeInfo.Data = nil
+		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
+		for i := range readers {
+			readers[i] = new(readutil.EmptyReader)
+		}
+		return
+	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
 			emptyScan = true
@@ -1951,7 +1959,7 @@ func (s *Scope) scanReaderCount(c *Compile) int {
 	n := s.NodeInfo.Mcpu
 	if n <= 1 || uint64(n) > uint64(^uint32(0)>>1) || c == nil || c.pn == nil || c.pn.GetQuery() == nil || len(c.pn.GetQuery().Nodes) == 0 ||
 		s.DataSource == nil || s.DataSource.node == nil || s.DataSource.node.Stats == nil ||
-		len(s.DataSource.OrderBy) > 0 || s.DataSource.IndexReaderParam != nil {
+		s.DataSource.IndexReaderParam != nil {
 		return n
 	}
 	// Other relation data can encode shuffle buckets rather than plain blocks.

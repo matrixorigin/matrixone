@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,9 +27,17 @@ import (
 func TestSecondaryIndexEqualityPrefixWithIntegerRange(t *testing.T) {
 	for _, tc := range []struct {
 		name, op, want, params                                      string
+		rangeSel                                                    float64
 		otherColumn, otherBinding, floatRange, unique, disableBlock bool
+		dynamicPrefix, dynamicRange                                 bool
 	}{
 		{name: "between", op: "between", want: "prefix_between"},
+		{name: "zero_range_cost", op: "between", want: "prefix_between"},
+		{name: "dynamic_prefix_cost", op: "between", want: "prefix_between", dynamicPrefix: true},
+		{name: "dynamic_range_cost", op: "between", want: "prefix_between", dynamicRange: true},
+		{name: "unknown_range_cost", op: "between", want: "prefix_between", rangeSel: -1},
+		{name: "nan_range_cost", op: "between", want: "prefix_between", rangeSel: math.NaN()},
+		{name: "infinite_range_cost", op: "between", want: "prefix_between", rangeSel: math.Inf(1)},
 		{name: "block_filter_disabled", op: "between", want: "prefix_between", disableBlock: true},
 		{name: "open_range", op: "in_range", want: "prefix_in_range"},
 		{name: "lower_open", op: ">", want: "prefix_in_range"},
@@ -89,14 +98,35 @@ func TestSecondaryIndexEqualityPrefixWithIntegerRange(t *testing.T) {
 			}
 			rangeExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), tc.op, args)
 			require.NoError(t, err)
+			if tc.dynamicPrefix {
+				eq.GetF().Args[1] = &planpb.Expr{Typ: intType, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			}
+			if tc.dynamicRange {
+				rangeExpr.GetF().Args[1] = &planpb.Expr{Typ: rangeType, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
+			}
+			eq.Selectivity = 0.01
+			rangeExpr.Selectivity = 0.25
+			if tc.rangeSel != 0 {
+				rangeExpr.Selectivity = tc.rangeSel
+			}
 			scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{scanTag},
 				TableDef: table, FilterList: []*planpb.Expr{eq, rangeExpr}}
 			idxTable := makeTestIndexTableDef()
 			idxScan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{indexTag}, TableDef: idxTable,
 				FilterList: []*planpb.Expr{builder.replaceEqualCondition(idx, scan.FilterList, []int32{0}, indexTag, idxTable)}}
+			if tc.name == "zero_range_cost" {
+				rangeExpr.Selectivity = 0
+			}
 			original := DeepCopyExprList(scan.FilterList)
 			builder.applyExtraFiltersOnIndex(idx, scan, idxScan, []int32{0})
-			require.Equal(t, original, scan.FilterList)
+			require.Len(t, scan.FilterList, len(original))
+			for i := range original {
+				before, err := original[i].Marshal()
+				require.NoError(t, err)
+				after, err := scan.FilterList[i].Marshal()
+				require.NoError(t, err)
+				require.Equal(t, before, after)
+			}
 			var found *planpb.Expr
 			for _, filter := range idxScan.BlockFilterList {
 				if fn := filter.GetF(); fn != nil && (fn.Func.ObjName == "prefix_between" || fn.Func.ObjName == "prefix_in_range") {
@@ -110,6 +140,11 @@ func TestSecondaryIndexEqualityPrefixWithIntegerRange(t *testing.T) {
 			require.NotNil(t, found)
 			require.Equal(t, tc.want, found.GetF().Func.ObjName)
 			require.Equal(t, tc.want, idxScan.FilterList[0].GetF().Func.ObjName)
+			wantCost := 0.0025
+			if tc.rangeSel != 0 || tc.name == "zero_range_cost" || tc.dynamicPrefix || tc.dynamicRange {
+				wantCost = 0.01
+			}
+			require.InDelta(t, wantCost, idxScan.FilterList[0].Selectivity, 1e-12)
 			require.Equal(t, indexTag, found.GetF().Args[0].GetCol().RelPos)
 			for _, bound := range found.GetF().Args[1:3] {
 				require.Equal(t, "serial_full", bound.GetF().Func.ObjName)

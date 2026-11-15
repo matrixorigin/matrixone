@@ -22,10 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,25 +38,33 @@ func TestScanReaderCountUsesPrunedWork(t *testing.T) {
 		blocks  int
 		width   float64
 		prepare bool
+		ordered bool
 		want    int
 	}{
-		{"few blocks", 5, 72, false, 1},
-		{"many blocks", 124, 72, false, 4},
-		{"wide rows", 5, 128, false, 4},
-		{"ordinary grain", 32, 72, false, 3},
-		{"prepared grain", 32, 72, true, 1},
+		{"few blocks", 5, 72, false, false, 1},
+		{"many blocks", 124, 72, false, false, 4},
+		{"wide rows", 5, 128, false, false, 4},
+		{"ordinary grain", 32, 72, false, false, 3},
+		{"prepared grain", 32, 72, true, false, 1},
+		{"ordered few blocks", 5, 72, false, true, 1},
+		{"ordered many blocks", 124, 72, false, true, 4},
+		{"ordered wide rows", 5, 128, false, true, 4},
+		{"ordered prepared grain", 32, 72, true, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stats := &plan.Stats{BlockNum: 124, Rowsize: tc.width, HashmapStats: &plan.HashMapStats{Shuffle: true}}
 			node := &plan.Node{Stats: stats}
 			s := &Scope{NodeInfo: engine.Node{Mcpu: 4, Data: readutil.NewBlockListRelationData(tc.blocks)}, DataSource: &Source{node: node}}
+			if tc.ordered {
+				s.DataSource.OrderBy = []*plan.OrderBySpec{{}}
+			}
 			c := &Compile{pn: &plan.Plan{IsPrepare: tc.prepare, Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}}
 			require.Equal(t, tc.want, s.scanReaderCount(c))
 			require.Equal(t, 4, s.NodeInfo.Mcpu, "reader reduction must not alter worker/EOF topology")
 			require.EqualValues(t, 124, stats.BlockNum, "do not rewrite reusable plan statistics")
 		})
 	}
-	for _, name := range []string{"no compile", "no plan", "no query", "empty query", "nil node", "missing stats", "no source stats", "ordered", "index top", "reused sibling", "object list", "combined", "empty ranges"} {
+	for _, name := range []string{"no compile", "no plan", "no query", "empty query", "nil node", "missing stats", "no source stats", "index top", "reused sibling", "object list", "combined", "empty ranges"} {
 		t.Run(name, func(t *testing.T) {
 			node := &plan.Node{Stats: &plan.Stats{BlockNum: 124, Rowsize: 72}}
 			query := &plan.Query{Nodes: []*plan.Node{node}}
@@ -74,8 +85,6 @@ func TestScanReaderCountUsesPrunedWork(t *testing.T) {
 				query.Nodes = append(query.Nodes, &plan.Node{})
 			case "no source stats":
 				s.DataSource.node = &plan.Node{}
-			case "ordered":
-				s.DataSource.OrderBy = []*plan.OrderBySpec{{}}
 			case "index top":
 				s.DataSource.IndexReaderParam = &plan.IndexReaderParam{}
 			case "reused sibling":
@@ -201,5 +210,48 @@ func TestGroupScanReadersFailureCleanup(t *testing.T) {
 				require.Equal(t, 1, r.closes)
 			}
 		})
+	}
+}
+
+func TestBuildReadersSkipsEmptyScanAcquisition(t *testing.T) {
+	for _, mode := range []string{"DROP"} {
+		for _, route := range []string{"local", "remote", "resolve"} {
+			for _, workers := range []int{1, 4} {
+				t.Run(fmt.Sprintf("%s/%s/workers=%d", mode, route, workers), func(t *testing.T) {
+					c := NewMockCompile(t)
+					board := message.NewMessageBoard()
+					t.Cleanup(func() { board.Reset() })
+					c.proc.SetMessageBoard(board)
+					s := &Scope{Proc: c.proc, NodeInfo: engine.Node{Mcpu: workers, Data: readutil.NewBlockListRelationData(3)}, DataSource: &Source{}}
+					if route == "remote" {
+						s.IsRemote = true
+					}
+					if route == "local" {
+						s.DataSource.Rel = &struct{ engine.Relation }{}
+					}
+					if mode == "FALSE" {
+						s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+					} else {
+						spec := plan2.MakeRuntimeFilter(101, false, 1, plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0), false)
+						s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{spec}
+						message.SendMessage(message.RuntimeFilterMessage{Tag: 101, Typ: message.RuntimeFilter_DROP}, board)
+					}
+					// Any engine/DB acquisition would fail through the absent implementation.
+					readers, err := s.buildReaders(c)
+					require.NoError(t, err)
+					require.Len(t, readers, workers)
+					require.Equal(t, workers, s.NodeInfo.Mcpu)
+					require.Nil(t, s.NodeInfo.Data)
+					for _, rd := range readers {
+						var out batch.Batch
+						done, err := rd.Read(t.Context(), nil, nil, nil, &out)
+						require.NoError(t, err)
+						require.True(t, done)
+						require.Zero(t, out.RowCount())
+						require.NoError(t, rd.Close())
+					}
+				})
+			}
+		}
 	}
 }
