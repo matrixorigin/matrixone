@@ -4564,6 +4564,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
+		if builder.restrictAggregateMembership(rootID) {
+			ReCalcNodeStats(rootID, builder, true, false, true)
+		}
 		// Compare unique filtering joins against ANTI on their original fact-key
 		// domain after the legacy existence-pushdown pass has finished.
 		if !builder.outerAntiPlanningDisabled() &&

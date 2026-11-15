@@ -1,0 +1,19 @@
+-- @suite
+-- @case
+-- @desc: aggregate membership domain preserves bag, NULL and fallback semantics
+-- @label:bvt
+drop database if exists aggregate_membership_domain;
+create database aggregate_membership_domain;
+use aggregate_membership_domain;
+create table domain_keys(part int,name varchar(20));
+create table p(part int,supp int,avail decimal(7,2));
+create table f(part int,supp int,qty decimal(7,2),dt date);
+insert into domain_keys values (1,'lime-a'),(1,'lime-b'),(2,'other'),(3,'lime-c'),(null,'lime-null');
+insert into p values (1,10,20),(1,10,20),(1,11,5),(2,10,100),(3,10,100),(null,10,100),(1,null,100),(1,12,100);
+insert into f values (1,10,10,'1993-05-01'),(1,10,10,'1993-06-01'),(1,10,null,'1993-07-01'),(1,11,20,'1993-05-01'),(2,10,1,'1993-05-01'),(3,10,null,'1993-05-01'),(1,null,1,'1993-05-01'),(null,10,1,'1993-05-01'),(1,12,9,'1992-05-01'),(1,10,500,'1994-01-01');
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01' and f.part in (select part from domain_keys where name like 'lime%')) order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select count(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part not in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') or p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+drop database aggregate_membership_domain;
