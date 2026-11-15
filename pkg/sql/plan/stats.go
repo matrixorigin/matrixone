@@ -1775,7 +1775,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	}
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
-	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(indexScanSelectivityFilters(node)), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1

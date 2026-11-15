@@ -77,9 +77,13 @@ through the canonical statistics owner before publishing Project/Top. Refresh
 only estimates, preserving physical placement and hash/shuffle decisions.
 Parent nodes then consume estimates for the complete filter list.
 
-A literal composite prefix/range bound carries the original finite range
-selectivity as well as its equality prefix. Dynamic or unknown values retain
-their established estimate. Keep the original SQL recheck.
+For a secondary-index prefix/range built from equalities and a decoded range,
+the encoded bound carries the equality-prefix estimate and the decoded range
+contributes its own estimate. During scan statistics calculation, prove when an
+encoded bound implies a static integer equality or exact IN recheck and count it
+only once in an estimation-only view. Preserve the executable expressions and
+their selectivities for filter ordering and block estimation. Dynamic or
+unproved values retain their established estimates.
 
 Regular-index scans retain real row/cost/block estimates; do not cap them to
 manufacture a TP schedule. Spatial policy stays in its existing owner.

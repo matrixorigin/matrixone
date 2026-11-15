@@ -185,87 +185,159 @@ func (builder *QueryBuilder) secondaryIndexPrefixRanges(idx *plan.IndexDef, scan
 	return bounds
 }
 
-// indexAccessAccountsForSelectivity recognizes a SQL predicate whose estimate
-// is already included in an encoded index access bound. The decoded predicate
-// remains in the execution plan: this proof only avoids counting it twice.
-func indexAccessAccountsForSelectivity(def *plan.IndexDef, base, index *plan.Node, filter *plan.Expr) bool {
-	if def == nil || base == nil || base.TableDef == nil || index == nil ||
-		len(def.Parts) == 0 || len(base.BindingTags) != 1 || len(index.BindingTags) != 1 ||
-		len(index.FilterList) == 0 || filter == nil || filter.Selectivity <= 0 {
+// indexScanSelectivityFilters builds an estimation-only view. An encoded
+// regular-index bound can imply decoded SQL rechecks in the same scan. Those
+// rechecks must still execute, but must not reduce the row estimate again.
+// The actual expressions retain their own selectivity for other consumers.
+func indexScanSelectivityFilters(node *plan.Node) []*plan.Expr {
+	if node == nil {
+		return nil
+	}
+	if !node.IndexScanInfo.IsIndexScan || node.IndexScanInfo.IsUnique || len(node.FilterList) < 2 {
+		return node.FilterList
+	}
+
+	var key *plan.Expr
+	var fixed []*plan.Expr
+	var in *plan.LiteralVec
+	for _, filter := range node.FilterList {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if col == nil || col.ColPos != 0 {
+			continue
+		}
+		switch fn.Func.ObjName {
+		case "prefix_eq":
+			if hasNonNilFunctionArgs(fn, 2) {
+				args := serialFullArgs(fn.Args[1])
+				n := 0
+				for n < len(args) && staticIntegerLiteral(args[n]) {
+					n++
+				}
+				fixed = args[:n]
+			}
+		case "prefix_between", "prefix_in_range":
+			n := 3
+			if fn.Func.ObjName == "prefix_in_range" {
+				n = 4
+			}
+			if hasNonNilFunctionArgs(fn, n) {
+				lower, upper := serialFullArgs(fn.Args[1]), serialFullArgs(fn.Args[2])
+				common := 0
+				for common < len(lower) && common < len(upper) &&
+					staticIntegerLiteral(lower[common]) && staticIntegerLiteral(upper[common]) &&
+					exprStructuralEqual(lower[common], upper[common]) {
+					common++
+				}
+				fixed = lower[:common]
+			}
+		case "prefix_in":
+			if hasNonNilFunctionArgs(fn, 2) {
+				args := serialFullArgs(fn.Args[1])
+				if len(args) == 1 && args[0] != nil {
+					in = args[0].GetVec()
+				}
+			}
+		}
+		if len(fixed) > 0 || in != nil {
+			key = fn.Args[0]
+			break
+		}
+	}
+	if key == nil {
+		return node.FilterList
+	}
+
+	var estimates []*plan.Expr
+	for i, filter := range node.FilterList {
+		if !indexAccessImpliesRecheck(key, fixed, in, filter) {
+			continue
+		}
+		if estimates == nil {
+			estimates = slices.Clone(node.FilterList)
+		}
+		estimate := *filter
+		estimate.Selectivity = 1
+		estimates[i] = &estimate
+	}
+	if estimates == nil {
+		return node.FilterList
+	}
+	return estimates
+}
+
+func serialFullArgs(expr *plan.Expr) []*plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != function.SerialFullFunctionName ||
+		fn.Func.Obj != function.SerialFullFunctionEncodeID {
+		return nil
+	}
+	return fn.Args
+}
+
+func staticIntegerLiteral(expr *plan.Expr) bool {
+	if expr == nil {
 		return false
 	}
-	if index.FilterList[0] == nil {
+	lit := expr.GetLit()
+	_, _, integer := integerTypeWidth(types.T(expr.Typ.Id))
+	return integer && lit != nil && !lit.Isnull && lit.Src == nil
+}
+
+func indexAccessImpliesRecheck(key *plan.Expr, fixed []*plan.Expr, in *plan.LiteralVec, filter *plan.Expr) bool {
+	if filter == nil {
 		return false
 	}
-	fn, access := filter.GetF(), index.FilterList[0].GetF()
-	if !hasNonNilFunctionArgs(fn, 2) || access == nil || access.Func == nil ||
-		len(access.Args) < 2 || access.Args[0] == nil || access.Args[1] == nil ||
-		index.FilterList[0].Selectivity != filter.Selectivity {
-		return false
-	}
-	key := access.Args[0].GetCol()
-	if key == nil || key.RelPos != index.BindingTags[0] || key.ColPos != 0 {
+	fn := filter.GetF()
+	if !hasNonNilFunctionArgs(fn, 2) || (fn.Func.ObjName != "=" && fn.Func.ObjName != "in") {
 		return false
 	}
 	column, value := fn.Args[0], fn.Args[1]
-	if column.GetCol() == nil && fn.Func.ObjName == "=" {
+	if fn.Func.ObjName == "=" && column.GetF() == nil {
 		column, value = value, column
 	}
-	col := column.GetCol()
-	name := catalog.ResolveAlias(def.Parts[0])
-	pos, ok := base.TableDef.Name2ColIndex[name]
-	if !ok || col == nil || col.RelPos != base.BindingTags[0] || col.ColPos != pos ||
-		pos < 0 || int(pos) >= len(base.TableDef.Cols) || base.TableDef.Cols[pos] == nil {
+	extract := column.GetF()
+	if !hasNonNilFunctionArgs(extract, 3) || extract.Func.ObjName != "serial_extract" ||
+		!exprStructuralEqual(extract.Args[0], key) || extract.Args[2].GetT() == nil ||
+		extract.Args[2].Typ.Id != column.Typ.Id {
 		return false
 	}
-	typ := base.TableDef.Cols[pos].Typ
-	if _, _, ok := integerTypeWidth(types.T(typ.Id)); !ok || column.Typ.Id != typ.Id {
+	id, _ := function.DecodeOverloadID(extract.Func.Obj)
+	if id != function.SERIAL_EXTRACT {
 		return false
 	}
-	lengths, err := catalog.IndexPrefixLengthsFromParamsWithError(def.IndexAlgoParams)
-	if err != nil || lengths[name] != 0 {
+	positionLiteral := extract.Args[1].GetLit()
+	if positionLiteral == nil || positionLiteral.Isnull || positionLiteral.Src != nil {
 		return false
 	}
-	serialArgs := func(expr *plan.Expr) []*plan.Expr {
-		if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil ||
-			expr.GetF().Func.ObjName != function.SerialFullFunctionName ||
-			expr.GetF().Func.Obj != function.SerialFullFunctionEncodeID {
-			return nil
-		}
-		return expr.GetF().Args
-	}
-	switch access.Func.ObjName {
-	case "prefix_between", "prefix_in_range":
-		if fn.Func.ObjName != "=" || len(access.Args) < 3 || value.GetLit() == nil ||
-			value.GetLit().Isnull || value.GetLit().Src != nil || value.Typ.Id != typ.Id {
-			return false
-		}
-		lower, upper := serialArgs(access.Args[1]), serialArgs(access.Args[2])
-		if len(lower) == 0 || len(upper) == 0 {
-			return false
-		}
-		for _, bound := range []*plan.Expr{lower[0], upper[0]} {
-			if bound == nil || bound.GetLit() == nil || bound.GetLit().Isnull ||
-				bound.GetLit().Src != nil || bound.Typ.Id != typ.Id || !exprStructuralEqual(value, bound) {
-				return false
-			}
-		}
-		return true
-	case "prefix_in":
-		if fn.Func.ObjName != "in" || value.GetVec() == nil || literalVectorMayContainNull(value.GetVec()) {
-			return false
-		}
-		args := serialArgs(access.Args[1])
-		if len(args) != 1 || args[0] == nil || args[0].GetVec() == nil {
-			return false
-		}
-		left, right := value.GetVec(), args[0].GetVec()
-		if left.Len != right.Len || !bytes.Equal(left.Data, right.Data) {
-			return false
-		}
-		vec, _, ok := decodeLiteralVec(left)
-		return ok && vec.GetType().Oid == types.T(typ.Id)
-	default:
+	position, ok := positionLiteral.Value.(*plan.Literal_I64Val)
+	if !ok || position == nil || position.I64Val < 0 {
 		return false
 	}
+	_, _, integer := integerTypeWidth(types.T(column.Typ.Id))
+	if !integer {
+		return false
+	}
+	if fn.Func.ObjName == "=" {
+		if position.I64Val >= int64(len(fixed)) || !staticIntegerLiteral(value) || value.Typ.Id != column.Typ.Id {
+			return false
+		}
+		return exprStructuralEqual(value, fixed[position.I64Val])
+	}
+
+	if position.I64Val != 0 || in == nil || value.GetVec() == nil {
+		return false
+	}
+	values := value.GetVec()
+	if values.Len != in.Len || !bytes.Equal(values.Data, in.Data) || literalVectorMayContainNull(values) {
+		return false
+	}
+	vec, _, ok := decodeLiteralVec(values)
+	return ok && vec.GetType().Oid == types.T(column.Typ.Id)
 }

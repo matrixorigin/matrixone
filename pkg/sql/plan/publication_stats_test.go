@@ -133,27 +133,41 @@ func (c *backfillCachedStatsContext) GetStatsCache() *StatsCache { return c.cach
 // rows. Replanning must not independently apply both selectivities.
 func TestIndexBackfillStatsCountEachConditionOnce(t *testing.T) {
 	for _, tc := range []struct {
-		name, predicate string
-		want            float64
+		name, predicate, order string
+		ndvA, ndvB, want       float64
 	}{
-		{"prefix_range", "a=1 and b between 1 and 30", 30303.030303030304},
-		{"prefix_and_residual", "a=1 and mod(b,2)=0", 50000},
-		{"in_and_residual", "a in (1,2) and mod(b,2)=0", 100000},
+		{"prefix_range", "a=1 and b between 1 and 30", "b,id", 10, 100, 30303.030303030304},
+		{"prefix_and_residual", "a=1 and mod(b,2)=0", "b,id", 10, 100, 50000},
+		{"in_and_residual", "a in (1,2) and mod(b,2)=0", "b,id", 10, 100, 100000},
+		{"multi_prefix_range", "a=1 and b=1 and c between 1 and 30", "c,id", 2, 2, 75757.57575757576},
+		{"multi_prefix_lower", "a=1 and b=1 and c>10", "c,id", 2, 2, 227272.72727272726},
+		{"multi_prefix_upper", "a=1 and b=1 and c<=30", "c,id", 2, 2, 78282.82828282828},
+		{"multi_prefix_residual", "a=1 and b=1 and c between 1 and 30 and mod(c,2)=0", "c,id", 2, 2, 37878.78787878788},
+		{"multi_prefix_low_selectivity", "a=1 and b=1 and c between 1 and 30", "c,id", 100, 100, 99.988061488},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			addIndexHintChoiceTableForTest(mock)
 			table := mock.ctxt.tables["index_hint_t"]
-			table.Cols = append(table.Cols, &planpb.ColDef{ColId: 4, Name: "payload", OriginName: "payload",
-				Typ: planpb.Type{Id: int32(types.T_int32)}, Default: &planpb.Default{NullAbility: true}})
-			table.Name2ColIndex["payload"] = 4
+			for _, name := range []string{"c", "payload"} {
+				pos := int32(len(table.Cols))
+				table.Cols = append(table.Cols, &planpb.ColDef{ColId: uint64(pos), Name: name, OriginName: name,
+					Typ: planpb.Type{Id: int32(types.T_int32)}, Default: &planpb.Default{NullAbility: true}})
+				table.Name2ColIndex[name] = pos
+			}
+			for _, idx := range table.Indexes {
+				if idx.IndexName == "idx_ab" {
+					idx.Parts = []string{"a", "b", "c", catalog.CreateAlias("id")}
+				}
+			}
 			stats := NewStatsInfo()
 			stats.TableCnt, stats.BlockNumber = 1000000, 128
-			stats.NdvMap["a"], stats.NdvMap["b"], stats.NdvMap["id"] = 10, 100, 1000000
+			stats.NdvMap["a"], stats.NdvMap["b"], stats.NdvMap["c"], stats.NdvMap["id"] = tc.ndvA, tc.ndvB, 100, 1000000
 			stats.NdvMap[catalog.IndexTableIndexColName], stats.NdvMap[catalog.IndexTablePrimaryColName] = 1000000, 1000000
-			stats.DataTypeMap["a"], stats.DataTypeMap["b"] = uint64(types.T_int32), uint64(types.T_int32)
-			stats.MinValMap["a"], stats.MaxValMap["a"] = 0, 9
-			stats.MinValMap["b"], stats.MaxValMap["b"] = 0, 99
+			for _, name := range []string{"a", "b", "c"} {
+				stats.DataTypeMap[name] = uint64(types.T_int32)
+				stats.MinValMap[name], stats.MaxValMap[name] = 0, 99
+			}
 			cache := NewStatsCache()
 			for _, tableID := range []uint64{25356, 25357, 25358, 25359, 25360} {
 				cache.Set(tableID, stats)
@@ -162,8 +176,8 @@ func TestIndexBackfillStatsCountEachConditionOnce(t *testing.T) {
 				backfillTopStatsContext: &backfillTopStatsContext{MockCompilerContext: &mock.ctxt, rows: 1000000},
 				cache:                   cache,
 			}
-			query := "select id,a,b,payload from index_hint_t force index(idx_ab) where " +
-				tc.predicate + " order by b,id limit 2"
+			query := "select id,a,b,c,payload from index_hint_t force index(idx_ab) where " +
+				tc.predicate + " order by " + tc.order + " limit 2"
 			stmts, err := mysql.Parse(ctx.GetContext(), query, 1)
 			require.NoError(t, err)
 			planned, err := BuildPlan(ctx, stmts[0], false)
@@ -171,8 +185,7 @@ func TestIndexBackfillStatsCountEachConditionOnce(t *testing.T) {
 
 			q := planned.GetQuery()
 			seen := make(map[int32]bool)
-			var index, base *planpb.Node
-			var top bool
+			var index, base, top *planpb.Node
 			var visit func(int32, bool)
 			visit = func(id int32, inIndex bool) {
 				if seen[id] {
@@ -185,8 +198,8 @@ func TestIndexBackfillStatsCountEachConditionOnce(t *testing.T) {
 				} else if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "index_hint_t" {
 					base = node
 				}
-				if inIndex && node.NodeType == planpb.Node_SORT {
-					top = true
+				if inIndex && node.NodeType == planpb.Node_SORT && node.Limit != nil {
+					top = node
 				}
 				for i, child := range node.Children {
 					visit(child, inIndex || node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INDEX && i == 1)
@@ -197,73 +210,138 @@ func TestIndexBackfillStatsCountEachConditionOnce(t *testing.T) {
 			}
 			require.NotNil(t, index)
 			require.NotNil(t, base)
-			require.True(t, top, "the query must exercise the index-side Top")
+			require.NotNil(t, top, "the query must exercise the index-side Top")
 			require.InDelta(t, tc.want, index.Stats.Outcnt, 0.000001)
+			require.InDelta(t, tc.want, top.Stats.Cost, 0.000001)
 
-			if tc.name != "prefix_and_residual" {
-				var def *planpb.IndexDef
-				for _, candidate := range base.TableDef.Indexes {
-					if candidate.IndexName == "idx_ab" {
-						def = candidate
+			// The rechecks remain executable and retain their independent
+			// selectivity. Only the scan's estimation view neutralizes predicates
+			// already implied by the encoded access.
+			if tc.name == "prefix_range" || tc.name == "in_and_residual" || tc.name == "multi_prefix_range" {
+				view := indexScanSelectivityFilters(index)
+				rechecks := make([]int, 0, 2)
+				for i, filter := range index.FilterList {
+					fn := filter.GetF()
+					if fn == nil || fn.Func == nil || len(fn.Args) != 2 ||
+						(fn.Func.ObjName != "=" && fn.Func.ObjName != "in") {
+						continue
+					}
+					extract := fn.Args[0].GetF()
+					if extract != nil && extract.Func != nil && extract.Func.ObjName == "serial_extract" {
+						rechecks = append(rechecks, i)
+						require.NotEqual(t, float64(1), filter.Selectivity)
+						require.Equal(t, float64(1), view[i].Selectivity)
 					}
 				}
-				require.NotNil(t, def)
-				var leading *planpb.Expr
-				for _, filter := range base.FilterList {
-					if fn := filter.GetF(); fn != nil && len(fn.Args) == 2 && fn.Args[0].GetCol() != nil &&
-						fn.Args[0].GetCol().ColPos == base.TableDef.Name2ColIndex["a"] &&
-						(fn.Func.ObjName == "=" || fn.Func.ObjName == "in") {
-						leading = filter
+				wantRechecks := 1
+				if tc.name == "multi_prefix_range" {
+					wantRechecks = 2
+				}
+				require.Len(t, rechecks, wantRechecks)
+
+				recheck := rechecks[0]
+				unchanged := func(n *planpb.Node) {
+					t.Helper()
+					estimates := indexScanSelectivityFilters(n)
+					require.Equal(t, n.FilterList[recheck].Selectivity, estimates[recheck].Selectivity)
+				}
+				otherKey := DeepCopyNode(index)
+				otherKey.FilterList[recheck].GetF().Args[0].GetF().Args[0].GetCol().RelPos++
+				unchanged(otherKey)
+				otherComponent := DeepCopyNode(index)
+				otherComponent.FilterList[recheck].GetF().Args[0].GetF().Args[1].GetLit().Value =
+					&planpb.Literal_I64Val{I64Val: 10}
+				unchanged(otherComponent)
+				malformedPosition := DeepCopyNode(index)
+				malformedPosition.FilterList[recheck].GetF().Args[0].GetF().Args[1].GetLit().Value =
+					(*planpb.Literal_I64Val)(nil)
+				unchanged(malformedPosition)
+
+				// A semantic proof must not depend on coincidentally equal
+				// floating-point selectivities.
+				otherSelectivity := DeepCopyNode(index)
+				otherSelectivity.FilterList[recheck].Selectivity = 0.7
+				require.Equal(t, float64(1), indexScanSelectivityFilters(otherSelectivity)[recheck].Selectivity)
+				require.Equal(t, 0.7, otherSelectivity.FilterList[recheck].Selectivity)
+
+				if tc.name == "multi_prefix_range" {
+					// A full equality prefix supplies the same proof without a range.
+					equalityAccess := DeepCopyNode(index)
+					bound := equalityAccess.FilterList[0].GetF()
+					prefix := DeepCopyExpr(bound.Args[1])
+					prefix.GetF().Args = prefix.GetF().Args[:2]
+					equalityAccess.FilterList[0], err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "prefix_eq",
+						[]*planpb.Expr{bound.Args[0], prefix})
+					require.NoError(t, err)
+					equalityView := indexScanSelectivityFilters(equalityAccess)
+					for _, pos := range rechecks {
+						require.Equal(t, float64(1), equalityView[pos].Selectivity)
+					}
+
+					// Reordering executable filters must not lose the proof.
+					reordered := DeepCopyNode(index)
+					reordered.FilterList[0], reordered.FilterList[rechecks[0]] =
+						reordered.FilterList[rechecks[0]], reordered.FilterList[0]
+					reorderedView := indexScanSelectivityFilters(reordered)
+					require.Equal(t, float64(1), reorderedView[0].Selectivity)
+					require.Equal(t, float64(1), reorderedView[rechecks[1]].Selectivity)
+
+					// Equal later components do not form a fixed prefix if an earlier
+					// component differs between the two physical bounds.
+					mismatchFirst := DeepCopyNode(index)
+					mismatchFirst.FilterList[0].GetF().Args[1].GetF().Args[0] = makePlan2Int32ConstExprWithType(2)
+					firstView := indexScanSelectivityFilters(mismatchFirst)
+					for _, pos := range rechecks {
+						require.Equal(t, mismatchFirst.FilterList[pos].Selectivity, firstView[pos].Selectivity)
+					}
+
+					mismatchSecond := DeepCopyNode(index)
+					mismatchSecond.FilterList[0].GetF().Args[1].GetF().Args[1] = makePlan2Int32ConstExprWithType(2)
+					secondView := indexScanSelectivityFilters(mismatchSecond)
+					for _, pos := range rechecks {
+						extract := mismatchSecond.FilterList[pos].GetF().Args[0].GetF()
+						part := extract.Args[1].GetLit().GetI64Val()
+						if part == 0 {
+							require.Equal(t, float64(1), secondView[pos].Selectivity)
+						} else {
+							require.Equal(t, mismatchSecond.FilterList[pos].Selectivity, secondView[pos].Selectivity)
+						}
 					}
 				}
-				require.NotNil(t, leading)
-				// Final plan lowering removes BindingTags; reconstruct the two
-				// input bindings to exercise the pre-lowering proof.
-				proofBase, proofIndex := DeepCopyNode(base), DeepCopyNode(index)
-				proofBase.BindingTags = []int32{leading.GetF().Args[0].GetCol().RelPos}
-				proofIndex.BindingTags = []int32{index.FilterList[0].GetF().Args[0].GetCol().RelPos}
-				require.True(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, leading))
-				otherTag := DeepCopyExpr(leading)
-				otherTag.GetF().Args[0].GetCol().RelPos++
-				require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, otherTag))
-				otherColumn := DeepCopyExpr(leading)
-				otherColumn.GetF().Args[0].GetCol().ColPos = base.TableDef.Name2ColIndex["b"]
-				require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, otherColumn))
-				otherSelectivity := DeepCopyExpr(leading)
-				otherSelectivity.Selectivity = 0.7
-				require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, otherSelectivity))
-				truncated := *def
-				truncated.IndexAlgoParams = `{"prefix_lengths":"a:4"}`
-				require.False(t, indexAccessAccountsForSelectivity(&truncated, proofBase, proofIndex, leading))
 
-				if tc.name == "prefix_range" {
-					sourced := DeepCopyExpr(leading)
-					sourced.GetF().Args[1].GetLit().Src = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, sourced))
-					null := DeepCopyExpr(leading)
-					null.GetF().Args[1].GetLit().Isnull = true
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, null))
-					physicalSource := DeepCopyNode(proofIndex)
+				if tc.name != "in_and_residual" {
+					sourced := DeepCopyNode(index)
+					sourced.FilterList[recheck].GetF().Args[1].GetLit().Src =
+						&planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+					unchanged(sourced)
+					physicalSource := DeepCopyNode(index)
 					physicalSource.FilterList[0].GetF().Args[1].GetF().Args[0].GetLit().Src =
 						&planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, physicalSource, leading))
+					unchanged(physicalSource)
+					null := DeepCopyNode(index)
+					null.FilterList[recheck].GetF().Args[1].GetLit().Isnull = true
+					unchanged(null)
+					mismatch := DeepCopyNode(index)
+					mismatch.FilterList[recheck].GetF().Args[1] = makePlan2Int32ConstExprWithType(2)
+					unchanged(mismatch)
 				} else {
-					malformed := DeepCopyExpr(leading)
-					malformed.GetF().Args[1].GetVec().Data = []byte{0}
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, proofIndex, malformed))
-					mismatch := DeepCopyNode(proofIndex)
-					mismatch.FilterList[0].GetF().Args[1].GetF().Args[0].GetVec().Data = []byte{1}
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, mismatch, leading))
-					withNull := DeepCopyExpr(leading)
+					malformed := DeepCopyNode(index)
+					malformed.FilterList[recheck].GetF().Args[1].GetVec().Data = []byte{0}
+					malformed.FilterList[0].GetF().Args[1].GetF().Args[0].GetVec().Data = []byte{0}
+					unchanged(malformed)
+					mismatch := DeepCopyNode(index)
+					mismatch.FilterList[recheck].GetF().Args[1].GetVec().Data = []byte{1}
+					unchanged(mismatch)
+					withNull := DeepCopyNode(index)
 					var values vector.Vector
-					require.NoError(t, values.UnmarshalBinary(withNull.GetF().Args[1].GetVec().Data))
+					require.NoError(t, values.UnmarshalBinary(withNull.FilterList[recheck].GetF().Args[1].GetVec().Data))
 					values.GetNulls().Add(0)
 					encoded, err := values.MarshalBinary()
 					require.NoError(t, err)
-					withNull.GetF().Args[1].GetVec().Data = encoded
-					nullBound := DeepCopyNode(proofIndex)
-					nullBound.FilterList[0].GetF().Args[1].GetF().Args[0].GetVec().Data = encoded
-					require.False(t, indexAccessAccountsForSelectivity(def, proofBase, nullBound, withNull))
+					withNull.FilterList[recheck].GetF().Args[1].GetVec().Data = encoded
+					access := withNull.FilterList[0].GetF()
+					access.Args[1].GetF().Args[0].GetVec().Data = encoded
+					unchanged(withNull)
 				}
 			}
 
