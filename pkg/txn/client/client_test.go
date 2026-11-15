@@ -2863,6 +2863,37 @@ func TestOpenTxnReturnsWhenPausedContextCanceled(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestPausedAdmissionCancelAndRetry(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	waitCtx := &observedWaitContext{Context: ctx, waiting: make(chan struct{})}
+	result := make(chan txnCreateResult, 1)
+	go func() {
+		op, err := c.New(waitCtx, timestamp.Timestamp{})
+		result <- txnCreateResult{op: op, err: err}
+	}()
+	select {
+	case <-waitCtx.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission did not reach the paused wait")
+	}
+	cancel()
+	select {
+	case got := <-result:
+		require.ErrorIs(t, got.err, context.Canceled)
+		require.Nil(t, got.op)
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled admission did not return")
+	}
+	c.Resume()
+	op, err := c.New(context.Background(), timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(context.Background()))
+}
+
 func TestCloseUnblocksPausedNew(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := NewTxnClient("", newTestTxnSender())

@@ -435,6 +435,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 	newNode.NarrowScan = node.NarrowScan
+	newNode.ReadPolicy = node.ReadPolicy
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
@@ -595,6 +596,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 	}
 	return &plan.ColDef{
 		IntegerResultPresentation: cloneIntegerResultPresentation(col.IntegerResultPresentation),
+		EnumSetResultType:         DeepCopyType(col.EnumSetResultType),
 		ColId:                     col.ColId,
 		Name:                      col.Name,
 		OriginName:                col.OriginName,
@@ -928,6 +930,12 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		CatalogDependencies:       make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 		ViewMetadataDependsOnUdf:  qry.ViewMetadataDependsOnUdf,
 		Correlation:               DeepCopyCorrelation(qry.Correlation),
+	}
+	if qry.EnumSetResultTypes != nil {
+		newQry.EnumSetResultTypes = make([]plan.Type, len(qry.EnumSetResultTypes))
+		for i := range qry.EnumSetResultTypes {
+			newQry.EnumSetResultTypes[i] = *DeepCopyType(&qry.EnumSetResultTypes[i])
+		}
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

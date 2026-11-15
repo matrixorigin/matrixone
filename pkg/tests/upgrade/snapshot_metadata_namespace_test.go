@@ -18,13 +18,16 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 // Reuse the subscription fixture's ordinary service and tenant. One row and two
 // widths distinguish the snapshot namespace from the caller and current data.
-func testSnapshotMetadataNamespace(t *testing.T, ctx context.Context, sys, tenant *sql.DB) {
+func testSnapshotMetadataNamespace(t *testing.T, sys, tenant *sql.DB) {
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
 	exec := func(db *sql.DB, query string) {
 		t.Helper()
 		_, err := db.ExecContext(ctx, query)
@@ -47,6 +50,8 @@ func testSnapshotMetadataNamespace(t *testing.T, ctx context.Context, sys, tenan
 
 	var owner uint32
 	require.NoError(t, tenant.QueryRowContext(ctx, "select current_account_id()").Scan(&owner))
+	// The following read-only checks should not inherit setup's spent budget.
+	cancel()
 	for _, tc := range []struct {
 		name             string
 		db               *sql.DB
@@ -57,6 +62,8 @@ func testSnapshotMetadataNamespace(t *testing.T, ctx context.Context, sys, tenan
 		{"tenant own same-name snapshot", tenant, "new", 37, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			var catalogTables int
 			require.NoError(t, tc.db.QueryRowContext(ctx,
 				"select count(*) from mo_catalog.mo_tables {snapshot='snapshot_metadata_namespace_history'} "+
@@ -96,6 +103,8 @@ func testSnapshotMetadataNamespace(t *testing.T, ctx context.Context, sys, tenan
 		})
 	}
 	var count int
-	err := tenant.QueryRowContext(ctx, "select count(*) from information_schema.columns {snapshot='snapshot_metadata_namespace_private'}").Scan(&count)
+	negativeCtx, negativeCancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer negativeCancel()
+	err := tenant.QueryRowContext(negativeCtx, "select count(*) from information_schema.columns {snapshot='snapshot_metadata_namespace_private'}").Scan(&count)
 	require.ErrorContains(t, err, "snapshot", "a snapshot name owned by sys is not a tenant capability")
 }

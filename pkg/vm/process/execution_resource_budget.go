@@ -960,6 +960,7 @@ type ExecutionResourceGeneration struct {
 	cap                                                     uint64
 	used                                                    uint64
 	closed                                                  bool
+	spillDiskInitialized                                    atomic.Bool
 	spillDiskCap, spillDiskUsed                             uint64
 	spillFDConfiguredCap, spillFDCap, spillFDUsed           uint64
 	memoryGrowthParticipants                                uint64
@@ -2090,12 +2091,33 @@ func ResolveExecutionMemoryCeiling(in ExecutionMemoryCeilingInputs) (ExecutionMe
 // process in this BaseProcess. Different top-level processes on the same CN
 // charge a shared aggregate budget.
 func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration, error) {
+	return proc.getExecutionResourceBudget(true)
+}
+
+// GetExecutionTransientMemoryAdmission captures only memory authority from the
+// existing statement generation. It does not expose a spill-capable handle or
+// sample the spill filesystem. A later full-budget request promotes the same
+// generation before returning it to a spill-capable caller.
+func (proc *Process) GetExecutionTransientMemoryAdmission() (func(uint64) (*ExecutionTransientMemoryReservation, error), error) {
+	generation, err := proc.getExecutionResourceBudget(false)
+	if err != nil {
+		return nil, err
+	}
+	return generation.ReserveTransientMemory, nil
+}
+
+func (proc *Process) getExecutionResourceBudget(withSpill bool) (*ExecutionResourceGeneration, error) {
 	if proc == nil || proc.Base == nil {
 		return nil, &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "nil process for execution resource budget"}
 	}
 	proc.Base.executionResourceBudgetMu.Lock()
 	defer proc.Base.executionResourceBudgetMu.Unlock()
 	if proc.Base.executionResourceBudget != nil {
+		if withSpill && !proc.Base.executionResourceBudget.spillDiskInitialized.Load() {
+			if err := proc.initializeGenerationSpillBudget(proc.Base.executionResourceBudget); err != nil {
+				return nil, err
+			}
+		}
 		return proc.Base.executionResourceBudget, nil
 	}
 
@@ -2153,8 +2175,10 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	}
 	// Resolve the winning CN ledger before sampling. In particular, a losing
 	// LoadOrStore candidate must not publish a sample taken for its empty ledger.
-	if err = aggregate.refreshAutomaticSpillDiskCap(proc.automaticSpillDiskAvailable); err != nil {
-		return nil, err
+	if withSpill {
+		if err = aggregate.refreshAutomaticSpillDiskCap(proc.automaticSpillDiskAvailable); err != nil {
+			return nil, err
+		}
 	}
 	if loaded {
 		aggregate.mergeObservedCNCap(initialInputs, ceiling.CNMemoryCap)
@@ -2168,8 +2192,10 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	spillDiskCap := uint64(0)
 	if proc.Base.Lim.SpillSize > 0 {
 		spillDiskCap = uint64(proc.Base.Lim.SpillSize)
-		if err = aggregate.raiseSpillDiskCapToExplicitLimit(spillDiskCap); err != nil {
-			return nil, err
+		if withSpill {
+			if err = aggregate.raiseSpillDiskCapToExplicitLimit(spillDiskCap); err != nil {
+				return nil, err
+			}
 		}
 	}
 	generation, err := aggregate.openProcessGeneration(
@@ -2180,8 +2206,49 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	if err != nil {
 		return nil, err
 	}
+	if withSpill {
+		generation.spillDiskInitialized.Store(true)
+	}
 	proc.Base.executionResourceBudget = generation
 	return generation, nil
+}
+
+// initializeGenerationSpillBudget is called with the owning BaseProcess lock.
+// A memory-only generation is never shared across separately locked bases and
+// cannot issue spill reservations before this promotion.
+func (proc *Process) initializeGenerationSpillBudget(generation *ExecutionResourceGeneration) error {
+	if generation.Closed() {
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	budget := generation.budget
+	if err := budget.refreshAutomaticSpillDiskCap(proc.automaticSpillDiskAvailable); err != nil {
+		return err
+	}
+	configured := uint64(0)
+	if proc.Base.Lim.SpillSize > 0 {
+		configured = uint64(proc.Base.Lim.SpillSize)
+		if err := budget.raiseSpillDiskCapToExplicitLimit(configured); err != nil {
+			return err
+		}
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if budget.closed || generation.closed {
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Message: ErrExecutionResourceClosed.Error()}
+	}
+	if generation.spillDiskUsed != 0 {
+		return &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid, Message: "uninitialized generation has spill reservations"}
+	}
+	if configured == 0 {
+		if budget.spillDiskAutomatic {
+			configured = budget.spillDiskCap
+		} else {
+			configured = defaultSpillCap(generation.cap)
+		}
+	}
+	generation.spillDiskCap = min(configured, budget.spillDiskCap)
+	generation.spillDiskInitialized.Store(true)
+	return nil
 }
 
 // SetExecutionResourceBudgetForTesting installs a private, deterministic ledger
@@ -2197,6 +2264,7 @@ func (proc *Process) SetExecutionResourceBudgetForTesting(generation *ExecutionR
 	if proc.Base.executionResourceBudget != nil {
 		return ErrExecutionResourceInvalid
 	}
+	generation.spillDiskInitialized.Store(true)
 	proc.Base.executionResourceBudget = generation
 	return nil
 }

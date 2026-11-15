@@ -313,7 +313,7 @@ matches
 create or replace procedure typed_value(out v binary(3)) language 'starlark' $$out_v = "abcd"$$;
 set @v=99;
 call typed_value(@v);
-internal error: Can't cast 'abcd' from VARCHAR type to BINARY type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to BINARY type. Src length 4 is larger than Dest length 3
 select @v=99 as matches;
 matches
 1
@@ -326,7 +326,7 @@ matches
 create or replace procedure typed_value(out v varbinary(3)) language 'starlark' $$out_v = "abcd"$$;
 set @v=99;
 call typed_value(@v);
-internal error: Can't cast 'abcd' from VARCHAR type to VARBINARY type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to VARBINARY type. Src length 4 is larger than Dest length 3
 select @v=99 as matches;
 matches
 1
@@ -657,7 +657,7 @@ matches
 create or replace procedure typed_value(inout v binary(3)) language 'starlark' $$out_v = "abcd"$$;
 set @v=99;
 call typed_value(@v);
-internal error: Can't cast 'abcd' from VARCHAR type to BINARY type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to BINARY type. Src length 4 is larger than Dest length 3
 select @v=99 as matches;
 matches
 1
@@ -670,7 +670,7 @@ matches
 create or replace procedure typed_value(inout v varbinary(3)) language 'starlark' $$out_v = "abcd"$$;
 set @v=99;
 call typed_value(@v);
-internal error: Can't cast 'abcd' from VARCHAR type to VARBINARY type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to VARBINARY type. Src length 4 is larger than Dest length 3
 select @v=99 as matches;
 matches
 1

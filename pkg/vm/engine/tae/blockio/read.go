@@ -1123,6 +1123,9 @@ func blockDataReadWithFilter(
 					return err
 				}
 			}
+			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deleted, mp); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1151,6 +1154,11 @@ func blockDataReadWithFilter(
 	}
 	if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
 		return err
+	}
+	if !filterResult.All {
+		if err := objectio.JSONReadSetFromContext(ctx).SelectRows(filterResult.Sels, mp); err != nil {
+			return err
+		}
 	}
 	for _, pos := range earlyColumns {
 		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
@@ -1594,6 +1602,9 @@ func BlockDataReadInner(
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
 					return err
 				}
+			}
+			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deletedRows, mp); err != nil {
+				return err
 			}
 		}
 		return nil

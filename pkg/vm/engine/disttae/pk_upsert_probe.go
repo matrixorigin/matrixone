@@ -295,13 +295,13 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
 					ctx, pkSeq, pkType, fs, blk.MetaLocation(), filter.CachedSearch,
 					blk.IsSorted() && !filter.HasFakePK, objectio.SEQNUM_COMMITTS,
-					from, to, mp, fileservice.Policy(0))
+					from, to, mp, fileservice.ExactColumnsRead)
 			} else {
 				var release func()
 				release, _, err = ioutil.LoadColumns(ctx,
 					[]uint16{pkSeq, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
 					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
-					fs, blk.MetaLocation(), cacheVectors, mp, fileservice.Policy(0))
+					fs, blk.MetaLocation(), cacheVectors, mp, fileservice.ExactColumnsRead)
 				if err == nil {
 					if err = ctx.Err(); err == nil {
 						sels := search(cacheVectors)

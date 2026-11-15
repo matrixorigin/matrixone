@@ -158,7 +158,7 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
-	width := int32(0)
+	bound := stringResultBound{}
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
@@ -174,30 +174,17 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_varbinary:
 			hasBinary = true
 			sameFixedBinary = false
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
-			// Character widths count runes, while VARBINARY widths count bytes.
-			// Reserve the maximum utf8mb4 encoding size without exceeding the
-			// largest representable VARBINARY width.
-			byteWidth := int32(types.MaxVarBinaryLen)
-			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
-				byteWidth = typ.Width * utf8.UTFMax
-			}
-			if byteWidth > width {
-				width = byteWidth
-			}
 		default:
 			return types.Type{}, false
 		}
+		inputBound := declaredStringByteBound(typ)
+		bound.unknown = bound.unknown || inputBound.unknown
+		bound.bytes = max(bound.bytes, inputBound.bytes)
 	}
 	if !hasBinary {
 		return types.Type{}, false
@@ -205,7 +192,11 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
 	}
-	return types.New(types.T_varbinary, width, 0), true
+	// This is an expression bound, not a storage assignment capacity. Capping
+	// UTF-8 bytes at MaxVarBinaryLen would make the implicit branch CAST discard
+	// selected bytes before the real assignment owner can check them. Promote
+	// large/unknown bounds to BLOB; keep finite small results indexable.
+	return binaryStringResultType(bound), true
 }
 
 // MixedTextBinaryCommonType returns a binary common type only when a set
@@ -480,8 +471,16 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
@@ -1381,8 +1380,16 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}

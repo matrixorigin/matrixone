@@ -384,15 +384,11 @@ endif
 cgo-native-thirdparties-internal: cgo-native-prepare-internal
 	$(BUILD_THIRDPARTIES)
 
+# Keep preparation nonrecursive so Make itself skips it under -n, -t, and -q.
+# Clean sub-makes use this alias; pipe-based jobservers run those cleans serially.
+NATIVE_PREPARE_CLEAN_MAKE = $(MAKE)
 cgo-native-prepare-internal:
 	@set -eu; \
-		case "$(firstword $(MAKEFLAGS))" in \
-			-*) ;; \
-			*n*|*t*|*q*) exit 0 ;; \
-			esac; \
-		case " $(MAKEFLAGS) " in \
-			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
-		esac; \
 		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
 			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
 			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"); \
@@ -400,13 +396,13 @@ cgo-native-prepare-internal:
 			local|reuse) ;; \
 			rebuild-cgo) \
 				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
-				$(MAKE) -C cgo clean; \
+				$(NATIVE_PREPARE_CLEAN_MAKE) -C cgo clean; \
 				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin" ;; \
 			rebuild-all) \
 				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
-				$(MAKE) -C cgo clean; \
+				$(NATIVE_PREPARE_CLEAN_MAKE) -C cgo clean; \
 				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin"; \
-				$(MAKE) -C thirdparties clean ;; \
+				$(NATIVE_PREPARE_CLEAN_MAKE) -C thirdparties clean ;; \
 			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
 		esac; \
 		GO="$(GO)" ./cgo/mo-native-provenance begin \

@@ -295,7 +295,30 @@ func loadColumnsDataInto(
 		}
 	}
 
+	publication := objectio.JSONReadSetFromContext(ctx)
 	for i := range columns {
+		if destinations[i].Length() != 0 && publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
+			publication.Disable()
+		}
+		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
+			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, destinations[i].AllocationAccountSelection(), publication.CachePinAdmission())
+			if openErr != nil {
+				publication.Disable()
+				err = openErr
+				return
+			}
+			if sels != nil {
+				selected, selectErr := reader.Select(sels, m)
+				reader.Close()
+				if selectErr != nil {
+					publication.Disable()
+					err = selectErr
+					return
+				}
+				reader = selected
+			}
+			publication.Publish(columns[i], reader)
+		}
 		if readonlyArea {
 			err = objectio.CopyCachedVectorAllReadonly(
 				destinations[i],
@@ -317,6 +340,7 @@ func loadColumnsDataInto(
 			)
 		}
 		if err != nil {
+			publication.Disable()
 			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
 			return
 		}

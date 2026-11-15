@@ -54,7 +54,7 @@ func (c *classicAdmissionContext) CreateIndexCdcTask(_, _ string, _ uint64, _ st
 	return nil
 }
 
-func testClassicAsyncAdmissionResults(t *testing.T, conn *sql.Conn, service cnservice.Service, database, local, remote string) {
+func testClassicAsyncAdmissionResults(t *testing.T, conn *sql.Conn, admin *sql.DB, service cnservice.Service, database, local, remote string) {
 	// generate_series emits serial batches of at most 8192 rows. One extra row
 	// proves full consumption without a large stored table or another cluster.
 	const rows = 8193
@@ -73,7 +73,7 @@ func testClassicAsyncAdmissionResults(t *testing.T, conn *sql.Conn, service cnse
 		{name: "bad second column in later batch", rows: rows, value: local, badLast: true},
 		{name: "canceled", rows: 1, canceled: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		if !t.Run(tc.name, func(t *testing.T) {
 			value := "NULL"
 			if tc.value != "" {
 				value = sqlquote.String(tc.value)
@@ -81,9 +81,15 @@ func testClassicAsyncAdmissionResults(t *testing.T, conn *sql.Conn, service cnse
 					value = fmt.Sprintf("case when result=%d then %s else NULL end", rows, value)
 				}
 			}
-			_, err := conn.ExecContext(t.Context(), fmt.Sprintf("create view %s as select result as id, cast(NULL as datalink) as p1, cast(%s as datalink) as p2 from generate_series(1,%d) g where result<=%d", source, value, rows, tc.rows))
+			_, err := conn.ExecContext(t.Context(), fmt.Sprintf("create view %s as select result as id, cast(NULL as datalink) as p1, cast(%s as datalink) as p2 from generate_series(1,%d) g where result<=%d", source, value, max(1, tc.rows), tc.rows))
 			require.NoError(t, err)
-			defer conn.ExecContext(t.Context(), "drop view "+source)
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if _, err := admin.ExecContext(cleanupCtx, "drop view "+sqlquote.QualifiedIdent(database, source)); err != nil {
+					t.Errorf("drop admission source: %v", err)
+				}
+			}()
 
 			run := func(ctx context.Context, query string, inspect func(executor.Result)) error {
 				return sqlexec.RunTxnWithSqlContext(ctx, service.GetEngine(), service.GetTxnClient(), service.ID(), 0, time.Minute, nil, nil, func(sp *sqlexec.SqlProcess, _ any) error {
@@ -163,6 +169,8 @@ func testClassicAsyncAdmissionResults(t *testing.T, conn *sql.Conn, service cnse
 				require.LessOrEqual(t, allocated, 512, "two fixed-width result vectors must not grow with source rows")
 			}
 			t.Logf("source rows=%d retained rows=%d batches=%d allocated vector bytes=%d", tc.rows, resultRows, batches, allocated)
-		})
+		}) {
+			return
+		}
 	}
 }

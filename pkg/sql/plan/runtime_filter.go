@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -187,9 +189,37 @@ func localProtocolEnablesSortedMembershipFilter(sid string) bool {
 	return ok && version >= defines.MORPCVersion10
 }
 
+// exactFilterEnv resolves planner dependencies only where the existing codec
+// contract needs them. A scan-local caller supplies its values directly.
+type exactFilterEnv struct {
+	builder     *QueryBuilder
+	ctx         context.Context
+	service     string
+	fromBuilder bool
+}
+
+func (env exactFilterEnv) context() context.Context {
+	if env.fromBuilder {
+		return env.builder.GetContext()
+	}
+	return env.ctx
+}
+
+func (env exactFilterEnv) serviceID() string {
+	if env.fromBuilder {
+		return env.builder.compCtx.GetProcess().GetService()
+	}
+	return env.service
+}
+
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
-	probeType, buildType types.Type,
-	matchPrefix bool,
+	probeType, buildType types.Type, matchPrefix bool,
+) (keycodec.ExactRuntimeFilterEncoding, bool) {
+	return exactRuntimeFilterPlanEncoding(exactFilterEnv{builder: builder, fromBuilder: true}, probeType, buildType, matchPrefix)
+}
+
+func exactRuntimeFilterPlanEncoding(
+	env exactFilterEnv, probeType, buildType types.Type, matchPrefix bool,
 ) (keycodec.ExactRuntimeFilterEncoding, bool) {
 	encoding := keycodec.ExactRuntimeFilterEncodingForPair(probeType, buildType)
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
@@ -198,7 +228,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 	if (encoding != keycodec.ExactRuntimeFilterRaw ||
 		!keycodec.LegacyExactRawProducerSafe(buildType.Oid)) &&
 		!localProtocolEnablesVersionedExactKeyContract(
-			builder.compCtx.GetProcess().GetService(),
+			env.serviceID(),
 		) {
 		// Only metadata-independent raw types can keep their exact filters below
 		// v8. Metadata-dependent contracts, new closures, and types without a
@@ -211,7 +241,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 		filterFunction = function.PrefixInFunctionName
 	}
 	if _, err := function.GetFunctionByName(
-		builder.GetContext(), filterFunction, []types.Type{probeType, probeType}); err != nil {
+		env.context(), filterFunction, []types.Type{probeType, probeType}); err != nil {
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	return encoding, true
@@ -222,11 +252,24 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 // unsupported contracts must leave no consumer dependency, placement
 // constraint, or optimistic selectivity behind.
 func (builder *QueryBuilder) makeExactRuntimeFilterPair(
-	tag int32,
-	matchPrefix bool,
-	upperLimit int32,
-	probeExpr, buildExpr *plan.Expr,
-	notOnPk bool,
+	tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
+) (*plan.RuntimeFilterSpec, *plan.RuntimeFilterSpec, bool) {
+	return makeExactRuntimeFilterPair(exactFilterEnv{builder: builder, fromBuilder: true}, tag, matchPrefix, upperLimit, probeExpr, buildExpr, notOnPk)
+}
+
+// MakeExactRuntimeFilterPair constructs the existing bounded exact-key contract
+// for a caller that owns a local producer and its consumer.
+func MakeExactRuntimeFilterPair(
+	ctx context.Context, service string, tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
+) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
+	return makeExactRuntimeFilterPair(exactFilterEnv{ctx: ctx, service: service}, tag, matchPrefix, upperLimit, probeExpr, buildExpr, notOnPk)
+}
+
+func makeExactRuntimeFilterPair(
+	env exactFilterEnv, tag int32, matchPrefix bool, upperLimit int32,
+	probeExpr, buildExpr *plan.Expr, notOnPk bool,
 ) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
 	if probeExpr == nil || probeExpr.GetCol() == nil ||
 		buildExpr == nil || buildExpr.GetCol() == nil ||
@@ -237,7 +280,7 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 		// scale, floating signed zero, and other non-raw equality domains.
 		return nil, nil, false
 	}
-	encoding, ok := builder.exactRuntimeFilterPlanEncoding(
+	encoding, ok := exactRuntimeFilterPlanEncoding(env,
 		makeTypeByPlan2Expr(probeExpr),
 		makeTypeByPlan2Expr(buildExpr),
 		matchPrefix,
@@ -262,7 +305,7 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 		if !keycodec.LegacyExactRawProducerSafe(
 			types.T(buildExpr.Typ.Id),
 		) || localProtocolEnablesVersionedExactKeyContract(
-			builder.compCtx.GetProcess().GetService(),
+			env.serviceID(),
 		) {
 			buildSpec.Expr = nil
 		}

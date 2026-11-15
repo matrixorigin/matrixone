@@ -72,10 +72,11 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	for _, q := range denied {
 		_, err = conn.ExecContext(t.Context(), q)
 		require.ErrorContains(t, err, "asynchronous indexes require remote Datalink sources", q)
-		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from docs where id=1 and path is null").Scan(&count))
+		var unchanged int
+		require.NoError(t, conn.QueryRowContext(t.Context(),
+			"select count(*), count(case when id=1 and path is null then 1 end) from docs").Scan(&count, &unchanged))
 		require.Equal(t, 1, count)
-		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from docs").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 1, unchanged)
 	}
 	prepared, err := conn.PrepareContext(t.Context(), "insert into docs values(?,?)")
 	require.NoError(t, err)
@@ -108,9 +109,11 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	service := cn.RawService().(cnservice.Service)
-	t.Run("bounded classic async admission", func(t *testing.T) {
-		testClassicAsyncAdmissionResults(t, conn, service, database, local, remote)
-	})
+	if !t.Run("bounded classic async admission", func(t *testing.T) {
+		testClassicAsyncAdmissionResults(t, conn, admin, service, database, local, remote)
+	}) {
+		return
+	}
 	exec("create user async_source_public identified by 'owned-async-source' default role public")
 	defer admin.Exec("drop user if exists async_source_public")
 	exec("grant insert on table " + database + ".docs to public")
@@ -138,8 +141,9 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 		})
 	}
 	require.ErrorContains(t, backgroundRead(local), "only the sys account moadmin role")
-	// Deterministically change the provider between admission and the same
-	// background acquisition boundary; restoring the source permits normal retry.
+	// Change the provider between admission and the background acquisition
+	// boundary below. The live CDC job must not consume the temporarily invalid
+	// source: exceeding max_bad_records makes that job permanently fail.
 	var admitted bool
 	require.NoError(t, conn.QueryRowContext(t.Context(), "select _check_async_datalink_source(cast("+sqlquote.String(remote)+" as datalink),true)").Scan(&admitted))
 	require.True(t, admitted)
@@ -162,6 +166,28 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	require.NoError(t, conn.QueryRowContext(t.Context(), "select coalesce(min(job_id),0),count(*) from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_changed_ft' and drop_at is null", changedTableID).Scan(&changedJobID, &activeJobs))
 	require.Equal(t, 1, activeJobs, "the fixture must pin exactly one live index job")
 	require.NotZero(t, changedJobID)
+	indexExecutor, ready := iscp.GetExecutorRuntime(service.ID())
+	require.True(t, ready, "the single CN must own the index executor")
+	paused := true
+	defer func() {
+		if !paused {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := admin.ExecContext(cleanupCtx, "alter stage async_source_remote set url='s3://bucket/'"); err != nil {
+			t.Errorf("restore async source before resuming index executor: %v", err)
+			return
+		}
+		if err := indexExecutor.Resume(); err != nil {
+			t.Errorf("resume index executor: %v", err)
+		}
+	}()
+	require.NoError(t, indexExecutor.Pause())
+	_, ready = iscp.GetExecutorRuntime(service.ID())
+	require.False(t, ready, "Pause must drain and unpublish the index executor")
+	var pausedTail int64
+	require.NoError(t, conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&pausedTail))
 	exec("alter stage async_source_remote set url=" + sqlquote.String("file://"+dir+"/"))
 	// Keeping an OLD source does not introduce a source or authorize a read.
 	exec("update changed_sources set status=1")
@@ -184,9 +210,17 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	require.Equal(t, remote, storedP2)
 	require.Equal(t, 2, status)
 	require.ErrorContains(t, backgroundRead(remote), "only the sys account moadmin role")
+	var tailWhilePaused int64
+	require.NoError(t, conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&tailWhilePaused))
+	require.Equal(t, pausedTail, tailWhilePaused, "the CDC job must not consume the invalidated source")
 	exec("alter stage async_source_remote set url='s3://bucket/'")
 	require.NoError(t, backgroundRead(remote))
 	require.Equal(t, "matrixone stage content", resolvedText)
+	require.NoError(t, indexExecutor.Resume())
+	paused = false
+	restoredExecutor, ready := iscp.GetExecutorRuntime(service.ID())
+	require.True(t, ready, "Resume must publish the index executor")
+	require.Same(t, indexExecutor, restoredExecutor)
 	exec("update changed_sources set p1='stage://async_source_stable/file-sample_100kB.docx',p2=NULL,status=3 where id=1")
 	// The connection and transaction client both belong to CN 0. Capture once
 	// after autocommit; concurrent later commits only make this a conservative

@@ -219,8 +219,14 @@ func TestMatchesModel(t *testing.T) {
 			require.Equal(t, m.smallBytes(), c.smallBytes.Load(), "capacity %d, op %d", capacity, i)
 			require.Equal(t, m.mainBytes(), c.mainBytes.Load(), "capacity %d, op %d", capacity, i)
 			require.Equal(t, m.ghostBytes(), c.ghostBytes.Load(), "capacity %d, op %d", capacity, i)
+			// Keep the exhaustive membership oracle after every operation. The
+			// 32 million successful boolean comparisons need no reflection or
+			// testing helper bookkeeping; retain full coordinates on failure.
 			for k := 0; k < 400; k++ {
-				require.Equal(t, m.objects[k] != nil, c.Contains(k), "capacity %d, op %d, key %d", capacity, i, k)
+				want := m.objects[k] != nil
+				if got := c.Contains(k); got != want {
+					t.Fatalf("capacity %d, op %d, key %d: contains = %t, want %t", capacity, i, k, got, want)
+				}
 			}
 		}
 	}

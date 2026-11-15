@@ -800,15 +800,34 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		}
 		return newDate, true
 	case Second:
+		if nums > math.MaxInt64/MicroSecsPerSec || nums < math.MinInt64/MicroSecsPerSec {
+			return 0, false
+		}
 		nums *= MicroSecsPerSec
 	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
+		const multiplier = MicroSecsPerSec * SecsPerMinute
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
+		const multiplier = MicroSecsPerSec * SecsPerHour
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Day:
-		nums *= MicroSecsPerSec * SecsPerDay
+		const multiplier = MicroSecsPerSec * SecsPerDay
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Week:
-		nums *= MicroSecsPerSec * SecsPerWeek
+		const multiplier = MicroSecsPerSec * SecsPerWeek
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Month:
 		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
@@ -825,7 +844,13 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
+	if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
+		return 0, false
+	}
 	newDate := dt + Datetime(nums)
+	if newDate < 0 {
+		return 0, false
+	}
 	y, m, d, _ := newDate.ToDate().Calendar(true)
 	if !ValidDatetime(y, m, d) {
 		return 0, false

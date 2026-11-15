@@ -21,11 +21,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1800,4 +1802,55 @@ func TestClusterAndLegacyPortAllocatorsShareLeases(t *testing.T) {
 		require.NoError(t, contender.lock.Close())
 	}
 	require.False(t, locked)
+}
+
+// A frontend constructor can fail after the engine starts catalog replay and
+// before the CN heartbeat is published. Teardown must retire both owners.
+func TestCNFrontendConstructionFailureReleasesResources(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), strings.Repeat("s", 160))
+	var frontendAddress string
+	value, err := NewCluster(WithTesting(), WithCNCount(1), WithPreStart(func(op ServiceOperator) {
+		if op.ServiceType() == metadata.ServiceType_CN {
+			op.Adjust(func(cfg *ServiceConfig) {
+				cfg.CN.Frontend.UnixSocketAddress = socket
+				frontendAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(cfg.CN.Frontend.Port)))
+			})
+		}
+	}))
+	require.NoError(t, err)
+	c := value.(*cluster)
+	t.Cleanup(func() {
+		require.NoError(t, c.Close())
+		require.True(t, c.CloseComplete())
+		require.NoError(t, os.RemoveAll(c.options.dataPath))
+	})
+	failure := errors.New("injected Unix frontend construction failure")
+	var panicValue any
+	var failed cnservice.Service
+	// Recover only at the existing test seam, in the constructor's goroutine;
+	// the real production constructor and rollback still own every resource.
+	c.startFn = func(op *operator) (err error) {
+		if op.serviceType == metadata.ServiceType_CN {
+			defer func() {
+				if value := recover(); value != nil {
+					panicValue = value
+					failed, _ = op.reset.svc.(cnservice.Service)
+					err = failure
+				}
+			}()
+		}
+		return op.StartContext(c.startup.context())
+	}
+	require.ErrorIs(t, c.Start(), failure)
+	require.NotNil(t, panicValue)
+	require.Contains(t, fmt.Sprint(panicValue), "listen unix "+socket)
+	require.NotNil(t, failed)
+	state, ok := failed.(interface{ CloseComplete() bool })
+	require.True(t, ok)
+	require.True(t, state.CloseComplete(), "failed CN construction must finish its owned cleanup")
+	require.NoError(t, c.Close())
+	require.True(t, c.CloseComplete())
+	rebound, err := net.Listen("tcp", frontendAddress)
+	require.NoError(t, err, "failed frontend handoff must release its TCP listener")
+	require.NoError(t, rebound.Close())
 }

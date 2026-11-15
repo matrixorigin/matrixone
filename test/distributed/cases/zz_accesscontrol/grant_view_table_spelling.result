@@ -1,0 +1,168 @@
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+select @saved_enable_privilege_cache;
+➤ @saved_enable_privilege_cache[-1,16383,0]  𝄀
+1
+set global enable_privilege_cache = off;
+drop account if exists acc_vt;
+create account acc_vt admin_name = 'admin' identified by '111';
+create role r_vw;
+create user u_vw identified by '111' default role r_vw;
+grant r_vw to u_vw;
+create database db_vt;
+use db_vt;
+create table t1 (a int);
+insert into t1 values (1);
+create view vw1 as select * from t1;
+grant connect on account * to r_vw;
+grant select on table db_vt.vw1 to r_vw;
+select count(*) as table_class_grant from mo_catalog.mo_role_privs rp join mo_catalog.mo_role r on rp.role_id = r.role_id where r.role_name = 'r_vw' and rp.obj_type = 'table' and rp.privilege_name = 'select';
+➤ table_class_grant[-5,64,0]  𝄀
+1
+select count(*) as view_class_grant from mo_catalog.mo_role_privs rp join mo_catalog.mo_role r on rp.role_id = r.role_id where r.role_name = 'r_vw' and rp.obj_type = 'view' and rp.privilege_name = 'select';
+➤ view_class_grant[-5,64,0]  𝄀
+0
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on table db_vt.vw1 from r_vw;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on db_vt.vw1 to r_vw;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on db_vt.vw1 from r_vw;
+grant select on db_vt.vw1 to r_vw with grant option;
+create user u2 identified by '111' default role r_vw;
+grant r_vw to u2;
+create role r_dst;
+create user u3 identified by '111' default role r_dst;
+grant r_dst to u3;
+grant select on db_vt.vw1 to r_dst with grant option;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on db_vt.vw1 from r_dst;
+grant select on table db_vt.* to r_dst;
+select * from db_vt.t1;
+➤ a[4,32,0]  𝄀
+1
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on view db_vt.vw1 to r_dst;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+grant select on view db_vt.t1 to r_vw;
+internal error: there is no view "t1" in database "db_vt"
+use db_vt;
+create view vw2 as select a + 1 as a from t1;
+create role r_other;
+create user u_other identified by '111' default role r_other;
+grant r_other to u_other;
+grant select on table db_vt.t1 to r_other;
+select * from db_vt.t1;
+➤ a[4,32,0]  𝄀
+1
+select * from db_vt.vw2;
+internal error: do not have privilege to execute the statement
+grant all on table db_vt.vw2 to r_other;
+select * from db_vt.vw2;
+➤ a[-5,12,0]  𝄀
+2
+revoke all on table db_vt.vw2 from r_other;
+select * from db_vt.vw2;
+internal error: do not have privilege to execute the statement
+create role r_play;
+create user u_play identified by '111' default role r_play;
+grant r_play to u_play;
+grant connect on account * to r_play;
+grant select on table db_vt.vw1 to r_play;
+grant all on table db_vt.vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke all on table db_vt.vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on view db_vt.vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke all on table db_vt.vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on table db_vt.t1 to r_play;
+grant all privileges on table db_vt.t1 to r_play;
+select * from db_vt.t1;
+➤ a[4,32,0]  𝄀
+1
+revoke all privileges on table db_vt.t1 from r_play;
+select * from db_vt.t1;
+internal error: do not have privilege to execute the statement
+use db_vt;
+grant select on table vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke all on table db_vt.vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on table db_vt.vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+use db_vt;
+revoke select on table vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+use db_vt;
+grant select on view vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke all on table db_vt.vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on view db_vt.vw1 to r_play;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+use db_vt;
+revoke all on table vw1 from r_play;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+create role r_wild;
+create user u_wild identified by '111' default role r_wild;
+grant r_wild to u_wild;
+grant connect on account * to r_wild;
+grant select on view db_vt.* to r_wild;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on table db_vt.* from r_wild;
+revoke all on table db_vt.* from r_wild;
+select * from db_vt.vw1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on view db_vt.* from r_wild;
+select * from db_vt.vw1;
+internal error: do not have privilege to execute the statement
+grant select on table db_vt.* to r_wild;
+select * from db_vt.t1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on view db_vt.* from r_wild;
+revoke all on view db_vt.* from r_wild;
+select * from db_vt.t1;
+➤ a[4,32,0]  𝄀
+1
+revoke select on table db_vt.* from r_wild;
+select * from db_vt.t1;
+internal error: do not have privilege to execute the statement
+drop database db_vt;
+drop account acc_vt;
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+select @@global.enable_privilege_cache;
+➤ @@global.enable_privilege_cache[-1,16383,0]  𝄀
+1
