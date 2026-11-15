@@ -287,7 +287,7 @@ func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domain
 		!finitePositive(domain.Stats.TableCnt) || !finitePositive(domain.Stats.Outcnt) {
 		return false
 	}
-	var groupTypes []plan.Type
+	groupTypes := make([]plan.Type, 0, len(agg.GroupBy))
 	for _, expr := range agg.GroupBy {
 		groupTypes = append(groupTypes, expr.Typ)
 	}

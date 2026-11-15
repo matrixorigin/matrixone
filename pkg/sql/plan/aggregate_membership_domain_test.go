@@ -40,7 +40,7 @@ func aggregateMembershipTestBuilder(t *testing.T) (*QueryBuilder, int32) {
 		require.NoError(t, err)
 		return expr
 	}
-	var scans []*plan.Node
+	scans := make([]*plan.Node, 0, 3)
 	for i, cols := range [][]*plan.ColDef{
 		{{Name: "part", Typ: k}, {Name: "supp", Typ: k}},
 		{{Name: "part", Typ: k}, {Name: "name", Typ: text}},
