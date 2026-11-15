@@ -550,10 +550,7 @@ func (mc *oneBatchMemoryCache) setSuitableBatchBuffers(src, dst *batch.Batch, fi
 		beforeSize, beforeColumn, beforeKind = best.size, bestColumn, best.kind
 		suitable, difference := -1, math.MaxInt
 		for index := range mc.buffers {
-			if !mc.buffers[index].CanAttachTo(best.vec, best.kind) {
-				continue
-			}
-			if extra := mc.buffers[index].Capacity() - best.size; extra >= 0 && extra < difference {
+			if extra := mc.buffers[index].Capacity() - best.size; extra >= 0 && extra < difference && mc.buffers[index].CanAttachTo(best.vec, best.kind) {
 				suitable, difference = index, extra
 				if extra == 0 {
 					break
@@ -601,10 +598,7 @@ func (mc *oneBatchMemoryCache) attachSufficient(request batchMemoryRequest) erro
 	}
 	suitable, difference := -1, math.MaxInt
 	for index := range mc.buffers {
-		if !mc.buffers[index].CanAttachTo(request.vec, request.kind) {
-			continue
-		}
-		if extra := mc.buffers[index].Capacity() - request.size; extra >= 0 && extra < difference {
+		if extra := mc.buffers[index].Capacity() - request.size; extra >= 0 && extra < difference && mc.buffers[index].CanAttachTo(request.vec, request.kind) {
 			suitable, difference = index, extra
 			if extra == 0 {
 				break
