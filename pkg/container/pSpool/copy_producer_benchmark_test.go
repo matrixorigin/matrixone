@@ -42,6 +42,7 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 		{"dense_exact_20", 20, 1, 64, false, false},
 		{"dense_exact_128", 128, 1, 64, false, false},
 		{"ragged_20", 20, 1, 65, true, false},
+		{"ragged_128", 128, 1, 65, true, false},
 		{"bulk_varlen_2", 2, 256, 65, true, false},
 	} {
 		b.Run(tc.name, func(b *testing.B) {

@@ -95,13 +95,14 @@ func TestCachedBatchCreatesBorrowedSnapshotInCopyOrder(t *testing.T) {
 	t.Cleanup(func() { private.Free(sourceMP) })
 	require.NoError(t, private.CopyWithReadonlyArea(original, sourceMP))
 	makeSource := func(size int) *batch.Batch {
-		source := batch.NewWithSize(2)
+		source := batch.NewWithSize(3)
 		t.Cleanup(func() { source.Clean(sourceMP) })
 		source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
 		fill(source.Vecs[0], size)
 		var err error
 		source.Vecs[1], err = private.RetainedReadonlyViewWithMP(sourceMP)
 		require.NoError(t, err)
+		source.Vecs[2] = source.Vecs[1]
 		source.SetRowCount(rows)
 		return source
 	}
@@ -119,6 +120,7 @@ func TestCachedBatchCreatesBorrowedSnapshotInCopyOrder(t *testing.T) {
 			require.Equal(t, vec.GetBytesAt(row), copied.Vecs[i].GetBytesAt(row))
 		}
 	}
+	require.Same(t, copied.Vecs[1], copied.Vecs[2])
 	// The ordinary column must finish growing and releasing its old area
 	// before the later borrowed column allocates its descriptor snapshot.
 	require.LessOrEqual(t, peak, uint64(mp.CurrNB()), "borrowed descriptors must not overlap an earlier column's old and new areas")
