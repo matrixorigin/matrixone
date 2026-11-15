@@ -422,6 +422,25 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithUserTxn())
 	}
 
+	// The task service uses a dedicated connection pool for transactions that
+	// publish metadata under a lease guard. RC may advance its snapshot again
+	// at commit and hide a concurrent optimistic lease change from TN's conflict
+	// check; the versioned session capability keeps that validation snapshot
+	// fixed. Ordinary frontend and background sessions retain their defaults.
+	if ses, ok := execCtx.ses.(*Session); ok {
+		value, getErr := ses.GetSessionSysVar(defines.TaskLeaseSnapshotSysVar)
+		if getErr != nil {
+			return getErr
+		}
+		fixed, convertErr := valueIsBoolTrue(value)
+		if convertErr != nil {
+			return convertErr
+		}
+		if fixed {
+			opts = append(opts, txnclient.WithTxnIsolation(pbtxn.TxnIsolation_SI))
+		}
+	}
+
 	if execCtx.ses.IsBackgroundSession() ||
 		execCtx.ses.DisableTrace() {
 		opts = append(opts, txnclient.WithDisableTrace(true))

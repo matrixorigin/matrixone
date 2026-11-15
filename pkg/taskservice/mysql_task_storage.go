@@ -28,9 +28,20 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
+
+// CDCLeaseGuardBeforeCommitFault is a context-aware test barrier after a
+// conditional daemon-task write and before committing its catalog mutation.
+const CDCLeaseGuardBeforeCommitFault = "fj/taskservice/cdc/lease-guard-before-commit"
+
+func waitForCDCLeaseGuardBeforeCommit(ctx context.Context) error {
+	fault.TriggerFaultWithContext(ctx, CDCLeaseGuardBeforeCommitFault)
+	return ctx.Err()
+}
 
 var (
 	insertAsyncTask = "insert into sys_async_task(" +
@@ -293,25 +304,66 @@ var (
 )
 
 type mysqlTaskStorage struct {
-	db *sql.DB
+	db       *sql.DB
+	fencedDB *sql.DB
+}
+
+func taskLeaseFencedDSN(dsn string) (string, error) {
+	config, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return "", err
+	}
+	if config.Params == nil {
+		config.Params = make(map[string]string)
+	}
+	// Each physical connection proves support by setting the new capability at
+	// connect time. An older CN rejects the unknown variable; never fall back to
+	// an unfenced connection for catalog/lease transactions.
+	config.Params[defines.TaskLeaseSnapshotSysVar] = "1"
+	return config.FormatDSN(), nil
 }
 
 func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
+	fencedDSN, err := taskLeaseFencedDSN(dsn)
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
 	}
+	fencedDB, err := sql.Open("mysql", fencedDSN)
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
 
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(3)
+	fencedDB.SetMaxOpenConns(5)
+	fencedDB.SetMaxIdleConns(1)
 
 	return &mysqlTaskStorage{
-		db: db,
+		db:       db,
+		fencedDB: fencedDB,
 	}, nil
 }
 
 func (m *mysqlTaskStorage) Close() error {
-	return m.db.Close()
+	var err error
+	if m.db != nil {
+		err = m.db.Close()
+	}
+	if m.fencedDB != nil && m.fencedDB != m.db {
+		err = errors.Join(err, m.fencedDB.Close())
+	}
+	return err
+}
+
+func (m *mysqlTaskStorage) beginFencedTxn(ctx context.Context) (*sql.Tx, error) {
+	if m.fencedDB == nil {
+		return nil, moerr.NewInternalError(ctx, "task lease snapshot connection is unavailable")
+	}
+	return m.fencedDB.BeginTx(ctx, nil)
 }
 
 func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
@@ -1903,7 +1955,7 @@ func (m *mysqlTaskStorage) ClaimCDCRestart(ctx context.Context, claimed task.Dae
 	if err != nil {
 		return false, err
 	}
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := m.beginFencedTxn(ctx)
 	if err != nil {
 		return false, cdcTaskStorageError(err, false)
 	}
@@ -1946,6 +1998,9 @@ func (m *mysqlTaskStorage) ClaimCDCRestart(ctx context.Context, claimed task.Dae
 	if matched != 1 {
 		return false, nil
 	}
+	if err = waitForCDCLeaseGuardBeforeCommit(ctx); err != nil {
+		return false, err
+	}
 	err = tx.Commit()
 	finished = true
 	return err == nil, cdcTaskStorageError(err, true)
@@ -1960,7 +2015,7 @@ func (m *mysqlTaskStorage) UpdateOwnedCDCTask(
 	if taskFrameworkDisabled() || owner.DaemonID == 0 || owner.Runner == "" || owner.Key.TaskId == "" || mutate == nil || (target.ReleaseLease && !target.StartedAt.IsZero()) {
 		return moerr.NewInternalError(ctx, "invalid or unavailable CDC task owner")
 	}
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := m.beginFencedTxn(ctx)
 	if err != nil {
 		return cdcTaskStorageError(err, false)
 	}
@@ -1998,6 +2053,9 @@ func (m *mysqlTaskStorage) UpdateOwnedCDCTask(
 	if matched != 1 {
 		return &CDCTaskOwnerMismatch{err: moerr.NewInternalErrorf(ctx, "CDC daemon task %d no longer has the expected owner", owner.DaemonID)}
 	}
+	if err = waitForCDCLeaseGuardBeforeCommit(ctx); err != nil {
+		return err
+	}
 	err = tx.Commit()
 	finished = true
 	return cdcTaskStorageError(err, true)
@@ -2018,7 +2076,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		return 0, nil
 	}
 	var affectedCdcRow int
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := m.beginFencedTxn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -2131,6 +2189,9 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 			return 0, err
 		}
 		affectedCdcRow += int(affectedTaskRow)
+	}
+	if err = waitForCDCLeaseGuardBeforeCommit(ctx); err != nil {
+		return 0, err
 	}
 
 	return affectedCdcRow, nil
