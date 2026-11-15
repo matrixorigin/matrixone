@@ -145,7 +145,7 @@ func TestTerminalMonitorBufferedTLSReset(t *testing.T) {
 }
 
 func TestTerminalMonitorBufferedTLSShutdown(t *testing.T) {
-	conn, _, _, serverRaw, clientRaw, monitor, routine, ctx, now := newBufferedTLSMonitor(t)
+	conn, serverTLS, clientTLS, serverRaw, clientRaw, monitor, routine, ctx, now := newBufferedTLSMonitor(t)
 	require.NoError(t, clientRaw.CloseWrite())
 	require.Eventually(t, func() bool { return terminalSocketHasEvent(serverRaw, unix.POLLRDHUP) }, 3*time.Second, time.Millisecond)
 	monitor.scan(now)

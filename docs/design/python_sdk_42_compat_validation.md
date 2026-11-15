@@ -29,15 +29,18 @@ The dedicated empty ENUM domain remains
 `enum('')`. Public domain replay and the existing 4.2 DUMP/hash spelling have
 separate existing owners; scalar normalization does not justify changing either.
 
-The existing 4.2 catalog stores ENUM/SET members as a comma-separated string.
-Members containing an ASCII comma cannot be represented reversibly. SET already
-rejects them; ENUM now rejects them before joining the members. This tightens the
-input contract for every caller of the type binder, including CREATE/ALTER,
-typed declarations and replaying old raw DDL with such a member. It does not
-change persisted encoding, rewrite existing data or recover the original
-grouping from an already ambiguous catalog string. Exact-member replay applies
-to domains representable by this format; full comma-member support needs a
-separate storage/compatibility design.
+ENUM now uses an explicit encoding tag in existing type metadata and a counted
+byte representation only for comma-bearing and singleton-empty domains.
+Ordinary domains retain the existing catalog bytes. The common domain reader
+serves planning, DML, native metadata, ALTER, imports, branch output and tooling;
+SET keeps its comma prohibition. The authoritative pair is encoding plus payload.
+See [the exact-domain design](enum_member_encoding_42.md).
+
+Existing ambiguous catalog text retains its historical split interpretation,
+including the released ordinal mapping. This PR does not infer lost grouping
+from saved CREATE SQL or silently rewrite old values. New-format metadata and
+data require capable readers; old binaries must not open them. Upgrade evidence
+below uses stopped copies, not rolling upgrade or supported downgrade.
 
 ## Other retained closures
 
@@ -291,20 +294,20 @@ and about 19% scalar overhead against base.
   branch/restore and upgrade evidence retain their stated revision and scope;
   those broader suites are not rerun for this two-owner follow-up.
 
-## Native domain metadata replay
+## Earlier native domain metadata replay qualification
 
 The native formatter resolves the executing SQL mode once per vector batch,
 using the same runtime-resolver and serialized-session fallback as LIKE.
 NO_BACKSLASH_ESCAPES preserves literal backslashes and doubles single quotes;
 ordinary mode also escapes backslashes. The formatter remains volatile, so a
 prepared metadata query follows mode changes at execution time. No second
-SQL-mode cache, new catalog codec or migration path is introduced.
+SQL-mode cache is introduced. The later exact-domain change is recorded below.
 
 The focused metadata test checks both types, runtime mode overrides (including
 an explicit empty mode), captured-mode fallback, exact rendered literals and
-parser member-value round trips. The type-binder test covers unrepresentable
-comma members and preserves separate ordinary members, case and the valid
-single empty ENUM member.
+parser member-value round trips. The earlier type-binder test rejected comma members. That temporary restriction
+is removed by the exact-domain implementation; positive comma-domain cases
+replace its expected errors.
 
 On 57, Linux/amd64, Go 1.26.4 with source-matched native libraries, the five
 focused roots and all 3,091 roots in sqlquote, plan and function pass with
@@ -316,8 +319,8 @@ The maintained enum_set_metadata_replay BVT passes all 31 statements twice on
 the same real instance with zero failed/ignored/abnormal statements. It executes
 one prepared metadata query across ordinary/NBE/ordinary modes, builds new
 tables from native COLUMN_TYPE, and verifies original member bytes through
-ordinal inserts and HEX reads. Rejected CREATE/ALTER leave catalog and data
-unchanged. The normal expected-result comparator is used; header comparison
+ordinal inserts and HEX reads. The earlier rejection checks verified failure atomicity; current tests accept
+comma CREATE and retain failed incompatible ALTER checks. The normal expected-result comparator is used; header comparison
 is disabled but all result cells and errors are checked. The service stops
 normally and fixtures are removed between runs.
 

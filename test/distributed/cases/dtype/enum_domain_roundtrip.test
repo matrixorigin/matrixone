@@ -63,5 +63,13 @@ select id,hex(e),e+0 from import_json order by id;
 create table import_numeric(id int primary key,e enum('3','a,b'));
 load data inline format='csv', data='1,3\n2,"a,b"\n' into table import_numeric fields terminated by ',' optionally enclosed by '"';
 select id,hex(e),e+0 from import_numeric order by id;
+-- Materialization consumes frozen typed values, including the error ordinal.
+data branch create table domain_branch from domain_src;
+insert ignore into domain_branch values(10,'invalid');
+data branch diff domain_branch against domain_src output as domain_diff;
+select id,hex(e),e+0 from domain_diff order by id;
+insert into domain_src values(11,0);
+select count(*) as strict_zero_not_inserted from domain_src where id=11;
+
 set sql_mode=@enum_saved_mode;
 drop database enum_domain_roundtrip;
