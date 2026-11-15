@@ -16,9 +16,9 @@ package types
 
 import (
 	"encoding/binary"
+	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -92,7 +92,7 @@ func TestEnumMemberEncodingRejectsMalformed(t *testing.T) {
 }
 
 func TestEnumTypeEncodingRoundTrip(t *testing.T) {
-	require.Equal(t, uintptr(16), unsafe.Sizeof(Type{}))
+	require.Equal(t, uintptr(16), reflect.TypeOf(Type{}).Size())
 	typ := T_enum.ToType()
 	typ.SetEnumEncoding(1)
 	encoded, err := typ.Marshal()

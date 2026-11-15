@@ -294,35 +294,85 @@ and about 19% scalar overhead against base.
   branch/restore and upgrade evidence retain their stated revision and scope;
   those broader suites are not rerun for this two-owner follow-up.
 
-## Earlier native domain metadata replay qualification
+## Exact ENUM domain qualification
 
-The native formatter resolves the executing SQL mode once per vector batch,
-using the same runtime-resolver and serialized-session fallback as LIKE.
-NO_BACKSLASH_ESCAPES preserves literal backslashes and doubles single quotes;
-ordinary mode also escapes backslashes. The formatter remains volatile, so a
-prepared metadata query follows mode changes at execution time. No second
-SQL-mode cache is introduced. The later exact-domain change is recorded below.
+The complete-domain implementation was qualified against 4.2-dev
+58a6fc5a034e33a3de767fea42e4eefb24143824. The final production sources are
+6d5b0335d0; the service build records the identical in-progress source hashes
+before that commit. Environment: 57, Linux/amd64, Go 1.26.4, source-matched
+CPU native libraries. No task data or temporary directories use /tmp.
 
-The focused metadata test checks both types, runtime mode overrides (including
-an explicit empty mode), captured-mode fallback, exact rendered literals and
-parser member-value round trips. The earlier type-binder test rejected comma members. That temporary restriction
-is removed by the exact-domain implementation; positive comma-domain cases
-replace its expected errors.
+The temporary comma rejection is removed. New comma-bearing and singleton-empty
+domains use an explicit tag and counted byte framing; ordinary domains retain
+legacy bytes. SQL-mode-aware native metadata and SHOW CREATE replay preserve
+quotes, backslashes, NUL, CR/LF and Unicode. The pair propagates through plan
+protobuf, both native type layouts, catalog/TAE, imports, views and copies.
+The existing physical enum ordinal representation is unchanged.
 
-On 57, Linux/amd64, Go 1.26.4 with source-matched native libraries, the five
-focused roots and all 3,091 roots in sqlquote, plan and function pass with
--short -tags=matrixone_test and zero skips. Formatting, standard vet and
-configured incremental lint pass on these owners. Pinned molint exits zero
-with the same three pre-existing checkrecover diagnostics in expr_opt.go and
-returning.go; both files remain byte-identical to the exact PR base.
-The maintained enum_set_metadata_replay BVT passes all 31 statements twice on
-the same real instance with zero failed/ignored/abnormal statements. It executes
-one prepared metadata query across ordinary/NBE/ordinary modes, builds new
-tables from native COLUMN_TYPE, and verifies original member bytes through
-ordinal inserts and HEX reads. The earlier rejection checks verified failure atomicity; current tests accept
-comma CREATE and retain failed incompatible ALTER checks. The normal expected-result comparator is used; header comparison
-is disabled but all result cells and errors are checked. The service stops
-normally and fixtures are removed between runs.
+| Qualification | Result |
+| --- | --- |
+| Fifteen exact owning packages | go list/build/vet passed; -short -tags=matrixone_test: 7,159 root passes; five inherited skip events (two roots and three subtests) |
+| Static checks across changed Go owners | gofmt clean; configured incremental golangci-lint: zero issues; molint exit zero; 15 existing diagnostics point to 12 base-identical files |
+| Codec fuzz | 30 seconds, 444,866 executions; no failure; decoder inputs are unchanged by the later projection-only correction |
+| Lifecycle stress | TLS reset, TLS shutdown and external ENUM Reset/Free each pass 100 race repetitions; frontend and external owning packages pass -race with 2,143 roots and one inherited skip |
+| Maintained real-service BVT | 121/121 twice; zero failed, ignored or abnormal statements |
+| Public SQL/client oracle | Default/NBE/prepared metadata replay, ALTER atomicity/backfill/remap, distinct stored zero and declared empty, ordering/window/grouping, view/CTE/CTAS, UNIQUE/FK/cascade, CSV/JSON and retained scalar spelling pass |
+| Projection counterexamples | CASE with differing domains, same-domain UNION ALL and outer-join NULLs pass |
+| Set-operation correction | UNION DISTINCT and MINUS initially changed INSERT SELECT row counts; read-only provenance proof now stops at comparison/counting set boundaries before adding hidden columns. Public SELECT and INSERT SELECT agree; UNION ALL retains ordinals 0/1/1 |
+| Frozen branch output | Clone, OUTPUT AS, snapshot restore and restart pass. An additional source-matched pre-barrier service run preserves NBE text and 20,000 stored-zero rows with 3,000-byte payloads across multiple spool batches and the 32-MiB SQL flush boundary |
+| Actual distribution | Two independently connected CNs exchange legacy/tagged metadata with identical payload bytes, write/read tagged values and propagate ALTER/remapped ordinals through real catalog logtail |
+| Released stopped-data upgrade | Frozen 4.2.1 and 4.2.8 copies open, preserve historical ordinary/ambiguous/collision/long-label domains, create tagged data and restart/read/write successfully; all four phases stop normally and source directories remain unchanged |
 
-This closure does not rerun physical upgrades or the prior lexer/Parquet
-benchmarks; those results retain their original tested revision and scope.
+BVT result files were generated for the deliberate behavior changes, then
+manually checked against literal byte/ordinal oracles and verified twice with
+the normal expected-result comparator. JDBC header comparison is disabled;
+metadata values, row counts and errors are checked. The separate Python client
+oracles assert their own expected values, rather than learning them from output.
+
+### Focused conversion performance
+
+The same maintained benchmark source was compiled for clean base 58a6fc5a034e
+and the candidate. Five interleaved 150-ms rounds cover 54 combinations of
+3/8/64 members, 1/64/1,024 rows, constant/dynamic domains and display/name/numeric
+conversion, pinned to one CPU with GOMAXPROCS=1. Values below are medians per
+vector-function call, not end-to-end SQL latency or throughput.
+
+| Legacy domain operation | Base | Candidate | Allocations |
+| --- | --- | --- | --- |
+| 3 members, 1,024 rows, constant display | 51.453 us | 14.115 us | 1,026 -> 3 |
+| 64 members, 1,024 rows, constant display | 636.784 us | 15.828 us | 1,026 -> 3 |
+| 64 members, 1,024 rows, constant numeric | 635.807 us | 5.059 us | 1,026 -> 3 |
+| 64 members, 1,024 rows, constant name lookup | 18.404 us | 18.360 us | 76 -> 76 |
+
+Not every operation gets faster. Three short-run ratios exceeded 10% (maximum
+13.53%); the raw runs remain recorded. Seven additional interleaved 500-ms
+rounds measured those exact cases at 122.3 -> 127.8 ns (+4.50%) for single-row
+numeric conversion, 50.363 -> 51.728 us (+2.71%) for dynamic 1,024-row display,
+and 151.0 -> 155.7 ns (+3.11%) for dynamic single-row name lookup. Allocations
+were unchanged. These small costs are not reported as speedups or zero regression.
+
+Another 54 tagged-domain cases pass three benchmark rounds. For 64 members and
+1,024 rows, constant tagged display/numeric conversion take 15.661/5.164 us
+and four allocations; tag-argument wrapping adds one allocation per batch.
+The decoded domain belongs to the batch, with no global or cross-query cache.
+
+### Scope and remaining limitations
+
+Historically ambiguous data is not regrouped from saved CREATE SQL. Released
+fixtures prove that ordinal 2 already means b and ordinal 3 means c for a
+flattened a,b,c domain. Those meanings remain unchanged. Repair requires an
+explicit operator-authorized mapping and checked reload/ALTER; absence of the
+original grouping cannot be solved by a formatter.
+
+New tagged data requires capable binaries and schema consumers. Stopped upgrade
+is qualified; mixed-version operation, opening new-format data with old binaries,
+and supported downgrade are not. SET comma input remains prohibited. Binary
+collation identity and unrelated HEX behavior in the consolidated #30771 are
+not closed. This qualification does not include a complete release/SDK suite,
+live cross-cluster CDC/publication or an offline production-checkpoint dump.
+
+One independent control, UPDATE t SET e=e, fails with an ambiguous-column error
+on clean base cc056261a8; the ordinary label-update
+path passes. It was not broadened into this representation fix. Existing
+reflection, unmarked empty-branch and older branch-identity rollback boundaries
+described above still apply.
