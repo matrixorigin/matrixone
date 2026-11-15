@@ -241,6 +241,9 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference
+					if difference == 0 {
+						break
+					}
 				}
 			}
 		}
@@ -266,6 +269,9 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference
+					if difference == 0 {
+						break
+					}
 				}
 			}
 		}
